@@ -17,6 +17,10 @@ import { decorateAttempt, describeAttemptState, isAttemptActive } from "./attemp
 import { getLatestAttemptsByPullRequest } from "./attempt-summary.ts";
 import { buildReviewContext } from "./review-context.ts";
 import {
+  type ChangeIdentity,
+  tryCarryForward,
+} from "./carry-forward.ts";
+import {
   buildInlineCommentBody,
   buildReviewBody,
   classifyPublicationDisposition,
@@ -332,7 +336,6 @@ export class ReviewQuillService {
     for (const pr of prs) {
       await this.reconcileActiveAttemptsForPullRequest(repo, pr);
       const currentReviews = await this.github.listPullRequestReviews(repo.repoFullName, pr.number);
-      await this.dismissStaleDecisiveReviews(repo, pr, currentReviews);
       const existing = this.store.getAttempt(repo.repoFullName, pr.number, pr.headSha);
       const eligibility = await this.evaluateEligibility(repo, pr.number, pr.headSha, pr.isDraft, pr.headRefName);
       if (!eligibility.eligible && !pr.isDraft && eligibility.reason === "required_checks_not_green") {
@@ -354,12 +357,41 @@ export class ReviewQuillService {
           });
         }
       }
+
+      // Decide whether this PR needs a fresh review run, attempting
+      // carry-forward first when eligible. Dismissal of stale decisive
+      // reviews must run AFTER the carry-forward decision (plan
+      // implementation.md §A.4): otherwise a transient identity-compute
+      // failure would dismiss the prior approval and leave nothing to
+      // re-emit.
+      let needsExecution = false;
+      let identity: ChangeIdentity | undefined;
       if (existing && !["failed", "cancelled", "superseded"].includes(existing.status)) {
-        if (!eligibility.eligible) continue;
-        continue;
+        // Exact-head match — already reviewed (or in-flight) on this SHA.
+      } else if (!eligibility.eligible) {
+        // Ineligible — nothing to publish.
+      } else {
+        const result = await tryCarryForward(repo, pr, {
+          store: this.store,
+          github: this.github,
+          logger: this.logger,
+        });
+        if (result.kind === "carried_forward") {
+          needsExecution = false;
+        } else {
+          identity = result.kind === "no_candidate" ? result.identity : undefined;
+          needsExecution = true;
+        }
       }
-      if (!eligibility.eligible) continue;
-      await this.executeReview(repo, pr, existing);
+
+      // Now safe: either we already re-emitted on the current head
+      // (carry-forward hit) or we are about to run a fresh review that
+      // will publish a new verdict (executeReview branch).
+      await this.dismissStaleDecisiveReviews(repo, pr, currentReviews);
+
+      if (needsExecution) {
+        await this.executeReview(repo, pr, existing, identity);
+      }
     }
 
     this.setPendingReviews(repo.repoId, pendingForRepo);
@@ -558,6 +590,7 @@ export class ReviewQuillService {
     repo: ReviewQuillRepositoryConfig,
     pr: Awaited<ReturnType<GitHubClient["listOpenPullRequests"]>>[number],
     existingAttempt?: ReturnType<SqliteStore["getAttempt"]>,
+    identity?: ChangeIdentity,
   ): Promise<void> {
     const attempt = existingAttempt
       ? (this.store.updateAttempt(existingAttempt.id, {
@@ -568,6 +601,10 @@ export class ReviewQuillService {
         turnId: null,
         externalCheckRunId: null,
         completedAt: null,
+        ...(identity?.patchId !== undefined ? { patchId: identity.patchId } : {}),
+        ...(identity?.integrationTreeId !== undefined ? { integrationTreeId: identity.integrationTreeId } : {}),
+        ...(identity?.mode !== undefined ? { reviewSurfaceMode: identity.mode } : {}),
+        ...(identity?.baseSha !== undefined ? { baseSha: identity.baseSha } : {}),
       }) ?? existingAttempt)
       : this.store.createAttempt({
         repoFullName: repo.repoFullName,
@@ -575,6 +612,10 @@ export class ReviewQuillService {
         headSha: pr.headSha,
         status: "queued",
         ...(pr.title ? { prTitle: pr.title } : {}),
+        ...(identity?.patchId !== undefined ? { patchId: identity.patchId } : {}),
+        ...(identity?.integrationTreeId !== undefined ? { integrationTreeId: identity.integrationTreeId } : {}),
+        ...(identity?.mode !== undefined ? { reviewSurfaceMode: identity.mode } : {}),
+        ...(identity?.baseSha !== undefined ? { baseSha: identity.baseSha } : {}),
       });
     if (existingAttempt && pr.title && attempt.prTitle !== pr.title) {
       this.store.setAttemptTitle(attempt.id, pr.title);
@@ -721,6 +762,10 @@ export class ReviewQuillService {
         }
       }
       const attemptConclusion = event === "REQUEST_CHANGES" ? "declined" : "approved";
+      // Persist the rendered review on the attempt row so future heads
+      // that produce the same patch-id can be served from the cache by
+      // re-emitting this body+event without re-running the reviewer.
+      // publicationMode is body_only in v1; with_annotations is deferred.
       this.store.updateAttempt(attempt.id, {
         status: "completed",
         conclusion: attemptConclusion,
@@ -729,6 +774,9 @@ export class ReviewQuillService {
         turnId: result.turnId,
         externalCheckRunId: null,
         completedAt: new Date().toISOString(),
+        reviewBody: reviewBody,
+        reviewEvent: event,
+        publicationMode: "body_only",
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

@@ -14,6 +14,7 @@ function basePr(overrides: Partial<PullRequestSummary> = {}): PullRequestSummary
     headSha: "abc123",
     headRefName: "feature/review",
     baseRefName: "main",
+    labels: [],
     ...overrides,
   };
 }

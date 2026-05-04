@@ -20,6 +20,14 @@ CREATE TABLE IF NOT EXISTS review_attempts (
   thread_id TEXT,
   turn_id TEXT,
   external_check_run_id INTEGER,
+  patch_id TEXT,
+  integration_tree_id TEXT,
+  review_surface_mode TEXT,
+  base_sha TEXT,
+  prior_attempt_id INTEGER,
+  review_body TEXT,
+  review_event TEXT,
+  publication_mode TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   completed_at TEXT,
@@ -28,4 +36,10 @@ CREATE TABLE IF NOT EXISTS review_attempts (
 
 CREATE INDEX IF NOT EXISTS idx_review_attempts_repo_pr
   ON review_attempts(repo_full_name, pr_number, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_review_attempts_patch
+  ON review_attempts(repo_full_name, pr_number, patch_id);
+
+CREATE INDEX IF NOT EXISTS idx_review_attempts_patch_tree
+  ON review_attempts(repo_full_name, pr_number, patch_id, integration_tree_id);
 `;

@@ -2,8 +2,23 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ensureRepoCache } from "./cache.ts";
-import { gitCheckoutDetached, gitFetchReviewRefs, gitWorktreeAddDetached, gitWorktreeRemove } from "./git.ts";
+import {
+  gitCheckoutDetached,
+  gitFetchReviewRefs,
+  gitWorktreeAddDetached,
+  gitWorktreeRemove,
+} from "./git.ts";
 import type { PullRequestSummary, ReviewWorkspace } from "../types.ts";
+
+// `baseRefName` from GitHub names the PR's actual base ref. For a stacked
+// PR this is another PR's branch; for a normal PR it's the repo default.
+// We compare against the configured `baseBranch` so callers can tell —
+// the call site decides whether to refuse carry-forward (today's v1
+// behavior) or fetch the parent ref and use that as the diff base
+// (deferred — see plan §3.2).
+function isStackedPullRequest(pr: PullRequestSummary, repoBaseBranch: string): boolean {
+  return pr.baseRefName !== "" && pr.baseRefName !== repoBaseBranch;
+}
 
 export async function materializeReviewWorkspace(params: {
   repoFullName: string;
@@ -36,3 +51,5 @@ export async function materializeReviewWorkspace(params: {
     },
   };
 }
+
+export { isStackedPullRequest };
