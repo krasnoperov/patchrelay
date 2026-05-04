@@ -157,8 +157,13 @@ export class GitHubSim implements GitHubPRApi {
  */
 export class EvictionReporterSim implements EvictionReporter {
   readonly evictions: Array<{ entry: QueueEntry; incident: IncidentRecord }> = [];
+  readonly specReadyEvents: Array<{ entry: QueueEntry; specBranch: string; specSha: string }> = [];
 
   async reportEviction(entry: QueueEntry, incident: IncidentRecord): Promise<void> {
     this.evictions.push({ entry: { ...entry }, incident: { ...incident } });
+  }
+
+  async reportSpecReady(entry: QueueEntry, specBranch: string, specSha: string): Promise<void> {
+    this.specReadyEvents.push({ entry: { ...entry }, specBranch, specSha });
   }
 }

@@ -184,6 +184,14 @@ export async function prepareEntry(
 
   await ctx.git.push(specName, true);
 
+  // Plan §5.2: emit `merge-steward/spec-ready` on the PR head so
+  // review-quill (and any other consumer) can react to spec
+  // availability via the GitHub bus instead of polling. Best-effort —
+  // failures are caught inside the reporter; CI still triggers.
+  if (ctx.eviction.reportSpecReady) {
+    await ctx.eviction.reportSpecReady(entry, specName, specSha).catch(() => undefined);
+  }
+
   const runId = await ctx.ci.triggerRun(specName, specSha);
   emit(ctx, entry, "ci_triggered", { ciRunId: runId, specBranch: specName });
   ctx.store.transition(entry.id, "validating", {

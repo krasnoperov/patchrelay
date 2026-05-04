@@ -7,6 +7,10 @@ import type { QueueEntry, IncidentRecord } from "../types.ts";
 import { exec } from "../exec.ts";
 import { DEFAULT_MERGE_QUEUE_CHECK_NAME } from "../config.ts";
 
+// Plan §5.2 default — review-quill subscribes by default; configurable
+// per project via the bus contract added in PR 1.
+const DEFAULT_SPEC_READY_CHECK_NAME = "merge-steward/spec-ready";
+
 /**
  * Reports evictions by creating a GitHub check run on the PR's head SHA.
  * The check run output contains the incident context as structured JSON.
@@ -20,6 +24,7 @@ export class GitHubCheckRunReporter implements EvictionReporter {
     private readonly publicBaseUrl?: string,
     private readonly admissionLabel: string = "queue",
     private readonly mergeQueueCheckName: string = DEFAULT_MERGE_QUEUE_CHECK_NAME,
+    private readonly specReadyCheckName: string = DEFAULT_SPEC_READY_CHECK_NAME,
   ) {}
 
   async reportEviction(entry: QueueEntry, incident: IncidentRecord): Promise<void> {
@@ -65,6 +70,50 @@ export class GitHubCheckRunReporter implements EvictionReporter {
       "--repo", this.repoFullName,
       "--remove-label", this.admissionLabel,
     ], { timeoutMs: 15_000, githubRepoFullName: this.repoFullName }).catch(() => {});
+  }
+
+  // Plan §5.2: a "spec is ready" event on the PR head — not a verdict.
+  // Conclusion is `neutral` so branch-protection rules treat it as a
+  // signal rather than a gate. Best-effort: failures are logged in the
+  // exec layer and not propagated.
+  async reportSpecReady(entry: QueueEntry, specBranch: string, specSha: string): Promise<void> {
+    const targetUrl = `https://github.com/${this.repoFullName}/commit/${specSha}`;
+    const summary = [
+      `Spec branch \`${specBranch}\` is at \`${specSha.slice(0, 12)}\`.`,
+      ``,
+      `This is the integration tree the lander will run CI on. Reviewers`,
+      `subscribed to integration_tree mode use this commit as the head`,
+      `they review.`,
+    ].join("\n");
+
+    const body = JSON.stringify({
+      name: this.specReadyCheckName,
+      head_sha: entry.headSha,
+      status: "completed",
+      conclusion: "neutral",
+      details_url: targetUrl,
+      output: {
+        title: `Spec ready (${specBranch})`,
+        summary,
+        text: JSON.stringify({ specBranch, specSha, prNumber: entry.prNumber, queueEntryId: entry.id }),
+      },
+    });
+
+    const tmpPath = join(tmpdir(), `steward-specready-${randomUUID()}.json`);
+    try {
+      writeFileSync(tmpPath, body);
+      await exec("gh", [
+        "api",
+        `repos/${this.repoFullName}/check-runs`,
+        "--method", "POST",
+        "--input", tmpPath,
+      ], { timeoutMs: 30_000, githubRepoFullName: this.repoFullName });
+    } catch {
+      // Best-effort — review-quill can also fall back to polling the
+      // spec branch directly if it never sees this check_run.
+    } finally {
+      try { unlinkSync(tmpPath); } catch {}
+    }
   }
 }
 

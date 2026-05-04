@@ -61,4 +61,13 @@ export interface GitHubPRApi {
  */
 export interface EvictionReporter {
   reportEviction(entry: QueueEntry, incident: IncidentRecord): Promise<void>;
+  /**
+   * Plan §5.2: emit a "spec ready" check_run on the PR's head SHA when
+   * a fresh spec branch has been pushed. Lets review-quill (and other
+   * consumers) subscribe to integration-tree availability via the
+   * GitHub bus instead of polling. Optional — implementations that
+   * cannot or should not write this check (sim, in-memory, dry-run)
+   * may omit or no-op.
+   */
+  reportSpecReady?(entry: QueueEntry, specBranch: string, specSha: string): Promise<void>;
 }
