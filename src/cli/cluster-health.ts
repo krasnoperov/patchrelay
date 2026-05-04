@@ -500,6 +500,21 @@ async function evaluateGitHubIssueHealth(
     && issue.activeRunId === undefined
     && ageMs >= RECONCILIATION_GRACE_MS
   ) {
+    // Plan §6.1: when the PR is also approved, this is the
+    // "In Review · stuck at admission" condition — the lander would
+    // accept the verdict but branch CI is red and (post-§4.3) we no
+    // longer auto-repair. Keep the same scope/status pair so existing
+    // dashboards continue to surface it; just sharpen the message.
+    if (reviewDecision === "APPROVED") {
+      return {
+        ciEntry,
+        finding: {
+          status: "fail",
+          scope: "github:ci",
+          message: "In Review · stuck at admission — PR is approved but gate CI is red and no CI repair is running",
+        },
+      };
+    }
     return {
       ciEntry,
       finding: {
