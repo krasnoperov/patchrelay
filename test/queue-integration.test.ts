@@ -46,8 +46,31 @@ test("check_passed from repairing_ci without approval transitions to pr_open", (
   );
 });
 
-test("check_failed from awaiting_queue still resolves to repairing_ci in the FSM", () => {
-  assert.equal(resolve("check_failed", "awaiting_queue"), "repairing_ci");
+test("check_failed from awaiting_queue without classification is metadata-only (plan §4.3)", () => {
+  // While In Deploy, branch CI failures don't trigger ci_repair — the
+  // lander's spec CI on the integration tree is the gate.
+  assert.equal(resolve("check_failed", "awaiting_queue"), undefined);
+});
+
+test("check_failed classified as queue_eviction from awaiting_queue routes to repairing_queue", () => {
+  assert.equal(
+    resolve("check_failed", "awaiting_queue", { failureSource: "queue_eviction" }),
+    "repairing_queue",
+  );
+});
+
+test("check_failed classified as branch_ci from awaiting_queue is metadata-only", () => {
+  assert.equal(
+    resolve("check_failed", "awaiting_queue", { failureSource: "branch_ci" }),
+    undefined,
+  );
+});
+
+test("check_failed classified as branch_ci from pr_open still routes to repairing_ci", () => {
+  assert.equal(
+    resolve("check_failed", "pr_open", { failureSource: "branch_ci" }),
+    "repairing_ci",
+  );
 });
 
 test("check_passed from repairing_queue returns to awaiting_queue", () => {
@@ -59,17 +82,20 @@ test("merge_group events are no-ops (external queue handles merging)", () => {
   assert.equal(resolve("merge_group_passed", "awaiting_queue"), undefined);
 });
 
-test("full cycle: awaiting_queue → CI repair → awaiting_queue → done", () => {
+test("full cycle: awaiting_queue → queue eviction → repairing_queue → awaiting_queue → done", () => {
+  // Plan §4.3 changed this cycle: branch CI failures while In Deploy
+  // are metadata; only the lander's eviction signal returns the issue
+  // to a repair state.
   let state: FactoryState = "awaiting_queue";
 
-  const afterFail = resolve("check_failed", state);
-  assert.equal(afterFail, "repairing_ci");
-  state = afterFail!;
+  const afterEvict = resolve("check_failed", state, { failureSource: "queue_eviction" });
+  assert.equal(afterEvict, "repairing_queue");
+  state = afterEvict!;
 
-  // Agent fixes, CI passes. Since PR is approved → awaiting_queue.
-  const afterPass = resolve("check_passed", state, { prReviewState: "approved" });
-  assert.equal(afterPass, "awaiting_queue");
-  state = afterPass!;
+  // After queue repair, the issue returns to the queue.
+  const afterRepairPass = resolve("check_passed", state);
+  assert.equal(afterRepairPass, "awaiting_queue");
+  state = afterRepairPass!;
 
   // External queue merges → done.
   const afterMerge = resolve("pr_merged", state);

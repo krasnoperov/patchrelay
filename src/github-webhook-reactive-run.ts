@@ -100,6 +100,24 @@ async function handleCheckFailedEvent(params: {
   failureContextResolver: GitHubFailureContextResolver;
 }): Promise<void> {
   const { db, logger, feed, enqueueIssue, issue, event, project, failureContextResolver } = params;
+
+  // Plan §4.3: while In Deploy (`awaiting_queue`), branch CI is metadata
+  // only — the lander owns admission, and its spec CI on the integration
+  // tree is the gate. Queue eviction failures still flow through (they're
+  // how the lander signals a real integration regression).
+  if (issue.factoryState === "awaiting_queue" && !isQueueEvictionFailure(issue, event, project)) {
+    feed?.publish({
+      level: "info",
+      kind: "github",
+      issueKey: issue.issueKey,
+      projectId: issue.projectId,
+      stage: issue.factoryState,
+      status: "branch_ci_metadata_in_deploy",
+      summary: `Ignored ${event.checkName ?? "branch CI"} failure while In Deploy; lander owns admission`,
+    });
+    return;
+  }
+
   if (isQueueEvictionFailure(issue, event, project)) {
     const queueRepairContext = buildQueueRepairContextFromEvent(event);
     const failureContext = buildGitHubQueueFailureContext(event, project, queueRepairContext);
