@@ -81,7 +81,7 @@ export async function syncActiveWorkflowState(params: {
 async function syncQueuedForDeployLabel(params: {
   issue: Pick<IssueRecord, "linearIssueId" | "factoryState">;
   liveIssue: {
-    workflowStates: Array<{ name: string; type?: string | undefined }>;
+    workflowStates: Array<{ name: string; type?: string }>;
     labels: Array<{ id: string; name: string }>;
   };
   linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>;
@@ -110,7 +110,7 @@ async function syncQueuedForDeployLabel(params: {
 // unnecessary.
 function isQueuedForDeployFallback(
   issue: Pick<IssueRecord, "factoryState">,
-  liveIssue: { workflowStates: Array<{ name: string; type?: string | undefined }> },
+  liveIssue: { workflowStates: Array<{ name: string; type?: string }> },
 ): boolean {
   if (issue.factoryState !== "awaiting_queue") return false;
   const deploying = resolvePreferredDeployingLinearState(liveIssue);
