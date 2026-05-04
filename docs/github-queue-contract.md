@@ -83,3 +83,37 @@ This document is the contract for that boundary.
 - Eviction check run: `merge-steward/queue`
 
 Changing the eviction check name must be treated as a protocol change and updated on both sides.
+
+## Review carry-forward
+
+Review-quill caches approved verdicts so a head SHA change that does not change
+the patch (rebase onto fresh main, force-push of the same content, etc.) does
+not trigger a fresh review run. The cache key is the change identity:
+
+- `patch_id` — `git diff $(git merge-base <base> <head>)..<head> | git patch-id --stable`
+- `integration_tree_id` (deferred) — `git merge-tree --write-tree <base> <head>`
+
+`--stable` canonicalizes per-file order so commit reorders within a range
+produce the same id. The output is a tree object id; non-zero exit from
+`git merge-tree` signals a real conflict, not an error.
+
+Two review surface modes coupled to two cache shapes:
+
+- `head` (v1 default) — reviewer reviews the PR head; cache keys on `patch_id`
+  alone. Trivial rebases carry forward; semantic merge issues are caught at
+  integration time by the lander's spec CI.
+- `integration_tree` (deferred) — reviewer reviews the synthetic merged tree;
+  cache keys on `(patch_id, integration_tree_id)`. Most base-advance rebases
+  re-review.
+
+Mixing modes with the wrong cache key produces incorrect carry-forward, so
+`review_surface_mode` is recorded on every `review_attempts` row and the
+lookup filters on it.
+
+A PR carrying the configured no-cache label (default `review:no-cache`) is
+always re-reviewed even when the patch is unchanged — useful for release /
+changelog PRs that need a fresh body rendering.
+
+Carry-forward only fires for stored verdicts that include the rendered review
+body and event. Rows from before the carry-forward migration have NULL bodies
+and naturally fall through to a fresh review (rollout safety).

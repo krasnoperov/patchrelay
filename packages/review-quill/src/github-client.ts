@@ -161,6 +161,20 @@ function normalizePullRequestState(pr: Record<string, unknown>): PullRequestSumm
   return state;
 }
 
+function normalizePullRequestLabels(pr: Record<string, unknown>): string[] {
+  const raw = pr.labels;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((entry) => {
+      if (entry && typeof entry === "object") {
+        const name = (entry as Record<string, unknown>).name;
+        if (typeof name === "string") return name;
+      }
+      return "";
+    })
+    .filter((name) => name.length > 0);
+}
+
 export class GitHubClient {
   constructor(private readonly auth: GitHubClientAuthProvider) {}
 
@@ -255,6 +269,7 @@ export class GitHubClient {
         : {}),
       ...(typeof pr.merged_at === "string" ? { mergedAt: pr.merged_at } : {}),
       ...(typeof pr.closed_at === "string" ? { closedAt: pr.closed_at } : {}),
+      labels: normalizePullRequestLabels(pr),
     }));
   }
 
@@ -295,6 +310,7 @@ export class GitHubClient {
         : {}),
       ...(typeof pr.merged_at === "string" ? { mergedAt: pr.merged_at } : {}),
       ...(typeof pr.closed_at === "string" ? { closedAt: pr.closed_at } : {}),
+      labels: normalizePullRequestLabels(pr),
     };
   }
 
