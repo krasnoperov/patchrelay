@@ -33,6 +33,21 @@ export const stewardConfigSchema = z.object({
   admissionLabel: z.string().default("queue"),
   priorityQueueLabel: z.string().default("queue:priority"),
   mergeQueueCheckName: z.string().default(DEFAULT_MERGE_QUEUE_CHECK_NAME),
+  // Plan §2.4 — bus-contract artifact names exposed for cross-service
+  // alignment. Defaults preserve current behavior. The steward writes
+  // `evictionCheckName` (today: same as mergeQueueCheckName, kept for
+  // contract clarity) and `specReadyCheckName`; consumers read them.
+  /** Eviction check run name. Synonym for mergeQueueCheckName, surfaced
+   * under the bus-contract name so consumer code can be naming-aligned
+   * with patchrelay's resolver. */
+  evictionCheckName: z.string().default(DEFAULT_MERGE_QUEUE_CHECK_NAME),
+  /** Spec-ready check run name (default: "merge-steward/spec-ready").
+   * Read by review-quill in integration_tree mode (plan §3.5). */
+  specReadyCheckName: z.string().default("merge-steward/spec-ready"),
+  /** Prefix for spec branch names (default: "mq-spec-"); matches the
+   * existing SPEC_BRANCH_PREFIX in reconciler-core.ts. The pattern
+   * review-quill matches against is `${prefix}*`. */
+  specBranchPrefix: z.string().default("mq-spec-"),
   /** Branch name patterns to exclude from admission (glob-style). */
   excludeBranches: z.array(z.string()).default([]),
   /**
