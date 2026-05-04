@@ -29,6 +29,15 @@ describe("observability: reconciler event stream", () => {
     assert.ok(actions.includes("merge_revalidating"), "should emit merge_revalidating");
     assert.ok(actions.includes("merge_succeeded"), "should emit merge_succeeded");
 
+    // Plan §5.2: spec-ready check_run is emitted after the spec push.
+    assert.ok(
+      h.evictionSim.specReadyEvents.length > 0,
+      "should emit spec-ready event after spec push",
+    );
+    const specReady = h.evictionSim.specReadyEvents.find((e) => e.entry.prNumber === 1);
+    assert.ok(specReady, "spec-ready event for PR 1");
+    assert.match(specReady!.specBranch, /^mq-spec-/);
+
     // Order: promoted before spec_build before ci_triggered before merge_succeeded
     const promotedIdx = actions.indexOf("promoted");
     const specIdx = actions.indexOf("spec_build_started");
