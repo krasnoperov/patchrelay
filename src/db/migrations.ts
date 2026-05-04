@@ -348,6 +348,14 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   addColumnIfMissing(connection, "issues", "last_attempted_failure_head_sha", "TEXT");
   addColumnIfMissing(connection, "issues", "last_attempted_failure_signature", "TEXT");
   addColumnIfMissing(connection, "issues", "last_attempted_failure_at", "TEXT");
+  // Plan §4.1: track the last published change identity so future
+  // runs can detect patch-id-equivalent re-publishes (no-op pushes).
+  // Currently observability-only — populated when patchrelay observes
+  // a push it can attribute to itself; consumers (prompt assembly,
+  // post-hoc detection) layer in follow-up PRs.
+  addColumnIfMissing(connection, "issues", "last_published_patch_id", "TEXT");
+  addColumnIfMissing(connection, "issues", "last_published_integration_tree_id", "TEXT");
+  addColumnIfMissing(connection, "issues", "last_published_head_sha", "TEXT");
   addColumnIfMissing(connection, "linear_installations", "health_status", "TEXT NOT NULL DEFAULT 'ok'");
   addColumnIfMissing(connection, "linear_installations", "health_reason", "TEXT");
   addColumnIfMissing(connection, "linear_installations", "health_updated_at", "TEXT");
@@ -425,6 +433,9 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         last_attempted_failure_head_sha TEXT,
         last_attempted_failure_signature TEXT,
         last_attempted_failure_at TEXT,
+        last_published_patch_id TEXT,
+        last_published_integration_tree_id TEXT,
+        last_published_head_sha TEXT,
         ci_repair_attempts INTEGER NOT NULL DEFAULT 0,
         queue_repair_attempts INTEGER NOT NULL DEFAULT 0,
         review_fix_attempts INTEGER NOT NULL DEFAULT 0,
@@ -488,6 +499,9 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         last_attempted_failure_head_sha,
         last_attempted_failure_signature,
         last_attempted_failure_at,
+        last_published_patch_id,
+        last_published_integration_tree_id,
+        last_published_head_sha,
         ci_repair_attempts,
         queue_repair_attempts,
         review_fix_attempts,
@@ -549,6 +563,9 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         last_attempted_failure_head_sha,
         last_attempted_failure_signature,
         last_attempted_failure_at,
+        last_published_patch_id,
+        last_published_integration_tree_id,
+        last_published_head_sha,
         COALESCE(ci_repair_attempts, 0),
         COALESCE(queue_repair_attempts, 0),
         COALESCE(review_fix_attempts, 0),
