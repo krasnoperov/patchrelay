@@ -323,6 +323,25 @@ export class IssueStore {
     return rows.map(mapIssueRow);
   }
 
+  // Issues that are approved by review-quill but stuck in In Review
+  // because branch CI is failing — the merge-steward never admits them.
+  // Plan §6.2: surface this as IN_REVIEW_STUCK so an operator notices
+  // before the issue goes silent for hours.
+  listApprovedRedCiIssues(): IssueRecord[] {
+    const rows = this.connection
+      .prepare(
+        `SELECT * FROM issues
+         WHERE factory_state = 'pr_open'
+         AND active_run_id IS NULL
+         AND pending_run_type IS NULL
+         AND pr_number IS NOT NULL
+         AND pr_review_state = 'approved'
+         AND pr_check_status = 'failure'`,
+      )
+      .all() as Array<Record<string, unknown>>;
+    return rows.map(mapIssueRow);
+  }
+
   replaceIssueDependencies(params: {
     projectId: string;
     linearIssueId: string;

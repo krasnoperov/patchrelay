@@ -9,6 +9,11 @@ import { execCommand } from "./utils.ts";
 
 const QUEUE_HEALTH_GRACE_MS = 120_000;
 const QUEUE_HEALTH_PROBE_FAILURE_COOLDOWN_MS = 300_000;
+// Plan §6.2: an approved PR with red branch CI for >= this long is
+// stuck at admission — operator notice is needed before the issue
+// goes silent for hours.
+const IN_REVIEW_STUCK_THRESHOLD_MS = 30 * 60 * 1000;
+const IN_REVIEW_STUCK_FEED_COOLDOWN_MS = 30 * 60 * 1000;
 
 export interface QueueHealthAdvancer {
   advanceIdleIssue(
@@ -36,6 +41,7 @@ function isDuplicateProbe(
 
 export class QueueHealthMonitor {
   private readonly probeFailureFeedTimes = new Map<string, number>();
+  private readonly inReviewStuckFeedTimes = new Map<string, number>();
 
   constructor(
     private readonly db: PatchRelayDatabase,
@@ -49,6 +55,45 @@ export class QueueHealthMonitor {
     for (const issue of this.db.issues.listAwaitingQueueIssues()) {
       await this.probeQueuedIssue(issue);
     }
+    for (const issue of this.db.issues.listApprovedRedCiIssues()) {
+      this.probeInReviewStuckIssue(issue);
+    }
+  }
+
+  // Plan §6.2: emit IN_REVIEW_STUCK when an approved PR has a red gate
+  // for more than 30 minutes. Consequence of plan §4.3 — branch CI
+  // failures while approved no longer trigger ci_repair, so the
+  // condition is otherwise invisible to the operator.
+  private probeInReviewStuckIssue(issue: IssueRecord): void {
+    if (!issue.prNumber) return;
+    const project = this.config.projects.find((p) => p.id === issue.projectId);
+    if (!project) return;
+
+    const reference = issue.lastGitHubFailureAt ?? issue.updatedAt;
+    const stuckMs = Date.now() - Date.parse(reference);
+    if (stuckMs < IN_REVIEW_STUCK_THRESHOLD_MS) return;
+
+    const feedKey = `${issue.projectId}::${issue.linearIssueId}`;
+    const lastFedAt = this.inReviewStuckFeedTimes.get(feedKey) ?? 0;
+    if (Date.now() - lastFedAt < IN_REVIEW_STUCK_FEED_COOLDOWN_MS) return;
+    this.inReviewStuckFeedTimes.set(feedKey, Date.now());
+
+    const minutes = Math.round(stuckMs / 60_000);
+    const failedCheck = issue.lastGitHubFailureCheckName ?? "branch CI";
+    this.logger.warn(
+      { issueKey: issue.issueKey, prNumber: issue.prNumber, stuckMs, failedCheck },
+      "Queue health: approved PR is stuck at admission with red branch CI",
+    );
+    this.feed?.publish({
+      level: "warn",
+      kind: "github",
+      issueKey: issue.issueKey,
+      projectId: issue.projectId,
+      stage: "pr_open",
+      status: "in_review_stuck",
+      summary: `In Review · stuck at admission — PR #${issue.prNumber} has been approved with red ${failedCheck} for ${minutes} min`,
+      detail: issue.lastGitHubFailureCheckUrl ?? undefined,
+    });
   }
 
   private async probeQueuedIssue(issue: IssueRecord): Promise<void> {

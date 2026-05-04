@@ -359,6 +359,58 @@ exit 1`;
   }
 });
 
+// ─── IN_REVIEW_STUCK — approved + red CI > 30 min ────────────────
+
+test("listApprovedRedCiIssues returns approved+red issues with no run", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "qhm-stuck-list-"));
+  try {
+    const harness = createTestHarness(baseDir, "exit 0");
+    process.env.PATH = harness.oldPath;
+    // Approved + red gate, In Review (pr_open), no active run.
+    harness.db.upsertIssue({
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      issueKey: "PRJ-1",
+      branchName: "feat-stuck",
+      prNumber: 100,
+      prState: "open",
+      prReviewState: "approved",
+      prCheckStatus: "failure",
+      factoryState: "pr_open",
+    });
+    // Same shape but factoryState repairing_ci → excluded (run is implicit).
+    harness.db.upsertIssue({
+      projectId: "proj",
+      linearIssueId: "issue-2",
+      issueKey: "PRJ-2",
+      branchName: "feat-repairing",
+      prNumber: 101,
+      prState: "open",
+      prReviewState: "approved",
+      prCheckStatus: "failure",
+      factoryState: "repairing_ci",
+    });
+    // Not approved → excluded.
+    harness.db.upsertIssue({
+      projectId: "proj",
+      linearIssueId: "issue-3",
+      issueKey: "PRJ-3",
+      branchName: "feat-unreviewed",
+      prNumber: 102,
+      prState: "open",
+      prReviewState: "review_requested",
+      prCheckStatus: "failure",
+      factoryState: "pr_open",
+    });
+
+    const stuck = harness.db.issues.listApprovedRedCiIssues();
+    const keys = stuck.map((i) => i.issueKey);
+    assert.deepEqual(keys, ["PRJ-1"]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 // ─── Probe failure — no state transition ─────────────────────────
 
 test("reconcileQueueHealth does not transition state on probe failure", { concurrency: false }, async () => {
