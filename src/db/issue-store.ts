@@ -61,6 +61,9 @@ export interface UpsertIssueParams {
   lastAttemptedFailureHeadSha?: string | null;
   lastAttemptedFailureSignature?: string | null;
   lastAttemptedFailureAt?: string | null;
+  lastPublishedPatchId?: string | null;
+  lastPublishedIntegrationTreeId?: string | null;
+  lastPublishedHeadSha?: string | null;
   ciRepairAttempts?: number;
   queueRepairAttempts?: number;
   reviewFixAttempts?: number;
@@ -134,6 +137,9 @@ export class IssueStore {
       if (params.lastAttemptedFailureHeadSha !== undefined) { sets.push("last_attempted_failure_head_sha = @lastAttemptedFailureHeadSha"); values.lastAttemptedFailureHeadSha = params.lastAttemptedFailureHeadSha; }
       if (params.lastAttemptedFailureSignature !== undefined) { sets.push("last_attempted_failure_signature = @lastAttemptedFailureSignature"); values.lastAttemptedFailureSignature = params.lastAttemptedFailureSignature; }
       if (params.lastAttemptedFailureAt !== undefined) { sets.push("last_attempted_failure_at = @lastAttemptedFailureAt"); values.lastAttemptedFailureAt = params.lastAttemptedFailureAt; }
+      if (params.lastPublishedPatchId !== undefined) { sets.push("last_published_patch_id = @lastPublishedPatchId"); values.lastPublishedPatchId = params.lastPublishedPatchId; }
+      if (params.lastPublishedIntegrationTreeId !== undefined) { sets.push("last_published_integration_tree_id = @lastPublishedIntegrationTreeId"); values.lastPublishedIntegrationTreeId = params.lastPublishedIntegrationTreeId; }
+      if (params.lastPublishedHeadSha !== undefined) { sets.push("last_published_head_sha = @lastPublishedHeadSha"); values.lastPublishedHeadSha = params.lastPublishedHeadSha; }
       if (params.ciRepairAttempts !== undefined) { sets.push("ci_repair_attempts = @ciRepairAttempts"); values.ciRepairAttempts = params.ciRepairAttempts; }
       if (params.queueRepairAttempts !== undefined) { sets.push("queue_repair_attempts = @queueRepairAttempts"); values.queueRepairAttempts = params.queueRepairAttempts; }
       if (params.reviewFixAttempts !== undefined) { sets.push("review_fix_attempts = @reviewFixAttempts"); values.reviewFixAttempts = params.reviewFixAttempts; }
@@ -154,6 +160,7 @@ export class IssueStore {
           last_github_ci_snapshot_head_sha, last_github_ci_snapshot_gate_check_name, last_github_ci_snapshot_gate_check_status, last_github_ci_snapshot_json, last_github_ci_snapshot_settled_at,
           last_queue_signal_at, last_queue_incident_json,
           last_attempted_failure_head_sha, last_attempted_failure_signature, last_attempted_failure_at,
+          last_published_patch_id, last_published_integration_tree_id, last_published_head_sha,
           ci_repair_attempts, queue_repair_attempts, review_fix_attempts, zombie_recovery_attempts, last_zombie_recovery_at, orchestration_settle_until,
           updated_at
         ) VALUES (
@@ -167,6 +174,7 @@ export class IssueStore {
           @lastGitHubCiSnapshotHeadSha, @lastGitHubCiSnapshotGateCheckName, @lastGitHubCiSnapshotGateCheckStatus, @lastGitHubCiSnapshotJson, @lastGitHubCiSnapshotSettledAt,
           @lastQueueSignalAt, @lastQueueIncidentJson,
           @lastAttemptedFailureHeadSha, @lastAttemptedFailureSignature, @lastAttemptedFailureAt,
+          @lastPublishedPatchId, @lastPublishedIntegrationTreeId, @lastPublishedHeadSha,
           @ciRepairAttempts, @queueRepairAttempts, @reviewFixAttempts, @zombieRecoveryAttempts, @lastZombieRecoveryAt, @orchestrationSettleUntil,
           @now
         )
@@ -222,6 +230,9 @@ export class IssueStore {
         lastAttemptedFailureHeadSha: params.lastAttemptedFailureHeadSha ?? null,
         lastAttemptedFailureSignature: params.lastAttemptedFailureSignature ?? null,
         lastAttemptedFailureAt: params.lastAttemptedFailureAt ?? null,
+        lastPublishedPatchId: params.lastPublishedPatchId ?? null,
+        lastPublishedIntegrationTreeId: params.lastPublishedIntegrationTreeId ?? null,
+        lastPublishedHeadSha: params.lastPublishedHeadSha ?? null,
         ciRepairAttempts: params.ciRepairAttempts ?? 0,
         queueRepairAttempts: params.queueRepairAttempts ?? 0,
         reviewFixAttempts: params.reviewFixAttempts ?? 0,
@@ -684,6 +695,15 @@ export function mapIssueRow(row: Record<string, unknown>): IssueRecord {
       : {}),
     ...(row.last_attempted_failure_at !== null && row.last_attempted_failure_at !== undefined
       ? { lastAttemptedFailureAt: String(row.last_attempted_failure_at) }
+      : {}),
+    ...(row.last_published_patch_id !== null && row.last_published_patch_id !== undefined
+      ? { lastPublishedPatchId: String(row.last_published_patch_id) }
+      : {}),
+    ...(row.last_published_integration_tree_id !== null && row.last_published_integration_tree_id !== undefined
+      ? { lastPublishedIntegrationTreeId: String(row.last_published_integration_tree_id) }
+      : {}),
+    ...(row.last_published_head_sha !== null && row.last_published_head_sha !== undefined
+      ? { lastPublishedHeadSha: String(row.last_published_head_sha) }
       : {}),
     ciRepairAttempts: Number(row.ci_repair_attempts ?? 0),
     queueRepairAttempts: Number(row.queue_repair_attempts ?? 0),

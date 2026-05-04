@@ -77,6 +77,13 @@ export interface IssueRecord {
   lastAttemptedFailureHeadSha?: string | undefined;
   lastAttemptedFailureSignature?: string | undefined;
   lastAttemptedFailureAt?: string | undefined;
+  // Plan §4.1: change identity of the last patchrelay-attributed publish.
+  // Populated by post-hoc detection so future runs can recognize a
+  // patch-id-equivalent push and skip the cosmetic re-publish loop.
+  // Currently observability-only — consumer wiring is a follow-up.
+  lastPublishedPatchId?: string | undefined;
+  lastPublishedIntegrationTreeId?: string | undefined;
+  lastPublishedHeadSha?: string | undefined;
   ciRepairAttempts: number;
   queueRepairAttempts: number;
   reviewFixAttempts: number;
