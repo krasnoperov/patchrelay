@@ -12,6 +12,32 @@ For install and first-time setup, see [self-hosting.md](./self-hosting.md). For 
 4. GitHub webhooks automatically trigger CI repair, review fix, or merge queue repair runs when needed.
 5. Watch progress from the terminal, or open the same worktree and take over manually.
 
+### Sequencing predictable conflicts at planning time
+
+When two issues will both touch the same lock file, the same schema migration,
+the same shared enum, or the same normalization helper, they will conflict at
+integration time. The merge-steward eviction loop catches it, but every cycle
+costs a fresh review and a queue restart.
+
+For predictable conflicts, set `B blockedBy A` in Linear **before either
+starts**. PatchRelay already honors `blockedBy` (the `IssueRecord.blockedByCount`
+field gates start). When A reaches Done, B starts on a main that already
+contains A's changes, so there is no conflict to resolve.
+
+Heuristics for when to set `blockedBy` at planning:
+
+- both issues touch a lock file (`package-lock.json`, `pnpm-lock.yaml`,
+  `yarn.lock`, `Cargo.lock`, …)
+- both issues edit the same migration sequence or schema file
+- both issues rename, replace, or remove a shared helper / enum / type
+- both issues edit the same normalization or compatibility shim
+- one issue establishes a new convention the other must follow
+
+The cost is latency — B waits for A. The cost is worth paying when the
+conflict is genuinely predictable. If the conflict is only visible at
+handoff (after the diff is in hand), the runtime `sequence-check` path
+(see plan §8.2) covers it without `blockedBy`.
+
 ## Command cheatsheet
 
 ```bash
