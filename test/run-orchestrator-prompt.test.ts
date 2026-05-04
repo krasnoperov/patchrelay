@@ -268,7 +268,7 @@ test("branch_upkeep prompt folds follow-up and PR facts into current context", (
     assert.match(prompt, /Current review state: changes_requested/);
     assert.match(prompt, /Merge state against main: DIRTY/);
     assert.match(prompt, /Branch upkeep is required on the existing PR branch\./);
-    assert.match(prompt, /Goal: restore merge readiness on the current branch and push a newer head without regressing review or CI readiness\./);
+    assert.match(prompt, /Goal: restore merge readiness on the current branch\. Push a newer head only when the work actually changes the diff against the base/);
     assert.doesNotMatch(prompt, /## Follow-up Turn/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -313,10 +313,10 @@ test("review_fix prompt keeps concise reviewer context plus structured comments"
     assert.match(prompt, /Review ID: 901/);
     assert.match(prompt, /Reviewed commit: abc123def456/);
     assert.match(prompt, /Inline review comments captured: 1/);
-    assert.match(prompt, /only complete if you push a newer PR head or deliberately escalate/);
+    assert.match(prompt, /Do not push a commit that produces a patch-id-equivalent diff just to make the fix unmistakable\./);
     assert.match(prompt, /src\/frontend\/app\/sessionSchema\.ts:1526 \(RIGHT\)/);
     assert.match(prompt, /Blank totals should not produce a leader\./);
-    assert.match(prompt, /Goal: restore review readiness and push a newer head on the current PR branch\./);
+    assert.match(prompt, /Goal: restore review readiness on the current PR branch\. Push a newer head only when the fix actually changes the diff/);
     assert.match(prompt, /Address the real concern behind the feedback and verify nearby invariants in the touched flow before you publish\./);
     assert.match(prompt, /## Final Self-Review Before Push/);
     assert.match(prompt, /Fix any likely in-scope blocker you can see now: missing edge-case handling, broken adjacent invariant in the touched flow/);

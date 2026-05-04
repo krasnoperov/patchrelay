@@ -328,7 +328,8 @@ function buildStructuredReviewContext(context?: Record<string, unknown>): string
   lines.push(
     `Inline review comments captured: ${reviewComments.length}`,
     "Resolve each comment below or verify it is already fixed on the current head before you stop.",
-    "A requested-changes turn is only complete if you push a newer PR head or deliberately escalate because you are blocked.",
+    "Complete the turn either by pushing a newer PR head with the fix, or — if your reviewer-pass produces only comments, test wording, or PR-body changes — by editing the PR body via `gh pr edit` instead of pushing. Do not push a commit that produces a patch-id-equivalent diff just to make the fix unmistakable.",
+    "If you are blocked, deliberately escalate instead of pushing.",
     "",
   );
   for (const comment of reviewComments) {
@@ -356,14 +357,14 @@ function buildRequestedChangesContext(runType: RunType, context?: Record<string,
   if (mode === "branch_upkeep") {
     lines.push(
       "Branch upkeep is required on the existing PR branch.",
-      "Goal: restore merge readiness on the current branch and push a newer head without regressing review or CI readiness.",
+      "Goal: restore merge readiness on the current branch. Push a newer head only when the work actually changes the diff against the base; do not republish a patch-id-equivalent head.",
     );
   } else {
     const reviewer = typeof context?.reviewerName === "string" ? context.reviewerName : undefined;
     const reviewBody = typeof context?.reviewBody === "string" ? context.reviewBody.trim() : "";
     lines.push(
       "Requested changes on the existing PR branch.",
-      "Goal: restore review readiness and push a newer head on the current PR branch.",
+      "Goal: restore review readiness on the current PR branch. Push a newer head only when the fix actually changes the diff; if the reviewer-pass produces only comments, test wording, or PR-body changes, edit the PR body via `gh pr edit` instead.",
       "Address the real concern behind the feedback and verify nearby invariants in the touched flow before you publish.",
       reviewer ? `Reviewer: ${reviewer}` : "",
       reviewBody ? `Review summary:\n${reviewBody}` : "",
