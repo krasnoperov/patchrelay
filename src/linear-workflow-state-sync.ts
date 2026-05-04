@@ -5,14 +5,17 @@ import {
   resolvePreferredQueuedLinearState,
   resolvePreferredCompletedLinearState,
   resolvePreferredDeployingLinearState,
+  resolvePreferredDeployLinearState,
   resolvePreferredHumanNeededLinearState,
   resolvePreferredImplementingLinearState,
   resolvePreferredReviewLinearState,
   resolvePreferredReviewingLinearState,
 } from "./linear-workflow.ts";
+import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
 import { isCompletedLinearState } from "./pr-state.ts";
 import { hasTrustedNoPrCompletion } from "./trusted-no-pr-completion.ts";
 import type { LinearClientProvider } from "./types.ts";
+import type { ProjectConfig } from "./workflow-types.ts";
 
 export async function syncActiveWorkflowState(params: {
   db: PatchRelayDatabase;
@@ -20,8 +23,9 @@ export async function syncActiveWorkflowState(params: {
   linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>;
   trackedIssue?: TrackedIssueRecord | undefined;
   options?: { activeRunType?: RunType } | undefined;
+  project?: ProjectConfig | undefined;
 }): Promise<void> {
-  const { db, issue, linear, trackedIssue, options } = params;
+  const { db, issue, linear, trackedIssue, options, project } = params;
   const liveIssue = await linear.getIssue(issue.linearIssueId).catch(() => undefined);
   if (!liveIssue) return;
 
@@ -43,6 +47,16 @@ export async function syncActiveWorkflowState(params: {
     return;
   }
 
+  // Plan §4.6: keep the queued-for-deploy label in sync UNCONDITIONALLY,
+  // before the state-equality early-return. When a project lacks an
+  // In Deploy state the deploying-Linear-state collapses to the same
+  // value as In Review — meaning when an awaiting_queue issue is sitting
+  // in the In Review state, the early-return below skips the state
+  // write but the label still needs to be added/removed to reflect
+  // factoryState. Running first guarantees the label tracks reality
+  // even when the state name doesn't change.
+  await syncQueuedForDeployLabel({ issue, liveIssue, linear, project }).catch(() => undefined);
+
   const targetState = resolveDesiredActiveWorkflowState(issue, trackedIssue, options, liveIssue);
   if (!targetState) return;
 
@@ -54,6 +68,59 @@ export async function syncActiveWorkflowState(params: {
 
   const updated = await linear.setIssueState(issue.linearIssueId, targetState);
   refreshCachedLinearState(db, issue, updated.stateName, updated.stateType);
+}
+
+// Plan §4.6: when the issue's factoryState says it's In Deploy but the
+// project's Linear workflow has no In Deploy-equivalent state, we want
+// the dashboard to be able to distinguish "in review, awaiting verdict"
+// from "in review, queued for landing". A configurable PR/Linear label
+// (`queuedForDeployLabel`, default `queued-for-deploy`) carries that
+// signal idempotently. The helper computes the desired present/absent
+// state and only calls the API when there's a delta — safe to run on
+// every sync invocation.
+async function syncQueuedForDeployLabel(params: {
+  issue: Pick<IssueRecord, "linearIssueId" | "factoryState">;
+  liveIssue: {
+    workflowStates: Array<{ name: string; type?: string | undefined }>;
+    labels: Array<{ id: string; name: string }>;
+  };
+  linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>;
+  project: ProjectConfig | undefined;
+}): Promise<void> {
+  const { issue, liveIssue, linear, project } = params;
+  const labelName = resolveMergeQueueProtocol(project).queuedForDeployLabel;
+  const want = isQueuedForDeployFallback(issue, liveIssue);
+  const currentLabels = (liveIssue.labels ?? [])
+    .map((label) => label.name.trim().toLowerCase())
+    .filter(Boolean);
+  const have = currentLabels.includes(labelName.trim().toLowerCase());
+  if (want === have) return;
+  if (want) {
+    await linear.updateIssueLabels({ issueId: issue.linearIssueId, addNames: [labelName] });
+  } else {
+    await linear.updateIssueLabels({ issueId: issue.linearIssueId, removeNames: [labelName] });
+  }
+}
+
+// True only when (a) the issue is In Deploy AND (b) the project's
+// Linear workflow has no In Deploy-equivalent state — detected by the
+// preferred-deploying state collapsing to the same name as the
+// preferred-review state. When the project does have a real In Deploy
+// state, `setIssueState` flows the issue there and the label is
+// unnecessary.
+function isQueuedForDeployFallback(
+  issue: Pick<IssueRecord, "factoryState">,
+  liveIssue: { workflowStates: Array<{ name: string; type?: string | undefined }> },
+): boolean {
+  if (issue.factoryState !== "awaiting_queue") return false;
+  const deploying = resolvePreferredDeployingLinearState(liveIssue);
+  const review = resolvePreferredReviewLinearState(liveIssue);
+  const deployUnstarted = resolvePreferredDeployLinearState(liveIssue);
+  if (!deploying || !review) return false;
+  // No "deploying"/"deploy" state in the workflow → both resolve to
+  // a review state. That's the fallback condition.
+  return deploying.trim().toLowerCase() === review.trim().toLowerCase()
+    && (deployUnstarted ?? "").trim().toLowerCase() === review.trim().toLowerCase();
 }
 
 async function syncCompletedLinearState(params: {
