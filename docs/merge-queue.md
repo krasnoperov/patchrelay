@@ -8,7 +8,9 @@ Three independent services handle the path from "PR exists" to "merged on `main`
 
 Neither downstream service calls the other's API, and neither calls patchrelay. GitHub is the shared bus — PR state, reviews, checks, and branch changes are the protocol. Each service is independently usable; a repo can adopt any subset.
 
-For the concrete shared artifacts and ownership boundaries, see [github-queue-contract.md](./github-queue-contract.md).
+For the *mental model* (three roles, four primitives, the carry-forward and eviction rules), see [concepts.md](./concepts.md).
+
+For the *concrete shared artifacts and ownership boundaries*, see [github-queue-contract.md](./github-queue-contract.md).
 
 ## Why split the pipeline
 
@@ -28,32 +30,40 @@ See the design docs for the full analysis: [design-docs/merge-steward.md](./desi
 
 ```mermaid
 sequenceDiagram
-    participant A as Agent / Human
+    participant A as Author<br/>(patchrelay / human)
     participant GH as GitHub
-    participant RQ as review-quill
-    participant MS as merge-steward
+    participant RQ as Reviewer<br/>(review-quill)
+    participant MS as Lander<br/>(merge-steward)
 
     A->>GH: Push branch, open PR
     GH-->>RQ: webhook: PR opened / head updated
-    RQ->>GH: Checkout head SHA in throwaway worktree
-    RQ->>GH: Submit APPROVE / REQUEST_CHANGES review
+
+    alt Same patch_id as a prior approved attempt (carry-forward)
+        RQ->>GH: Re-publish prior verdict (no Codex turn spent)
+    else New patch_id
+        RQ->>GH: Checkout head SHA in throwaway worktree
+        RQ->>GH: Submit APPROVE / REQUEST_CHANGES review
+    end
 
     Note over A,MS: If APPROVE + required checks green:
     GH-->>MS: webhook: review approved / checks green
     MS->>GH: Admit to queue (DB record)
-    MS->>GH: Build speculative branch (main + PR)
-    MS->>GH: Push spec branch, trigger CI on spec SHA
+    MS->>GH: Build spec branch mq-spec-N (merge of main + PR)
+    MS->>GH: Push spec, emit merge-steward/spec-ready check_run
+    Note over RQ: review-quill sees spec-ready;<br/>in integration_tree mode, targets the spec SHA
     GH-->>MS: webhook: check_suite completed on spec
 
     alt CI green on spec
         MS->>GH: Fast-forward push spec SHA → main
         Note over MS,GH: main now points at the tested SHA
     else CI red on spec
-        MS->>GH: Retry (if base SHA changed) or evict + emit check run
-        GH-->>A: check_run failure visible on PR
+        MS->>GH: Retry (if base SHA changed) or evict + emit merge-steward/queue check_run
+        GH-->>A: eviction check_run visible on PR
         A->>GH: Fix branch, push new head → loop restarts
     end
 ```
+
+This sequence is built on the four primitives described in [concepts.md](./concepts.md): a commit's tree, the integration tree, `patch_id`, and fast-forward landing. The two carry-forward branches (re-publish vs fresh review) and the spec-ready check are the ways those primitives surface on the bus.
 
 ## Queue state machine
 
@@ -86,6 +96,20 @@ States:
 | `merged` | Done — `main` now points at the tested SHA |
 | `evicted` | Failed after retries; durable incident created, GitHub check run emitted |
 | `dequeued` | Manually removed by an operator |
+
+## What this pipeline eliminates
+
+The pipeline is built around five rules that fall out of the four primitives. Each rule maps to a specific class of waste that was directly observed in production transcripts before the merge-trees rollout:
+
+| Rule | Where it lives | Waste it eliminates |
+|-|-|-|
+| Carry the verdict by `patch_id` | review-quill `service.ts` carry-forward gate | Re-review on rebase against fresh main |
+| Don't originate redundant pushes | patchrelay run-finalizer (`shouldNotPublish` + post-hoc `patch_id` detection) | Cosmetic re-pushes that dismiss approvals |
+| Branch CI is metadata once In Deploy | patchrelay state-machine table + reactive enqueue guard | `ci_repair` runs fired on flaky branch CI while the lander already has the PR |
+| Cancel a run when an approval lands on the run's source SHA | patchrelay `superseded` RunStatus + finalizer publication block | Mid-run race where a fresh approval is dismissed by a still-running review-fix push |
+| Test the integration tree, not the head | merge-steward speculative branch (`mq-spec-*`) | Green PR head that breaks main after fast-forward |
+
+Three sequencing tiers prevent integration conflicts upstream of the rules above. See [concepts.md](./concepts.md#sequencing--three-tiers-for-predictable-conflicts).
 
 ## Failure and repair handoff
 

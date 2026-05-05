@@ -24,6 +24,8 @@ starts**. PatchRelay already honors `blockedBy` (the `IssueRecord.blockedByCount
 field gates start). When A reaches Done, B starts on a main that already
 contains A's changes, so there is no conflict to resolve.
 
+This is Tier 1 of the three-tier sequencing model — see [concepts.md](./concepts.md#sequencing--three-tiers-for-predictable-conflicts) for the full picture.
+
 Heuristics for when to set `blockedBy` at planning:
 
 - both issues touch a lock file (`package-lock.json`, `pnpm-lock.yaml`,
@@ -81,6 +83,23 @@ This is why PatchRelay maintains `issues` and `runs` tables alongside Codex thre
 - live systemd stream: `journalctl -u patchrelay.service -f`
 
 Use the log file for persisted history, `journalctl` for the live stream.
+
+### Operator alert vocabulary
+
+Cluster-health (`patchrelay cluster-health`) and the queue-health monitor surface stuck-state alerts using the Linear-state-prefixed convention from [concepts.md](./concepts.md#four-states). The prefix matches what the team already reads in Linear; the suffix is the diagnostic.
+
+| Display | Where it fires | Trigger |
+|-|-|-|
+| In Review · stuck at admission | `patchrelay cluster-health` and the queue-health monitor (`IN_REVIEW_STUCK` event) | PR is approved but a required check is red, no `ci_repair` is running, and the issue has been in this state ≥ 30 min |
+
+Other "PR is in this Linear state — but why isn't progression happening right now?" conditions are surfaced today on the merge-steward dashboard rather than as cluster-health alerts:
+
+- **In Deploy · retry-gated** — integration conflict; the steward is waiting for `main` to advance before retrying. See `merge-steward queue show --pr <num>`.
+- **In Deploy · queue paused (main unhealthy)** — `main`'s own CI is failing; the queue holds. See `merge-steward queue status --repo <id>`.
+- **In Deploy · queue paused (operator hold)** — explicit pause on the project, queue, or single PR.
+- **In Deploy · dequeued** — operator pulled the issue from the queue mid-flight.
+
+The cluster-health entry above is the one alert that today is also raised through the IN_REVIEW_STUCK feed event so it shows up in the operator activity stream, not only on a dashboard view.
 
 ### Common log patterns
 

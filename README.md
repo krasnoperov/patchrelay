@@ -114,10 +114,12 @@ See the [merge-steward package README](./packages/merge-steward/README.md) for t
 
 ## Docs
 
+- [Concepts](./docs/concepts.md) — the shared mental model (three roles, four primitives, four states, carry-forward, eviction). Start here.
 - [Self-hosting and deployment](./docs/self-hosting.md) — install, ingress, OAuth and GitHub App setup
 - [Architecture](./docs/architecture.md) — components, ownership, state machine, failure taxonomy
 - [Operator guide](./docs/operator-guide.md) — daily loop, CLI cheatsheet, troubleshooting
-- [Merge queue](./docs/merge-queue.md) — the two-service delivery story
+- [Merge queue](./docs/merge-queue.md) — the three-service delivery story
+- [GitHub queue contract](./docs/github-queue-contract.md) — bus artifacts, identity algorithms, configurable names
 - [Prompting](./docs/prompting.md) — how workflow files and the built-in scaffold compose
 - [Secrets](./docs/secrets.md) — systemd credentials, resolution order
 - [review-quill reference](./docs/review-quill.md) · [merge-steward reference](./docs/merge-steward.md)

@@ -237,17 +237,58 @@ This loop must also respect `delegatedToPatchRelay`. merge-steward may continue 
 
 **Current**, as defined in `factory-state.ts`:
 
-```text
-delegated → implementing → pr_open → awaiting_queue → done
-             ↘ changes_requested ↗
-             ↘ repairing_ci ↗
-awaiting_queue ↘ repairing_queue ↗
+```mermaid
+stateDiagram-v2
+    [*] --> delegated
+    delegated --> implementing
+    implementing --> pr_open: PR opened
+    pr_open --> changes_requested: review requests changes
+    changes_requested --> pr_open: review_fix pushes new head
+    pr_open --> repairing_ci: branch CI fails (and not in queue)
+    repairing_ci --> pr_open: ci_repair pushes new head
+    pr_open --> awaiting_queue: approved + green
+    awaiting_queue --> repairing_queue: merge-steward/queue eviction
+    repairing_queue --> pr_open: queue_repair pushes new head
+    awaiting_queue --> done: main fast-forwarded
 
-terminal exits:
-- awaiting_input
-- escalated
-- failed
+    awaiting_input --> [*]
+    escalated --> [*]
+    failed --> [*]
+    done --> [*]
 ```
+
+### Mapping to Linear workflow states
+
+PatchRelay maps internal `factoryState` codes onto the four-state Linear vocabulary the operator already reads. See [concepts.md](./concepts.md#four-states) for the model and the per-state owners.
+
+| Linear state | `factoryState` codes |
+|-|-|
+| In Progress | `implementing`, `changes_requested`, `repairing_ci`, `repairing_queue` |
+| In Review | `pr_open` (review pending or approved-but-CI-not-yet-green) |
+| In Deploy | `awaiting_queue` (merge-steward queue entry exists) |
+| Done | `done` |
+| Cancelled | `failed` (closed-without-merge variant) |
+
+The mapping is consolidated in `src/linear-workflow-state-sync.ts:resolveDesiredActiveWorkflowState()`. When a project's Linear workflow does not include an In Deploy state, the issue stays in In Review with the configured `queued-for-deploy` sub-label so operators can distinguish "in review, awaiting verdict" from "in review, queued for landing." The label name is configurable via project config; see [github-queue-contract.md](./github-queue-contract.md#configurable-names-per-service).
+
+### Run lifecycle and `superseded` cancellation
+
+`RunStatus` (`src/db-types.ts`) is `queued | running | completed | failed | released | superseded`.
+
+`superseded` is the mid-flight cancellation outcome: a run was cancelled because its premise is no longer true (most commonly, a PR approval landed on the same head SHA the run was working from). The orchestrator releases the active Codex turn's lease, marks the run row `superseded`, and writes a structured summary.
+
+A complementary `shouldNotPublish` flag on the run record makes cancellation hard rather than advisory. Even if the Codex turn races ahead and produces output before the release lands, the run-finalizer reads this flag and refuses to invoke `git push` / `gh pr create` / `gh pr edit`. This is the "no further side effects accepted" contract — soft cancellation alone is not enough because the agent runs in a separate process.
+
+### No-op publish detection
+
+When a run finishes, the finalizer recomputes `patch_id` for the new head and compares it to `IssueRecord.lastPublishedPatchId` (cached on every successful push):
+
+- **Equal** → mark the run `outcome = noop_publish`. Do not advance counters that would trigger downstream reactive runs (don't reset `reviewFixAttempts` to zero; don't dismiss any cached review-quill approval — review-quill's own carry-forward gate handles re-emission).
+- **Different** → record the new identity and proceed normally.
+
+Identity computation happens in a per-repo cache directory shared across PRs, separate from per-issue worktrees. On any failure (network, fetch error, missing refs) the helper returns `undefined` rather than throwing; the webhook handler treats `undefined` conservatively and lets the normal reactive cascade run. Failing closed preserves correctness at the cost of occasional missed optimisations.
+
+A complementary prompt rule in `src/prompting/patchrelay.ts` instructs the agent to compute `patch_id` before pushing and finish the run as a no-op if it equals the last published value. The prompt is the first line of defense; the finalizer's post-hoc detection is the backstop for cases where the agent pushes anyway.
 
 ### Undelegation semantics
 
@@ -272,6 +313,19 @@ That keeps operator-facing state truthful without letting PatchRelay continue wr
 - repeated semantic integration failures
 - broken credentials or revoked installations
 - repository setup hook failures that block all progress
+
+### Failure-source classification
+
+The `factoryState` rule table and the reactive-run enqueue path both consult a `failureSource` field on incoming `check_failed` events:
+
+| `failureSource` | Source | Routes to |
+|-|-|-|
+| `branch_ci` | A required check on the PR head | `repairing_ci` (only when *not* In Deploy) |
+| `queue_eviction` | The configured eviction check (`merge-steward/queue`) | `repairing_queue` |
+
+While the issue is **In Deploy** (`factoryState === "awaiting_queue"`), `branch_ci` failures are metadata only — no `ci_repair` run is launched, no `settled_red_ci` wake is appended. The lander owns the integration tree on a different SHA; branch CI on the PR head does not block landing. The only signal that returns the issue to In Progress in this window is the `queue_eviction` source.
+
+Classification happens in `resolveGitHubFactoryStateForEvent` (which calls `isQueueEvictionFailure` once and forwards the result) and is enforced again in `src/github-webhook-reactive-run.ts:handleCheckFailedEvent()` so the state-machine table and the reactive enqueue path cannot drift.
 
 ## State storage
 

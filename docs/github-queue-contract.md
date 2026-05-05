@@ -1,8 +1,8 @@
 # GitHub Queue Contract
 
-PatchRelay and Merge Steward are intentionally decoupled services. GitHub is the protocol boundary between them.
+PatchRelay, review-quill, and merge-steward are three intentionally decoupled services. GitHub is the protocol boundary between all of them.
 
-This document is the contract for that boundary.
+This document is the contract for that boundary. For the mental model behind it (three roles, four primitives, the carry-forward rule, the eviction rule) see [concepts.md](./concepts.md).
 
 ## Shared Primitives
 
@@ -12,17 +12,45 @@ This document is the contract for that boundary.
 - Review state: approved, changes requested, commented
 - Check state: passed, failed, pending
 - Merge state: open, closed, merged
+- **Change identity**: `patch_id` (always) and `integration_tree_id` (in integration-tree review mode). See [Identity algorithms](#identity-algorithms) below.
 
 ## Shared Control Artifacts
 
-- Eviction check run:
-  Merge Steward emits this on queue eviction.
-  PatchRelay interprets it as a queue-repair request rather than ordinary CI failure.
-  Default: `merge-steward/queue`
+The bus carries five named artifacts. All five default to merge-steward / review-quill / patchrelay conventions but are configurable per project so any role can be replaced by a generic alternative without breaking the others.
 
-- Optional compatibility label:
-  Some repos may still carry a `queue` label or similar metadata.
-  PatchRelay does not rely on it for scheduling, and Merge Steward admission should not require it.
+| Artifact | Default name | Writer | Readers |
+|-|-|-|-|
+| Eviction check_run | `merge-steward/queue` | Lander | Author |
+| Spec-ready check_run | `merge-steward/spec-ready` | Lander | Reviewer |
+| Spec branch ref | `mq-spec-<entry-id>` | Lander | Reviewer, operators |
+| No-cache PR label | `review:no-cache` | Author / human | Reviewer |
+| Queued-for-deploy Linear sub-label | `queued-for-deploy` | Author | Operators |
+
+Defaults preserve current behaviour bit-for-bit. Each service exposes its own configuration field for overriding the names — see [Configurable names per service](#configurable-names-per-service) below.
+
+### Eviction check_run (Lander → Author)
+
+Merge Steward emits this on queue eviction. PatchRelay interprets it as a queue-repair request rather than ordinary CI failure. The check carries structured incident detail in `output.text` plus an incident details URL so PatchRelay preserves richer repair context.
+
+### Spec-ready check_run (Lander → Reviewer)
+
+Merge Steward creates this on the PR head after pushing the speculative branch (`reconciler-prepare.ts`). It announces *"the integration tree for this PR is at SHA X on branch Y"*. review-quill subscribes to this name when running in `integration_tree` mode and uses the spec SHA as the integration target. Pure GitHub bus; no service-to-service call.
+
+| Field | Value |
+|-|-|
+| `name` | `merge-steward/spec-ready` (configurable) |
+| `status` | `completed` |
+| `conclusion` | `neutral` (it's an event, not a verdict) |
+| `output.summary` | Spec SHA + spec branch ref |
+| `target_url` | Link to the spec branch's commit page |
+
+### No-cache PR label (Author → Reviewer)
+
+A PR carrying this label opts out of carry-forward — review-quill always runs a fresh review even when the patch is unchanged. Useful for release / changelog PRs that need a fresh body rendering.
+
+### Queued-for-deploy Linear sub-label (Author → operators)
+
+When a project's Linear workflow does not include an In Deploy state, PatchRelay leaves the issue in In Review and adds this label so operators can distinguish *"in review, awaiting verdict"* from *"in review, queued for landing."* Removed when the issue leaves the deploy fallback (Done, eviction back to In Progress, or moves to a real In Deploy state).
 
 ## Ownership
 
@@ -78,42 +106,89 @@ This document is the contract for that boundary.
   - emitted eviction check run name
   - current required checks / admission facts from GitHub truth
 
-## Defaults
+## Identity algorithms
 
-- Eviction check run: `merge-steward/queue`
+A change has at most two identity hashes. Any service implementing the pipelines below exactly produces interoperable identities — same inputs, same byte sequence, same hash. This is the spec, like RFC 7519 (JWT). No reference implementation, no shared package required for interop.
 
-Changing the eviction check name must be treated as a protocol change and updated on both sides.
+```
+PATCH_ID(branch, base) :=
+  git diff $(git merge-base <base> <branch>)..<branch> \
+    | git patch-id --stable \
+    | awk '{print $1}'
+
+INTEGRATION_TREE_ID(base, head) :=
+  # Auto form (preferred — git resolves the merge-base):
+  git merge-tree --write-tree <base-ref-or-sha> <head-ref-or-sha>
+
+  # Or, when the merge-base must be supplied explicitly:
+  git merge-tree --write-tree --merge-base <merge-base-sha> <base> <head>
+```
+
+Notes:
+
+- `git patch-id --stable` (not bare `git patch-id`) — the `--stable` flag canonicalises per-file order so commit reorders within a range produce the same id.
+- The output of `merge-tree --write-tree` is a **tree object id**, not a commit SHA. Comparisons must use `git rev-parse <commit>^{tree}` or a separately stored tree id.
+- Non-zero exit from `git merge-tree` means *cannot integrate* and is a real conflict signal, not an error condition.
+- `<base>` for `PATCH_ID` is the PR's base ref as GitHub reports it. For a stacked PR, that's the parent PR's branch — not always main.
 
 ## Review carry-forward
 
-Review-quill caches approved verdicts so a head SHA change that does not change
-the patch (rebase onto fresh main, force-push of the same content, etc.) does
-not trigger a fresh review run. The cache key is the change identity:
+review-quill caches approved verdicts so a head SHA change that does not change the patch (rebase onto fresh main, force-push of the same content, etc.) does not trigger a fresh review run.
 
-- `patch_id` — `git diff $(git merge-base <base> <head>)..<head> | git patch-id --stable`
-- `integration_tree_id` (deferred) — `git merge-tree --write-tree <base> <head>`
+Two review surface modes, coupled to two cache shapes:
 
-`--stable` canonicalizes per-file order so commit reorders within a range
-produce the same id. The output is a tree object id; non-zero exit from
-`git merge-tree` signals a real conflict, not an error.
+| Mode | Reviewer reads | Cache key | Default? |
+|-|-|-|-|
+| `head` | The PR head's diff against its base | `patch_id` only | Yes |
+| `integration_tree` | The synthetic merged tree (`git merge-tree --write-tree base head`) | `(patch_id, integration_tree_id)` | Opt-in per repo |
 
-Two review surface modes coupled to two cache shapes:
+Set `reviewSurfaceMode: "integration_tree"` in the per-repo review-quill config to opt in. In integration-tree mode, materialisation builds a synthetic merge commit (`git commit-tree tree -p base -p head`) and detaches the worktree to it, so the reviewer's file reads see what would actually land. A real merge-tree conflict produces a `cannot_integrate` decline rather than throwing.
 
-- `head` (v1 default) — reviewer reviews the PR head; cache keys on `patch_id`
-  alone. Trivial rebases carry forward; semantic merge issues are caught at
-  integration time by the lander's spec CI.
-- `integration_tree` (deferred) — reviewer reviews the synthetic merged tree;
-  cache keys on `(patch_id, integration_tree_id)`. Most base-advance rebases
-  re-review.
+Mixing modes with the wrong cache key produces incorrect carry-forward, so `review_surface_mode` is recorded on every `review_attempts` row and the lookup filters on it.
 
-Mixing modes with the wrong cache key produces incorrect carry-forward, so
-`review_surface_mode` is recorded on every `review_attempts` row and the
-lookup filters on it.
+A PR carrying the configured no-cache label (default `review:no-cache`) is always re-reviewed even when the patch is unchanged.
 
-A PR carrying the configured no-cache label (default `review:no-cache`) is
-always re-reviewed even when the patch is unchanged — useful for release /
-changelog PRs that need a fresh body rendering.
+Carry-forward only fires for stored verdicts that include the rendered review body and event. Rows from before the carry-forward migration have NULL bodies and naturally fall through to a fresh review (rollout safety).
 
-Carry-forward only fires for stored verdicts that include the rendered review
-body and event. Rows from before the carry-forward migration have NULL bodies
-and naturally fall through to a fresh review (rollout safety).
+## Configurable names per service
+
+Each service exposes its own configuration shape rather than a single shared field, so configuration aligns with each service's existing convention. Defaults across services agree byte-for-byte; overriding a name on one side requires the same override on the other.
+
+**patchrelay** — under `github.*` in `workflow-types.ts`:
+
+```ts
+github: {
+  mergeQueueCheckName?: string;     // default: "merge-steward/queue"
+  specReadyCheckName?: string;      // default: "merge-steward/spec-ready"
+  specBranchPattern?: string;       // default: "mq-spec-*"
+  noCacheLabel?: string;            // default: "review:no-cache"
+  queuedForDeployLabel?: string;    // default: "queued-for-deploy"
+}
+```
+
+Resolved through `resolveMergeQueueProtocol()` (`src/merge-queue-protocol.ts`); internal code reads the resolver, never `project.github.*` directly.
+
+**review-quill** — per-repository config (`packages/review-quill/src/types.ts`):
+
+```ts
+specReadyCheckName?: string;      // for spec-subscription in integration_tree mode
+specBranchPattern?: string;
+noCacheLabel?: string;
+reviewSurfaceMode?: "head" | "integration_tree";   // default: "head"
+```
+
+review-quill does not need the eviction name or queued-for-deploy label.
+
+**merge-steward** — flat config (`packages/merge-steward/src/types.ts`):
+
+```ts
+evictionCheckName?: string;       // default: "merge-steward/queue"
+specReadyCheckName?: string;      // default: "merge-steward/spec-ready"
+specBranchPrefix?: string;        // default: "mq-spec-" (the prefix; pattern form is "mq-spec-*")
+```
+
+### What this unlocks
+
+- **Replace the Lander with Mergify.** Set `evictionCheckName: "mergify/queue"`, `specBranchPattern: "mergify/merge-queue/*"`. PatchRelay reacts to Mergify's eviction; review-quill watches Mergify's queue branches. No code changes.
+- **Replace the Reviewer with Copilot Code Review.** Turn off review-quill. Merge-steward and patchrelay don't notice — they read GitHub's `prReviewState`, which any reviewer populates.
+- **Replace the Author with a human.** PatchRelay isn't running. Merge-steward and review-quill operate on the human-authored PR normally; only the Linear status sync goes missing (a patchrelay-specific feature).
