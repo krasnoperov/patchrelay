@@ -36,10 +36,10 @@ CREATE TABLE IF NOT EXISTS review_attempts (
 
 CREATE INDEX IF NOT EXISTS idx_review_attempts_repo_pr
   ON review_attempts(repo_full_name, pr_number, created_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_review_attempts_patch
-  ON review_attempts(repo_full_name, pr_number, patch_id);
-
-CREATE INDEX IF NOT EXISTS idx_review_attempts_patch_tree
-  ON review_attempts(repo_full_name, pr_number, patch_id, integration_tree_id);
 `;
+// idx_review_attempts_patch and idx_review_attempts_patch_tree are
+// created in SqliteStore *after* addColumnIfMissing populates the
+// patch_id / integration_tree_id columns. Legacy databases were
+// created before those columns existed, so referencing them here
+// (CREATE TABLE IF NOT EXISTS skips the body when the table is
+// already present) would fail with "no such column: patch_id".
