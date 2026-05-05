@@ -219,6 +219,8 @@ git push --force-with-lease origin mq-spec-<entry-id>
 
 The steward then triggers a CI run on that SHA (or lets GitHub's push-triggered workflows fire) and transitions the entry to `validating`. Status updates come from webhook events (`check_suite completed`) rather than polling.
 
+After the push, the steward emits a `merge-steward/spec-ready` check_run on the **PR head** (not the spec SHA) announcing where the spec is. review-quill subscribes to this check name when it runs in `integration_tree` mode and uses the spec SHA as the integration target. The contract is documented in [github-queue-contract.md](./github-queue-contract.md#spec-ready-check_run-lander--reviewer).
+
 ### Step 3 — revalidate and fast-forward main
 
 When CI is green, the steward revalidates before merging:
@@ -254,6 +256,29 @@ A post-merge verification pass records the state of `main`'s CI on the new tip; 
 ### Cascade invalidation
 
 If the head entry fails mid-queue (spec CI red, push rejected, merge conflict), the steward invalidates every downstream spec that depended on it and rebuilds them without the evicted entry. Each downstream entry transitions back to `preparing_head` and runs Step 1 again against the new base.
+
+### Patch-id-aware updateHead
+
+When a queue entry's PR head is force-pushed to a SHA that produces the **same `patch_id` and same integration tree** as the prior head (most commonly: a rebase onto fresh main with no real change), the steward short-circuits the spec-rebuild path:
+
+1. Cached on the entry: `headPatchId`, `specTreeId`.
+2. Recompute `patch_id` for the new head and the integration tree against the current base.
+3. If both match the cached values, rebuild the spec commit on the same tree but with the new head as a parent (`git commit-tree spec_tree -p current_base -p new_head`) and force-push the spec branch.
+4. Re-trigger CI on the new spec SHA — `check_runs` are anchored to commit SHAs and there is no API to copy a passing verdict to a different SHA.
+
+What this saves: the spec-build content work (merge computation, conflict checking) and the prepare-state churn through `preparing_head`. What it does not save: the CI run itself.
+
+The new spec commit must include the *current* PR head as a parent so GitHub's post-fast-forward "PR is merged" detection works after landing. Reusing the old spec commit unchanged would leave the PR open after `main` advances.
+
+Downstream entries on the same chain are still invalidated through the existing machinery — changing `entry.specSha` invalidates anything with `specBasedOn === entry.id`. The same-tree rebuild produces a new SHA, so downstream specs were built on a commit that no longer represents this entry's spec head.
+
+### Stack-aware admission
+
+When admitting a PR whose `baseRefName` matches another open PR's `branch` (head ref), the steward defers admission until the parent PR is itself in the queue, then enqueues immediately behind the parent. The base-ref data is fetched as part of `getStatus()` (`packages/merge-steward/src/github/pr-client.ts`) and persisted on `QueueEntry.baseRefName`.
+
+Once a stacked child is in the queue, the existing chain machinery (`reconciler-prepare.ts`: `base = isHead ? main : prevEntry?.specBranch`) handles the cumulative speculative validation on top of the parent's spec. When the parent merges, GitHub auto-retargets the child's base to main. PatchRelay notices the base change, pushes a rebased child, and the cycle continues normally.
+
+If a stacked parent is force-pushed (review-fix run produces a new patch on the parent), the existing invalidate-downstream machinery fires for the child and the child's spec is rebuilt against the parent's new spec. No new steward code; the existing chain invalidation handles it.
 
 ### State machine (simplified)
 
