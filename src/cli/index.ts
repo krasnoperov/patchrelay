@@ -7,6 +7,7 @@ import {
 } from "./commands/issues.ts";
 import { handleClusterCommand } from "./commands/cluster.ts";
 import { handleLinearCommand } from "./commands/linear.ts";
+import { handleSequenceCheckCommand } from "./commands/sequence-check.ts";
 import { handleRepoCommand } from "./commands/repo.ts";
 import { handleInitCommand, handleServiceCommand } from "./commands/setup.ts";
 import type { RunCliOptions } from "./command-types.ts";
@@ -30,6 +31,7 @@ function getCommandConfigProfile(command: string): ConfigLoadProfile {
     case "cluster":
     case "repo":
     case "issue":
+    case "sequence-check":
       return "cli";
     default:
       return "service";
@@ -93,6 +95,9 @@ function validateFlags(command: string, commandArgs: string[], parsed: ReturnTyp
       return;
     case "cluster":
       assertKnownFlags(parsed, command, ["json"]);
+      return;
+    case "sequence-check":
+      assertKnownFlags(parsed, command, ["json", "base"]);
       return;
     case "init":
       assertKnownFlags(parsed, command, ["force", "json", "public-base-url"]);
@@ -373,6 +378,22 @@ export async function runCli(
     if (command === "dashboard") {
       const { handleWatchCommand } = await import("./commands/watch.ts");
       return await handleWatchCommand({ config, parsed });
+    }
+
+    if (command === "sequence-check") {
+      const issueData = await ensureIssueDataAccess(data, config);
+      if (!data) {
+        data = issueData;
+        ownsData = true;
+      }
+      return await handleSequenceCheckCommand({
+        commandArgs,
+        parsed,
+        json,
+        stdout,
+        stderr,
+        data: issueData,
+      });
     }
 
     throw new Error(`Unknown command: ${command}`);
