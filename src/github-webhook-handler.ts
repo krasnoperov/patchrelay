@@ -17,6 +17,7 @@ import { resolveGitHubWebhookIssue } from "./github-webhook-issue-resolution.ts"
 import { maybeCloseLatePublishedImplementationPr } from "./github-webhook-late-publication-guard.ts";
 import { projectGitHubWebhookState } from "./github-webhook-state-projector.ts";
 import { maybeEnqueueGitHubReactiveRun } from "./github-webhook-reactive-run.ts";
+import { maybeRunSequenceBackstop } from "./github-webhook-sequence-backstop.ts";
 import { maybeFanChildRebaseWakes } from "./github-webhook-stack-coordination.ts";
 import { handleGitHubTerminalPrEvent } from "./github-webhook-terminal-handler.ts";
 
@@ -174,6 +175,18 @@ export class GitHubWebhookHandler {
       failureContextResolver: this.failureContextResolver,
       fetchImpl: this.fetchImpl,
     });
+
+    if (event.triggerEvent === "pr_opened") {
+      await maybeRunSequenceBackstop({
+        db: this.db,
+        logger: this.logger,
+        ...(this.feed ? { feed: this.feed } : {}),
+        event,
+        fetchImpl: this.fetchImpl,
+      }).catch((error) => {
+        this.logger.warn({ err: error }, "sequence-check backstop failed");
+      });
+    }
 
     // Plan §8.3: parent-moved trigger. When a PR's head advances,
     // any child PR stacked on it becomes stale relative to its

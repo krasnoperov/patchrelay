@@ -20,6 +20,7 @@ export const KNOWN_COMMANDS = new Set([
   "connect",
   "installations",
   "help",
+  "sequence-check",
 ]);
 
 export function parseArgs(argv: string[]): ParsedArgs {

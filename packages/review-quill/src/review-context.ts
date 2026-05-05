@@ -6,7 +6,19 @@ import { buildDiffContext } from "./diff-context/index.ts";
 import { buildPromptContext } from "./prompt-context/index.ts";
 import { renderReviewPrompt } from "./prompt-builder/index.ts";
 import { findDisallowedReviewPromptSectionIds, findUnknownReviewPromptSectionIds } from "./prompt-builder/render.ts";
-import { materializeReviewWorkspace } from "./review-workspace/index.ts";
+import { materializeReviewWorkspaceWithMode } from "./review-workspace/index.ts";
+import { resolveReviewSurfaceMode } from "./carry-forward.ts";
+
+export class CannotIntegrateError extends Error {
+  readonly headSha: string;
+  readonly baseSha: string;
+  constructor(headSha: string, baseSha: string) {
+    super(`Cannot integrate PR head ${headSha.slice(0, 8)} with base ${baseSha.slice(0, 8)} — merge-tree conflict`);
+    this.name = "CannotIntegrateError";
+    this.headSha = headSha;
+    this.baseSha = baseSha;
+  }
+}
 
 export async function resolvePromptPullRequest(params: {
   github: GitHubClient;
@@ -55,12 +67,16 @@ export async function buildReviewContext(params: {
     throw new Error(`No GitHub installation token available for ${params.repo.repoFullName}`);
   }
 
-  const materialized = await materializeReviewWorkspace({
+  const materialized = await materializeReviewWorkspaceWithMode({
     repoFullName: params.repo.repoFullName,
     baseBranch: params.repo.baseBranch,
     pr: params.pr,
     token,
+    surfaceMode: resolveReviewSurfaceMode(params.repo),
   });
+  if (materialized.kind === "cannot_integrate") {
+    throw new CannotIntegrateError(materialized.headSha, materialized.baseSha);
+  }
 
   try {
     const promptPr = await resolvePromptPullRequest({

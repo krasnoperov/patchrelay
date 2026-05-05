@@ -84,6 +84,8 @@ export class MergeStewardQueueCommands {
       postMergeSha: null,
       postMergeSummary: null,
       postMergeCheckedAt: null,
+      headPatchId: null,
+      specTreeId: null,
       prTitle: params.prTitle ?? null,
       baseRefName: params.baseRefName ?? null,
       enqueuedAt: new Date().toISOString(),

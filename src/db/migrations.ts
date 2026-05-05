@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS runs (
   summary_json TEXT,
   report_json TEXT,
   failure_reason TEXT,
+  should_not_publish INTEGER NOT NULL DEFAULT 0,
   started_at TEXT NOT NULL,
   ended_at TEXT
 );
@@ -309,6 +310,9 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   addColumnIfMissing(connection, "runs", "completion_check_why", "TEXT");
   addColumnIfMissing(connection, "runs", "completion_check_recommended_reply", "TEXT");
   addColumnIfMissing(connection, "runs", "completion_checked_at", "TEXT");
+  // Plan §4.4: hard publication-suppression flag for the
+  // mid-run-approval cancellation primitive.
+  addColumnIfMissing(connection, "runs", "should_not_publish", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(connection, "issues", "last_blocking_review_head_sha", "TEXT");
 
   // Collapse awaiting_review into pr_open (state normalization)

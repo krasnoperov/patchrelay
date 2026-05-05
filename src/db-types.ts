@@ -3,7 +3,12 @@ import type { IssueClass, IssueClassSource } from "./issue-class.ts";
 import type { IssueSessionState } from "./issue-session.ts";
 import type { CompletionCheckOutcome } from "./completion-check-types.ts";
 
-export type RunStatus = "queued" | "running" | "completed" | "failed" | "released";
+// Plan §4.4: `superseded` — the run was cancelled mid-flight because
+// its premise no longer holds (e.g. the PR was approved on the same
+// head while a `review_fix` run was still producing output). Combined
+// with `shouldNotPublish` on the run row, this stops the next
+// finalizer step from emitting a no-op republish.
+export type RunStatus = "queued" | "running" | "completed" | "failed" | "released" | "superseded";
 export type GitHubFailureSource = "branch_ci" | "queue_eviction";
 
 export interface GitHubCiSnapshotCheckRecord {
@@ -155,6 +160,11 @@ export interface RunRecord {
   summaryJson?: string | undefined;
   reportJson?: string | undefined;
   failureReason?: string | undefined;
+  // Plan §4.4: hard publication-suppression flag. Even if the Codex
+  // turn races ahead and produces output before its lease is
+  // released, the run-finalizer reads this flag and refuses to
+  // invoke `git push` / `gh pr create` / `gh pr edit`.
+  shouldNotPublish?: boolean | undefined;
   startedAt: string;
   endedAt?: string | undefined;
 }

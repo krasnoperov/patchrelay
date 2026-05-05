@@ -68,7 +68,7 @@ export class MemoryStore implements QueueStore {
   transition(
     entryId: string,
     to: QueueEntryStatus,
-    patch?: Partial<Pick<QueueEntry, "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" | "lastFailedBaseSha" | "specBranch" | "specSha" | "specBasedOn" | "waitDetail" | "postMergeStatus" | "postMergeSha" | "postMergeSummary" | "postMergeCheckedAt">>,
+    patch?: Partial<Pick<QueueEntry, "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" | "lastFailedBaseSha" | "specBranch" | "specSha" | "specBasedOn" | "waitDetail" | "postMergeStatus" | "postMergeSha" | "postMergeSummary" | "postMergeCheckedAt" | "headPatchId" | "specTreeId">>,
     detail?: string,
   ): void {
     const entry = this.entries.get(entryId);
@@ -93,11 +93,48 @@ export class MemoryStore implements QueueStore {
       if (patch.postMergeSha !== undefined) entry.postMergeSha = patch.postMergeSha;
       if (patch.postMergeSummary !== undefined) entry.postMergeSummary = patch.postMergeSummary;
       if (patch.postMergeCheckedAt !== undefined) entry.postMergeCheckedAt = patch.postMergeCheckedAt;
+      if (patch.headPatchId !== undefined) entry.headPatchId = patch.headPatchId;
+      if (patch.specTreeId !== undefined) entry.specTreeId = patch.specTreeId;
     }
     if (from !== to && patch?.waitDetail === undefined) {
       entry.waitDetail = null;
     }
     this.appendEvent(entryId, from, to, detail);
+  }
+
+  rebuildSpecHeadEquivalent(
+    entryId: string,
+    patch: {
+      headSha: string;
+      specSha: string;
+      specBranch: string;
+      headPatchId: string;
+      specTreeId: string;
+      ciRunId: string | null;
+    },
+    detail?: string,
+  ): void {
+    const entry = this.entries.get(entryId);
+    if (!entry || TERMINAL_STATUSES.includes(entry.status)) return;
+    const from = entry.status;
+    entry.headSha = patch.headSha;
+    entry.status = "validating";
+    entry.generation++;
+    entry.ciRunId = patch.ciRunId;
+    entry.ciRetries = 0;
+    entry.retryAttempts = 0;
+    entry.lastFailedBaseSha = null;
+    entry.specBranch = patch.specBranch;
+    entry.specSha = patch.specSha;
+    entry.headPatchId = patch.headPatchId;
+    entry.specTreeId = patch.specTreeId;
+    entry.waitDetail = null;
+    entry.postMergeStatus = null;
+    entry.postMergeSha = null;
+    entry.postMergeSummary = null;
+    entry.postMergeCheckedAt = null;
+    entry.updatedAt = isoNow();
+    this.appendEvent(entryId, from, "validating", detail ?? `patch-id-equivalent rebuild: generation ${entry.generation}`);
   }
 
   dequeue(entryId: string): void {
@@ -123,6 +160,8 @@ export class MemoryStore implements QueueStore {
     entry.postMergeSha = null;
     entry.postMergeSummary = null;
     entry.postMergeCheckedAt = null;
+    entry.headPatchId = null;
+    entry.specTreeId = null;
     entry.updatedAt = isoNow();
     this.appendEvent(entryId, from, "queued", `updateHead: generation ${entry.generation}`);
   }

@@ -15,6 +15,7 @@ import { buildRunCompletedActivity, buildRunFailureActivity } from "./linear-ses
 import { handleNoPrCompletionCheck } from "./no-pr-completion-check.ts";
 import type { RunCompletionPolicy } from "./run-completion-policy.ts";
 import { resolveCompletedRunState } from "./run-completion-policy.ts";
+import { computeChangeIdentityFromWorktree } from "./change-identity.ts";
 
 type StageReport = ReturnType<typeof buildStageReport>;
 
@@ -182,9 +183,80 @@ export class RunFinalizer {
     }
   }
 
+  // Plan §4.2(c): record the identity of the head we just published
+  // so subsequent runs can recognize a patch-id-equivalent re-push.
+  // Only fires when the current head SHA is observably different from
+  // the run's starting sourceHeadSha — a no-op publish would not
+  // advance the head.
+  private maybeUpdateLastPublishedIdentity(
+    run: RunRecord,
+    issue: IssueRecord,
+  ): void {
+    if (!issue.worktreePath || !issue.prHeadSha) return;
+    if (run.sourceHeadSha && run.sourceHeadSha === issue.prHeadSha) return;
+    if (issue.lastPublishedHeadSha === issue.prHeadSha) return;
+    const identity = computeChangeIdentityFromWorktree({
+      worktreePath: issue.worktreePath,
+      baseRef: "origin/main",
+      headSha: issue.prHeadSha,
+    });
+    if (!identity.patchId && !identity.integrationTreeId) return;
+    this.db.issues.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      ...(identity.patchId ? { lastPublishedPatchId: identity.patchId } : {}),
+      ...(identity.integrationTreeId ? { lastPublishedIntegrationTreeId: identity.integrationTreeId } : {}),
+      lastPublishedHeadSha: issue.prHeadSha,
+    });
+    this.logger.info(
+      {
+        issueKey: issue.issueKey,
+        prHeadSha: issue.prHeadSha,
+        patchId: identity.patchId,
+      },
+      "Recorded last-published change identity after run completion",
+    );
+  }
+
   private clearProgressAndRelease(run: Pick<RunRecord, "id" | "projectId" | "linearIssueId">): void {
     this.linearSync.clearProgress(run.id);
     this.releaseLease(run.projectId, run.linearIssueId);
+  }
+
+  // Plan §4.4: finalize a run that was superseded mid-flight. The
+  // status row was already moved to `superseded` by the trigger
+  // observer; this just makes sure the issue's activeRunId is
+  // cleared, the lease is released, and the operator sees a
+  // clean recap event. No publication, no follow-up enqueue —
+  // the approval that triggered supersedure already advanced the
+  // factoryState.
+  private releaseSupersededRun(
+    run: RunRecord,
+    threadId: string,
+    completedTurnId: string | undefined,
+  ): void {
+    this.withHeldLease(run.projectId, run.linearIssueId, () => {
+      this.db.runs.finishRun(run.id, {
+        status: "superseded",
+        threadId,
+        ...(completedTurnId ? { turnId: completedTurnId } : {}),
+        failureReason: run.failureReason ?? "approved on the same head; further publication suppressed",
+      });
+      this.db.issues.upsertIssue({
+        projectId: run.projectId,
+        linearIssueId: run.linearIssueId,
+        activeRunId: null,
+        pendingRunType: null,
+        pendingRunContextJson: null,
+      });
+    });
+    this.clearProgressAndRelease(run);
+    this.feed?.publish({
+      level: "info",
+      kind: "agent",
+      summary: `Run #${run.id} superseded — publication suppressed (approved on the same head)`,
+      ...(run.projectId ? { projectId: run.projectId } : {}),
+    });
   }
 
   private enqueuePendingWakeIfPresent(params: {
@@ -291,6 +363,21 @@ export class RunFinalizer {
     resolveRecoverableRunState: (issue: IssueRecord) => FactoryState | undefined;
   }): Promise<void> {
     const { run, issue, thread, threadId } = params;
+
+    // Plan §4.4: a run flagged shouldNotPublish was deliberately
+    // superseded mid-flight (the PR was approved on the same head
+    // while a review_fix run was still producing output). The Codex
+    // turn may have completed; the finalizer must NOT run any of
+    // the publication-verification policies — they all assume the
+    // run was supposed to publish, and would either fail it
+    // spuriously (`verifyReviewFixAdvancedHead`) or open new
+    // follow-up work. Just record the supersedure outcome and
+    // release the lease.
+    if (run.shouldNotPublish || run.status === "superseded") {
+      this.releaseSupersededRun(run, threadId, params.completedTurnId);
+      return;
+    }
+
     const trackedIssue = this.db.issueToTrackedIssue(issue);
     const report = buildStageReport(
       { ...run, status: "completed" },
@@ -368,6 +455,12 @@ export class RunFinalizer {
     }
 
     const refreshedIssue = await this.completionPolicy.refreshIssueAfterReactivePublish(run, freshIssue);
+    // Plan §4.2(c): post-hoc change-identity detection. When the run
+    // produced a new head SHA, compute and persist the patch-id and
+    // integration-tree-id so the next run's prompt rule can recognize
+    // a patch-id-equivalent re-push and skip the publish. Best-effort:
+    // any git error returns undefined and we leave the cache as-is.
+    this.maybeUpdateLastPublishedIdentity(run, refreshedIssue);
     const postRunFollowUp = await this.completionPolicy.resolvePostRunFollowUp(run, refreshedIssue);
     const postRunState = postRunFollowUp?.factoryState ?? resolveCompletedRunState(refreshedIssue, run);
     const publicationRecapSummary = await this.generatePublicationRecap({

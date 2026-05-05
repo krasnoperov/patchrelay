@@ -4,6 +4,11 @@ import type { GitOperations, SpeculativeBranchBuilder } from "../interfaces.ts";
 import type { MergeResult } from "../types.ts";
 import { exec } from "../exec.ts";
 
+/** Shell-quote a string for sh -c invocation (single-quote, escape inner quotes). */
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 /** Extract conflict file names from git merge stderr. */
 function parseConflicts(stderr: string): string[] | undefined {
   const files = stderr
@@ -112,6 +117,76 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
     const refspec = targetBranch ? `${branch}:${targetBranch}` : branch;
     args.push("origin", refspec);
     await this.git(args, { timeoutMs: 60_000 });
+  }
+
+  // Plan §5.3: identity primitives for patch-id-aware updateHead.
+
+  async patchIdAgainst(base: string, headSha: string): Promise<string | undefined> {
+    // `git diff base..head | git patch-id --stable` — invoke as one
+    // pipeline through a shell so we don't have to plumb stdin/stdout.
+    const result = await exec(
+      "sh",
+      ["-c", `${this.gitBin} -C ${shellQuote(this.clonePath)} diff ${shellQuote(base)}..${shellQuote(headSha)} | ${this.gitBin} patch-id --stable`],
+      {
+        timeoutMs: 30_000,
+        allowNonZero: true,
+        githubRepoFullName: this.repoFullName,
+      },
+    );
+    if (result.exitCode !== 0) return undefined;
+    const first = result.stdout.split(/\s+/, 1)[0]?.trim();
+    return first ? first : undefined;
+  }
+
+  async integrationTreeId(base: string, headSha: string): Promise<string | undefined> {
+    const result = await this.git(
+      ["merge-tree", "--write-tree", "--no-messages", base, headSha],
+      { allowNonZero: true, timeoutMs: 60_000 },
+    );
+    if (result.exitCode !== 0) return undefined;
+    const tree = result.stdout.trim().split(/\s+/, 1)[0];
+    return tree || undefined;
+  }
+
+  async treeId(commitSha: string): Promise<string | undefined> {
+    const result = await this.git(["rev-parse", `${commitSha}^{tree}`], { allowNonZero: true });
+    if (result.exitCode !== 0) return undefined;
+    const tree = result.stdout.trim();
+    return tree || undefined;
+  }
+
+  async commitTree(tree: string, parents: string[], message: string): Promise<string | undefined> {
+    const args = ["commit-tree", tree];
+    for (const parent of parents) {
+      args.push("-p", parent);
+    }
+    args.push("-m", message);
+    const env: Record<string, string> = {};
+    if (this.botIdentity) {
+      env.GIT_AUTHOR_NAME = this.botIdentity.name;
+      env.GIT_AUTHOR_EMAIL = this.botIdentity.email;
+      env.GIT_COMMITTER_NAME = this.botIdentity.name;
+      env.GIT_COMMITTER_EMAIL = this.botIdentity.email;
+    }
+    const result = await exec(this.gitBin, ["-C", this.clonePath, ...args], {
+      timeoutMs: 30_000,
+      allowNonZero: true,
+      githubRepoFullName: this.repoFullName,
+      ...(Object.keys(env).length > 0 ? { env } : {}),
+    });
+    if (result.exitCode !== 0) return undefined;
+    const sha = result.stdout.trim();
+    return sha || undefined;
+  }
+
+  async pushCommit(commitSha: string, branch: string): Promise<void> {
+    // Force-update the named branch on origin to a known commit
+    // SHA. Used by the patch-id-aware rebuild path which writes a
+    // synthetic commit-tree result without checking it out.
+    await this.git(
+      ["push", "--force", "origin", `${commitSha}:refs/heads/${branch}`],
+      { timeoutMs: 60_000 },
+    );
   }
 
   // ─── SpeculativeBranchBuilder ───────────────────────────────

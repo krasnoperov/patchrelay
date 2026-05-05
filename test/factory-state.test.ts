@@ -52,6 +52,50 @@ test("review_approved is ignored when a run is active", () => {
   }
 });
 
+// ─── Plan §4.4: mid-run approval cancellation ─────────────────────
+
+test("review_approved fires mid-run when activeRunType=review_fix on the same head", () => {
+  const openNonRunning = ALL_STATES.filter((s) => !ACTIVE_RUN_STATES.has(s) && !TERMINAL_STATES.has(s));
+  for (const state of openNonRunning) {
+    assert.equal(
+      resolve("review_approved", state, {
+        activeRunId: 99,
+        activeRunType: "review_fix",
+        approvalHeadSha: "deadbeef",
+        activeRunSourceHeadSha: "deadbeef",
+      }),
+      "awaiting_queue",
+      `review_approved should fire mid-run from ${state} when heads match`,
+    );
+  }
+});
+
+test("review_approved does not fire mid-run when active run type is not review_fix", () => {
+  assert.equal(
+    resolve("review_approved", "pr_open", {
+      activeRunId: 99,
+      activeRunType: "implementation",
+      approvalHeadSha: "deadbeef",
+      activeRunSourceHeadSha: "deadbeef",
+    }),
+    undefined,
+    "should not supersede an unrelated run",
+  );
+});
+
+test("review_approved does not fire mid-run when approval is on a different head than the run started against", () => {
+  assert.equal(
+    resolve("review_approved", "changes_requested", {
+      activeRunId: 99,
+      activeRunType: "review_fix",
+      approvalHeadSha: "newsha",
+      activeRunSourceHeadSha: "oldsha",
+    }),
+    undefined,
+    "should not supersede when approval is on a fresher head than the run baseline",
+  );
+});
+
 test("review_approved is ignored in terminal states", () => {
   for (const state of TERMINAL_STATES) {
     assert.equal(resolve("review_approved", state), undefined, `review_approved from ${state}`);

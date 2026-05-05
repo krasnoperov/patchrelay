@@ -152,6 +152,8 @@ describe("check_suite_completed with empty pull_requests", () => {
       postMergeSummary: null,
       postMergeCheckedAt: null,
       baseRefName: null,
+      headPatchId: null,
+      specTreeId: null,
       enqueuedAt: "2026-03-28T12:00:00.000Z",
       updatedAt: "2026-03-28T12:10:00.000Z",
     };
@@ -203,6 +205,8 @@ describe("check_suite_completed with empty pull_requests", () => {
       postMergeSummary: null,
       postMergeCheckedAt: null,
       baseRefName: null,
+      headPatchId: null,
+      specTreeId: null,
       enqueuedAt: "2026-03-28T12:00:00.000Z",
       updatedAt: "2026-03-28T12:10:00.000Z",
     };

@@ -83,6 +83,9 @@ export function ensureSchema(connection: DatabaseConnection): void {
   ensureColumn(connection, "queue_entries", "pr_title", "TEXT");
   // Plan §8.4: stack-aware admission ordering needs the PR's base ref.
   ensureColumn(connection, "queue_entries", "base_ref_name", "TEXT");
+  // Plan §5.3: cached identity for patch-id-aware updateHead.
+  ensureColumn(connection, "queue_entries", "head_patch_id", "TEXT");
+  ensureColumn(connection, "queue_entries", "spec_tree_id", "TEXT");
   connection.exec(`
     UPDATE queue_entries
        SET post_merge_status = 'pending'

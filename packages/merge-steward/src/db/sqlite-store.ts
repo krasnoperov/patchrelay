@@ -42,6 +42,8 @@ function mapEntry(row: Record<string, unknown>): QueueEntry {
     postMergeCheckedAt: row.post_merge_checked_at === null || row.post_merge_checked_at === undefined ? null : String(row.post_merge_checked_at),
     prTitle: row.pr_title === null || row.pr_title === undefined ? null : String(row.pr_title),
     baseRefName: row.base_ref_name === null || row.base_ref_name === undefined ? null : String(row.base_ref_name),
+    headPatchId: row.head_patch_id === null || row.head_patch_id === undefined ? null : String(row.head_patch_id),
+    specTreeId: row.spec_tree_id === null || row.spec_tree_id === undefined ? null : String(row.spec_tree_id),
     enqueuedAt: String(row.enqueued_at),
     updatedAt: String(row.updated_at),
   };
@@ -191,7 +193,8 @@ export class SqliteStore implements QueueStore {
         QueueEntry,
         "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" |
         "lastFailedBaseSha" | "specBranch" | "specSha" | "specBasedOn" | "waitDetail" |
-        "postMergeStatus" | "postMergeSha" | "postMergeSummary" | "postMergeCheckedAt"
+        "postMergeStatus" | "postMergeSha" | "postMergeSummary" | "postMergeCheckedAt" |
+        "headPatchId" | "specTreeId"
       >
     >,
     detail?: string,
@@ -218,6 +221,8 @@ export class SqliteStore implements QueueStore {
       if (patch?.postMergeSha !== undefined) { sets.push("post_merge_sha = ?"); values.push(patch.postMergeSha); }
       if (patch?.postMergeSummary !== undefined) { sets.push("post_merge_summary = ?"); values.push(patch.postMergeSummary); }
       if (patch?.postMergeCheckedAt !== undefined) { sets.push("post_merge_checked_at = ?"); values.push(patch.postMergeCheckedAt); }
+      if (patch?.headPatchId !== undefined) { sets.push("head_patch_id = ?"); values.push(patch.headPatchId); }
+      if (patch?.specTreeId !== undefined) { sets.push("spec_tree_id = ?"); values.push(patch.specTreeId); }
 
       this.conn.prepare(
         `UPDATE queue_entries SET ${sets.join(", ")} WHERE id = ?`,
@@ -246,11 +251,58 @@ export class SqliteStore implements QueueStore {
           spec_branch = NULL, spec_sha = NULL, spec_based_on = NULL,
           wait_detail = NULL,
           post_merge_status = NULL, post_merge_sha = NULL, post_merge_summary = NULL, post_merge_checked_at = NULL,
+          head_patch_id = NULL, spec_tree_id = NULL,
           updated_at = ?
          WHERE id = ?`,
       ).run(newHeadSha, newGen, isoNow(), entryId);
 
       this.writeEvent(entryId, from, "queued", `updateHead: generation ${newGen}`);
+    })();
+  }
+
+  rebuildSpecHeadEquivalent(
+    entryId: string,
+    patch: {
+      headSha: string;
+      specSha: string;
+      specBranch: string;
+      headPatchId: string;
+      specTreeId: string;
+      ciRunId: string | null;
+    },
+    detail?: string,
+  ): void {
+    this.conn.transaction(() => {
+      const current = this.conn.prepare("SELECT status, generation FROM queue_entries WHERE id = ?").get(entryId);
+      if (!current) return;
+      const from = String(current.status) as QueueEntryStatus;
+      if (TERMINAL_STATUSES.includes(from)) return;
+      const newGen = Number(current.generation) + 1;
+
+      this.conn.prepare(
+        `UPDATE queue_entries SET
+          head_sha = ?, status = 'validating', generation = ?,
+          ci_run_id = ?, ci_retries = 0, retry_attempts = 0,
+          last_failed_base_sha = NULL,
+          spec_branch = ?, spec_sha = ?,
+          head_patch_id = ?, spec_tree_id = ?,
+          wait_detail = NULL,
+          post_merge_status = NULL, post_merge_sha = NULL, post_merge_summary = NULL, post_merge_checked_at = NULL,
+          updated_at = ?
+         WHERE id = ?`,
+      ).run(
+        patch.headSha,
+        newGen,
+        patch.ciRunId,
+        patch.specBranch,
+        patch.specSha,
+        patch.headPatchId,
+        patch.specTreeId,
+        isoNow(),
+        entryId,
+      );
+
+      this.writeEvent(entryId, from, "validating", detail ?? `patch-id-equivalent rebuild: generation ${newGen}`);
     })();
   }
 

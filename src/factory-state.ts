@@ -62,6 +62,19 @@ export interface TransitionContext {
    * integration tree is the admission gate.
    */
   failureSource?: "queue_eviction" | "branch_ci" | undefined;
+  /**
+   * Plan §4.4: classification fields for the mid-run-approval rule.
+   * `activeRunType` lets us scope the rule to `review_fix` so an
+   * approval landing during an unrelated run (e.g. `branch_upkeep`)
+   * doesn't trigger supersedure. `approvalHeadSha` and
+   * `activeRunSourceHeadSha` together gate the rule to "approval is
+   * on the same head the run was launched against" — without that
+   * check we'd cancel runs that are working on a different SHA than
+   * the one the reviewer approved.
+   */
+  activeRunType?: string | undefined;
+  approvalHeadSha?: string | undefined;
+  activeRunSourceHeadSha?: string | undefined;
 }
 
 interface TransitionRule {
@@ -97,6 +110,21 @@ const TRANSITION_RULES: readonly TransitionRule[] = [
   // active — once the run completes, reviews should be accepted.
   { event: "review_approved",
     guard: (s, ctx) => isOpen(s) && ctx.activeRunId === undefined,
+    to: "awaiting_queue" },
+
+  // Plan §4.4: mid-run approval cancellation. When an approval lands
+  // on the same head a `review_fix` run was launched against, the
+  // run's premise no longer holds — there is no "fix" to publish, the
+  // PR is already approved. We let the transition fire so factoryState
+  // reflects reality (awaiting_queue), and the observer in
+  // reactive-run-policy.ts supersedes the still-running Codex turn so
+  // it can't push a cosmetic patch-id-equivalent commit.
+  { event: "review_approved",
+    guard: (s, ctx) => isOpen(s)
+                   && ctx.activeRunId !== undefined
+                   && ctx.activeRunType === "review_fix"
+                   && ctx.approvalHeadSha !== undefined
+                   && ctx.approvalHeadSha === ctx.activeRunSourceHeadSha,
     to: "awaiting_queue" },
 
   { event: "review_changes_requested",

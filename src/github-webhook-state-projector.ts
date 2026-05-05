@@ -82,7 +82,20 @@ export async function projectGitHubWebhookState(
 
   if (!isMetadataOnlyCheckEvent(event) || queueEvictionCheck) {
     const afterMetadata = deps.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
-    const newState = resolveGitHubFactoryStateForEvent(afterMetadata, event, project);
+    const activeRun = afterMetadata.activeRunId
+      ? deps.db.runs.getRunById(afterMetadata.activeRunId)
+      : undefined;
+    const newState = resolveGitHubFactoryStateForEvent(
+      afterMetadata,
+      event,
+      project,
+      activeRun
+        ? {
+            ...(activeRun.runType ? { runType: activeRun.runType } : {}),
+            ...(activeRun.sourceHeadSha ? { sourceHeadSha: activeRun.sourceHeadSha } : {}),
+          }
+        : undefined,
+    );
 
     if (newState && newState !== afterMetadata.factoryState) {
       deps.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
@@ -94,6 +107,21 @@ export async function projectGitHubWebhookState(
         { issueKey: issue.issueKey, from: afterMetadata.factoryState, to: newState, trigger: event.triggerEvent },
         "Factory state transition from GitHub event",
       );
+
+      // Plan §4.4: when the transition fired *because* an approval
+      // landed during a review_fix run on the same head (the
+      // mid-run-approval rule), the run's premise is gone. Mark it
+      // superseded and set the publication-suppression flag so the
+      // finalizer cannot push a cosmetic patch-id-equivalent commit.
+      maybeSupersedeActiveRun({
+        db: deps.db,
+        logger: deps.logger,
+        feed: deps.feed,
+        issue: afterMetadata,
+        newState,
+        event,
+        activeRun,
+      });
 
       const transitionedIssue = deps.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
       void emitGitHubLinearActivity({
@@ -178,6 +206,50 @@ function computeParentPrBranchUpdate(
     return null;
   }
   return event.prBaseRef;
+}
+
+// Plan §4.4: when the mid-run-approval transition fires, the active
+// review_fix run's premise no longer holds — there is no fix to
+// publish. Mark it superseded and set the publication-suppression
+// flag. The Codex turn may have produced output already; the
+// finalizer reads `shouldNotPublish` and refuses to push.
+function maybeSupersedeActiveRun(params: {
+  db: PatchRelayDatabase;
+  logger: Logger;
+  feed: OperatorEventFeed | undefined;
+  issue: IssueRecord;
+  newState: string;
+  event: NormalizedGitHubEvent;
+  activeRun: { id: number; runType?: string | undefined; sourceHeadSha?: string | undefined } | undefined;
+}): void {
+  const { db, logger, feed, issue, newState, event, activeRun } = params;
+  if (event.triggerEvent !== "review_approved") return;
+  if (newState !== "awaiting_queue") return;
+  if (!activeRun) return;
+  if (activeRun.runType !== "review_fix") return;
+
+  const approvalHead = event.reviewCommitId ?? event.headSha;
+  if (!approvalHead || !activeRun.sourceHeadSha) return;
+  if (approvalHead !== activeRun.sourceHeadSha) return;
+
+  db.runs.markSuperseded(activeRun.id, {
+    reason: "approved on the same head; further publication suppressed",
+  });
+  logger.info(
+    {
+      issueKey: issue.issueKey,
+      runId: activeRun.id,
+      headSha: approvalHead,
+    },
+    "Superseded mid-run review_fix after approval landed on the same head",
+  );
+  feed?.publish({
+    level: "info",
+    kind: "agent",
+    summary: `Superseded review_fix run #${activeRun.id} — PR approved on the same head`,
+    ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+    ...(issue.projectId ? { projectId: issue.projectId } : {}),
+  });
 }
 
 async function updateGitHubCiSnapshot(
