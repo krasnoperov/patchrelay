@@ -150,21 +150,23 @@ export class RunStore {
     }
   }
 
-  // Plan §4.4: mark a still-running run as superseded. The
-  // `should_not_publish` flag is the hard publication-suppression
-  // contract — even if the Codex turn races ahead, the finalizer
-  // refuses to push/edit when this is set.
+  // Plan §4.4: flag a still-running run as superseded. We deliberately
+  // do NOT change `status` here — the Codex turn must finish naturally
+  // so the notification handler can deliver `turn/completed` to the
+  // run-finalizer (run-notification-handler ignores any run whose status
+  // is not 'running'). The finalizer reads `should_not_publish` and
+  // routes to `releaseSupersededRun`, which is where the row finally
+  // moves to status='superseded'. Setting status here would orphan the
+  // run: notifications would be dropped, the issue's activeRunId would
+  // never be cleared, and the lease would stay held.
   markSuperseded(runId: number, params: { reason: string }): void {
-    const now = isoNow();
     this.connection.prepare(`
       UPDATE runs SET
-        status = 'superseded',
         should_not_publish = 1,
-        failure_reason = COALESCE(failure_reason, ?),
-        ended_at = COALESCE(ended_at, ?)
+        failure_reason = COALESCE(failure_reason, ?)
       WHERE id = ?
         AND status IN ('queued', 'running')
-    `).run(params.reason, now, runId);
+    `).run(params.reason, runId);
     const run = this.getRunById(runId);
     if (!run) return;
     const issue = this.issues.getIssue(run.projectId, run.linearIssueId);

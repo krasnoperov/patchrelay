@@ -41,22 +41,25 @@ function seedRun(db: PatchRelayDatabase) {
   });
 }
 
-test("markSuperseded transitions a running run to superseded with shouldNotPublish set", () => {
+test("markSuperseded sets shouldNotPublish but leaves status running so the Codex notification still finalizes", () => {
   withDb((db) => {
     const run = seedRun(db);
+    db.runs.updateRunThread(run.id, { threadId: "thr-1" });
+    assert.equal(db.runs.getRunById(run.id)!.status, "running");
+
     db.runs.markSuperseded(run.id, {
       reason: "approved on the same head; further publication suppressed",
     });
 
     const updated = db.runs.getRunById(run.id);
     assert.ok(updated);
-    assert.equal(updated!.status, "superseded");
+    assert.equal(updated!.status, "running", "status must stay 'running' so run-notification-handler still routes turn/completed to the finalizer");
     assert.equal(updated!.shouldNotPublish, true);
+    assert.equal(updated!.endedAt, undefined, "endedAt must not be stamped — finishRun does that at finalize time");
     assert.equal(
       updated!.failureReason,
       "approved on the same head; further publication suppressed",
     );
-    assert.ok(updated!.endedAt, "endedAt should be stamped");
   });
 });
 
@@ -73,22 +76,24 @@ test("markSuperseded is a no-op for already-completed runs", () => {
   });
 });
 
-test("markSuperseded preserves an existing failure_reason if already set", () => {
+test("markSuperseded does not flip an already-failed run's status", () => {
   withDb((db) => {
     const run = seedRun(db);
     db.runs.finishRun(run.id, { status: "failed", failureReason: "earlier failure" });
-    // After finishRun, status is "failed" — markSuperseded should not change it.
     db.runs.markSuperseded(run.id, { reason: "newer reason" });
     assert.equal(db.runs.getRunById(run.id)!.status, "failed");
   });
 });
 
-test("RunStatus 'superseded' round-trips through the row mapper", () => {
+test("RunStatus 'superseded' round-trips through the row mapper after finishRun stamps it", () => {
   withDb((db) => {
     const run = seedRun(db);
     db.runs.markSuperseded(run.id, { reason: "approved" });
+    // Finalizer's releaseSupersededRun is what actually moves the row to status='superseded'
+    db.runs.finishRun(run.id, { status: "superseded" });
     const fresh = db.runs.getRunById(run.id);
     assert.equal(fresh!.status, "superseded");
     assert.equal(fresh!.shouldNotPublish, true);
+    assert.ok(fresh!.endedAt, "endedAt is stamped by finishRun, not by markSuperseded");
   });
 });
