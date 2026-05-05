@@ -666,6 +666,10 @@ function buildPublicationContract(
       "If this is code-delivery work, publish before stopping: commit, push the issue branch, and open or update the PR.",
       "If the issue explicitly allows a non-PR outcome, complete that outcome clearly instead of inventing a PR.",
       "",
+      "Right before `gh pr create`, run `patchrelay sequence-check` from the worktree.",
+      "If the JSON recommendation is `rebase_onto`, rebase the branch onto the named parent and pass `--base <parent_branch>` to `gh pr create`. Include the recommendation's reason in the PR body under a `Stacked on #NNN` header.",
+      "If the recommendation is `open_pr_against_main`, proceed with `gh pr create` against the default base.",
+      "",
       ...buildPrePushSelfReviewSection("new_pr", runType),
     ].join("\n");
   }

@@ -1,4 +1,4 @@
-export type CliHelpTopic = "root" | "linear" | "repo" | "issue" | "service" | "cluster";
+export type CliHelpTopic = "root" | "linear" | "repo" | "issue" | "service" | "cluster" | "sequence-check";
 
 export function rootHelpText(): string {
   return [
@@ -222,7 +222,26 @@ export function helpTextFor(topic: CliHelpTopic): string {
       return issueHelpText();
     case "service":
       return serviceHelpText();
+    case "sequence-check":
+      return sequenceCheckHelpText();
     default:
       return rootHelpText();
   }
+}
+
+function sequenceCheckHelpText(): string {
+  return [
+    "patchrelay sequence-check",
+    "",
+    "Detect whether the current branch should be stacked on an in-flight PR before",
+    "opening a new one. Run from inside the worktree right before `gh pr create`.",
+    "",
+    "Output: JSON recommendation on stdout. Either:",
+    "  {\"recommendation\":\"open_pr_against_main\",\"reason\":\"…\"}",
+    "  {\"recommendation\":\"rebase_onto\",\"parentPr\":509,\"parentBranch\":\"…\",…}",
+    "",
+    "Flags:",
+    "  --base <ref>   Override the base ref used for diff (default: origin/HEAD)",
+    "  --json         Emit pretty-printed JSON",
+  ].join("\n");
 }
