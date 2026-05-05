@@ -59,11 +59,12 @@ function fakeSnapshot(params: {
       failedAttempts: 0,
     },
     runtime: {
-      reconcileInProgress: false,
       lastReconcileStartedAt: null,
       lastReconcileCompletedAt: null,
       lastReconcileOutcome: "idle",
       lastReconcileError: null,
+      inFlightReviews: 0,
+      repoLastReconciledAt: {},
     },
     repos: params.repos ?? [fakeRepo()],
     attempts: params.attempts ?? [],

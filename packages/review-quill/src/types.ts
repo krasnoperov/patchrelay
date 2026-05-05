@@ -68,6 +68,13 @@ export interface ReviewQuillConfig {
     heartbeatIntervalMs: number;
     staleQueuedAfterMs: number;
     staleRunningAfterMs: number;
+    /**
+     * Soft cap on parallel review executions. Each review materializes its
+     * own tmp worktree and runs on its own Codex thread, so they're fully
+     * independent — the cap only exists to bound CPU / memory / API usage
+     * when a burst of webhooks lands. Defaults to 20 if unset.
+     */
+    maxConcurrentReviews?: number;
   };
   codex: CodexAppServerConfig;
   prompting: PromptCustomizationLayer;
@@ -335,11 +342,30 @@ export type CodexThreadItem =
   | { type: string; id: string; [key: string]: unknown };
 
 export interface ReviewQuillRuntimeStatus {
-  reconcileInProgress: boolean;
+  /**
+   * Last time a discovery pass began for any reason (timer / webhook /
+   * explicit trigger). Multiple passes can run concurrently; this is the
+   * most recent start.
+   */
   lastReconcileStartedAt: string | null;
+  /**
+   * Last time a discovery pass finished. Independent of the start time —
+   * a long-running discovery doesn't block a new one from starting.
+   */
   lastReconcileCompletedAt: string | null;
   lastReconcileOutcome: "idle" | "running" | "succeeded" | "failed";
   lastReconcileError: string | null;
+  /**
+   * Number of review executions currently in flight. Bounded by
+   * `reconciliation.maxConcurrentReviews` (default 20).
+   */
+  inFlightReviews: number;
+  /**
+   * Last time each repo finished a discovery pass (all open PRs walked).
+   * Populated lazily — entries appear only once the repo has been walked
+   * at least once. Surfaced so operators can spot stalled discovery.
+   */
+  repoLastReconciledAt: Record<string, string>;
 }
 
 export interface ReviewQuillRepoSummary {
