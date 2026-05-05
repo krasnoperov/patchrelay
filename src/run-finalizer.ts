@@ -187,6 +187,42 @@ export class RunFinalizer {
     this.releaseLease(run.projectId, run.linearIssueId);
   }
 
+  // Plan §4.4: finalize a run that was superseded mid-flight. The
+  // status row was already moved to `superseded` by the trigger
+  // observer; this just makes sure the issue's activeRunId is
+  // cleared, the lease is released, and the operator sees a
+  // clean recap event. No publication, no follow-up enqueue —
+  // the approval that triggered supersedure already advanced the
+  // factoryState.
+  private releaseSupersededRun(
+    run: RunRecord,
+    threadId: string,
+    completedTurnId: string | undefined,
+  ): void {
+    this.withHeldLease(run.projectId, run.linearIssueId, () => {
+      this.db.runs.finishRun(run.id, {
+        status: "superseded",
+        threadId,
+        ...(completedTurnId ? { turnId: completedTurnId } : {}),
+        failureReason: run.failureReason ?? "approved on the same head; further publication suppressed",
+      });
+      this.db.issues.upsertIssue({
+        projectId: run.projectId,
+        linearIssueId: run.linearIssueId,
+        activeRunId: null,
+        pendingRunType: null,
+        pendingRunContextJson: null,
+      });
+    });
+    this.clearProgressAndRelease(run);
+    this.feed?.publish({
+      level: "info",
+      kind: "agent",
+      summary: `Run #${run.id} superseded — publication suppressed (approved on the same head)`,
+      ...(run.projectId ? { projectId: run.projectId } : {}),
+    });
+  }
+
   private enqueuePendingWakeIfPresent(params: {
     run: Pick<RunRecord, "projectId" | "linearIssueId" | "runType">;
     issueKey?: string | undefined;
@@ -291,6 +327,21 @@ export class RunFinalizer {
     resolveRecoverableRunState: (issue: IssueRecord) => FactoryState | undefined;
   }): Promise<void> {
     const { run, issue, thread, threadId } = params;
+
+    // Plan §4.4: a run flagged shouldNotPublish was deliberately
+    // superseded mid-flight (the PR was approved on the same head
+    // while a review_fix run was still producing output). The Codex
+    // turn may have completed; the finalizer must NOT run any of
+    // the publication-verification policies — they all assume the
+    // run was supposed to publish, and would either fail it
+    // spuriously (`verifyReviewFixAdvancedHead`) or open new
+    // follow-up work. Just record the supersedure outcome and
+    // release the lease.
+    if (run.shouldNotPublish || run.status === "superseded") {
+      this.releaseSupersededRun(run, threadId, params.completedTurnId);
+      return;
+    }
+
     const trackedIssue = this.db.issueToTrackedIssue(issue);
     const report = buildStageReport(
       { ...run, status: "completed" },

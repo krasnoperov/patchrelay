@@ -101,6 +101,7 @@ export function resolveGitHubFactoryStateForEvent(
   issue: IssueRecord,
   event: NormalizedGitHubEvent,
   project: ProjectConfig | undefined,
+  activeRun?: { runType?: string; sourceHeadSha?: string },
 ): FactoryState | undefined {
   if (event.triggerEvent === "pr_closed") {
     return undefined;
@@ -120,10 +121,17 @@ export function resolveGitHubFactoryStateForEvent(
       ? (isQueueEvictionFailure(issue, event, project) ? "queue_eviction" : "branch_ci")
       : undefined;
 
+  const approvalHeadSha = event.triggerEvent === "review_approved"
+    ? (event.reviewCommitId ?? event.headSha)
+    : undefined;
+
   const resolved = resolveFactoryStateFromGitHub(event.triggerEvent, effectiveCurrentState, {
     prReviewState: issue.prReviewState,
     activeRunId: issue.activeRunId,
     failureSource,
+    ...(activeRun?.runType ? { activeRunType: activeRun.runType } : {}),
+    ...(activeRun?.sourceHeadSha ? { activeRunSourceHeadSha: activeRun.sourceHeadSha } : {}),
+    ...(approvalHeadSha ? { approvalHeadSha } : {}),
   });
   if (resolved !== undefined) {
     return resolved;
