@@ -18,6 +18,7 @@ import { getLatestAttemptsByPullRequest } from "./attempt-summary.ts";
 import { CannotIntegrateError, buildReviewContext } from "./review-context.ts";
 import {
   type ChangeIdentity,
+  resolveReviewSurfaceMode,
   tryCarryForward,
 } from "./carry-forward.ts";
 import {
@@ -592,6 +593,15 @@ export class ReviewQuillService {
     existingAttempt?: ReturnType<SqliteStore["getAttempt"]>,
     identity?: ChangeIdentity,
   ): Promise<void> {
+    // Plan §3.6: the publication policy below (inline-vs-body-only)
+    // must match whatever materializeReviewWorkspaceWithMode actually
+    // produced. buildReviewContext resolves surface mode straight from
+    // repo config — derive the same here so we don't anchor inline
+    // comments at PR head while the model reviewed an integration
+    // tree (identity computation can return undefined for stacked
+    // PRs and other failure paths; identity.mode is therefore not a
+    // reliable source of truth).
+    const surfaceMode = resolveReviewSurfaceMode(repo);
     const attempt = existingAttempt
       ? (this.store.updateAttempt(existingAttempt.id, {
         status: "queued",
@@ -603,7 +613,7 @@ export class ReviewQuillService {
         completedAt: null,
         ...(identity?.patchId !== undefined ? { patchId: identity.patchId } : {}),
         ...(identity?.integrationTreeId !== undefined ? { integrationTreeId: identity.integrationTreeId } : {}),
-        ...(identity?.mode !== undefined ? { reviewSurfaceMode: identity.mode } : {}),
+        reviewSurfaceMode: surfaceMode,
         ...(identity?.baseSha !== undefined ? { baseSha: identity.baseSha } : {}),
       }) ?? existingAttempt)
       : this.store.createAttempt({
@@ -614,7 +624,7 @@ export class ReviewQuillService {
         ...(pr.title ? { prTitle: pr.title } : {}),
         ...(identity?.patchId !== undefined ? { patchId: identity.patchId } : {}),
         ...(identity?.integrationTreeId !== undefined ? { integrationTreeId: identity.integrationTreeId } : {}),
-        ...(identity?.mode !== undefined ? { reviewSurfaceMode: identity.mode } : {}),
+        reviewSurfaceMode: surfaceMode,
         ...(identity?.baseSha !== undefined ? { baseSha: identity.baseSha } : {}),
       });
     if (existingAttempt && pr.title && attempt.prTitle !== pr.title) {
@@ -718,7 +728,9 @@ export class ReviewQuillService {
       // (admission gate satisfied) while encoding findings inline
       // in markdown text. `with_annotations` (PR review + check_run
       // companion) is deferred per implementation.md §B.1.
-      const surfaceMode = identity?.mode ?? "head";
+      // surfaceMode is the repo-resolved value (not identity.mode)
+      // so this stays correct even when identity computation
+      // returned undefined.
       const useBodyOnly = surfaceMode === "integration_tree";
       const inlineComments = useBodyOnly
         ? []
