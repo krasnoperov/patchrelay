@@ -93,6 +93,34 @@ test("buildReviewBody renders architectural concerns between verdict and context
   assert.ok(verdictIdx < archIdx && archIdx < contextIdx, `expected verdict < architectural < context, got ${verdictIdx}, ${archIdx}, ${contextIdx}`);
 });
 
+test("buildReviewBody folds inlineFindings into a Findings section when provided", () => {
+  const body = buildReviewBody({
+    verdict: fakeVerdict({
+      verdict: "request_changes",
+      verdict_reason: "Two blocking issues.",
+      walkthrough: "Trailing context.",
+    }),
+    event: "REQUEST_CHANGES",
+    inlineFindings: [
+      fakeFinding({ path: "src/foo.ts", line: 42, message: "null pointer dereference" }),
+      fakeFinding({ path: "src/bar.ts", line: 7, severity: "nit", message: "consider extracting helper" }),
+    ],
+  });
+  const verdictIdx = body.indexOf("**Verdict:");
+  const findingsIdx = body.indexOf("## Findings");
+  const contextIdx = body.indexOf("## Context");
+  assert.ok(verdictIdx < findingsIdx && findingsIdx < contextIdx, `expected verdict < findings < context, got ${verdictIdx}, ${findingsIdx}, ${contextIdx}`);
+  assert.match(body, /🚨 `src\/foo\.ts:42` — null pointer dereference/);
+  assert.match(body, /💡 `src\/bar\.ts:7` — consider extracting helper/);
+});
+
+test("buildReviewBody omits the Findings section when inlineFindings is empty or missing", () => {
+  const withoutParam = buildReviewBody({ verdict: fakeVerdict(), event: "APPROVE" });
+  const emptyArray = buildReviewBody({ verdict: fakeVerdict(), event: "APPROVE", inlineFindings: [] });
+  assert.ok(!withoutParam.includes("## Findings"), `param-less render should not include a Findings section, got: ${withoutParam}`);
+  assert.ok(!emptyArray.includes("## Findings"), `empty-array render should not include a Findings section, got: ${emptyArray}`);
+});
+
 test("hasMatchingLatestReviewForHead detects matching state and body", () => {
   const reviews = [{
     id: 1,

@@ -81,12 +81,19 @@ export function resolveEvent(verdict: ReviewVerdict, filtered: ReviewFinding[]):
 // a trailing `## Context` appendix shown only when the model emitted one.
 //   1. Verdict line with rationale
 //   2. Architectural concerns section (if any)
-//   3. `## Context` walkthrough (only when present and non-empty)
+//   3. `## Findings` section (only when `inlineFindings` is provided and non-empty —
+//      used by body-only publication paths so the line-level findings still reach
+//      the author when they cannot be posted as inline comments)
+//   4. `## Context` walkthrough (only when present and non-empty)
 export function buildReviewBody(params: {
   verdict: ReviewVerdict;
   event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
+  // When provided, render these findings into a `## Findings` section in
+  // the body. Used when inline comments cannot be posted (422 retry,
+  // integration_tree mode) so the specifics still survive in markdown.
+  inlineFindings?: ReviewFinding[];
 }): string {
-  const { verdict, event } = params;
+  const { verdict, event, inlineFindings } = params;
   const lines: string[] = [];
 
   const verdictLabel = event === "APPROVE"
@@ -101,6 +108,14 @@ export function buildReviewBody(params: {
     for (const concern of verdict.architectural_concerns) {
       const marker = concern.severity === "blocking" ? "🚨" : "💡";
       lines.push(`- ${marker} **[${concern.category}]** ${concern.message}`);
+    }
+  }
+
+  if (inlineFindings && inlineFindings.length > 0) {
+    lines.push("", "## Findings");
+    for (const finding of inlineFindings) {
+      const marker = finding.severity === "blocking" ? "🚨" : "💡";
+      lines.push(`- ${marker} \`${finding.path}:${finding.line}\` — ${finding.message}`);
     }
   }
 
