@@ -78,6 +78,28 @@ export async function gitWorktreeRemove(cachePath: string, worktreePath: string)
   await runGit(["-C", cachePath, "worktree", "remove", "--force", worktreePath]);
 }
 
+// Plan §3.4: build a synthetic merge commit that has `tree` as its
+// content and `[base, head]` as parents. Used for integration_tree
+// review surface mode — the reviewer reads the merged tree as if the
+// PR had landed, but with the original PR head still reachable so
+// post-merge PR detection works.
+export async function gitCommitTree(
+  worktreePath: string,
+  tree: string,
+  parents: string[],
+  message: string,
+): Promise<string> {
+  const args = ["-C", worktreePath, "commit-tree", tree];
+  for (const parent of parents) {
+    args.push("-p", parent);
+  }
+  args.push("-m", message);
+  // Identity vars come from the runner env (review-quill bot identity);
+  // commit-tree picks them up via process.env.
+  const out = await runGit(args);
+  return out.trim();
+}
+
 export async function gitDiffNameStatus(
   worktreePath: string,
   baseRef: string,
