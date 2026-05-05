@@ -15,7 +15,7 @@ import type { ReviewRunner } from "./review-runner.ts";
 import type { PullRequestReviewRecord } from "./types.ts";
 import { decorateAttempt, describeAttemptState, isAttemptActive } from "./attempt-state.ts";
 import { getLatestAttemptsByPullRequest } from "./attempt-summary.ts";
-import { buildReviewContext } from "./review-context.ts";
+import { CannotIntegrateError, buildReviewContext } from "./review-context.ts";
 import {
   type ChangeIdentity,
   tryCarryForward,
@@ -633,14 +633,37 @@ export class ReviewQuillService {
       }, this.config.reconciliation.heartbeatIntervalMs);
       heartbeat.unref?.();
 
-      const prepared = await buildReviewContext({
-        github: this.github,
-        repo,
-        pr,
-        prompting: this.config.prompting,
-        logger: this.logger,
-        selfLogin: this.reviewerLogin,
-      });
+      let prepared: Awaited<ReturnType<typeof buildReviewContext>>;
+      try {
+        prepared = await buildReviewContext({
+          github: this.github,
+          repo,
+          pr,
+          prompting: this.config.prompting,
+          logger: this.logger,
+          selfLogin: this.reviewerLogin,
+        });
+      } catch (error) {
+        if (error instanceof CannotIntegrateError) {
+          // Plan §3.4 conflict path. Mark this attempt declined with a
+          // `cannot_integrate` reason so the lander's spec build is
+          // not bypassed and the operator sees an early-eviction signal.
+          this.store.updateAttempt(attempt.id, {
+            status: "completed",
+            conclusion: "declined",
+            summary: `cannot_integrate: PR head conflicts with ${repo.baseBranch}`,
+            completedAt: new Date().toISOString(),
+          });
+          this.logger.warn({
+            repo: repo.repoFullName,
+            prNumber: pr.number,
+            headSha: error.headSha,
+            baseSha: error.baseSha,
+          }, "Marked review attempt declined: cannot_integrate (merge-tree conflict in integration_tree mode)");
+          return;
+        }
+        throw error;
+      }
       // Log diff packer stats so production reviews show the same
       // numbers the `review-quill diff --json` CLI exposes locally.
       // Useful for spotting drift in budget pressure / hallucinated paths
@@ -688,12 +711,23 @@ export class ReviewQuillService {
       }
       const event = resolveEvent(result.verdict, filteredFindings);
       const reviewBody = buildReviewBody({ verdict: result.verdict, event });
-      const inlineComments = filteredFindings.map((finding) => ({
-        path: finding.path,
-        line: finding.line,
-        side: "RIGHT" as const,
-        body: buildInlineCommentBody(finding),
-      }));
+      // Plan §3.6: in integration_tree mode the agent reviewed a
+      // synthetic merge commit, so inline comments anchored to
+      // `pr.headSha` would point at lines that may not exist on the
+      // PR head. Body-only publication keeps the verdict on the PR
+      // (admission gate satisfied) while encoding findings inline
+      // in markdown text. `with_annotations` (PR review + check_run
+      // companion) is deferred per implementation.md §B.1.
+      const surfaceMode = identity?.mode ?? "head";
+      const useBodyOnly = surfaceMode === "integration_tree";
+      const inlineComments = useBodyOnly
+        ? []
+        : filteredFindings.map((finding) => ({
+            path: finding.path,
+            line: finding.line,
+            side: "RIGHT" as const,
+            body: buildInlineCommentBody(finding),
+          }));
       const currentPr = await this.github.getPullRequest(repo.repoFullName, pr.number);
       const publicationDisposition = classifyPublicationDisposition(currentPr, pr.headSha);
       if (publicationDisposition.action !== "publish") {

@@ -7,7 +7,7 @@ import type {
   ReviewQuillRepositoryConfig,
   ReviewSurfaceMode,
 } from "./types.ts";
-import { gitMergeBase, gitPatchId } from "./review-workspace/git.ts";
+import { gitMergeBase, gitMergeTree, gitPatchId } from "./review-workspace/git.ts";
 import { isStackedPullRequest, materializeReviewWorkspace } from "./review-workspace/materialize.ts";
 
 // Default opt-out label. A PR carrying this label always re-runs the
@@ -16,11 +16,13 @@ import { isStackedPullRequest, materializeReviewWorkspace } from "./review-works
 // rendering even when the diff is byte-identical.
 export const DEFAULT_NO_CACHE_LABEL = "review:no-cache";
 
-// v1 ships only `head` mode (review the PR head, cache by patch_id alone).
-// `integration_tree` mode requires the synthetic-merge-tree worktree path
-// described in plan §3.4 and is deferred. If a project sets the mode,
-// we honor the cache-key shape but degrade to head mode for materialization
-// — see service.ts for the warning log.
+// Plan §3.4: `head` is the safe default — reviewer reads the PR head,
+// carry-forward cache keys on patch_id alone, trivial rebases carry
+// forward. `integration_tree` is opt-in: reviewer reads a synthetic
+// merge commit (so file reads see what would actually land), the
+// cache key includes the integration_tree_id, semantic merge issues
+// are caught at review time at the cost of more re-reviews when main
+// advances.
 export const DEFAULT_REVIEW_SURFACE_MODE: ReviewSurfaceMode = "head";
 
 export function resolveNoCacheLabel(repo: ReviewQuillRepositoryConfig): string {
@@ -113,10 +115,27 @@ export async function computeChangeIdentity(
       await materialized.dispose();
       return undefined;
     }
+    const mode = resolveReviewSurfaceMode(repo);
+    let integrationTreeId: string | undefined;
+    if (mode === "integration_tree") {
+      // Plan §3.4: cache key for integration_tree mode is
+      // (patch_id, integration_tree_id). The merged tree changes
+      // when the base advances even if the PR diff is unchanged, so
+      // the second key is necessary to avoid stale carry-forwards.
+      const merge = await gitMergeTree(
+        materialized.workspace.worktreePath,
+        baseSha,
+        pr.headSha,
+      ).catch(() => undefined);
+      if (merge && !merge.conflict) {
+        integrationTreeId = merge.treeId;
+      }
+    }
     const identity: ChangeIdentity = {
       patchId,
       baseSha,
-      mode: resolveReviewSurfaceMode(repo),
+      mode,
+      ...(integrationTreeId ? { integrationTreeId } : {}),
     };
     return { identity, dispose: materialized.dispose };
   } catch (error) {
