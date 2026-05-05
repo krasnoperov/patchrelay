@@ -372,6 +372,7 @@ function mapRunRow(row: Record<string, unknown>): RunRecord {
     ...(row.summary_json !== null ? { summaryJson: String(row.summary_json) } : {}),
     ...(row.report_json !== null ? { reportJson: String(row.report_json) } : {}),
     ...(row.failure_reason !== null ? { failureReason: String(row.failure_reason) } : {}),
+    ...(row.should_not_publish === 1 || row.should_not_publish === true ? { shouldNotPublish: true } : {}),
     startedAt: String(row.started_at),
     ...(row.ended_at !== null ? { endedAt: String(row.ended_at) } : {}),
   };

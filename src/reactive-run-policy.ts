@@ -72,6 +72,13 @@ export class ReactiveRunPolicy {
     if (!isRequestedChangesRunType(run.runType)) {
       return undefined;
     }
+    // Plan §4.4: a superseded run was deliberately cancelled mid-flight
+    // because the PR was approved on the same head. Demanding a new head
+    // would be wrong — there's nothing to push, and the publication-
+    // suppression flag is the contract that says so.
+    if (run.shouldNotPublish || run.status === "superseded") {
+      return undefined;
+    }
     if (!issue.prNumber || issue.prState !== "open") {
       return undefined;
     }
