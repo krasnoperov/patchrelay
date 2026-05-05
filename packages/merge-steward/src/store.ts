@@ -27,11 +27,34 @@ export interface QueueStore {
     patch?: Partial<Pick<QueueEntry,
       "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" | "lastFailedBaseSha" | "specBranch" | "specSha" | "specBasedOn" | "waitDetail"
       | "postMergeStatus" | "postMergeSha" | "postMergeSummary" | "postMergeCheckedAt"
+      | "headPatchId" | "specTreeId"
     >>,
     detail?: string,
   ): void;
   dequeue(entryId: string): void;
   updateHead(entryId: string, newHeadSha: string): void;
+  /**
+   * Plan §5.3: patch-id-aware short-circuit. The new head is
+   * patch-id-equivalent to the cached identity AND the freshly
+   * computed merge tree matches the cached spec tree. We rebuild the
+   * spec commit with the new head as its second parent (so GitHub
+   * marks the PR merged after fast-forward) but do not blow away the
+   * spec branch or restart the prepare cycle. CI must re-run on the
+   * new spec SHA — check_runs are SHA-anchored and there is no API
+   * to reuse a passing verdict.
+   */
+  rebuildSpecHeadEquivalent(
+    entryId: string,
+    patch: {
+      headSha: string;
+      specSha: string;
+      specBranch: string;
+      headPatchId: string;
+      specTreeId: string;
+      ciRunId: string | null;
+    },
+    detail?: string,
+  ): void;
   updatePriority(entryId: string, priority: number, detail?: string): void;
 
   // === Incidents (durable eviction records) ===

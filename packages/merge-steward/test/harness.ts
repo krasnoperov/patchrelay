@@ -163,6 +163,12 @@ export class Harness {
       specSha: null,
       specBasedOn: null,
       waitDetail: null,
+      postMergeStatus: null,
+      postMergeSha: null,
+      postMergeSummary: null,
+      postMergeCheckedAt: null,
+      headPatchId: null,
+      specTreeId: null,
       enqueuedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };

@@ -60,6 +60,21 @@ export interface QueueEntry {
   postMergeSummary: string | null;
   /** Timestamp of the most recent post-merge verification attempt. */
   postMergeCheckedAt: string | null;
+  /**
+   * Plan §5.3: stable patch-id (`git patch-id --stable`) of the
+   * current `headSha` against the entry's `baseSha`. Cached at spec
+   * build time so the prepare path can short-circuit on
+   * patch-id-equivalent updateHeads without re-running the merge.
+   * Null until the spec is first built.
+   */
+  headPatchId: string | null;
+  /**
+   * Plan §5.3: tree id of `specSha` (i.e. `git rev-parse specSha^{tree}`).
+   * Cached at spec build time so we can compare against a freshly
+   * computed `merge-tree --write-tree` for the new head and decide
+   * whether the merged tree is unchanged.
+   */
+  specTreeId: string | null;
   enqueuedAt: string;
   updatedAt: string;
 }

@@ -95,6 +95,8 @@ test("active filter keeps merged entries visible while post-merge CI is still pe
     postMergeSummary: "checks pending: Checks",
     postMergeSha: "landed-sha",
     postMergeCheckedAt: new Date().toISOString(),
+    headPatchId: null,
+    specTreeId: null,
   });
   const active = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
 
@@ -114,6 +116,8 @@ test("active filter drops merged entries once post-merge CI has settled past the
     postMergeSummary: "all checks passed",
     postMergeSha: "landed-sha",
     postMergeCheckedAt: new Date(Date.now() - 4 * 60_000).toISOString(),
+    headPatchId: null,
+    specTreeId: null,
   });
   const active = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
 
@@ -131,6 +135,8 @@ test("chain header keeps a merged entry present until post-merge CI resolves", (
     postMergeSummary: "checks pending: Checks",
     postMergeSha: "landed-sha",
     postMergeCheckedAt: new Date().toISOString(),
+    headPatchId: null,
+    specTreeId: null,
   });
   const active = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
 
