@@ -786,7 +786,6 @@ export class ReviewQuillService {
         }, "Dropped low-confidence, hallucinated-path, or over-cap findings before posting");
       }
       const event = resolveEvent(result.verdict, filteredFindings);
-      const reviewBody = buildReviewBody({ verdict: result.verdict, event });
       // Plan §3.6: in integration_tree mode the agent reviewed a
       // synthetic merge commit, so inline comments anchored to
       // `pr.headSha` would point at lines that may not exist on the
@@ -798,6 +797,14 @@ export class ReviewQuillService {
       // so this stays correct even when identity computation
       // returned undefined.
       const useBodyOnly = surfaceMode === "integration_tree";
+      // Two body renderings: the primary one keeps findings inline as
+      // GitHub comments (no `## Findings` section in the body), the
+      // body-only fallback folds findings into the body markdown so
+      // their specifics survive when inline comments cannot be posted
+      // (integration_tree mode upfront, 422 retry on demand).
+      const reviewBody = useBodyOnly
+        ? buildReviewBody({ verdict: result.verdict, event, inlineFindings: filteredFindings })
+        : buildReviewBody({ verdict: result.verdict, event });
       const inlineComments = useBodyOnly
         ? []
         : filteredFindings.map((finding) => ({
@@ -829,6 +836,11 @@ export class ReviewQuillService {
         return;
       }
       const currentReviews = await this.github.listPullRequestReviews(repo.repoFullName, pr.number);
+      // Track the body we actually posted so the persisted attempt
+      // row matches what's visible on GitHub. The 422 retry path
+      // re-renders the body with findings folded in, so this can
+      // diverge from the primary `reviewBody`.
+      let publishedBody = reviewBody;
       if (hasMatchingLatestReviewForHead(currentReviews, this.reviewerLogin, pr.headSha, event, reviewBody)) {
         this.logger.info({
           repo: repo.repoFullName,
@@ -844,8 +856,9 @@ export class ReviewQuillService {
         // a context line, or a line on the LHS of the diff). The whole
         // POST is rejected as a unit, so a single bad comment kills the
         // entire review. To survive that case we retry ONCE without the
-        // inline comments — the body-only review still lands so the
-        // verdict is visible to the author and CI.
+        // inline comments, and re-render the body with findings folded
+        // into a `## Findings` markdown section so their specifics
+        // still reach the author and the next implementation run.
         try {
           await this.github.submitReview(repo.repoFullName, pr.number, {
             event,
@@ -859,18 +872,25 @@ export class ReviewQuillService {
           if (!isUnprocessableEntity || inlineComments.length === 0) {
             throw error;
           }
+          const bodyOnlyReviewBody = buildReviewBody({
+            verdict: result.verdict,
+            event,
+            inlineFindings: filteredFindings,
+          });
           this.logger.warn({
             repo: repo.repoFullName,
             prNumber: pr.number,
             headSha: pr.headSha,
             droppedInlineComments: inlineComments.length,
+            findingsInlinedIntoBody: filteredFindings.length,
             githubError: message.slice(0, 500),
-          }, "GitHub rejected review with inline comments (422); retrying body-only");
+          }, "GitHub rejected review with inline comments (422); retrying body-only with findings folded into body");
           await this.github.submitReview(repo.repoFullName, pr.number, {
             event,
-            body: reviewBody,
+            body: bodyOnlyReviewBody,
             commitId: pr.headSha,
           });
+          publishedBody = bodyOnlyReviewBody;
         }
       }
       const attemptConclusion = event === "REQUEST_CHANGES" ? "declined" : "approved";
@@ -886,7 +906,7 @@ export class ReviewQuillService {
         turnId: result.turnId,
         externalCheckRunId: null,
         completedAt: new Date().toISOString(),
-        reviewBody: reviewBody,
+        reviewBody: publishedBody,
         reviewEvent: event,
         publicationMode: "body_only",
       });
