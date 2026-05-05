@@ -340,6 +340,13 @@ export interface ReviewQuillRuntimeStatus {
   lastReconcileCompletedAt: string | null;
   lastReconcileOutcome: "idle" | "running" | "succeeded" | "failed";
   lastReconcileError: string | null;
+  /**
+   * Last time each repo finished a full reconcile pass (all open PRs walked).
+   * Populated lazily — entries appear only once the repo has been reconciled
+   * at least once. Surfaced so operators can see when one repo is starving
+   * the others.
+   */
+  repoLastReconciledAt: Record<string, string>;
 }
 
 export interface ReviewQuillRepoSummary {

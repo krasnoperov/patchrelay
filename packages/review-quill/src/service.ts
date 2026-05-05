@@ -47,6 +47,7 @@ export class ReviewQuillService {
     lastReconcileCompletedAt: null,
     lastReconcileOutcome: "idle",
     lastReconcileError: null,
+    repoLastReconciledAt: {},
   };
 
   constructor(
@@ -273,30 +274,50 @@ export class ReviewQuillService {
     this.pendingRepoReconciles.add(repo.repoFullName);
   }
 
-  private prependQueuedReconciles(
+  /**
+   * Drain `pendingFullReconcile` / `pendingRepoReconciles` to the BACK of the
+   * active queue. Append (not prepend) is load-bearing for fairness: a hot
+   * repo whose webhook fires repeatedly during a slow reconcile would
+   * otherwise be put back in front of every other repo on each pass and
+   * starve them indefinitely. With append, every other repo runs at least
+   * once before the hot repo gets another turn.
+   */
+  private appendQueuedReconciles(
     queue: string[],
     queuedRepoNames: Set<string>,
   ): void {
-    const prioritize: string[] = [];
+    const appended: string[] = [];
     if (this.pendingFullReconcile) {
       this.pendingFullReconcile = false;
       this.pendingRepoReconciles.clear();
       for (const repo of this.config.repositories) {
         if (queuedRepoNames.has(repo.repoFullName)) continue;
-        prioritize.push(repo.repoFullName);
+        appended.push(repo.repoFullName);
       }
     } else if (this.pendingRepoReconciles.size > 0) {
       for (const repoFullName of this.pendingRepoReconciles) {
         if (queuedRepoNames.has(repoFullName)) continue;
-        prioritize.push(repoFullName);
+        appended.push(repoFullName);
       }
       this.pendingRepoReconciles.clear();
     }
-    for (let index = prioritize.length - 1; index >= 0; index -= 1) {
-      const repoFullName = prioritize[index]!;
-      queue.unshift(repoFullName);
+    for (const repoFullName of appended) {
+      queue.push(repoFullName);
       queuedRepoNames.add(repoFullName);
     }
+  }
+
+  /**
+   * True when there is a pending request for a repo that isn't the one we are
+   * currently walking. Used by `reconcileRepo` to yield mid-walk so a hot
+   * repo can't hold the global lock while reviewing its full PR list.
+   */
+  private hasPendingForOtherRepos(currentRepoFullName: string): boolean {
+    if (this.pendingFullReconcile) return true;
+    for (const repoFullName of this.pendingRepoReconciles) {
+      if (repoFullName !== currentRepoFullName) return true;
+    }
+    return false;
   }
 
   private async runQueuedReconcile(initialQueue: string[]): Promise<void> {
@@ -313,8 +334,14 @@ export class ReviewQuillService {
         queuedRepoNames.delete(repoFullName);
         const repo = this.config.repositories.find((entry) => entry.repoFullName === repoFullName);
         if (!repo) continue;
-        await this.reconcileRepo(repo);
-        this.prependQueuedReconciles(queue, queuedRepoNames);
+        const result = await this.reconcileRepo(repo);
+        if (result.yielded) {
+          // The repo yielded mid-walk because another repo was waiting.
+          // Re-pend it so `appendQueuedReconciles` puts it at the back of
+          // the queue — behind every other waiting repo.
+          this.pendingRepoReconciles.add(repoFullName);
+        }
+        this.appendQueuedReconciles(queue, queuedRepoNames);
       }
       this.prunePendingReviews(this.config.repositories.map((repo) => repo.repoId));
       this.runtime.lastReconcileCompletedAt = new Date().toISOString();
@@ -330,11 +357,23 @@ export class ReviewQuillService {
     }
   }
 
-  private async reconcileRepo(repo: ReviewQuillRepositoryConfig): Promise<void> {
+  private async reconcileRepo(
+    repo: ReviewQuillRepositoryConfig,
+  ): Promise<{ yielded: boolean }> {
     const prs = await this.github.listOpenPullRequests(repo.repoFullName);
     const pendingForRepo: ReviewQuillPendingReview[] = [];
     await this.reconcileClosedPullRequestAttempts(repo, prs);
     for (const pr of prs) {
+      // Yield between PRs when another repo is waiting. This bounds the
+      // "time-to-first-review" for any repo to one in-flight Codex turn,
+      // even when a hot repo has a long PR list. The current repo is
+      // re-pended in `runQueuedReconcile` so it picks up where it left
+      // off (cheap because exact-head matches short-circuit via
+      // `getAttempt`).
+      if (this.hasPendingForOtherRepos(repo.repoFullName)) {
+        this.setPendingReviews(repo.repoId, pendingForRepo);
+        return { yielded: true };
+      }
       await this.reconcileActiveAttemptsForPullRequest(repo, pr);
       const currentReviews = await this.github.listPullRequestReviews(repo.repoFullName, pr.number);
       const existing = this.store.getAttempt(repo.repoFullName, pr.number, pr.headSha);
@@ -396,6 +435,8 @@ export class ReviewQuillService {
     }
 
     this.setPendingReviews(repo.repoId, pendingForRepo);
+    this.runtime.repoLastReconciledAt[repo.repoFullName] = new Date().toISOString();
+    return { yielded: false };
   }
 
   private async reconcileClosedPullRequestAttempts(

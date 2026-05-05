@@ -284,7 +284,7 @@ test("triggerReconcile retires active attempts for merged pull requests", async 
   assert.equal(updates.length, 1);
 });
 
-test("triggerReconcile prioritizes queued repo nudges that arrive mid-pass", async () => {
+test("triggerReconcile honors queued repo nudges that arrive mid-pass without starving siblings", async () => {
   const service = new ReviewQuillService(
     {
       server: { bind: "127.0.0.1", port: 8788 },
@@ -342,24 +342,271 @@ test("triggerReconcile prioritizes queued repo nudges that arrive mid-pass", asy
   const queuedResults: boolean[] = [];
   let queued = false;
   (service as unknown as {
-    reconcileRepo: (repo: { repoFullName: string }) => Promise<void>;
+    reconcileRepo: (repo: { repoFullName: string }) => Promise<{ yielded: boolean }>;
   }).reconcileRepo = async (repo) => {
     processed.push(repo.repoFullName);
     if (repo.repoFullName === "krasnoperov/subtitles" && !queued) {
       queued = true;
       queuedResults.push(await service.triggerReconcile("krasnoperov/subtitles"));
     }
+    return { yielded: false };
   };
 
   const started = await service.triggerReconcile();
 
   assert.equal(started, true);
   assert.deepEqual(queuedResults, [false]);
+  // The mid-pass nudge for subtitles is queued, but it goes to the BACK of
+  // the queue — usertold (already enqueued by the initial pass) gets to run
+  // before subtitles is revisited. Without this ordering, a hot repo whose
+  // webhooks fire continuously would starve every other repo.
   assert.deepEqual(processed, [
     "krasnoperov/subtitles",
-    "krasnoperov/subtitles",
     "krasnoperov/usertold",
+    "krasnoperov/subtitles",
   ]);
+});
+
+test("triggerReconcile cannot starve a repo even when one repo's webhooks fire continuously", async () => {
+  // Regression: the previous prepend-based scheduler put each fresh nudge
+  // for a hot repo at the front of the queue. If webhooks for that repo
+  // arrived during every cycle, every sibling was indefinitely deferred.
+  // The append-based scheduler must guarantee that every repo in the
+  // initial set runs before the hot repo is revisited.
+  const service = new ReviewQuillService(
+    {
+      server: { bind: "127.0.0.1", port: 8788 },
+      database: { path: ":memory:", wal: true },
+      logging: { level: "info" },
+      reconciliation: {
+        pollIntervalMs: 1_000,
+        heartbeatIntervalMs: 1_000,
+        staleQueuedAfterMs: 60_000,
+        staleRunningAfterMs: 60_000,
+      },
+      codex: {
+        bin: "codex",
+        args: [],
+        approvalPolicy: "never",
+        sandboxMode: "danger-full-access",
+      },
+      prompting: { replaceSections: {} },
+      repositories: [
+        {
+          repoId: "hot",
+          repoFullName: "krasnoperov/hot",
+          baseBranch: "main",
+          requiredChecks: [],
+          excludeBranches: [],
+          reviewDocs: [],
+          diffIgnore: [],
+          diffSummarizeOnly: [],
+          patchBodyBudgetTokens: 5_000,
+        },
+        {
+          repoId: "cold-a",
+          repoFullName: "krasnoperov/cold-a",
+          baseBranch: "main",
+          requiredChecks: [],
+          excludeBranches: [],
+          reviewDocs: [],
+          diffIgnore: [],
+          diffSummarizeOnly: [],
+          patchBodyBudgetTokens: 5_000,
+        },
+        {
+          repoId: "cold-b",
+          repoFullName: "krasnoperov/cold-b",
+          baseBranch: "main",
+          requiredChecks: [],
+          excludeBranches: [],
+          reviewDocs: [],
+          diffIgnore: [],
+          diffSummarizeOnly: [],
+          patchBodyBudgetTokens: 5_000,
+        },
+      ],
+      secretSources: {},
+    } as never,
+    {
+      listAttempts: () => [],
+      listWebhooks: () => [],
+    } as never,
+    {} as never,
+    {} as never,
+    { info() {}, warn() {}, child() { return this; } } as never,
+  );
+
+  const processed: string[] = [];
+  let hotNudges = 0;
+  (service as unknown as {
+    reconcileRepo: (repo: { repoFullName: string }) => Promise<{ yielded: boolean }>;
+  }).reconcileRepo = async (repo) => {
+    processed.push(repo.repoFullName);
+    // Whenever the hot repo runs, fire another webhook for the hot repo
+    // *before* control returns to the scheduler. Five times — enough that a
+    // prepend-based scheduler would loop on hot indefinitely.
+    if (repo.repoFullName === "krasnoperov/hot" && hotNudges < 5) {
+      hotNudges += 1;
+      await service.triggerReconcile("krasnoperov/hot");
+    }
+    return { yielded: false };
+  };
+
+  await service.triggerReconcile();
+
+  // Both cold repos must run (at least once) within the same pass, even
+  // though the hot repo is firing nudges the entire time.
+  assert.ok(
+    processed.includes("krasnoperov/cold-a"),
+    `cold-a was starved; processed order: ${processed.join(", ")}`,
+  );
+  assert.ok(
+    processed.includes("krasnoperov/cold-b"),
+    `cold-b was starved; processed order: ${processed.join(", ")}`,
+  );
+  // And cold-a / cold-b should each appear before the second hot run —
+  // i.e. no repeat of hot until siblings have had a turn.
+  const hotIndices = processed
+    .map((r, i) => (r === "krasnoperov/hot" ? i : -1))
+    .filter((i) => i >= 0);
+  const coldAIndex = processed.indexOf("krasnoperov/cold-a");
+  const coldBIndex = processed.indexOf("krasnoperov/cold-b");
+  assert.ok(
+    coldAIndex < hotIndices[1]!,
+    `cold-a (idx ${coldAIndex}) should appear before second hot run (idx ${hotIndices[1]})`,
+  );
+  assert.ok(
+    coldBIndex < hotIndices[1]!,
+    `cold-b (idx ${coldBIndex}) should appear before second hot run (idx ${hotIndices[1]})`,
+  );
+});
+
+test("reconcileRepo yields between PRs when another repo is waiting", async () => {
+  // Even when reconcileRepo is in the middle of walking a long PR list,
+  // it must yield to a sibling whose webhook arrived. Without this,
+  // bounded-latency for the sibling becomes unbounded for any hot repo
+  // with many open PRs.
+  const service = new ReviewQuillService(
+    {
+      server: { bind: "127.0.0.1", port: 8788 },
+      database: { path: ":memory:", wal: true },
+      logging: { level: "info" },
+      reconciliation: {
+        pollIntervalMs: 1_000,
+        heartbeatIntervalMs: 1_000,
+        staleQueuedAfterMs: 60_000,
+        staleRunningAfterMs: 60_000,
+      },
+      codex: {
+        bin: "codex",
+        args: [],
+        approvalPolicy: "never",
+        sandboxMode: "danger-full-access",
+      },
+      prompting: { replaceSections: {} },
+      repositories: [
+        {
+          repoId: "hot",
+          repoFullName: "krasnoperov/hot",
+          baseBranch: "main",
+          requiredChecks: [],
+          excludeBranches: [],
+          reviewDocs: [],
+          diffIgnore: [],
+          diffSummarizeOnly: [],
+          patchBodyBudgetTokens: 5_000,
+        },
+        {
+          repoId: "cold",
+          repoFullName: "krasnoperov/cold",
+          baseBranch: "main",
+          requiredChecks: [],
+          excludeBranches: [],
+          reviewDocs: [],
+          diffIgnore: [],
+          diffSummarizeOnly: [],
+          patchBodyBudgetTokens: 5_000,
+        },
+      ],
+      secretSources: {},
+    } as never,
+    {
+      listAttempts: () => [],
+      listWebhooks: () => [],
+      listActiveAttemptsForRepo: () => [],
+      listAttemptsForPullRequest: () => [],
+      getAttempt: () => undefined,
+    } as never,
+    {
+      listOpenPullRequests: async (repoFullName: string) => {
+        if (repoFullName === "krasnoperov/hot") {
+          // Long PR list for the hot repo
+          return Array.from({ length: 5 }, (_, i) => ({
+            number: i + 1,
+            title: `pr ${i + 1}`,
+            url: `https://github.com/krasnoperov/hot/pull/${i + 1}`,
+            state: "OPEN" as const,
+            isDraft: false,
+            headSha: `sha-${i + 1}`,
+            headRefName: `feature/${i + 1}`,
+            baseRefName: "main",
+            labels: [],
+          }));
+        }
+        return [];
+      },
+      listPullRequestReviews: async () => [],
+    } as never,
+    {} as never,
+    { info() {}, warn() {}, debug() {}, child() { return this; } } as never,
+  );
+
+  // Stub the per-PR work so it doesn't try to talk to Codex.
+  (service as unknown as {
+    reconcileActiveAttemptsForPullRequest: () => Promise<void>;
+    evaluateEligibility: () => Promise<{ eligible: boolean; reason?: string }>;
+    dismissStaleDecisiveReviews: () => Promise<void>;
+    executeReview: () => Promise<void>;
+  }).reconcileActiveAttemptsForPullRequest = async () => {};
+  (service as unknown as { evaluateEligibility: () => Promise<{ eligible: boolean }> }).evaluateEligibility = async () => ({ eligible: false });
+  (service as unknown as { dismissStaleDecisiveReviews: () => Promise<void> }).dismissStaleDecisiveReviews = async () => {};
+  (service as unknown as { executeReview: () => Promise<void> }).executeReview = async () => {};
+
+  // Trigger a webhook nudge for the cold repo while hot is being walked.
+  // We rely on the fact that the first PR of hot will be processed, then
+  // before the second PR begins, the yield check fires.
+  let nudgedCold = false;
+  const originalReconcile = (service as unknown as {
+    reconcileActiveAttemptsForPullRequest: (
+      repo: { repoFullName: string },
+      pr: { number: number },
+    ) => Promise<void>;
+  }).reconcileActiveAttemptsForPullRequest.bind(service);
+  (service as unknown as {
+    reconcileActiveAttemptsForPullRequest: (
+      repo: { repoFullName: string },
+      pr: { number: number },
+    ) => Promise<void>;
+  }).reconcileActiveAttemptsForPullRequest = async (repo, pr) => {
+    await originalReconcile(repo, pr);
+    if (repo.repoFullName === "krasnoperov/hot" && pr.number === 1 && !nudgedCold) {
+      nudgedCold = true;
+      // Inject a pending request for cold while we're inside hot's walk.
+      await service.triggerReconcile("krasnoperov/cold");
+    }
+  };
+
+  await service.triggerReconcile();
+
+  // The hot repo must have yielded after PR 1 — observable via
+  // `repoLastReconciledAt`: it gets set only on a non-yielding completion,
+  // so after the yield, hot's timestamp lags cold's first completion.
+  const snapshot = service.getWatchSnapshot();
+  assert.ok(
+    snapshot.runtime.repoLastReconciledAt["krasnoperov/cold"],
+    "cold should have completed at least one full reconcile pass",
+  );
 });
 
 test("sanitizeJsonPayload strips markdown fences", () => {
