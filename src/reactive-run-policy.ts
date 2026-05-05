@@ -361,7 +361,7 @@ export class ReactiveRunPolicy {
     context: Record<string, unknown> | undefined,
   ): Promise<Record<string, unknown> | undefined> {
     const merged: Record<string, unknown> = {
-      ...(context ?? {}),
+      ...context,
       ...(headSha ? { headSha } : {}),
     };
 

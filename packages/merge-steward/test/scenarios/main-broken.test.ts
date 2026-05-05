@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createHarness, Harness, type SimPR } from "../harness.ts";
+import { createHarness, type SimPR } from "../harness.ts";
 import type { CIStatus } from "../../src/types.ts";
 
 const prA: SimPR = { number: 1, branch: "feat-a", files: [{ path: "a.ts", content: "a" }] };

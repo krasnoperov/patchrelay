@@ -65,11 +65,11 @@ export function queueSettledOrchestrationIssue(params: {
     projectId: params.issue.projectId,
     linearIssueId: params.issue.linearIssueId,
     eventType: "delegated",
-    eventJson: JSON.stringify({
-      ...(params.promptContext
+    eventJson: JSON.stringify(
+      params.promptContext
         ? { promptContext: params.promptContext }
-        : { promptContext: "The orchestration child set has settled enough to begin planning." }),
-    }),
+        : { promptContext: "The orchestration child set has settled enough to begin planning." },
+    ),
     dedupeKey: `delegated:orchestration_settle:${params.issue.linearIssueId}`,
   });
   if (params.db.issueSessions.peekIssueSessionWake(params.issue.projectId, params.issue.linearIssueId)) {

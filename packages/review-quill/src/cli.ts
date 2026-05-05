@@ -1,4 +1,3 @@
-import pino from "pino";
 import {
   defaultRunCommand,
   type CommandRunner,

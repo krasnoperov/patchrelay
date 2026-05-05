@@ -1,6 +1,5 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import git from "isomorphic-git";
 import { createHarness, type SimPR } from "../harness.ts";
 
 describe("non-spinning retry", () => {

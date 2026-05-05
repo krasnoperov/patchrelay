@@ -1,4 +1,4 @@
-import type { QueueBlockState, QueueEntry, QueueEntryDetail } from "../types.ts";
+import type { QueueBlockState, QueueEntryDetail } from "../types.ts";
 import { queueBlockMatchesEntry } from "./format.ts";
 
 export type VisualizationNodeStatus = "current" | "visited" | "upcoming";

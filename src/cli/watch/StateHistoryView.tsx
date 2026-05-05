@@ -194,7 +194,6 @@ function MainPathNode({
   const stateLabel = STATE_LABELS[node.state] ?? node.state;
   const marker = node.isCurrent ? "\u25c9" : "\u25cb";
   const stateColor = node.isCurrent ? "green" : "white";
-  const hasActiveRun = node.runs.some((r) => r.id === activeRunId);
   const gutter = isLast && node.sideTrips.length === 0 ? "   " : " \u2502 ";
 
   return (

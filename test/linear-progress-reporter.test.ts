@@ -327,9 +327,9 @@ test("progress reporter keeps durable history full when the ephemeral status is 
 
     assert.equal(emitted.length, 2);
     assert.equal(emitted[0]?.options?.ephemeral, true);
-    assert.match((emitted[0]?.content as { body?: string }).body ?? "", /\.\.\.$/);
+    assert.match(((emitted[0]?.content ?? {}) as { body?: string }).body ?? "", /\.\.\.$/);
     assert.equal(
-      (emitted[1]?.content as { body?: string }).body,
+      ((emitted[1]?.content ?? {}) as { body?: string }).body,
       "The build output reached the packaging step cleanly and the session closed normally, so I’m on the final publish pass now: checking the exact changed files, rerunning the focused verification, and preparing the push.",
     );
   } finally {

@@ -15,7 +15,6 @@ type ReviewPromptSectionId = typeof REVIEW_QUILL_PROMPT_SECTION_IDS[number];
 export const REVIEW_QUILL_REPLACEABLE_SECTION_IDS = [
   "review-rubric",
 ] as const;
-type ReviewQuillReplaceableSectionId = typeof REVIEW_QUILL_REPLACEABLE_SECTION_IDS[number];
 
 interface ReviewPromptSection {
   id: ReviewPromptSectionId | "extra-instructions";

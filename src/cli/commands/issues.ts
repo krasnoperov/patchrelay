@@ -96,7 +96,7 @@ export async function handleLiveCommand(params: IssueCommandParams): Promise<num
       break;
     }
     await delay(2000);
-  } while (true);
+  } while (watch);
   return 0;
 }
 

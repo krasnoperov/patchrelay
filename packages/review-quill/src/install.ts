@@ -13,7 +13,6 @@ import type { ReviewQuillRepositoryConfig } from "./types.ts";
 function renderTemplate(template: string, replacements?: { publicBaseUrl?: string }): string {
   const home = homedir();
   const user = basename(home);
-  const layout = getReviewQuillPathLayout();
   let rendered = template
     .replaceAll("/home/your-user", home)
     .replaceAll("your-user", user);

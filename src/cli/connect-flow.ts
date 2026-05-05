@@ -77,5 +77,6 @@ export async function runConnectFlow(params: {
       throw new Error(`Timed out waiting for Linear OAuth after ${params.timeoutSeconds ?? 180} seconds.`);
     }
     await delay(pollIntervalMs);
-  } while (true);
+  } while (Date.now() < deadline);
+  throw new Error(`Timed out waiting for Linear OAuth after ${params.timeoutSeconds ?? 180} seconds.`);
 }

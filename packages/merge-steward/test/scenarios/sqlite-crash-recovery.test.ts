@@ -6,11 +6,7 @@ import { randomUUID } from "node:crypto";
 import { unlinkSync } from "node:fs";
 import { SqliteStore } from "../../src/db/sqlite-store.ts";
 import { GitSim } from "../../src/sim/git-sim.ts";
-import { CISim } from "../../src/sim/ci-sim.ts";
-import { GitHubSim, EvictionReporterSim } from "../../src/sim/github-sim.ts";
-import { reconcile } from "../../src/reconciler.ts";
 import type { QueueEntry } from "../../src/types.ts";
-import { assertInvariants } from "../invariants.ts";
 
 function tempDbPath(): string {
   return join(tmpdir(), `steward-test-${randomUUID()}.sqlite`);
