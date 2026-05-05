@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS issues (
   ci_repair_attempts INTEGER NOT NULL DEFAULT 0,
   queue_repair_attempts INTEGER NOT NULL DEFAULT 0,
   orchestration_settle_until TEXT,
+  parent_pr_branch TEXT,
   updated_at TEXT NOT NULL,
   UNIQUE(project_id, linear_issue_id)
 );
@@ -356,6 +357,9 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   addColumnIfMissing(connection, "issues", "last_published_patch_id", "TEXT");
   addColumnIfMissing(connection, "issues", "last_published_integration_tree_id", "TEXT");
   addColumnIfMissing(connection, "issues", "last_published_head_sha", "TEXT");
+  // Plan §8.3: parent-of-child index for stacked PRs.
+  addColumnIfMissing(connection, "issues", "parent_pr_branch", "TEXT");
+  connection.exec(`CREATE INDEX IF NOT EXISTS idx_issues_parent_pr_branch ON issues(parent_pr_branch);`);
   addColumnIfMissing(connection, "linear_installations", "health_status", "TEXT NOT NULL DEFAULT 'ok'");
   addColumnIfMissing(connection, "linear_installations", "health_reason", "TEXT");
   addColumnIfMissing(connection, "linear_installations", "health_updated_at", "TEXT");
@@ -436,6 +440,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         last_published_patch_id TEXT,
         last_published_integration_tree_id TEXT,
         last_published_head_sha TEXT,
+        parent_pr_branch TEXT,
         ci_repair_attempts INTEGER NOT NULL DEFAULT 0,
         queue_repair_attempts INTEGER NOT NULL DEFAULT 0,
         review_fix_attempts INTEGER NOT NULL DEFAULT 0,
@@ -502,6 +507,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         last_published_patch_id,
         last_published_integration_tree_id,
         last_published_head_sha,
+        parent_pr_branch,
         ci_repair_attempts,
         queue_repair_attempts,
         review_fix_attempts,
@@ -566,6 +572,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         last_published_patch_id,
         last_published_integration_tree_id,
         last_published_head_sha,
+        parent_pr_branch,
         COALESCE(ci_repair_attempts, 0),
         COALESCE(queue_repair_attempts, 0),
         COALESCE(review_fix_attempts, 0),
@@ -582,6 +589,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
       CREATE INDEX IF NOT EXISTS idx_issues_key ON issues(issue_key);
       CREATE INDEX IF NOT EXISTS idx_issues_ready ON issues(pending_run_type, active_run_id);
       CREATE INDEX IF NOT EXISTS idx_issues_branch ON issues(branch_name);
+      CREATE INDEX IF NOT EXISTS idx_issues_parent_pr_branch ON issues(parent_pr_branch);
     `);
   } finally {
     connection.exec("PRAGMA foreign_keys = ON");

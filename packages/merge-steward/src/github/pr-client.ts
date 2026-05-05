@@ -26,7 +26,9 @@ export class GitHubPRClient implements GitHubPRApi {
     const result = await exec("gh", [
       "pr", "view", String(prNumber),
       "--repo", this.repoFullName,
-      "--json", "number,title,headRefName,headRefOid,reviewDecision,state,mergeStateStatus",
+      // Plan §8.4 change 3a: include baseRefName so the queue can
+      // detect stacked PRs at admission time.
+      "--json", "number,title,headRefName,headRefOid,baseRefName,reviewDecision,state,mergeStateStatus",
     ], { githubRepoFullName: this.repoFullName });
 
     const data = JSON.parse(result.stdout) as {
@@ -34,6 +36,7 @@ export class GitHubPRClient implements GitHubPRApi {
       title?: string;
       headRefName: string;
       headRefOid: string;
+      baseRefName?: string;
       reviewDecision: string;
       state: string;
       mergeStateStatus?: string;
@@ -44,6 +47,7 @@ export class GitHubPRClient implements GitHubPRApi {
       branch: data.headRefName,
       headSha: data.headRefOid,
       ...(data.title ? { title: data.title } : {}),
+      ...(data.baseRefName ? { baseRefName: data.baseRefName } : {}),
       mergeable: data.state === "OPEN",
       mergeStateStatus: data.mergeStateStatus,
       reviewDecision: data.reviewDecision,

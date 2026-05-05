@@ -41,6 +41,7 @@ function mapEntry(row: Record<string, unknown>): QueueEntry {
     postMergeSummary: row.post_merge_summary === null || row.post_merge_summary === undefined ? null : String(row.post_merge_summary),
     postMergeCheckedAt: row.post_merge_checked_at === null || row.post_merge_checked_at === undefined ? null : String(row.post_merge_checked_at),
     prTitle: row.pr_title === null || row.pr_title === undefined ? null : String(row.pr_title),
+    baseRefName: row.base_ref_name === null || row.base_ref_name === undefined ? null : String(row.base_ref_name),
     enqueuedAt: String(row.enqueued_at),
     updatedAt: String(row.updated_at),
   };
@@ -160,9 +161,9 @@ export class SqliteStore implements QueueStore {
           priority, generation, ci_run_id, ci_retries, retry_attempts,
           max_retries, last_failed_base_sha, issue_key, wait_detail,
           post_merge_status, post_merge_sha, post_merge_summary, post_merge_checked_at,
-          pr_title,
+          pr_title, base_ref_name,
           enqueued_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         entry.id, entry.repoId, entry.prNumber, entry.branch,
         entry.headSha, entry.baseSha, entry.status, entry.position,
@@ -175,6 +176,7 @@ export class SqliteStore implements QueueStore {
         entry.postMergeSummary ?? null,
         entry.postMergeCheckedAt ?? null,
         entry.prTitle ?? null,
+        entry.baseRefName ?? null,
         entry.enqueuedAt, entry.updatedAt,
       );
       this.writeEvent(entry.id, null, entry.status);

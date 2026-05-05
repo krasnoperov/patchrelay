@@ -84,6 +84,13 @@ export interface IssueRecord {
   lastPublishedPatchId?: string | undefined;
   lastPublishedIntegrationTreeId?: string | undefined;
   lastPublishedHeadSha?: string | undefined;
+  // Plan §8.3: parent-of-child index for stacked PRs. Set when
+  // patchrelay observes a PR with a base ref that is *not* the repo
+  // default branch — that base ref names another PR's head branch.
+  // Lookups by `parentPrBranch === <branch>` give us the inverse
+  // index "given this PR's branch, who is stacked on me?" which is
+  // what `pr_synchronize` needs to fan child-rebase wake events.
+  parentPrBranch?: string | undefined;
   ciRepairAttempts: number;
   queueRepairAttempts: number;
   reviewFixAttempts: number;

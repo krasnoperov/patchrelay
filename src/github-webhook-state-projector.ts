@@ -47,6 +47,13 @@ export async function projectGitHubWebhookState(
   const ciSnapshotResolver = deps.ciSnapshotResolver ?? createGitHubCiSnapshotResolver();
   const immediateCheckStatus = deriveImmediatePrCheckStatus(issue, event, project);
 
+  // Plan §8.3: when a PR's base ref differs from the repo default,
+  // it's stacked on another open PR. Cache the parent branch so we
+  // can fan child-rebase wakes on parent's `pr_synchronize`. Clear
+  // the field when a base ref reverts to the default (e.g. parent
+  // landed and GitHub auto-retargeted) or when the PR closes.
+  const parentPrBranch = computeParentPrBranchUpdate(event, project);
+
   deps.db.issues.upsertIssue({
     projectId: issue.projectId,
     linearIssueId: issue.linearIssueId,
@@ -58,6 +65,7 @@ export async function projectGitHubWebhookState(
     ...(event.reviewState !== undefined ? { prReviewState: event.reviewState } : {}),
     ...(immediateCheckStatus !== undefined ? { prCheckStatus: immediateCheckStatus } : {}),
     ...(linkedBy === "issue_key" ? { branchName: event.branchName } : {}),
+    ...(parentPrBranch !== undefined ? { parentPrBranch } : {}),
     ...(event.reviewState === "changes_requested"
       ? { lastBlockingReviewHeadSha: event.reviewCommitId ?? event.headSha ?? null }
       : event.reviewState === "approved"
@@ -149,6 +157,27 @@ export async function projectGitHubWebhookState(
   });
 
   return freshIssue;
+}
+
+// Plan §8.3: derive the cached parent-PR-branch state from a webhook
+// event. Returns `undefined` to mean "no change" (event isn't a
+// PR-shape event with a base ref); returns `null` to mean "clear the
+// field" (PR closed, or base ref is now the repo default).
+function computeParentPrBranchUpdate(
+  event: NormalizedGitHubEvent,
+  project: ProjectConfig | undefined,
+): string | null | undefined {
+  if (event.triggerEvent === "pr_closed" || event.triggerEvent === "pr_merged") {
+    return null;
+  }
+  if (event.prBaseRef === undefined) {
+    return undefined;
+  }
+  const repoDefault = project?.github?.baseBranch ?? "main";
+  if (!event.prBaseRef || event.prBaseRef === repoDefault) {
+    return null;
+  }
+  return event.prBaseRef;
 }
 
 async function updateGitHubCiSnapshot(

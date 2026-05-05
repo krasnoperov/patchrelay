@@ -17,6 +17,7 @@ import { resolveGitHubWebhookIssue } from "./github-webhook-issue-resolution.ts"
 import { maybeCloseLatePublishedImplementationPr } from "./github-webhook-late-publication-guard.ts";
 import { projectGitHubWebhookState } from "./github-webhook-state-projector.ts";
 import { maybeEnqueueGitHubReactiveRun } from "./github-webhook-reactive-run.ts";
+import { maybeFanChildRebaseWakes } from "./github-webhook-stack-coordination.ts";
 import { handleGitHubTerminalPrEvent } from "./github-webhook-terminal-handler.ts";
 
 type FetchLike = typeof fetch;
@@ -173,6 +174,20 @@ export class GitHubWebhookHandler {
       failureContextResolver: this.failureContextResolver,
       fetchImpl: this.fetchImpl,
     });
+
+    // Plan §8.3: parent-moved trigger. When a PR's head advances,
+    // any child PR stacked on it becomes stale relative to its
+    // declared base — enqueue a `branch_upkeep` run on each child
+    // so it rebases onto the new parent head.
+    if (event.triggerEvent === "pr_synchronize") {
+      maybeFanChildRebaseWakes({
+        db: this.db,
+        logger: this.logger,
+        ...(this.feed ? { feed: this.feed } : {}),
+        enqueueIssue: this.enqueueIssue,
+        event,
+      });
+    }
 
     if (event.triggerEvent === "pr_merged" || event.triggerEvent === "pr_closed") {
       await handleGitHubTerminalPrEvent({

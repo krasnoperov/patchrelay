@@ -81,6 +81,8 @@ export function ensureSchema(connection: DatabaseConnection): void {
   ensureColumn(connection, "queue_entries", "post_merge_checked_at", "TEXT");
   ensureColumn(connection, "queue_entries", "wait_detail", "TEXT");
   ensureColumn(connection, "queue_entries", "pr_title", "TEXT");
+  // Plan §8.4: stack-aware admission ordering needs the PR's base ref.
+  ensureColumn(connection, "queue_entries", "base_ref_name", "TEXT");
   connection.exec(`
     UPDATE queue_entries
        SET post_merge_status = 'pending'

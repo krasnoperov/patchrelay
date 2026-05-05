@@ -24,6 +24,9 @@ export interface NormalizedGitHubEvent {
   prState?: "open" | "closed" | "merged" | undefined;
   prAuthorLogin?: string | undefined;
   prLabels?: string[] | undefined;
+  // Plan §8.3: surfaced for stack-detection on `pr_opened` /
+  // `pr_synchronize`. Empty / absent means "no PR-shaped event."
+  prBaseRef?: string | undefined;
   reviewState?: "approved" | "changes_requested" | "commented" | undefined;
   checkStatus?: "pending" | "success" | "failure" | undefined;
   checkName?: string | undefined;

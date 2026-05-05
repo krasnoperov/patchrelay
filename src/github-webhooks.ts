@@ -85,6 +85,7 @@ function normalizePullRequestEvent(payload: GitHubWebhookPayload, repoFullName: 
     prLabels: Array.isArray(pr.labels)
       ? pr.labels.map((label) => label?.name).filter((label): label is string => typeof label === "string" && label.trim().length > 0)
       : undefined,
+    prBaseRef: pr.base.ref,
   };
 }
 
