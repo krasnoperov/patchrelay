@@ -61,6 +61,13 @@ export interface QueueEntry {
   /** Timestamp of the most recent post-merge verification attempt. */
   postMergeCheckedAt: string | null;
   /**
+   * Plan §8.4: PR's base ref captured at admission. When this names
+   * another open PR's `branch` (head ref), the entry is stacked and
+   * the queue holds it behind the parent until the parent is itself
+   * admitted. `null` when the PR was opened against the repo default.
+   */
+  baseRefName: string | null;
+  /**
    * Plan §5.3: stable patch-id (`git patch-id --stable`) of the
    * current `headSha` against the entry's `baseSha`. Cached at spec
    * build time so the prepare path can short-circuit on
@@ -221,6 +228,12 @@ export interface PRStatus {
   branch: string;
   headSha: string;
   title?: string | undefined;
+  /**
+   * Plan §8.4: PR's base ref. When this names another open PR's
+   * `branch` (head ref), the PR is stacked and admission must defer
+   * until the parent is in the queue.
+   */
+  baseRefName?: string | undefined;
   mergeable: boolean;
   mergeStateStatus?: string | undefined;
   reviewDecision?: string | undefined;

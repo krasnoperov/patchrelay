@@ -18,6 +18,7 @@ import { maybeCloseLatePublishedImplementationPr } from "./github-webhook-late-p
 import { projectGitHubWebhookState } from "./github-webhook-state-projector.ts";
 import { maybeEnqueueGitHubReactiveRun } from "./github-webhook-reactive-run.ts";
 import { maybeRunSequenceBackstop } from "./github-webhook-sequence-backstop.ts";
+import { maybeFanChildRebaseWakes } from "./github-webhook-stack-coordination.ts";
 import { handleGitHubTerminalPrEvent } from "./github-webhook-terminal-handler.ts";
 
 type FetchLike = typeof fetch;
@@ -184,6 +185,20 @@ export class GitHubWebhookHandler {
         fetchImpl: this.fetchImpl,
       }).catch((error) => {
         this.logger.warn({ err: error }, "sequence-check backstop failed");
+      });
+    }
+
+    // Plan §8.3: parent-moved trigger. When a PR's head advances,
+    // any child PR stacked on it becomes stale relative to its
+    // declared base — enqueue a `branch_upkeep` run on each child
+    // so it rebases onto the new parent head.
+    if (event.triggerEvent === "pr_synchronize") {
+      maybeFanChildRebaseWakes({
+        db: this.db,
+        logger: this.logger,
+        ...(this.feed ? { feed: this.feed } : {}),
+        enqueueIssue: this.enqueueIssue,
+        event,
       });
     }
 

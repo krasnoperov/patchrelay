@@ -64,6 +64,7 @@ export interface UpsertIssueParams {
   lastPublishedPatchId?: string | null;
   lastPublishedIntegrationTreeId?: string | null;
   lastPublishedHeadSha?: string | null;
+  parentPrBranch?: string | null;
   ciRepairAttempts?: number;
   queueRepairAttempts?: number;
   reviewFixAttempts?: number;
@@ -140,6 +141,7 @@ export class IssueStore {
       if (params.lastPublishedPatchId !== undefined) { sets.push("last_published_patch_id = @lastPublishedPatchId"); values.lastPublishedPatchId = params.lastPublishedPatchId; }
       if (params.lastPublishedIntegrationTreeId !== undefined) { sets.push("last_published_integration_tree_id = @lastPublishedIntegrationTreeId"); values.lastPublishedIntegrationTreeId = params.lastPublishedIntegrationTreeId; }
       if (params.lastPublishedHeadSha !== undefined) { sets.push("last_published_head_sha = @lastPublishedHeadSha"); values.lastPublishedHeadSha = params.lastPublishedHeadSha; }
+      if (params.parentPrBranch !== undefined) { sets.push("parent_pr_branch = @parentPrBranch"); values.parentPrBranch = params.parentPrBranch; }
       if (params.ciRepairAttempts !== undefined) { sets.push("ci_repair_attempts = @ciRepairAttempts"); values.ciRepairAttempts = params.ciRepairAttempts; }
       if (params.queueRepairAttempts !== undefined) { sets.push("queue_repair_attempts = @queueRepairAttempts"); values.queueRepairAttempts = params.queueRepairAttempts; }
       if (params.reviewFixAttempts !== undefined) { sets.push("review_fix_attempts = @reviewFixAttempts"); values.reviewFixAttempts = params.reviewFixAttempts; }
@@ -161,6 +163,7 @@ export class IssueStore {
           last_queue_signal_at, last_queue_incident_json,
           last_attempted_failure_head_sha, last_attempted_failure_signature, last_attempted_failure_at,
           last_published_patch_id, last_published_integration_tree_id, last_published_head_sha,
+          parent_pr_branch,
           ci_repair_attempts, queue_repair_attempts, review_fix_attempts, zombie_recovery_attempts, last_zombie_recovery_at, orchestration_settle_until,
           updated_at
         ) VALUES (
@@ -175,6 +178,7 @@ export class IssueStore {
           @lastQueueSignalAt, @lastQueueIncidentJson,
           @lastAttemptedFailureHeadSha, @lastAttemptedFailureSignature, @lastAttemptedFailureAt,
           @lastPublishedPatchId, @lastPublishedIntegrationTreeId, @lastPublishedHeadSha,
+          @parentPrBranch,
           @ciRepairAttempts, @queueRepairAttempts, @reviewFixAttempts, @zombieRecoveryAttempts, @lastZombieRecoveryAt, @orchestrationSettleUntil,
           @now
         )
@@ -233,6 +237,7 @@ export class IssueStore {
         lastPublishedPatchId: params.lastPublishedPatchId ?? null,
         lastPublishedIntegrationTreeId: params.lastPublishedIntegrationTreeId ?? null,
         lastPublishedHeadSha: params.lastPublishedHeadSha ?? null,
+        parentPrBranch: params.parentPrBranch ?? null,
         ciRepairAttempts: params.ciRepairAttempts ?? 0,
         queueRepairAttempts: params.queueRepairAttempts ?? 0,
         reviewFixAttempts: params.reviewFixAttempts ?? 0,
@@ -331,6 +336,17 @@ export class IssueStore {
          AND pr_number IS NOT NULL`,
       )
       .all() as Array<Record<string, unknown>>;
+    return rows.map(mapIssueRow);
+  }
+
+  // Plan §8.3: parent-of-child index. Given a parent's branch name,
+  // list every issue whose `parent_pr_branch` matches — i.e. PRs
+  // stacked on that parent. The index is hit on every
+  // `pr_synchronize` for a parent so it must stay cheap.
+  listIssuesWithParentBranch(branchName: string): IssueRecord[] {
+    const rows = this.connection
+      .prepare(`SELECT * FROM issues WHERE parent_pr_branch = ? AND factory_state NOT IN ('done', 'failed')`)
+      .all(branchName) as Array<Record<string, unknown>>;
     return rows.map(mapIssueRow);
   }
 
@@ -704,6 +720,9 @@ export function mapIssueRow(row: Record<string, unknown>): IssueRecord {
       : {}),
     ...(row.last_published_head_sha !== null && row.last_published_head_sha !== undefined
       ? { lastPublishedHeadSha: String(row.last_published_head_sha) }
+      : {}),
+    ...(row.parent_pr_branch !== null && row.parent_pr_branch !== undefined
+      ? { parentPrBranch: String(row.parent_pr_branch) }
       : {}),
     ciRepairAttempts: Number(row.ci_repair_attempts ?? 0),
     queueRepairAttempts: Number(row.queue_repair_attempts ?? 0),

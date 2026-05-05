@@ -43,6 +43,12 @@ export class MergeStewardQueueCommands {
     issueKey?: string;
     priority?: number;
     prTitle?: string;
+    /**
+     * Plan §8.4: PR's base ref. When this matches another open PR's
+     * `branch` (head ref), the entry is stacked and admission orders
+     * it immediately behind the parent.
+     */
+    baseRefName?: string;
   }): QueueEntry | undefined {
     const existing = this.store.getEntryByPR(this.config.repoId, params.prNumber);
     if (existing) {
@@ -81,6 +87,7 @@ export class MergeStewardQueueCommands {
       headPatchId: null,
       specTreeId: null,
       prTitle: params.prTitle ?? null,
+      baseRefName: params.baseRefName ?? null,
       enqueuedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -220,12 +227,40 @@ export class MergeStewardQueueCommands {
         }
       }
 
+      // Plan §8.4: stack-aware admission. When the PR's base ref
+      // names another open PR's branch (head ref), the entry is
+      // stacked. Enqueue it only when the parent is already in the
+      // queue — otherwise the child's spec would build against the
+      // unmerged parent's pre-spec content. Positions are monotonic
+      // (`nextPosition`), so the child's position is always greater
+      // than the parent's; sibling PRs admitted between the parent's
+      // enqueue and the child's tryAdmit can sit between them. That's
+      // fine: queue head selection orders by (priority, position), so
+      // the parent is still processed before the child. The functional
+      // guarantee is "parent before child", not strict adjacency.
+      const baseRefName = status.baseRefName ?? null;
+      if (baseRefName && baseRefName !== this.config.baseBranch) {
+        const parentEntry = this.findActiveEntryByBranch(baseRefName);
+        if (!parentEntry) {
+          this.logger.debug(
+            {
+              prNumber,
+              baseRefName,
+              repoBaseBranch: this.config.baseBranch,
+            },
+            "Deferring admission for stacked PR — parent branch is not in the queue yet",
+          );
+          return false;
+        }
+      }
+
       this.enqueue({
         prNumber,
         branch,
         headSha,
         priority,
         ...(status.title ? { prTitle: status.title } : {}),
+        ...(baseRefName ? { baseRefName } : {}),
       });
       return true;
     } catch (error) {
@@ -320,5 +355,12 @@ export class MergeStewardQueueCommands {
       }
     }
     return next;
+  }
+
+  // Plan §8.4: lookup helper used by stack-aware admission. Returns
+  // the active queue entry whose `branch` (head ref) matches `name`,
+  // or undefined when no such entry is in the queue.
+  private findActiveEntryByBranch(name: string): QueueEntry | undefined {
+    return this.store.listActive(this.config.repoId).find((entry) => entry.branch === name);
   }
 }
