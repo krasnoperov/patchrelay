@@ -55,6 +55,8 @@ function makeEntry(status: QueueEntry["status"], overrides: Partial<QueueEntry> 
     postMergeSha: null,
     postMergeSummary: null,
     postMergeCheckedAt: null,
+    headPatchId: null,
+    specTreeId: null,
     enqueuedAt: "2026-04-17T00:00:00Z",
     updatedAt: "2026-04-17T00:00:00Z",
     ...overrides,

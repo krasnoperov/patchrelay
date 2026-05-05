@@ -9,6 +9,20 @@ export interface GitOperations {
   headSha(branch: string): Promise<string>;
   isAncestor(ancestor: string, descendant: string): Promise<boolean>;
   push(branch: string, force?: boolean, targetBranch?: string): Promise<void>;
+
+  // Plan §5.3: optional identity/tree primitives. When present they
+  // power the patch-id-aware updateHead short-circuit; when absent
+  // the reconciler falls back to the standard rebuild path.
+  /** Stable patch-id of head's diff against base. Returns undefined on git error. */
+  patchIdAgainst?(base: string, headSha: string): Promise<string | undefined>;
+  /** `git merge-tree --write-tree base headSha` — returns tree-id, or undefined on conflict/error. */
+  integrationTreeId?(base: string, headSha: string): Promise<string | undefined>;
+  /** Tree id of a commit (`commit^{tree}`). */
+  treeId?(commitSha: string): Promise<string | undefined>;
+  /** `git commit-tree tree -p p1 -p p2 -m message`. Returns the new commit SHA. */
+  commitTree?(tree: string, parents: string[], message: string): Promise<string | undefined>;
+  /** Force-push a known commit SHA to a branch (overrides the target ref directly). */
+  pushCommit?(commitSha: string, branch: string): Promise<void>;
 }
 
 /**

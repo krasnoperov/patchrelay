@@ -246,4 +246,110 @@ export class GitSim implements GitOperations {
       await this.deleteBranch(specName);
     } catch { /* may not exist */ }
   }
+
+  // Plan §5.3: identity primitives. Sim uses deterministic stand-ins
+  // — patch-id is a hash of (sorted-changed-files) which mirrors
+  // production behaviour for tree-equivalent rebases (same files
+  // touched → same patch-id) and is enough to drive the
+  // patch-id-aware short-circuit tests.
+  patchIdOverrides = new Map<string, string>();
+
+  async patchIdAgainst(base: string, headSha: string): Promise<string | undefined> {
+    const override = this.patchIdOverrides.get(headSha);
+    if (override) return override;
+    try {
+      const baseSha = await git.resolveRef({ fs: this.vol, dir: this.dir, ref: base }).catch(() => base);
+      const files = await this.changedFilesBetween(baseSha, headSha);
+      // Hash the sorted file names + headSha so distinct heads with
+      // identical file lists collide deterministically only when the
+      // test arranges it (rare in production-like flows; the test
+      // override above is the primary mechanism).
+      return `patchid-${files.sort().join("|")}-${headSha.slice(0, 8)}`;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Test seam: declare two heads patch-id-equivalent. */
+  setPatchIdEquivalent(headA: string, headB: string, patchId = `eq-${headA.slice(0, 8)}`): void {
+    this.patchIdOverrides.set(headA, patchId);
+    this.patchIdOverrides.set(headB, patchId);
+  }
+
+  async integrationTreeId(base: string, headSha: string): Promise<string | undefined> {
+    try {
+      const baseSha = await git.resolveRef({ fs: this.vol, dir: this.dir, ref: base }).catch(() => base);
+      const result = await git.merge({
+        fs: this.vol,
+        dir: this.dir,
+        ours: baseSha,
+        theirs: headSha,
+        author: AUTHOR,
+        dryRun: true,
+      } as Parameters<typeof git.merge>[0]);
+      const oid = (result as { oid?: string }).oid;
+      if (!oid) return undefined;
+      const commit = await git.readCommit({ fs: this.vol, dir: this.dir, oid });
+      return commit.commit.tree;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async treeId(commitSha: string): Promise<string | undefined> {
+    try {
+      const commit = await git.readCommit({ fs: this.vol, dir: this.dir, oid: commitSha });
+      return commit.commit.tree;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async commitTree(tree: string, parents: string[], message: string): Promise<string | undefined> {
+    try {
+      const oid = await git.writeCommit({
+        fs: this.vol,
+        dir: this.dir,
+        commit: {
+          tree,
+          parent: parents,
+          message: `${message}\n`,
+          author: { ...AUTHOR, timestamp: Math.floor(Date.now() / 1000), timezoneOffset: 0 },
+          committer: { ...AUTHOR, timestamp: Math.floor(Date.now() / 1000), timezoneOffset: 0 },
+        },
+      });
+      return oid;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async pushCommit(commitSha: string, branch: string): Promise<void> {
+    await git.writeRef({ fs: this.vol, dir: this.dir, ref: `refs/heads/${branch}`, value: commitSha, force: true });
+    if (this.onPush) {
+      try {
+        this.onPush(branch, commitSha);
+      } catch { /* sim listener cleanup */ }
+    }
+  }
+
+  private async changedFilesBetween(base: string, head: string): Promise<string[]> {
+    const baseTree = git.TREE({ ref: base });
+    const headTree = git.TREE({ ref: head });
+    const changes: string[] = [];
+    await git.walk({
+      fs: this.vol,
+      dir: this.dir,
+      trees: [baseTree, headTree],
+      map: async (filepath, entries) => {
+        if (!entries || filepath === ".") return undefined;
+        const [b, h] = entries;
+        const bo = b ? await b.oid() : null;
+        const ho = h ? await h.oid() : null;
+        if (bo !== ho) changes.push(filepath);
+        return undefined;
+      },
+    });
+    return changes;
+  }
 }

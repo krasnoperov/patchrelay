@@ -37,6 +37,8 @@ function makeEntry(overrides: Partial<QueueEntry> & { prNumber: number; position
     postMergeSha: null,
     postMergeSummary: null,
     postMergeCheckedAt: null,
+    headPatchId: null,
+    specTreeId: null,
     enqueuedAt: minutesAgo(10),
     updatedAt: minutesAgo(5),
     ...overrides,
