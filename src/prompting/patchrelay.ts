@@ -373,6 +373,7 @@ function buildRequestedChangesContext(runType: RunType, context?: Record<string,
       "Requested changes on the existing PR branch.",
       "Goal: restore review readiness on the current PR branch. Push a newer head only when the fix actually changes the diff; if the reviewer-pass produces only comments, test wording, or PR-body changes, edit the PR body via `gh pr edit` instead.",
       "Address the real concern behind the feedback and verify nearby invariants in the touched flow before you publish.",
+      "For each review comment, identify the resource, epoch, or token it touches (e.g. session, capture, route, persistence handle, in-flight turn id), enumerate the other transitions that share that same resource, and verify each one before pushing — not just the exact path called out. If you find an adjacent transition that violates the same invariant, fix it in this iteration rather than waiting for the reviewer to surface it next round.",
       reviewer ? `Reviewer: ${reviewer}` : "",
       reviewBody ? `Review summary:\n${reviewBody}` : "",
     );

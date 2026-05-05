@@ -318,6 +318,7 @@ test("review_fix prompt keeps concise reviewer context plus structured comments"
     assert.match(prompt, /Blank totals should not produce a leader\./);
     assert.match(prompt, /Goal: restore review readiness on the current PR branch\. Push a newer head only when the fix actually changes the diff/);
     assert.match(prompt, /Address the real concern behind the feedback and verify nearby invariants in the touched flow before you publish\./);
+    assert.match(prompt, /For each review comment, identify the resource, epoch, or token it touches[\s\S]*enumerate the other transitions that share that same resource, and verify each one before pushing/);
     assert.match(prompt, /## Final Self-Review Before Push/);
     assert.match(prompt, /Fix any likely in-scope blocker you can see now: missing edge-case handling, broken adjacent invariant in the touched flow/);
   } finally {
