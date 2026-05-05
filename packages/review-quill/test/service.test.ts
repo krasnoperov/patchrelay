@@ -284,8 +284,17 @@ test("triggerReconcile retires active attempts for merged pull requests", async 
   assert.equal(updates.length, 1);
 });
 
-test("triggerReconcile prioritizes queued repo nudges that arrive mid-pass", async () => {
-  const service = new ReviewQuillService(
+function buildParallelTestService(
+  options: {
+    repos?: Array<{ repoId: string; repoFullName: string }>;
+    maxConcurrentReviews?: number;
+  } = {},
+): ReviewQuillService {
+  const repos = options.repos ?? [
+    { repoId: "alpha", repoFullName: "krasnoperov/alpha" },
+    { repoId: "beta", repoFullName: "krasnoperov/beta" },
+  ];
+  return new ReviewQuillService(
     {
       server: { bind: "127.0.0.1", port: 8788 },
       database: { path: ":memory:", wal: true },
@@ -295,6 +304,9 @@ test("triggerReconcile prioritizes queued repo nudges that arrive mid-pass", asy
         heartbeatIntervalMs: 1_000,
         staleQueuedAfterMs: 60_000,
         staleRunningAfterMs: 60_000,
+        ...(options.maxConcurrentReviews !== undefined
+          ? { maxConcurrentReviews: options.maxConcurrentReviews }
+          : {}),
       },
       codex: {
         bin: "codex",
@@ -303,30 +315,17 @@ test("triggerReconcile prioritizes queued repo nudges that arrive mid-pass", asy
         sandboxMode: "danger-full-access",
       },
       prompting: { replaceSections: {} },
-      repositories: [
-        {
-          repoId: "subtitles",
-          repoFullName: "krasnoperov/subtitles",
-          baseBranch: "main",
-          requiredChecks: [],
-          excludeBranches: [],
-          reviewDocs: [],
-          diffIgnore: [],
-          diffSummarizeOnly: [],
-          patchBodyBudgetTokens: 5_000,
-        },
-        {
-          repoId: "usertold",
-          repoFullName: "krasnoperov/usertold",
-          baseBranch: "main",
-          requiredChecks: [],
-          excludeBranches: [],
-          reviewDocs: [],
-          diffIgnore: [],
-          diffSummarizeOnly: [],
-          patchBodyBudgetTokens: 5_000,
-        },
-      ],
+      repositories: repos.map((repo) => ({
+        repoId: repo.repoId,
+        repoFullName: repo.repoFullName,
+        baseBranch: "main",
+        requiredChecks: [],
+        excludeBranches: [],
+        reviewDocs: [],
+        diffIgnore: [],
+        diffSummarizeOnly: [],
+        patchBodyBudgetTokens: 5_000,
+      })),
       secretSources: {},
     } as never,
     {
@@ -335,31 +334,194 @@ test("triggerReconcile prioritizes queued repo nudges that arrive mid-pass", asy
     } as never,
     {} as never,
     {} as never,
-    { info() {}, warn() {}, child() { return this; } } as never,
+    { info() {}, warn() {}, error() {}, debug() {}, child() { return this; } } as never,
   );
+}
 
-  const processed: string[] = [];
-  const queuedResults: boolean[] = [];
-  let queued = false;
+test("discovery passes run in parallel — neither repo blocks the other", async () => {
+  const service = buildParallelTestService();
+  const order: string[] = [];
+  const repoEntered = new Map<string, () => void>();
+  const repoEnteredPromises = new Map<string, Promise<void>>();
+  for (const name of ["krasnoperov/alpha", "krasnoperov/beta"]) {
+    repoEnteredPromises.set(name, new Promise<void>((resolve) => repoEntered.set(name, resolve)));
+  }
+
+  // Stub discoverRepo: announce entry, then wait for the OTHER repo to also
+  // enter. If discovery is serialized, this deadlocks — neither repo can
+  // proceed because each waits on the other.
   (service as unknown as {
-    reconcileRepo: (repo: { repoFullName: string }) => Promise<void>;
-  }).reconcileRepo = async (repo) => {
-    processed.push(repo.repoFullName);
-    if (repo.repoFullName === "krasnoperov/subtitles" && !queued) {
-      queued = true;
-      queuedResults.push(await service.triggerReconcile("krasnoperov/subtitles"));
-    }
+    discoverRepo: (repo: { repoFullName: string }) => Promise<void>;
+  }).discoverRepo = async (repo) => {
+    order.push(`enter:${repo.repoFullName}`);
+    repoEntered.get(repo.repoFullName)!();
+    const otherName = repo.repoFullName === "krasnoperov/alpha"
+      ? "krasnoperov/beta"
+      : "krasnoperov/alpha";
+    await repoEnteredPromises.get(otherName)!;
+    order.push(`exit:${repo.repoFullName}`);
   };
 
-  const started = await service.triggerReconcile();
+  await service.triggerReconcile();
 
-  assert.equal(started, true);
-  assert.deepEqual(queuedResults, [false]);
-  assert.deepEqual(processed, [
-    "krasnoperov/subtitles",
-    "krasnoperov/subtitles",
-    "krasnoperov/usertold",
-  ]);
+  // Both repos must have entered before either exited — proves parallelism.
+  assert.deepEqual(
+    order.slice(0, 2).sort(),
+    ["enter:krasnoperov/alpha", "enter:krasnoperov/beta"],
+  );
+});
+
+test("dispatchReview deduplicates the same (repo, pr, head) — only one execution runs", async () => {
+  const service = buildParallelTestService();
+  let executionCount = 0;
+  let release!: () => void;
+  const releasePromise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  (service as unknown as {
+    executeReview: () => Promise<void>;
+  }).executeReview = async () => {
+    executionCount += 1;
+    await releasePromise;
+  };
+
+  const repo = { repoFullName: "krasnoperov/alpha", repoId: "alpha" } as never;
+  const pr = { number: 1, headSha: "abc" } as never;
+
+  const dispatch = (service as unknown as {
+    dispatchReview: (
+      repo: unknown,
+      pr: unknown,
+      existing?: unknown,
+      identity?: unknown,
+    ) => Promise<void>;
+  }).dispatchReview.bind(service);
+
+  // Three back-to-back dispatches for the same (repo, pr, headSha) — only
+  // one execution should actually run; the others share the in-flight
+  // promise.
+  const a = dispatch(repo, pr);
+  const b = dispatch(repo, pr);
+  const c = dispatch(repo, pr);
+
+  // All three references must be the same promise.
+  assert.equal(a, b);
+  assert.equal(b, c);
+
+  release();
+  await Promise.all([a, b, c]);
+  assert.equal(executionCount, 1);
+});
+
+test("review semaphore caps in-flight executions at maxConcurrentReviews", async () => {
+  const service = buildParallelTestService({ maxConcurrentReviews: 2 });
+  let inFlight = 0;
+  let peakInFlight = 0;
+  const releasers: Array<() => void> = [];
+
+  (service as unknown as {
+    executeReview: (repo: { repoFullName: string }, pr: { number: number }) => Promise<void>;
+  }).executeReview = async () => {
+    inFlight += 1;
+    peakInFlight = Math.max(peakInFlight, inFlight);
+    await new Promise<void>((resolve) => releasers.push(resolve));
+    inFlight -= 1;
+  };
+
+  const dispatch = (service as unknown as {
+    dispatchReview: (
+      repo: unknown,
+      pr: unknown,
+      existing?: unknown,
+      identity?: unknown,
+    ) => Promise<void>;
+  }).dispatchReview.bind(service);
+
+  // Dispatch five distinct reviews; cap is 2.
+  const work = Array.from({ length: 5 }, (_, i) =>
+    dispatch(
+      { repoFullName: "krasnoperov/alpha", repoId: "alpha" } as never,
+      { number: i + 1, headSha: `sha-${i + 1}` } as never,
+    ),
+  );
+
+  // Yield enough microtasks for the first batch to acquire slots.
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(inFlight, 2, "exactly two reviews should be in flight after the burst");
+
+  // Release one; another should immediately enter the slot.
+  releasers.shift()!();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(inFlight, 2, "freeing a slot should let the next review acquire");
+
+  // Release the rest.
+  while (releasers.length > 0) {
+    releasers.shift()!();
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  await Promise.all(work);
+
+  assert.equal(peakInFlight, 2, "in-flight count must never exceed the cap");
+  assert.equal(inFlight, 0, "all reviews must have completed");
+});
+
+test("triggerReconcile fans out reviews as independent workers", async () => {
+  // End-to-end: discovery walks two repos, identifies one PR each that
+  // needs a review, dispatches both. The Codex turns run in parallel,
+  // not serialized.
+  const service = buildParallelTestService();
+  const startedAt = new Map<number, number>();
+  const completed: number[] = [];
+  const release: Array<() => void> = [];
+
+  (service as unknown as {
+    discoverRepo: (repo: { repoFullName: string; repoId: string }) => Promise<void>;
+  }).discoverRepo = async (repo) => {
+    // Each repo "discovers" one PR that needs a review.
+    const dispatch = (service as unknown as {
+      dispatchReview: (
+        repo: unknown,
+        pr: unknown,
+        existing?: unknown,
+        identity?: unknown,
+      ) => Promise<void>;
+    }).dispatchReview.bind(service);
+    const prNumber = repo.repoFullName === "krasnoperov/alpha" ? 1 : 2;
+    dispatch(
+      repo as never,
+      { number: prNumber, headSha: `${repo.repoFullName}-sha` } as never,
+    );
+  };
+
+  (service as unknown as {
+    executeReview: (repo: unknown, pr: { number: number }) => Promise<void>;
+  }).executeReview = async (_repo, pr) => {
+    startedAt.set(pr.number, Date.now());
+    await new Promise<void>((resolve) => release.push(resolve));
+    completed.push(pr.number);
+  };
+
+  // Trigger discovery; it returns once dispatch has been called for both
+  // PRs (executeReview promises are not awaited inside discovery).
+  await service.triggerReconcile();
+
+  // Both reviews should have started immediately (parallel), within one
+  // microtask tick of each other.
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(startedAt.size, 2, "both reviews must start under parallelism");
+
+  // Drain.
+  while (release.length > 0) {
+    release.shift()!();
+  }
+  // Wait for in-flight workers to settle.
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(completed.sort(), [1, 2]);
 });
 
 test("sanitizeJsonPayload strips markdown fences", () => {

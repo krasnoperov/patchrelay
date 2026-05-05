@@ -1,5 +1,6 @@
 import type { Logger } from "pino";
 import type {
+  PullRequestSummary,
   ReviewAttemptDetail,
   ReviewAttemptRecord,
   ReviewEligibility,
@@ -34,19 +35,37 @@ import {
 } from "./review-publication-policy.ts";
 import { evaluateReviewEligibility } from "./review-eligibility.ts";
 
+/** Default cap on parallel review executions. ~20 is comfortable on a
+ *  single host: each review materializes its own tmp worktree (small)
+ *  and runs on a Codex thread (heavyweight but bounded by the model
+ *  side, not by us). The cap exists to bound CPU / disk / API spikes,
+ *  not as an architectural ceiling — patchrelay runs ~the same
+ *  shape and number of independent agents. */
+const DEFAULT_MAX_CONCURRENT_REVIEWS = 20;
+
 export class ReviewQuillService {
   private timer: ReturnType<typeof setTimeout> | undefined;
-  private reconcileInProgress = false;
   private readonly startedAt = new Date().toISOString();
   private readonly pendingReviewsByRepo = new Map<string, ReviewQuillPendingReview[]>();
-  private pendingFullReconcile = false;
-  private readonly pendingRepoReconciles = new Set<string>();
+  /**
+   * In-memory dedupe of executions. Key is `{repoFullName}::{prNumber}::{headSha}`.
+   * Two discovery passes that both land on the same PR head before the DB row is
+   * inserted would otherwise both dispatch — this map ensures only one runs.
+   * Cross-restart safety is provided by the `UNIQUE(repo_full_name, pr_number,
+   * head_sha)` constraint on `review_attempts`.
+   */
+  private readonly inFlightReviews = new Map<string, Promise<void>>();
+  /** Semaphore-style waiter list so dispatch fans out under a soft cap. */
+  private readonly reviewSemaphoreWaiters: Array<() => void> = [];
+  private inFlightReviewCount = 0;
+  private readonly maxConcurrentReviews: number;
   private readonly runtime: ReviewQuillRuntimeStatus = {
-    reconcileInProgress: false,
     lastReconcileStartedAt: null,
     lastReconcileCompletedAt: null,
     lastReconcileOutcome: "idle",
     lastReconcileError: null,
+    inFlightReviews: 0,
+    repoLastReconciledAt: {},
   };
 
   constructor(
@@ -56,7 +75,10 @@ export class ReviewQuillService {
     private readonly runner: ReviewRunner,
     private readonly logger: Logger,
     private readonly reviewerLogin?: string,
-  ) {}
+  ) {
+    this.maxConcurrentReviews =
+      config.reconciliation.maxConcurrentReviews ?? DEFAULT_MAX_CONCURRENT_REVIEWS;
+  }
 
   async start(): Promise<void> {
     await this.runner.start();
@@ -220,21 +242,30 @@ export class ReviewQuillService {
     }
   }
 
+  /**
+   * Triggers a discovery pass and waits for it (but NOT for the reviews it
+   * fans out — those are independent workers under the semaphore).
+   * `repoFullName` scopes discovery to one repo; otherwise all watched
+   * repos are walked.
+   *
+   * Multiple passes can run concurrently — discovery is read-only against
+   * the world (GitHub list calls + DB lookups + cheap eligibility math)
+   * and the dispatch itself is dedupe'd by `inFlightReviews`. There's no
+   * global lock to wait on, so this method always returns `true` once the
+   * discovery completes; the boolean is kept for backward compat with the
+   * earlier `false = queued, will run later` semantics.
+   */
   async triggerReconcile(repoFullName?: string): Promise<boolean> {
-    if (this.reconcileInProgress) {
-      this.queueReconcileRequest(repoFullName);
-      return false;
-    }
-    await (repoFullName ? this.reconcileRepoByName(repoFullName) : this.reconcileAll());
+    await (repoFullName ? this.discoverRepoByName(repoFullName) : this.reconcileAll());
     return true;
   }
 
+  /**
+   * Fire-and-forget variant. Discovery runs in the background; errors are
+   * logged. Always returns `true` — there is no queue any more.
+   */
   requestReconcile(repoFullName?: string): boolean {
-    if (this.reconcileInProgress) {
-      this.queueReconcileRequest(repoFullName);
-      return false;
-    }
-    void (repoFullName ? this.reconcileRepoByName(repoFullName) : this.reconcileAll()).catch((error: unknown) => {
+    void (repoFullName ? this.discoverRepoByName(repoFullName) : this.reconcileAll()).catch((error: unknown) => {
       this.logger.error({
         repo: repoFullName,
         error: error instanceof Error ? error.message : String(error),
@@ -251,71 +282,24 @@ export class ReviewQuillService {
   }
 
   private async reconcileAll(): Promise<void> {
-    if (this.reconcileInProgress) return;
-    await this.runQueuedReconcile(this.config.repositories.map((repo) => repo.repoFullName));
-  }
-
-  private async reconcileRepoByName(repoFullName: string): Promise<void> {
-    const repo = this.config.repositories.find((entry) => entry.repoFullName === repoFullName);
-    if (!repo) return;
-    if (this.reconcileInProgress) return;
-    await this.runQueuedReconcile([repo.repoFullName]);
-  }
-
-  private queueReconcileRequest(repoFullName?: string): void {
-    if (!repoFullName) {
-      this.pendingFullReconcile = true;
-      this.pendingRepoReconciles.clear();
-      return;
-    }
-    const repo = this.config.repositories.find((entry) => entry.repoFullName === repoFullName);
-    if (!repo) return;
-    this.pendingRepoReconciles.add(repo.repoFullName);
-  }
-
-  private prependQueuedReconciles(
-    queue: string[],
-    queuedRepoNames: Set<string>,
-  ): void {
-    const prioritize: string[] = [];
-    if (this.pendingFullReconcile) {
-      this.pendingFullReconcile = false;
-      this.pendingRepoReconciles.clear();
-      for (const repo of this.config.repositories) {
-        if (queuedRepoNames.has(repo.repoFullName)) continue;
-        prioritize.push(repo.repoFullName);
-      }
-    } else if (this.pendingRepoReconciles.size > 0) {
-      for (const repoFullName of this.pendingRepoReconciles) {
-        if (queuedRepoNames.has(repoFullName)) continue;
-        prioritize.push(repoFullName);
-      }
-      this.pendingRepoReconciles.clear();
-    }
-    for (let index = prioritize.length - 1; index >= 0; index -= 1) {
-      const repoFullName = prioritize[index]!;
-      queue.unshift(repoFullName);
-      queuedRepoNames.add(repoFullName);
-    }
-  }
-
-  private async runQueuedReconcile(initialQueue: string[]): Promise<void> {
-    this.reconcileInProgress = true;
-    this.runtime.reconcileInProgress = true;
     this.runtime.lastReconcileStartedAt = new Date().toISOString();
     this.runtime.lastReconcileOutcome = "running";
     this.runtime.lastReconcileError = null;
-    const queue = [...initialQueue];
-    const queuedRepoNames = new Set(queue);
     try {
-      while (queue.length > 0) {
-        const repoFullName = queue.shift()!;
-        queuedRepoNames.delete(repoFullName);
-        const repo = this.config.repositories.find((entry) => entry.repoFullName === repoFullName);
-        if (!repo) continue;
-        await this.reconcileRepo(repo);
-        this.prependQueuedReconciles(queue, queuedRepoNames);
-      }
+      // Discover all repos in parallel. Discovery is read-only and cheap —
+      // GitHub list + DB lookups + carry-forward identity math. Heavy work
+      // (Codex turn) is dispatched as a fire-and-forget worker that runs
+      // outside the discovery pass, gated by `acquireReviewSlot()`.
+      await Promise.all(
+        this.config.repositories.map((repo) =>
+          this.discoverRepo(repo).catch((error: unknown) => {
+            this.logger.error({
+              repo: repo.repoFullName,
+              err: error instanceof Error ? error.message : String(error),
+            }, "discoverRepo failed");
+          }),
+        ),
+      );
       this.prunePendingReviews(this.config.repositories.map((repo) => repo.repoId));
       this.runtime.lastReconcileCompletedAt = new Date().toISOString();
       this.runtime.lastReconcileOutcome = "succeeded";
@@ -324,13 +308,89 @@ export class ReviewQuillService {
       this.runtime.lastReconcileOutcome = "failed";
       this.runtime.lastReconcileError = error instanceof Error ? error.message : String(error);
       throw error;
-    } finally {
-      this.reconcileInProgress = false;
-      this.runtime.reconcileInProgress = false;
     }
   }
 
-  private async reconcileRepo(repo: ReviewQuillRepositoryConfig): Promise<void> {
+  private async discoverRepoByName(repoFullName: string): Promise<void> {
+    const repo = this.config.repositories.find((entry) => entry.repoFullName === repoFullName);
+    if (!repo) return;
+    await this.discoverRepo(repo);
+  }
+
+  /**
+   * Acquires one slot in the review-execution semaphore (default cap 20).
+   * Returns a `release` function the caller MUST invoke in `finally` —
+   * otherwise the slot leaks and parallelism degrades over time.
+   */
+  private async acquireReviewSlot(): Promise<() => void> {
+    if (this.inFlightReviewCount < this.maxConcurrentReviews) {
+      this.inFlightReviewCount += 1;
+      this.runtime.inFlightReviews = this.inFlightReviewCount;
+      return () => this.releaseReviewSlot();
+    }
+    return new Promise<() => void>((resolve) => {
+      this.reviewSemaphoreWaiters.push(() => {
+        this.inFlightReviewCount += 1;
+        this.runtime.inFlightReviews = this.inFlightReviewCount;
+        resolve(() => this.releaseReviewSlot());
+      });
+    });
+  }
+
+  private releaseReviewSlot(): void {
+    this.inFlightReviewCount -= 1;
+    this.runtime.inFlightReviews = this.inFlightReviewCount;
+    const waiter = this.reviewSemaphoreWaiters.shift();
+    if (waiter) waiter();
+  }
+
+  /**
+   * Dispatches a review as an independent worker. Idempotent: if the same
+   * (repo, pr, head) is already in flight, the existing promise is returned
+   * so the caller doesn't double-fire. The promise resolves when the review
+   * completes (or fails); errors are logged, never thrown out.
+   */
+  private dispatchReview(
+    repo: ReviewQuillRepositoryConfig,
+    pr: PullRequestSummary,
+    existing: ReviewAttemptRecord | undefined,
+    identity: ChangeIdentity | undefined,
+  ): Promise<void> {
+    const key = `${repo.repoFullName}::${pr.number}::${pr.headSha}`;
+    const inFlight = this.inFlightReviews.get(key);
+    if (inFlight) return inFlight;
+
+    const work = (async () => {
+      const release = await this.acquireReviewSlot();
+      try {
+        await this.executeReview(repo, pr, existing, identity);
+      } catch (error) {
+        this.logger.error({
+          repo: repo.repoFullName,
+          prNumber: pr.number,
+          headSha: pr.headSha,
+          err: error instanceof Error ? error.message : String(error),
+        }, "Review execution failed");
+      } finally {
+        release();
+        this.inFlightReviews.delete(key);
+      }
+    })();
+
+    this.inFlightReviews.set(key, work);
+    return work;
+  }
+
+  /**
+   * Discovery pass for one repo. Walks the open PR list, decides per PR
+   * whether a fresh review is needed, and **dispatches** any executions
+   * as independent workers (fire-and-forget under the semaphore).
+   *
+   * Discovery itself is read-only and cheap — no Codex calls happen here,
+   * so multiple discovery passes can run concurrently with no coordination
+   * other than the in-flight dedup in `dispatchReview`.
+   */
+  private async discoverRepo(repo: ReviewQuillRepositoryConfig): Promise<void> {
     const prs = await this.github.listOpenPullRequests(repo.repoFullName);
     const pendingForRepo: ReviewQuillPendingReview[] = [];
     await this.reconcileClosedPullRequestAttempts(repo, prs);
@@ -391,11 +451,17 @@ export class ReviewQuillService {
       await this.dismissStaleDecisiveReviews(repo, pr, currentReviews);
 
       if (needsExecution) {
-        await this.executeReview(repo, pr, existing, identity);
+        // Fire-and-forget. The discovery pass returns once all PRs have
+        // been *evaluated*, not once their reviews are published — that
+        // way one repo's long-running review never blocks discovery for
+        // any other repo. The semaphore inside `dispatchReview` is what
+        // bounds CPU/memory, not the discovery loop.
+        this.dispatchReview(repo, pr, existing, identity);
       }
     }
 
     this.setPendingReviews(repo.repoId, pendingForRepo);
+    this.runtime.repoLastReconciledAt[repo.repoFullName] = new Date().toISOString();
   }
 
   private async reconcileClosedPullRequestAttempts(
