@@ -66,11 +66,18 @@ function buildPromptHeader(issue: IssueRecord): string {
           : prContext.kind === "closed_pr_paused"
             ? `Previous PR: #${prContext.prNumber} (closed; redelegate to replace it)`
             : undefined;
+  // Plan §4.2(b): surface the patch-id of the last patchrelay-attributed
+  // publish so the agent can compute its own diff's patch-id pre-push
+  // and skip the publish if the result is patch-id-equivalent.
+  const patchIdLine = issue.lastPublishedPatchId
+    ? `Last published patch-id: ${issue.lastPublishedPatchId}`
+    : undefined;
   return [
     `Issue: ${issue.issueKey ?? issue.linearIssueId}`,
     issue.title ? `Title: ${issue.title}` : undefined,
     issue.branchName ? `Branch: ${issue.branchName}` : undefined,
     prLine,
+    patchIdLine,
   ].filter(Boolean).join("\n");
 }
 
@@ -680,6 +687,9 @@ function buildPublicationContract(
     "Restore and publish on the existing PR branch: commit and push the same branch.",
     "Do not open a new PR.",
     "A PR-less stop is not a successful outcome for a repair run unless a genuine external blocker prevents any correct push.",
+    "",
+    "Before pushing, compute `git diff $(git merge-base origin/main HEAD)..HEAD | git patch-id --stable` and compare its first field to the `Last published patch-id` shown in the prompt header (if any).",
+    "If they match, do not push — finish the run as a no-op. Edit the PR body via `gh pr edit` instead if a textual update is needed.",
     "",
     ...buildPrePushSelfReviewSection("existing_pr", runType),
   ].join("\n");
