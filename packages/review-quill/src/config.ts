@@ -17,7 +17,7 @@ const repositorySchema = z.object({
   waitForGreenChecks: z.boolean().default(false),
   requiredChecks: z.array(z.string()).default([]),
   excludeBranches: z.array(z.string()).default([]),
-  reviewDocs: z.array(z.string()).default(["REVIEW_WORKFLOW.md", "CLAUDE.md", "AGENTS.md"]),
+  reviewDocs: z.array(z.string()).default(["REVIEW_WORKFLOW.md", "AGENTS.md"]),
   diffIgnore: z.array(z.string()).default([...DEFAULT_DIFF_IGNORE]),
   diffSummarizeOnly: z.array(z.string()).default([...DEFAULT_DIFF_SUMMARIZE_ONLY]),
   patchBodyBudgetTokens: z.number().int().min(1_000).default(DEFAULT_PATCH_BODY_BUDGET_TOKENS),

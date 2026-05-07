@@ -35,7 +35,7 @@
       "waitForGreenChecks": true,
       "requiredChecks": ["Tests"],
       "excludeBranches": [],
-      "reviewDocs": ["REVIEW_WORKFLOW.md", "CLAUDE.md", "AGENTS.md"]
+      "reviewDocs": ["REVIEW_WORKFLOW.md", "AGENTS.md"]
     }
   ]
 }

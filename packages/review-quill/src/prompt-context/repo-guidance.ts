@@ -3,7 +3,7 @@ import path from "node:path";
 import type { GuidanceDoc } from "../types.ts";
 
 export async function loadRepoGuidanceDocs(worktreePath: string, reviewDocs: string[]): Promise<GuidanceDoc[]> {
-  const paths = [...new Set(["AGENTS.md", ...reviewDocs])];
+  const paths = [...new Set([...reviewDocs, "AGENTS.md"])];
   const docs: GuidanceDoc[] = [];
   for (const relativePath of paths) {
     const absolutePath = path.join(worktreePath, relativePath);
