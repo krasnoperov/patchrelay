@@ -11,7 +11,7 @@ For each eligible PR head:
 1. Detects that a new reviewable PR head exists.
 2. Materializes an ephemeral local checkout at that exact SHA.
 3. Builds a curated diff against the PR base branch.
-4. Loads repo review guidance (`REVIEW_WORKFLOW.md`, `CLAUDE.md`, `AGENTS.md`).
+4. Loads repo review guidance plus universal `AGENTS.md` (`REVIEW_WORKFLOW.md`, `AGENTS.md` by default).
 5. Runs a review pass through `codex app-server`.
 6. Publishes an ordinary GitHub `APPROVE` or `REQUEST_CHANGES` review.
 7. Cancels stale in-flight attempts when a newer PR head lands first.

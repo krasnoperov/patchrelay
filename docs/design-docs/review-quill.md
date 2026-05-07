@@ -80,7 +80,7 @@ The review prompt should include:
 - current head SHA
 - curated local diff
 - prior formal PR reviews as concise claims to verify
-- repo guidance docs, normally `REVIEW_WORKFLOW.md`, `CLAUDE.md`, and `AGENTS.md`
+- configured review guidance docs plus universal `AGENTS.md`, normally `REVIEW_WORKFLOW.md` and `AGENTS.md`
 - detected issue keys from PR title, body, or branch
 
 The prompt must keep GitHub truth authoritative and review only the current head SHA.

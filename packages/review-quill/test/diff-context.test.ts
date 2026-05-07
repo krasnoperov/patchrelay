@@ -41,7 +41,7 @@ function repoConfig(overrides?: Partial<ReviewQuillRepositoryConfig>): ReviewQui
     waitForGreenChecks: false,
     requiredChecks: [],
     excludeBranches: [],
-    reviewDocs: ["REVIEW_WORKFLOW.md", "CLAUDE.md", "AGENTS.md"],
+    reviewDocs: ["REVIEW_WORKFLOW.md", "AGENTS.md"],
     diffIgnore: [...DEFAULT_DIFF_IGNORE],
     diffSummarizeOnly: [...DEFAULT_DIFF_SUMMARIZE_ONLY],
     patchBodyBudgetTokens: DEFAULT_PATCH_BODY_BUDGET_TOKENS,

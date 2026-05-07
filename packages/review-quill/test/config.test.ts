@@ -55,6 +55,7 @@ test("loadConfig defaults waitForGreenChecks to false for repositories", () => {
 
     const config = loadConfig(configPath);
     assert.equal(config.repositories[0]?.waitForGreenChecks, false);
+    assert.deepEqual(config.repositories[0]?.reviewDocs, ["REVIEW_WORKFLOW.md", "AGENTS.md"]);
     assert.equal(config.codex.model, "gpt-5.5");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

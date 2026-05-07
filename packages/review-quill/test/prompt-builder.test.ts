@@ -23,7 +23,7 @@ function baseContext(): Omit<ReviewContext, "prompt"> {
       waitForGreenChecks: true,
       requiredChecks: ["Tests"],
       excludeBranches: [],
-      reviewDocs: ["REVIEW_WORKFLOW.md", "CLAUDE.md", "AGENTS.md"],
+      reviewDocs: ["REVIEW_WORKFLOW.md", "AGENTS.md"],
       diffIgnore: [],
       diffSummarizeOnly: ["package-lock.json"],
       patchBodyBudgetTokens: 75_000,
