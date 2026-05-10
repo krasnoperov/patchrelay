@@ -217,6 +217,8 @@ function buildOrchestrationConstraints(context?: Record<string, unknown>): strin
     "",
     "This issue is orchestration work. Coordinate convergence instead of duplicating child implementation.",
     "Inspect the current child set before acting. Reuse existing child issues when they already cover the needed slices instead of creating duplicates.",
+    "Before creating child issues, list existing children and recent parent context, normalize the intended child purpose, and update or reuse matching issues.",
+    "When you create or reuse children, leave a concise parent-visible split manifest naming the child IDs and what each one covers.",
     "Babysit child progress and solve parent-owned integration or convergence issues when the delivered pieces do not yet fit together cleanly.",
     "Do not open an overlapping umbrella PR unless this parent owns unique direct work.",
     "Create new child issues only for genuinely missing required work needed to satisfy the parent goal.",

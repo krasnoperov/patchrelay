@@ -6,6 +6,7 @@
     "git_bin": "git",
     "codex": {
       "model": "gpt-5.5",
+      "triage_model": "gpt-5.4-mini",
       "reasoning_effort": "high",
       "developer_instructions": "Keep the public API stable for this installation unless the task explicitly requires a breaking change."
     }

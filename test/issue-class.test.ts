@@ -69,3 +69,31 @@ test("classifyIssue only honors explicit orchestration when child issues exist",
     { issueClass: "implementation", issueClassSource: "heuristic" },
   );
 });
+
+test("classifyIssue preserves model triage classification until hierarchy facts override it", () => {
+  assert.deepEqual(
+    classifyIssue({
+      issue: {
+        issueClass: "orchestration",
+        issueClassSource: "triage",
+        title: "Model-triaged orchestration parent",
+        description: "No children yet.",
+      },
+      childIssueCount: 0,
+    }),
+    { issueClass: "orchestration", issueClassSource: "triage" },
+  );
+
+  assert.deepEqual(
+    classifyIssue({
+      issue: {
+        issueClass: "orchestration",
+        issueClassSource: "triage",
+        title: "Triaged child",
+        parentLinearIssueId: "parent-1",
+      },
+      childIssueCount: 0,
+    }),
+    { issueClass: "implementation", issueClassSource: "hierarchy" },
+  );
+});

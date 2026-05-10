@@ -1,7 +1,7 @@
 import type { IssueRecord } from "./db-types.ts";
 
 export type IssueClass = "implementation" | "orchestration";
-export type IssueClassSource = "explicit" | "hierarchy" | "heuristic";
+export type IssueClassSource = "explicit" | "hierarchy" | "heuristic" | "triage";
 
 export function classifyIssue(params: {
   issue: Pick<IssueRecord, "issueClass" | "issueClassSource" | "title" | "description" | "parentLinearIssueId">;
@@ -20,6 +20,10 @@ export function classifyIssue(params: {
 
   if (params.issue.issueClassSource === "explicit" && params.issue.issueClass === "implementation") {
     return { issueClass: "implementation", issueClassSource: "explicit" };
+  }
+
+  if (params.issue.issueClassSource === "triage" && params.issue.issueClass) {
+    return { issueClass: params.issue.issueClass, issueClassSource: "triage" };
   }
 
   return { issueClass: "implementation", issueClassSource: "heuristic" };

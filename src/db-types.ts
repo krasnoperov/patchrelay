@@ -36,6 +36,8 @@ export interface IssueRecord {
   delegatedToPatchRelay: boolean;
   issueClass?: IssueClass | undefined;
   issueClassSource?: IssueClassSource | undefined;
+  issueTriageHash?: string | undefined;
+  issueTriageResultJson?: string | undefined;
   parentLinearIssueId?: string | undefined;
   parentIssueKey?: string | undefined;
   issueKey?: string | undefined;

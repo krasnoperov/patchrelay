@@ -411,6 +411,48 @@ test("CodexAppServerClient sends configured runtime instructions on thread start
   }
 });
 
+test("CodexAppServerClient starts issue triage threads with cheap read-only overrides", async () => {
+  const child = new FakeChildProcess("normal");
+  const client = new CodexAppServerClient(
+    {
+      bin: process.execPath,
+      args: ["unused"],
+      sourceBashrc: false,
+      requestTimeoutMs: 50,
+      approvalPolicy: "never",
+      sandboxMode: "danger-full-access",
+      persistExtendedHistory: false,
+      serviceName: "patchrelay-test",
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      triageModel: "gpt-5.4-mini",
+      triageModelProvider: "openai",
+      reasoningEffort: "high",
+      baseInstructions: "Base instructions here.",
+      developerInstructions: "Merged developer instructions here.",
+      experimentalRawEvents: true,
+    },
+    createCaptureLogger().logger,
+    (() => child) as never,
+  );
+
+  try {
+    await client.start();
+    await client.startThreadForIssueTriage();
+
+    assert.equal(child.threadStartParams.length, 1);
+    assert.equal(child.threadStartParams[0]?.approvalPolicy, "never");
+    assert.equal(child.threadStartParams[0]?.sandbox, "read-only");
+    assert.equal(child.threadStartParams[0]?.model, "gpt-5.4-mini");
+    assert.equal(child.threadStartParams[0]?.modelProvider, "openai");
+    assert.equal(child.threadStartParams[0]?.reasoningEffort, "low");
+    assert.equal(child.threadStartParams[0]?.baseInstructions, null);
+    assert.match(String(child.threadStartParams[0]?.developerInstructions), /issue triage classifier/);
+  } finally {
+    await client.stop();
+  }
+});
+
 test("resolveCodexAppServerLaunch can wrap codex in a shell that sources bashrc", () => {
   assert.deepEqual(
     resolveCodexAppServerLaunch({

@@ -34,7 +34,9 @@ import { RunRecoveryService } from "./run-recovery-service.ts";
 import { RunWakePlanner, type PendingRunWake } from "./run-wake-planner.ts";
 import { getRemainingZombieRecoveryDelayMs } from "./zombie-recovery.ts";
 import { classifyIssue } from "./issue-class.ts";
+import { buildIssueTriageHash, IssueTriageService } from "./issue-triage.ts";
 import { loadConfig } from "./config.ts";
+import { CodexThreadMaterializingError, isThreadMaterializingError } from "./codex-thread-errors.ts";
 
 function lowerCaseFirst(value: string): string {
   return value ? `${value.slice(0, 1).toLowerCase()}${value.slice(1)}` : value;
@@ -99,6 +101,7 @@ export class RunOrchestrator {
   private readonly runCompletionPolicy: RunCompletionPolicy;
   private readonly completionCheck: CompletionCheckService;
   private readonly publicationRecap: PublicationRecapService;
+  private readonly issueTriage: IssueTriageService;
   private readonly runNotificationHandler: RunNotificationHandler;
   private readonly runReconciler: RunReconciler;
   private readonly mergedLinearCompletionReconciler: MergedLinearCompletionReconciler;
@@ -148,6 +151,7 @@ export class RunOrchestrator {
     );
     this.completionCheck = new CompletionCheckService(codex, logger);
     this.publicationRecap = new PublicationRecapService(codex, logger);
+    this.issueTriage = new IssueTriageService(codex, logger);
     this.runFinalizer = new RunFinalizer(
       db,
       logger,
@@ -312,17 +316,45 @@ export class RunOrchestrator {
     };
   }
 
-  private classifyTrackedIssue(issue: IssueRecord): IssueRecord {
-    const childIssueCount = this.db.issues.listChildIssues(issue.projectId, issue.linearIssueId).length;
-    const classification = classifyIssue({ issue, childIssueCount });
+  private async classifyTrackedIssue(issue: IssueRecord): Promise<IssueRecord> {
+    const childIssues = this.db.issues.listChildIssues(issue.projectId, issue.linearIssueId);
+    const classification = classifyIssue({ issue, childIssueCount: childIssues.length });
+    const triageHash = buildIssueTriageHash({ issue, childIssues });
+    const triageCacheFresh = issue.issueClassSource === "triage" && issue.issueTriageHash === triageHash;
     if (issue.issueClass === classification.issueClass && issue.issueClassSource === classification.issueClassSource) {
-      return issue;
+      if (classification.issueClassSource !== "triage" || triageCacheFresh) {
+        return issue;
+      }
     }
+    if (classification.issueClassSource === "heuristic" || (classification.issueClassSource === "triage" && !triageCacheFresh)) {
+      try {
+        const triage = await this.issueTriage.classify({ issue, childIssues });
+        if (triage) {
+          return this.db.issues.upsertIssue({
+            projectId: issue.projectId,
+            linearIssueId: issue.linearIssueId,
+            issueClass: triage.issueClass,
+            issueClassSource: "triage",
+            issueTriageHash: triageHash,
+            issueTriageResultJson: JSON.stringify(triage),
+          });
+        }
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        this.logger.warn(
+          { issueKey: issue.issueKey, linearIssueId: issue.linearIssueId, error: err.message },
+          "Issue triage failed; falling back to heuristic classification",
+        );
+      }
+    }
+    const fallbackClassification = classification.issueClassSource === "triage" && !triageCacheFresh
+      ? { issueClass: "implementation" as const, issueClassSource: "heuristic" as const }
+      : classification;
     return this.db.issues.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
-      issueClass: classification.issueClass,
-      issueClassSource: classification.issueClassSource,
+      issueClass: fallbackClassification.issueClass,
+      issueClassSource: fallbackClassification.issueClassSource,
     });
   }
 
@@ -339,7 +371,8 @@ export class RunOrchestrator {
     }
 
     const initialIssue = this.db.issues.getIssue(item.projectId, item.issueId);
-    const issue = initialIssue ? this.classifyTrackedIssue(initialIssue) : undefined;
+    if (!initialIssue || initialIssue.activeRunId !== undefined) return;
+    const issue = await this.classifyTrackedIssue(initialIssue);
     if (!issue || issue.activeRunId !== undefined) return;
     const issueSession = this.db.issueSessions.getIssueSession(item.projectId, item.issueId);
 
@@ -635,15 +668,25 @@ export class RunOrchestrator {
   }
 
   private async readThreadWithRetry(threadId: string, maxRetries = 3): Promise<CodexThreadSummary> {
+    let lastError: unknown;
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
         return await this.codex.readThread(threadId, true);
-      } catch {
-        if (attempt === maxRetries - 1) throw new Error(`Failed to read thread ${threadId} after ${maxRetries} attempts`);
+      } catch (error) {
+        lastError = error;
+        if (attempt === maxRetries - 1) {
+          if (isThreadMaterializingError(error)) {
+            throw new CodexThreadMaterializingError(threadId, maxRetries, error);
+          }
+          throw new Error(`Failed to read thread ${threadId} after ${maxRetries} attempts`, { cause: error });
+        }
         await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
       }
     }
-    throw new Error(`Failed to read thread ${threadId}`);
+    if (isThreadMaterializingError(lastError)) {
+      throw new CodexThreadMaterializingError(threadId, maxRetries, lastError);
+    }
+    throw new Error(`Failed to read thread ${threadId}`, { cause: lastError });
   }
 
   private getHeldIssueSessionLease(projectId: string, linearIssueId: string):

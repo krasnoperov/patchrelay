@@ -15,6 +15,8 @@ export interface UpsertIssueParams {
   delegatedToPatchRelay?: boolean;
   issueClass?: IssueClass | null;
   issueClassSource?: IssueClassSource | null;
+  issueTriageHash?: string | null;
+  issueTriageResultJson?: string | null;
   parentLinearIssueId?: string | null;
   parentIssueKey?: string | null;
   issueKey?: string;
@@ -92,6 +94,8 @@ export class IssueStore {
       if (params.delegatedToPatchRelay !== undefined) { sets.push("delegated_to_patchrelay = @delegatedToPatchRelay"); values.delegatedToPatchRelay = params.delegatedToPatchRelay ? 1 : 0; }
       if (params.issueClass !== undefined) { sets.push("issue_class = @issueClass"); values.issueClass = params.issueClass; }
       if (params.issueClassSource !== undefined) { sets.push("issue_class_source = @issueClassSource"); values.issueClassSource = params.issueClassSource; }
+      if (params.issueTriageHash !== undefined) { sets.push("issue_triage_hash = @issueTriageHash"); values.issueTriageHash = params.issueTriageHash; }
+      if (params.issueTriageResultJson !== undefined) { sets.push("issue_triage_result_json = @issueTriageResultJson"); values.issueTriageResultJson = params.issueTriageResultJson; }
       if (params.parentLinearIssueId !== undefined) { sets.push("parent_linear_issue_id = @parentLinearIssueId"); values.parentLinearIssueId = params.parentLinearIssueId; }
       if (params.parentIssueKey !== undefined) { sets.push("parent_issue_key = @parentIssueKey"); values.parentIssueKey = params.parentIssueKey; }
       if (params.issueKey !== undefined) { sets.push("issue_key = COALESCE(@issueKey, issue_key)"); values.issueKey = params.issueKey; }
@@ -152,7 +156,7 @@ export class IssueStore {
     } else {
       this.connection.prepare(`
         INSERT INTO issues (
-          project_id, linear_issue_id, delegated_to_patchrelay, issue_class, issue_class_source, parent_linear_issue_id, parent_issue_key, issue_key, title, description, url,
+          project_id, linear_issue_id, delegated_to_patchrelay, issue_class, issue_class_source, issue_triage_hash, issue_triage_result_json, parent_linear_issue_id, parent_issue_key, issue_key, title, description, url,
           priority, estimate,
           current_linear_state, current_linear_state_type, factory_state, pending_run_type, pending_run_context_json,
           branch_name, worktree_path, thread_id, active_run_id, status_comment_id,
@@ -167,7 +171,7 @@ export class IssueStore {
           ci_repair_attempts, queue_repair_attempts, review_fix_attempts, zombie_recovery_attempts, last_zombie_recovery_at, orchestration_settle_until,
           updated_at
         ) VALUES (
-          @projectId, @linearIssueId, @delegatedToPatchRelay, @issueClass, @issueClassSource, @parentLinearIssueId, @parentIssueKey, @issueKey, @title, @description, @url,
+          @projectId, @linearIssueId, @delegatedToPatchRelay, @issueClass, @issueClassSource, @issueTriageHash, @issueTriageResultJson, @parentLinearIssueId, @parentIssueKey, @issueKey, @title, @description, @url,
           @priority, @estimate,
           @currentLinearState, @currentLinearStateType, @factoryState, @pendingRunType, @pendingRunContextJson,
           @branchName, @worktreePath, @threadId, @activeRunId, @statusCommentId,
@@ -188,6 +192,8 @@ export class IssueStore {
         delegatedToPatchRelay: params.delegatedToPatchRelay === false ? 0 : 1,
         issueClass: params.issueClass ?? null,
         issueClassSource: params.issueClassSource ?? null,
+        issueTriageHash: params.issueTriageHash ?? null,
+        issueTriageResultJson: params.issueTriageResultJson ?? null,
         parentLinearIssueId: params.parentLinearIssueId ?? null,
         parentIssueKey: params.parentIssueKey ?? null,
         issueKey: params.issueKey ?? null,
@@ -622,6 +628,12 @@ export function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.issue_class !== null && row.issue_class !== undefined ? { issueClass: String(row.issue_class) as IssueClass } : {}),
     ...(row.issue_class_source !== null && row.issue_class_source !== undefined
       ? { issueClassSource: String(row.issue_class_source) as IssueClassSource }
+      : {}),
+    ...(row.issue_triage_hash !== null && row.issue_triage_hash !== undefined
+      ? { issueTriageHash: String(row.issue_triage_hash) }
+      : {}),
+    ...(row.issue_triage_result_json !== null && row.issue_triage_result_json !== undefined
+      ? { issueTriageResultJson: String(row.issue_triage_result_json) }
       : {}),
     ...(row.parent_linear_issue_id !== null && row.parent_linear_issue_id !== undefined
       ? { parentLinearIssueId: String(row.parent_linear_issue_id) }
