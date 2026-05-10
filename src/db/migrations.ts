@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS issues (
   delegated_to_patchrelay INTEGER NOT NULL DEFAULT 1,
   issue_class TEXT,
   issue_class_source TEXT,
+  issue_triage_hash TEXT,
+  issue_triage_result_json TEXT,
   parent_linear_issue_id TEXT,
   parent_issue_key TEXT,
   issue_key TEXT,
@@ -271,6 +273,8 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   addColumnIfMissing(connection, "issues", "delegated_to_patchrelay", "INTEGER NOT NULL DEFAULT 1");
   addColumnIfMissing(connection, "issues", "issue_class", "TEXT");
   addColumnIfMissing(connection, "issues", "issue_class_source", "TEXT");
+  addColumnIfMissing(connection, "issues", "issue_triage_hash", "TEXT");
+  addColumnIfMissing(connection, "issues", "issue_triage_result_json", "TEXT");
   addColumnIfMissing(connection, "issues", "parent_linear_issue_id", "TEXT");
   addColumnIfMissing(connection, "issues", "parent_issue_key", "TEXT");
   addColumnIfMissing(connection, "issues", "orchestration_settle_until", "TEXT");
@@ -369,6 +373,8 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   addColumnIfMissing(connection, "linear_installations", "health_updated_at", "TEXT");
 
   removeRetiredIssueColumnsIfPresent(connection);
+  addColumnIfMissing(connection, "issues", "issue_triage_hash", "TEXT");
+  addColumnIfMissing(connection, "issues", "issue_triage_result_json", "TEXT");
 }
 
 function addColumnIfMissing(connection: DatabaseConnection, table: string, column: string, definition: string): void {
@@ -395,6 +401,8 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         delegated_to_patchrelay INTEGER NOT NULL DEFAULT 1,
         issue_class TEXT,
         issue_class_source TEXT,
+        issue_triage_hash TEXT,
+        issue_triage_result_json TEXT,
         parent_linear_issue_id TEXT,
         parent_issue_key TEXT,
         issue_key TEXT,
@@ -462,6 +470,8 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         delegated_to_patchrelay,
         issue_class,
         issue_class_source,
+        issue_triage_hash,
+        issue_triage_result_json,
         parent_linear_issue_id,
         parent_issue_key,
         issue_key,
@@ -527,6 +537,8 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         COALESCE(delegated_to_patchrelay, 1),
         issue_class,
         issue_class_source,
+        issue_triage_hash,
+        issue_triage_result_json,
         parent_linear_issue_id,
         parent_issue_key,
         issue_key,

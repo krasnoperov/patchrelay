@@ -14,6 +14,15 @@ import { resolveRecoverablePostRunState } from "./interrupted-run-recovery.ts";
 import type { RunFinalizer } from "./run-finalizer.ts";
 import type { ReleaseIssueSessionLease, WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import { resolveEffectiveActiveRun } from "./effective-active-run.ts";
+import { isThreadMaterializingError } from "./codex-thread-errors.ts";
+
+const THREAD_MATERIALIZATION_GRACE_MS = 10 * 60_000;
+
+function isWithinThreadMaterializationGrace(run: Pick<RunRecord, "startedAt">, nowMs = Date.now()): boolean {
+  const startedAtMs = Date.parse(run.startedAt);
+  if (!Number.isFinite(startedAtMs)) return true;
+  return nowMs - startedAtMs < THREAD_MATERIALIZATION_GRACE_MS;
+}
 
 export class RunReconciler {
   constructor(
@@ -106,7 +115,18 @@ export class RunReconciler {
     let thread: CodexThreadSummary | undefined;
     try {
       thread = await this.readThreadWithRetry(run.threadId);
-    } catch {
+    } catch (error) {
+      if (isThreadMaterializingError(error) && isWithinThreadMaterializationGrace(run)) {
+        this.logger.info(
+          { issueKey: effectiveIssue.issueKey, runId: run.id, runType: run.runType, threadId: run.threadId },
+          "Codex thread still materializing during reconciliation; keeping run active",
+        );
+        void this.linearSync.syncSession(effectiveIssue, { activeRunType: run.runType });
+        if (acquiredRecoveryLease) {
+          this.releaseLease(run.projectId, run.linearIssueId);
+        }
+        return;
+      }
       this.logger.warn(
         { issueKey: effectiveIssue.issueKey, runId: run.id, runType: run.runType, threadId: run.threadId },
         "Stale thread during reconciliation",

@@ -81,6 +81,7 @@ function createOrchestrator(
   baseDir: string,
   linearProvider?: { forProject(projectId: string): Promise<LinearClient | undefined> },
   codex?: {
+    startThreadForIssueTriage?: () => Promise<{ id: string; cwd: string; preview: string; status: string; turns: Array<unknown> }>;
     startThread: () => Promise<{ threadId: string }>;
     steerTurn: () => Promise<undefined>;
     readThread: (threadId: string) => Promise<{ id: string; turns: Array<{ id: string; status: string; items: Array<unknown> }> }>;
@@ -94,6 +95,7 @@ function createOrchestrator(
     config,
     db,
     (codex ?? {
+      startThreadForIssueTriage: async () => ({ id: "triage-thread-1", cwd: "/tmp/triage", preview: "", status: "idle", turns: [] }),
       startThread: async () => ({ threadId: "thread-1" }),
       steerTurn: async () => undefined,
       readThread: async () => ({ id: "thread-1", turns: [] }),
@@ -1061,6 +1063,55 @@ test("reconcileRun does not treat a locally-owned no-thread launch as zombie", a
     assert.equal(updatedRun?.status, "queued");
     assert.equal(updatedRun?.failureReason, undefined);
     assert.equal(session?.leaseId, leaseId);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("reconcileRun keeps a still-materializing thread active instead of launching stale recovery", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-materializing-thread-"));
+  try {
+    const { db, enqueueCalls, orchestrator } = createOrchestrator(baseDir, undefined, {
+      startThreadForIssueTriage: async () => ({ id: "triage-thread-1", cwd: "/tmp/triage", preview: "", status: "idle", turns: [] }),
+      startThread: async () => ({ threadId: "thread-1" }),
+      steerTurn: async () => undefined,
+      readThread: async () => {
+        throw new Error("thread not materialized yet");
+      },
+    });
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-materializing-thread",
+      issueKey: "USE-MATERIALIZING",
+      branchName: "feat-materializing-thread",
+      factoryState: "implementing",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+      promptText: "launch still materializing",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-materializing", turnId: "turn-materializing" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+      threadId: "thread-materializing",
+      factoryState: "implementing",
+    });
+
+    await (orchestrator as unknown as { reconcileRun: (targetRun: typeof run) => Promise<void> }).reconcileRun(db.runs.getRunById(run.id)!);
+
+    const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId);
+    const updatedRun = db.runs.getRunById(run.id);
+    assert.equal(updatedIssue?.activeRunId, run.id);
+    assert.equal(updatedIssue?.factoryState, "implementing");
+    assert.equal(updatedRun?.status, "running");
+    assert.equal(updatedRun?.failureReason, undefined);
+    assert.equal(db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId), undefined);
+    assert.deepEqual(enqueueCalls, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

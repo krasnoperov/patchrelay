@@ -20,6 +20,8 @@ export interface CodexAppServerConfig {
   model?: string;
   modelProvider?: string;
   reasoningEffort?: "low" | "medium" | "high";
+  triageModel?: string;
+  triageModelProvider?: string;
   serviceName?: string;
   baseInstructions?: string;
   developerInstructions?: string;

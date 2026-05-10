@@ -42,7 +42,7 @@ export interface StartThreadOptions {
 export interface StartTurnOptions {
   threadId: string;
   input: string;
-  cwd: string;
+  cwd?: string;
 }
 
 export interface SteerTurnOptions {
@@ -76,6 +76,14 @@ const PUBLICATION_RECAP_DEVELOPER_INSTRUCTIONS = [
   "Keep reasoning light and concise.",
   "Do not run commands, do not call tools, do not edit files, and do not inspect or modify the repository.",
   "Use only the prior thread context and the facts in the current prompt.",
+  "Return only the requested JSON object.",
+].join("\n");
+
+const ISSUE_TRIAGE_DEVELOPER_INSTRUCTIONS = [
+  "You are PatchRelay's issue triage classifier.",
+  "This is a read-only preflight step used only to choose the execution shape for one Linear issue.",
+  "Do not run commands, do not call tools, do not edit files, and do not inspect or modify the repository.",
+  "Use only the facts in the current prompt.",
   "Return only the requested JSON object.",
 ].join("\n");
 
@@ -172,16 +180,32 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   async startThread(options: StartThreadOptions): Promise<CodexThreadSummary> {
+    return await this.startThreadWithOverrides(options, {});
+  }
+
+  async startThreadForIssueTriage(): Promise<CodexThreadSummary> {
+    return await this.startThreadWithOverrides({ cwd: tmpdir() }, {
+      approvalPolicy: "never",
+      sandboxMode: "read-only",
+      model: this.config.triageModel ?? "gpt-5.4-mini",
+      modelProvider: this.config.triageModelProvider ?? this.config.modelProvider ?? null,
+      reasoningEffort: "low",
+      baseInstructions: null,
+      developerInstructions: ISSUE_TRIAGE_DEVELOPER_INSTRUCTIONS,
+    });
+  }
+
+  private async startThreadWithOverrides(options: StartThreadOptions, overrides: ForkThreadOverrides): Promise<CodexThreadSummary> {
     const params: Record<string, unknown> = {
       cwd: options.cwd,
-      approvalPolicy: this.config.approvalPolicy,
-      sandbox: this.config.sandboxMode,
+      approvalPolicy: overrides.approvalPolicy ?? this.config.approvalPolicy,
+      sandbox: overrides.sandboxMode ?? this.config.sandboxMode,
       serviceName: this.config.serviceName ?? "patchrelay",
-      model: this.config.model ?? null,
-      modelProvider: this.config.modelProvider ?? null,
-      reasoningEffort: this.config.reasoningEffort ?? null,
-      baseInstructions: this.config.baseInstructions ?? null,
-      developerInstructions: this.config.developerInstructions ?? null,
+      model: "model" in overrides ? overrides.model ?? null : this.config.model ?? null,
+      modelProvider: "modelProvider" in overrides ? overrides.modelProvider ?? null : this.config.modelProvider ?? null,
+      reasoningEffort: "reasoningEffort" in overrides ? overrides.reasoningEffort ?? null : this.config.reasoningEffort ?? null,
+      baseInstructions: "baseInstructions" in overrides ? overrides.baseInstructions ?? null : this.config.baseInstructions ?? null,
+      developerInstructions: "developerInstructions" in overrides ? overrides.developerInstructions ?? null : this.config.developerInstructions ?? null,
       experimentalRawEvents: this.config.experimentalRawEvents ?? false,
     };
     const response = (await this.sendRequest("thread/start", params)) as { thread: Record<string, unknown> };
@@ -213,11 +237,11 @@ export class CodexAppServerClient extends EventEmitter {
       cwd: overrides?.cwd ?? cwd ?? null,
       approvalPolicy: overrides?.approvalPolicy ?? this.config.approvalPolicy,
       sandbox: overrides?.sandboxMode ?? this.config.sandboxMode,
-      model: overrides?.model ?? this.config.model ?? null,
-      modelProvider: overrides?.modelProvider ?? this.config.modelProvider ?? null,
-      reasoningEffort: overrides?.reasoningEffort ?? this.config.reasoningEffort ?? null,
-      baseInstructions: overrides?.baseInstructions ?? this.config.baseInstructions ?? null,
-      developerInstructions: overrides?.developerInstructions ?? this.config.developerInstructions ?? null,
+      model: overrides && "model" in overrides ? overrides.model ?? null : this.config.model ?? null,
+      modelProvider: overrides && "modelProvider" in overrides ? overrides.modelProvider ?? null : this.config.modelProvider ?? null,
+      reasoningEffort: overrides && "reasoningEffort" in overrides ? overrides.reasoningEffort ?? null : this.config.reasoningEffort ?? null,
+      baseInstructions: overrides && "baseInstructions" in overrides ? overrides.baseInstructions ?? null : this.config.baseInstructions ?? null,
+      developerInstructions: overrides && "developerInstructions" in overrides ? overrides.developerInstructions ?? null : this.config.developerInstructions ?? null,
     };
     if (this.config.persistExtendedHistory) {
       this.logger.warn("persistExtendedHistory is requested but not enabled in the active app-server capability handshake; ignoring");
