@@ -276,6 +276,8 @@ export type ReconcileAction =
   | "merge_waiting_approval" // approval withdrawn, waiting for re-approval
   | "merge_waiting_main"     // main still verifying post-merge; keep spec + CI and retry
   | "main_pending_bypassed"  // main rerun pending for an already-validated merge commit
+  | "pr_branch_cleanup_deferred" // GitHub has not yet classified the PR as merged
+  | "pr_branch_cleanup_failed"   // branch cleanup failed after merge; non-blocking
   | "sanitized_closed"    // entry terminalized: PR closed on GitHub
   | "sanitized_duplicate" // older duplicate entry superseded
   | "post_merge_verification_started"

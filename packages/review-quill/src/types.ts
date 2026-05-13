@@ -21,10 +21,10 @@ export interface ReviewQuillRepositoryConfig {
   // PR label that opts a PR out of carry-forward — release / changelog
   // PRs typically want a fresh review even when the patch is unchanged.
   // Default `review:no-cache` (resolved at consumer side).
-  noCacheLabel?: string;
+  noCacheLabel?: string | undefined;
   // Which surface the reviewer reviews. v1 default is `head`. Setting
   // `integration_tree` is rejected at runtime until that path ships.
-  reviewSurfaceMode?: ReviewSurfaceMode;
+  reviewSurfaceMode?: ReviewSurfaceMode | undefined;
 }
 
 export interface PromptFileFragment {

@@ -5,6 +5,13 @@ import { cleanupSpec, evictEntry, invalidateDownstream } from "./reconciler-evic
 import { verifyPostMergeStatus } from "./reconciler-post-merge.ts";
 import { getEffectiveMainStatus } from "./reconciler-main-status.ts";
 
+const DEFAULT_PR_MERGED_POLL_ATTEMPTS = 6;
+const DEFAULT_PR_MERGED_POLL_DELAY_MS = 2_000;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promise<void> {
   emit(ctx, entry, "merge_revalidating");
   const prStatus = await ctx.github.getStatus(entry.prNumber);
@@ -141,9 +148,43 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
 
   await cleanupSpec(ctx, entry);
 
-  try {
-    await ctx.github.deleteBranch(entry.prNumber);
-  } catch {
-    /* cosmetic */
+  await deletePrBranchAfterGitHubMarksMerged(ctx, entry);
+}
+
+export async function deletePrBranchAfterGitHubMarksMerged(
+  ctx: ReconcileContext,
+  entry: QueueEntry,
+  options: { attempts?: number; delayMs?: number } = {},
+): Promise<void> {
+  const attempts = options.attempts ?? DEFAULT_PR_MERGED_POLL_ATTEMPTS;
+  const delayMs = options.delayMs ?? DEFAULT_PR_MERGED_POLL_DELAY_MS;
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    let merged = false;
+    try {
+      merged = (await ctx.github.getStatus(entry.prNumber)).merged;
+    } catch {
+      // Keep polling briefly. If GitHub is unavailable, branch cleanup is
+      // cosmetic; preserving correct PR merge classification matters more.
+    }
+
+    if (merged) {
+      try {
+        await ctx.github.deleteBranch(entry.prNumber);
+      } catch {
+        emit(ctx, entry, "pr_branch_cleanup_failed", {
+          detail: "GitHub marked the PR merged, but deleting the head branch failed",
+        });
+      }
+      return;
+    }
+
+    if (attempt < attempts - 1 && delayMs > 0) {
+      await delay(delayMs);
+    }
   }
+
+  emit(ctx, entry, "pr_branch_cleanup_deferred", {
+    detail: "waiting for GitHub to classify the fast-forwarded PR as merged before deleting the head branch",
+  });
 }
