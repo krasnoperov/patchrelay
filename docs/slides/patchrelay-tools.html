@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PatchRelay Tools in Production</title>
+<style>
+  :root {
+    --paper: #f8f3ea;
+    --ink: #171717;
+    --muted: #615c55;
+    --rule: #24211d;
+    --soft: #e9e0d2;
+    --panel: #fffaf1;
+    --accent: #9f2626;
+    --green: #24633b;
+    --blue: #245b78;
+    --amber: #9a5b12;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Iowan Old Style", "Charter", Georgia, serif;
+    font-size: 18px;
+    line-height: 1.48;
+  }
+  body { overflow: hidden; }
+  .deck {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+  }
+  .slide {
+    position: absolute;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    gap: 1.1rem;
+    padding: 5vh 7vw 7vh;
+    overflow: auto;
+  }
+  .slide.active { display: flex; }
+  h1 {
+    max-width: 13ch;
+    margin: 0;
+    font-size: clamp(40px, 7vw, 92px);
+    line-height: 0.95;
+    letter-spacing: 0;
+  }
+  h2 {
+    margin: 0;
+    font-size: clamp(26px, 3.2vw, 44px);
+    line-height: 1.08;
+    letter-spacing: 0;
+  }
+  h3 {
+    margin: 0 0 0.35rem;
+    font-size: clamp(18px, 1.7vw, 24px);
+    line-height: 1.15;
+  }
+  p, li { max-width: 72ch; }
+  p { margin: 0; }
+  ul, ol { margin: 0; padding-left: 1.25rem; }
+  li { margin-bottom: 0.35rem; }
+  code, .mono {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
+    font-size: 0.85em;
+  }
+  pre {
+    max-width: 88ch;
+    margin: 0;
+    padding: 1rem 1.15rem;
+    overflow-x: auto;
+    background: var(--ink);
+    color: #f4eadb;
+    font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
+    font-size: 0.82rem;
+    line-height: 1.5;
+  }
+  .kicker {
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--muted);
+  }
+  .lede {
+    max-width: 56ch;
+    color: var(--muted);
+    font-size: clamp(20px, 2.3vw, 30px);
+    line-height: 1.32;
+  }
+  .rule {
+    width: 100%;
+    border: 0;
+    border-top: 1px solid var(--rule);
+    margin: 0.25rem 0;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1rem;
+    width: 100%;
+  }
+  .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .card {
+    background: var(--soft);
+    border-left: 3px solid var(--rule);
+    padding: 1rem 1.1rem;
+    min-height: 9rem;
+  }
+  .card.author { border-left-color: var(--accent); }
+  .card.reviewer { border-left-color: var(--blue); }
+  .card.lander { border-left-color: var(--green); }
+  .card.warn { border-left-color: var(--amber); }
+  .tag {
+    display: inline-block;
+    padding: 0.12rem 0.45rem;
+    border: 1px solid currentColor;
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.72rem;
+    line-height: 1.2;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .tag.good { color: var(--green); }
+  .tag.warn { color: var(--amber); }
+  .tag.bad { color: var(--accent); }
+  .flow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    align-items: center;
+    max-width: 90ch;
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    font-size: clamp(16px, 1.7vw, 22px);
+  }
+  .pill {
+    padding: 0.45rem 0.65rem;
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+  .arrow {
+    color: var(--muted);
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    font-size: clamp(13px, 1.2vw, 16px);
+  }
+  th, td {
+    padding: 0.55rem 0.65rem;
+    border-bottom: 1px solid rgba(23, 23, 23, 0.22);
+    text-align: left;
+    vertical-align: top;
+  }
+  th { font-weight: 700; }
+  .nav {
+    position: fixed;
+    left: 7vw;
+    right: 7vw;
+    bottom: 2vh;
+    display: flex;
+    justify-content: space-between;
+    color: var(--muted);
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    pointer-events: none;
+  }
+  .foot-rule {
+    position: fixed;
+    left: 7vw;
+    right: 7vw;
+    bottom: 5vh;
+    border: 0;
+    border-top: 1px solid var(--rule);
+    pointer-events: none;
+  }
+
+  @media (max-width: 780px) {
+    body { overflow: auto; }
+    .slide { padding: 4vh 5vw 9vh; }
+    .grid, .grid.two { grid-template-columns: 1fr; }
+    .pill { white-space: normal; }
+  }
+
+  @media print {
+    body { overflow: visible; }
+    .deck { height: auto; overflow: visible; }
+    .slide {
+      position: static;
+      display: flex;
+      min-height: 100vh;
+      page-break-after: always;
+    }
+    .nav, .foot-rule { display: none; }
+  }
+</style>
+</head>
+<body>
+<main class="deck">
+  <section class="slide active">
+    <div class="kicker">PatchRelay stack</div>
+    <h1>Tools that ship through GitHub truth.</h1>
+    <p class="lede">PatchRelay writes branches, review-quill reviews changes, and merge-steward lands tested integration trees. The services stay separate; GitHub is the bus.</p>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">The cast</div>
+    <h2>One PR, three independent roles.</h2>
+    <div class="grid">
+      <div class="card author">
+        <h3>Author</h3>
+        <p><strong>PatchRelay</strong> owns Linear delegation, worktrees, implementation, review fixes, CI repair, and queue repair.</p>
+      </div>
+      <div class="card reviewer">
+        <h3>Reviewer</h3>
+        <p><strong>review-quill</strong> reads GitHub PR truth and publishes ordinary approve or request-changes reviews.</p>
+      </div>
+      <div class="card lander">
+        <h3>Lander</h3>
+        <p><strong>merge-steward</strong> admits approved green PRs, builds speculative integration branches, validates, and fast-forwards main.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">Shared bus</div>
+    <h2>They do not call each other.</h2>
+    <div class="flow">
+      <span class="pill">push branch</span><span class="arrow">-></span>
+      <span class="pill">GitHub PR</span><span class="arrow">-></span>
+      <span class="pill">review</span><span class="arrow">-></span>
+      <span class="pill">checks</span><span class="arrow">-></span>
+      <span class="pill">queue</span><span class="arrow">-></span>
+      <span class="pill">main</span>
+    </div>
+    <hr class="rule" />
+    <p>The protocol boundary is GitHub: PR head, review state, check state, queue check runs, and spec branches.</p>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">Mental model</div>
+    <h2>A PR is a ref. A change is a patch.</h2>
+    <div class="grid two">
+      <div class="card">
+        <h3><code>headSha</code></h3>
+        <p>The exact commit GitHub currently calls the PR head. Reviews are attached to this world.</p>
+      </div>
+      <div class="card">
+        <h3><code>patch_id</code></h3>
+        <p>The stable identity of the diff. Rebases and equivalent force-pushes can keep the same change identity.</p>
+      </div>
+    </div>
+    <pre>git diff $(git merge-base &lt;base&gt; &lt;head&gt;)..&lt;head&gt; | git patch-id --stable</pre>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">Integration truth</div>
+    <h2>The queue tests what will land.</h2>
+    <pre>tree   = git merge-tree --write-tree main pr-head
+commit = git commit-tree $tree -p main -p pr-head
+push   mq-spec-N
+test   mq-spec-N
+green  -> fast-forward main</pre>
+    <p>Branch CI tells you the PR head works in isolation. Spec CI tells you the integrated tree works on today&apos;s main.</p>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">The key invariant</div>
+    <h2>Requested changes require a new head.</h2>
+    <p class="lede">After review-quill requests changes at SHA A, PatchRelay must push SHA B before the issue can return to review or queue.</p>
+    <div class="grid two">
+      <div class="card warn">
+        <h3>Blocked</h3>
+        <p><span class="tag bad">same head</span> Review fix finishes, but GitHub still reports SHA A. PatchRelay fails the run.</p>
+      </div>
+      <div class="card author">
+        <h3>Allowed</h3>
+        <p><span class="tag good">fresh head</span> Review fix publishes SHA B. The reviewer can now evaluate new facts.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">Production evidence</div>
+    <h2>The guard fired in the real system.</h2>
+    <pre>Requested-changes run finished for PR #355 without pushing a new head
+past blocking review SHA 7586be6a;
+PatchRelay must not hand the same SHA back to review.</pre>
+    <p>That is a protected stop. It means PatchRelay refused to ask the reviewer to reconsider an unchanged PR head.</p>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">Production evidence</div>
+    <h2>Repairs that completed cleanly.</h2>
+    <table>
+      <thead>
+        <tr><th>Issue</th><th>Signal</th><th>Run</th><th>Outcome</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>LSR-373</code></td><td>requested changes on PR #724</td><td><code>review_fix</code></td><td>fresh head, approval, merge</td></tr>
+        <tr><td><code>LSR-374</code></td><td>requested changes on PR #722</td><td><code>review_fix</code></td><td>fresh head, approval, merge</td></tr>
+        <tr><td><code>LSR-375</code></td><td>queue conflict on PR #726</td><td><code>queue_repair</code></td><td>rebased head, approval, merge</td></tr>
+        <tr><td><code>USE-206</code></td><td>repeated requested changes</td><td><code>review_fix</code></td><td>no-push attempts blocked, pushed repairs continued</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">Operator map</div>
+    <h2>When something stalls, follow the owner.</h2>
+    <div class="grid">
+      <div class="card author">
+        <h3>In Progress</h3>
+        <p>PatchRelay owns the worktree. Use <code>patchrelay issue show</code>, <code>issue watch</code>, or <code>issue open</code>.</p>
+      </div>
+      <div class="card reviewer">
+        <h3>In Review</h3>
+        <p>Look at PR reviews and required checks. Red branch CI can trigger <code>ci_repair</code>.</p>
+      </div>
+      <div class="card lander">
+        <h3>In Deploy</h3>
+        <p>Look at merge-steward. Branch CI is metadata; the eviction check is the repair signal.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">Queue repair</div>
+    <h2>Eviction is a handoff, not a mystery.</h2>
+    <div class="flow">
+      <span class="pill">spec fails</span><span class="arrow">-></span>
+      <span class="pill">merge-steward/queue</span><span class="arrow">-></span>
+      <span class="pill">queue_repair</span><span class="arrow">-></span>
+      <span class="pill">fresh head</span><span class="arrow">-></span>
+      <span class="pill">approval</span><span class="arrow">-></span>
+      <span class="pill">merge</span>
+    </div>
+    <pre>merge-steward queue show --pr &lt;num&gt;
+patchrelay issue show APP-123
+patchrelay service logs --lines 100</pre>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">The whole thing</div>
+    <h2>The tools are small because the protocol is small.</h2>
+    <ol>
+      <li>PatchRelay changes the branch.</li>
+      <li>review-quill reviews the change identity.</li>
+      <li>merge-steward tests the integration tree.</li>
+      <li>GitHub carries all signals between them.</li>
+      <li>A repair always returns with a fresh head.</li>
+    </ol>
+  </section>
+</main>
+<hr class="foot-rule" />
+<nav class="nav">
+  <span id="counter">01 / 11</span>
+  <span>Left / Right / Home / End</span>
+</nav>
+<script>
+  const slides = Array.from(document.querySelectorAll(".slide"));
+  const counter = document.querySelector("#counter");
+  let index = 0;
+
+  function pad(n) {
+    return String(n).padStart(2, "0");
+  }
+
+  function show(next) {
+    index = Math.max(0, Math.min(slides.length - 1, next));
+    slides.forEach((slide, i) => slide.classList.toggle("active", i === index));
+    counter.textContent = `${pad(index + 1)} / ${pad(slides.length)}`;
+    location.hash = `slide-${index + 1}`;
+  }
+
+  function fromHash() {
+    const match = location.hash.match(/slide-(\d+)/);
+    if (match) show(Number(match[1]) - 1);
+  }
+
+  document.addEventListener("keydown", (event) => {
+    if (["ArrowRight", "PageDown", " "].includes(event.key)) show(index + 1);
+    if (["ArrowLeft", "PageUp"].includes(event.key)) show(index - 1);
+    if (event.key === "Home") show(0);
+    if (event.key === "End") show(slides.length - 1);
+  });
+  window.addEventListener("hashchange", fromHash);
+  fromHash();
+</script>
+</body>
+</html>

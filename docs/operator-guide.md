@@ -108,8 +108,60 @@ The cluster-health entry above is the one alert that today is also raised throug
 | Linear did nothing after a delegation or mention | Webhook intake lines — accepted, rejected, stale, or duplicate deliveries |
 | Agent ignored a new Linear comment or prompt | Queued turn-input delivery lines and any delivery failure warnings |
 | Codex execution looks broken or stops unexpectedly | `Starting Codex app-server`, `Codex app-server request failed`, `Codex app-server stderr`, `Codex app-server exited` |
+| Requested-changes repair stopped without returning to review | `Requested-changes run finished ... without pushing a new head past blocking review SHA` |
+| Queue repair started after an integration failure | `PR needs queue repair from fresh GitHub truth`, `Started queue_repair run`, and the `merge-steward/queue` check run |
+| Old closed PRs keep appearing in logs | `Reconciliation: PR was closed on a terminal issue; preserving terminal state` |
+| Startup/recovery cannot read an empty Codex thread yet | `thread ... is not materialized yet; includeTurns is unavailable before first user message` |
 
 The most useful correlation fields across logs: `webhookId`, `webhookEventId`, `projectId`, `issueKey`, `runType`, `threadId`, `turnId`, `agentSessionId`.
+
+### Requested-changes head guard
+
+After a `REQUEST_CHANGES` review, PatchRelay records the reviewed head SHA. A `review_fix` run must publish a different remote PR head before the issue can return to review. If the agent finishes without doing that, PatchRelay fails the run with a message like:
+
+```text
+Requested-changes run finished for PR #355 without pushing a new head past blocking review SHA 7586be6a;
+PatchRelay must not hand the same SHA back to review.
+```
+
+Treat this as a protected stop, not as a reviewer problem. The next action is to inspect the issue worktree and the run summary:
+
+```bash
+patchrelay issue show APP-123
+patchrelay issue open APP-123
+git status --short
+git log --oneline --decorate -5
+```
+
+If there is a real fix in the worktree, commit and push it or requeue the issue. If there is no diff, the agent did not produce a repair; clarify the requested change in Linear or take over manually.
+
+### Queue repair handoff
+
+When merge-steward cannot land an approved PR, it emits the configured eviction check run (default `merge-steward/queue`). PatchRelay treats that as `queue_repair`, not ordinary branch CI. The normal successful shape is:
+
+```text
+merge-steward/queue fails
+PatchRelay starts queue_repair
+PatchRelay pushes a fresh branch head
+review-quill approves
+merge-steward re-admits and merges
+```
+
+Start with the incident and the issue view:
+
+```bash
+merge-steward queue show --pr <num>
+patchrelay issue show APP-123
+patchrelay service logs --lines 100
+```
+
+Escalate when the incident is product ambiguity, a broken required check on `main`, missing credentials, or repeated semantic failures after fresh heads.
+
+### Benign reconciliation noise
+
+`Reconciliation: PR was closed on a terminal issue; preserving terminal state` means PatchRelay saw a closed PR for an issue already marked terminal and intentionally left the terminal issue state alone. A few old failed or escalated issues can produce this repeatedly during background reconciliation. It is noisy, but it is not a launch or repair request by itself.
+
+`thread ... is not materialized yet; includeTurns is unavailable before first user message` means the app-server was asked to read a thread before the first user turn was durable. PatchRelay recovery usually retries or starts fresh. Investigate only when the same issue stays active without progress after the retry backoff.
 
 ## Waking a run with new input
 

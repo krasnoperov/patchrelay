@@ -111,6 +111,36 @@ The pipeline is built around five rules that fall out of the four primitives. Ea
 
 Three sequencing tiers prevent integration conflicts upstream of the rules above. See [concepts.md](./concepts.md#sequencing--three-tiers-for-predictable-conflicts).
 
+## Production proof points
+
+The merge-trees rollout is intentionally observable through ordinary PatchRelay runtime state: Linear issue state, GitHub webhook transitions, and the `runs` table. A healthy repair path should read as a small story:
+
+```text
+review-quill requests changes
+PatchRelay starts review_fix
+PatchRelay pushes a fresh PR head
+review-quill approves the new head
+merge-steward admits, validates, and merges
+```
+
+Recent production runs showed that path on real LearnSpeakRepeat work:
+
+| Issue | What happened | Result |
+|-|-|-|
+| `LSR-373` | requested changes on PR #724, followed by `review_fix` runs | fresh head, approval, merge |
+| `LSR-374` | requested changes on PR #722, followed by `review_fix` runs | fresh head, approval, merge |
+| `LSR-375` | queue conflict on PR #726, followed by `queue_repair` | rebased fresh head, approval, merge |
+| `USE-206` | repeated requested-changes repair attempts on PR #355 | no-push attempts were blocked, pushed repairs continued |
+
+The important failure mode is now explicit. If a requested-changes run finishes without moving the remote PR head past the blocking review SHA, PatchRelay marks the run failed instead of handing the same head back to review. That failure means the guard worked: the system protected the reviewer from being asked to reconsider an unchanged head.
+
+Look for this failure reason when auditing production:
+
+```text
+Requested-changes run finished for PR #<n> without pushing a new head past blocking review SHA <sha>;
+PatchRelay must not hand the same SHA back to review.
+```
+
 ## Failure and repair handoff
 
 When the queue head fails, the steward classifies the failure before acting:
