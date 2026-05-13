@@ -1,7 +1,6 @@
-import type { QueueEntry } from "./types.ts";
 import { TERMINAL_STATUSES } from "./types.ts";
 import type { ReconcileContext } from "./reconciler-core.ts";
-import { CLEAN_CI, CLEAN_SPEC, emit } from "./reconciler-core.ts";
+import { emit } from "./reconciler-core.ts";
 import { sanitizeEntry } from "./reconciler-sanitize.ts";
 import { prepareEntry } from "./reconciler-prepare.ts";
 import { checkValidation } from "./reconciler-validate.ts";

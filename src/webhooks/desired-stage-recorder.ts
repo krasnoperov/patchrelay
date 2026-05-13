@@ -200,7 +200,7 @@ export class DesiredStageRecorder {
         ...(hydratedIssue.estimate != null ? { estimate: hydratedIssue.estimate } : {}),
         ...(hydratedIssue.stateName ? { currentLinearState: hydratedIssue.stateName } : {}),
         ...(hydratedIssue.stateType ? { currentLinearStateType: hydratedIssue.stateType } : {}),
-        ...(linkedPrAdoption?.issueUpdates ?? {}),
+        ...linkedPrAdoption?.issueUpdates,
         delegatedToPatchRelay: delegated,
         ...(!existingIssue && !delegated && incomingAgentSessionId ? { factoryState: "awaiting_input" as const } : {}),
         ...(startupResume.factoryState ? { factoryState: startupResume.factoryState as never } : {}),

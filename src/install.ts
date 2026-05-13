@@ -300,7 +300,7 @@ export async function upsertProjectInConfig(options: {
 
   const resolvedProjectId = existingProject ? String(existingProject.id ?? projectId) : projectId;
   const nextProject: Record<string, unknown> = {
-    ...(existingProject ?? {}),
+    ...existingProject,
     id: resolvedProjectId,
     repo_path: repoPath,
   };
@@ -464,7 +464,7 @@ export async function upsertRepositoryInConfig(options: {
   const existing = existingIndex >= 0 ? existingRepositories[existingIndex] : undefined;
 
   const nextRepository: Record<string, unknown> = {
-    ...(existing ?? {}),
+    ...existing,
     github_repo: githubRepo,
     local_path: localPath,
     ...(workspace ? { workspace } : {}),

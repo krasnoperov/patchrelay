@@ -816,8 +816,8 @@ export function mergePromptCustomizationLayers(
       ? { extraInstructions: base.extraInstructions }
       : {}),
     replaceSections: {
-      ...(base?.replaceSections ?? {}),
-      ...(override?.replaceSections ?? {}),
+      ...base?.replaceSections,
+      ...override?.replaceSections,
     },
   };
 }

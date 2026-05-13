@@ -10,7 +10,7 @@ import { GitHubActionsRunner } from "../src/github/actions-runner.ts";
  * passed in the URL.  Maps SHA → JSON array via env var GH_CHECKS_MAP
  * (JSON object keyed by SHA).
  */
-function buildGhStub(checksMap: Record<string, unknown[]>): string {
+function buildGhStub(_checksMap: Record<string, unknown[]>): string {
   // Shell script that extracts the SHA from the API URL and returns the
   // matching check-runs array from the encoded map.
   return `#!/usr/bin/env node

@@ -63,7 +63,7 @@ function setupEnv(baseDir: string) {
   };
 }
 
-async function initAndAttach(baseDir: string) {
+async function initAndAttach(_baseDir: string) {
   await runCli(["init", "queue.example.com"], {
     stdout: createBufferStream().stream,
     stderr: createBufferStream().stream,

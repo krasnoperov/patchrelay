@@ -1,7 +1,6 @@
 import type {
   ReviewAttemptRecord,
   ReviewQuillPendingReview,
-  ReviewQuillRepoSummary,
   ReviewQuillWatchSnapshot,
 } from "../types.ts";
 import { getLatestAttemptsByPullRequest } from "../attempt-summary.ts";

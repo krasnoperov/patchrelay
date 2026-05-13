@@ -39,7 +39,7 @@ export function buildReviewFixBranchUpkeepContext(
   ].join(" ");
 
   return {
-    ...(context ?? {}),
+    ...context,
     branchUpkeepRequired: true,
     reviewFixMode: "branch_upkeep",
     wakeReason: "branch_upkeep",

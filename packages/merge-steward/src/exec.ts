@@ -173,7 +173,7 @@ export async function exec(
 ): Promise<ExecResult> {
   const baseEnv = {
     ...process.env,
-    ...(options?.env ?? {}),
+    ...options?.env,
   };
   const githubEnv = resolveGitHubCommandEnv(command, baseEnv, {
     ...(options?.githubRepoFullName ? { githubRepoFullName: options.githubRepoFullName } : {}),

@@ -99,9 +99,10 @@ export class CliOperatorApiClient implements CliOperatorDataAccess {
   close(): void {}
 
   async connect(projectId?: string): Promise<ConnectResult> {
-    return await this.requestJson<ConnectResult>("/api/oauth/linear/start", {
-      ...(projectId ? { projectId } : {}),
-    });
+    return await this.requestJson<ConnectResult>(
+      "/api/oauth/linear/start",
+      projectId ? { projectId } : {},
+    );
   }
 
   async connectStatus(state: string): Promise<ConnectStateResult> {
@@ -140,9 +141,11 @@ export class CliOperatorApiClient implements CliOperatorDataAccess {
     teams: Array<{ id: string; key?: string; name?: string }>;
     projects: Array<{ id: string; name?: string; teamIds: string[] }>;
   }> {
-    return await this.requestJson("/api/linear/workspaces/sync", {
-      ...(workspace ? { workspace } : {}),
-    }, { method: "POST" });
+    return await this.requestJson(
+      "/api/linear/workspaces/sync",
+      workspace ? { workspace } : {},
+      { method: "POST" },
+    );
   }
 
   async disconnectLinearWorkspace(workspace: string): Promise<{

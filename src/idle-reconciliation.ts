@@ -799,9 +799,11 @@ export class IdleIssueReconciler {
           prReviewState: "approved",
         });
         if (issue.factoryState !== "awaiting_queue" || hasFailureProvenance(issue)) {
-          this.advanceIdleIssue(issue, "awaiting_queue", {
-            ...(hasFailureProvenance(issue) ? { clearFailureProvenance: true } : {}),
-          });
+          this.advanceIdleIssue(
+            issue,
+            "awaiting_queue",
+            hasFailureProvenance(issue) ? { clearFailureProvenance: true } : {},
+          );
         }
         return;
       }
@@ -818,9 +820,11 @@ export class IdleIssueReconciler {
       );
       if (issue.prReviewState === "approved") {
         if (issue.factoryState !== "awaiting_queue" || hasFailureProvenance(issue)) {
-          this.advanceIdleIssue(issue, "awaiting_queue", {
-            ...(hasFailureProvenance(issue) ? { clearFailureProvenance: true } : {}),
-          });
+          this.advanceIdleIssue(
+            issue,
+            "awaiting_queue",
+            hasFailureProvenance(issue) ? { clearFailureProvenance: true } : {},
+          );
         }
       }
     }

@@ -42,7 +42,7 @@ export function renderTextLines(text: string, options: RenderTextOptions): TextL
   for (let index = 0; index < sourceLines.length; index += 1) {
     const sourceLine = sourceLines[index] ?? "";
     const wrapped = wrapSegments(
-      tokenizeSegments([{ text: sourceLine, ...(options.style ?? {}) }]),
+      tokenizeSegments([{ text: sourceLine, ...options.style }]),
       width,
       index === 0 ? options.firstPrefix : options.continuationPrefix ?? options.firstPrefix,
       options.continuationPrefix ?? options.firstPrefix,
@@ -147,8 +147,8 @@ export function renderRichTextLines(text: string, options: RenderRichTextOptions
       lines.push(...wrapSegments(
         tokenizeSegments(parseInlineMarkdown(bulletMatch[1], options.style)),
         width,
-        appendSegments(options.firstPrefix, [{ text: "• ", ...(options.style ?? {}) }]),
-        appendSegments(options.continuationPrefix ?? options.firstPrefix, [{ text: "  ", ...(options.style ?? {}) }]),
+        appendSegments(options.firstPrefix, [{ text: "• ", ...options.style }]),
+        appendSegments(options.continuationPrefix ?? options.firstPrefix, [{ text: "  ", ...options.style }]),
         `${options.key}-b-${blockIndex}`,
       ));
       blockIndex += 1;
@@ -174,7 +174,7 @@ function parseInlineMarkdown(text: string, style?: TextStyle): TextSegment[] {
   for (const match of text.matchAll(pattern)) {
     const index = match.index ?? 0;
     if (index > lastIndex) {
-      segments.push({ text: text.slice(lastIndex, index), ...(style ?? {}) });
+      segments.push({ text: text.slice(lastIndex, index), ...style });
     }
 
     if (match[1] && match[2]) {
@@ -182,17 +182,17 @@ function parseInlineMarkdown(text: string, style?: TextStyle): TextSegment[] {
     } else if (match[3]) {
       segments.push({ text: match[3], color: "yellow" });
     } else if (match[4]) {
-      segments.push({ text: match[4], ...(style ?? {}), bold: true });
+      segments.push({ text: match[4], ...style, bold: true });
     }
 
     lastIndex = index + match[0].length;
   }
 
   if (lastIndex < text.length) {
-    segments.push({ text: text.slice(lastIndex), ...(style ?? {}) });
+    segments.push({ text: text.slice(lastIndex), ...style });
   }
 
-  return segments.length > 0 ? segments : [{ text, ...(style ?? {}) }];
+  return segments.length > 0 ? segments : [{ text, ...style }];
 }
 
 function wrapSegments(

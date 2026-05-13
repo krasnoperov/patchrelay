@@ -14,7 +14,7 @@ import { parseHomeConfigObject } from "./steward-home.ts";
 import { getMergeStewardPathLayout } from "./runtime-paths.ts";
 import { createGitHubAppTokenManager, generateJwt, resolveGitHubAuthConfig, resolveAppSlug, type GitHubAppTokenManager } from "./github-auth.ts";
 import { discoverRepoSettings } from "./github-repo-discovery.ts";
-import { resolveSecret, resolveSecretWithSource } from "./resolve-secret.ts";
+import { resolveSecretWithSource } from "./resolve-secret.ts";
 import { setRuntimeGitHubAuthProvider } from "./exec.ts";
 import { readFileSync, existsSync } from "node:fs";
 import type { Logger } from "pino";
@@ -190,9 +190,11 @@ export async function startMultiServer(): Promise<void> {
         if (githubAuth.mode !== "app") {
           throw new Error("GitHub App auth is not configured in the merge-steward service.");
         }
-        return await discoverRepoSettings(githubAuth.credentials, params.repoFullName, {
-          ...(params.baseBranch ? { baseBranch: params.baseBranch } : {}),
-        });
+        return await discoverRepoSettings(
+          githubAuth.credentials,
+          params.repoFullName,
+          params.baseBranch ? { baseBranch: params.baseBranch } : {},
+        );
       },
       async checkRepoAccess(params): Promise<ServiceGitHubRepoAccessResponse> {
         if (!githubAppTokenManager) {

@@ -67,13 +67,14 @@ export async function handleAttach(parsed: ParsedArgs, stdout: Output, runComman
   const warnings: string[] = [];
   if (needsDiscovery) {
     try {
-      const response = await fetchServiceRepoDiscovery(repoFullName, {
-        ...(explicitBaseBranch
+      const response = await fetchServiceRepoDiscovery(
+        repoFullName,
+        explicitBaseBranch
           ? { baseBranch: explicitBaseBranch }
           : existing?.baseBranch && !shouldDiscoverBaseBranch
             ? { baseBranch: existing.baseBranch }
-            : {}),
-      });
+            : {},
+      );
       discovered = response.discovery;
     } catch (error) {
       warnings.push(
