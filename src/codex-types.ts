@@ -25,6 +25,19 @@ export interface CodexTurnSummary {
   items: CodexThreadItem[];
 }
 
+export type CodexThreadGoalStatus = "active" | "paused" | "budgetLimited" | "complete";
+
+export interface CodexThreadGoal {
+  threadId: string;
+  objective: string;
+  status: CodexThreadGoalStatus;
+  tokenBudget?: number | null;
+  tokensUsed: number;
+  timeUsedSeconds: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export type CodexThreadItem =
   | { type: "userMessage"; id: string; content: unknown[] }
   | { type: "agentMessage"; id: string; text: string; phase?: string | null }

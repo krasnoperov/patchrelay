@@ -9,7 +9,7 @@ import {
   buildRunPrompt as buildLayeredRunPrompt,
   findDisallowedPatchRelayPromptSectionIds,
 } from "../src/prompting/patchrelay.ts";
-import { shouldFreshenWorktreeBeforeLaunch, shouldReuseIssueThread } from "../src/run-launcher.ts";
+import { buildInitialImplementationGoal, shouldFreshenWorktreeBeforeLaunch, shouldReuseIssueThread } from "../src/run-launcher.ts";
 import type { PromptCustomizationLayer } from "../src/types.ts";
 import type { IssueRecord } from "../src/db-types.ts";
 
@@ -61,6 +61,47 @@ test("implementation prompt keeps a concise scaffold with workflow pointer and p
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
+});
+
+test("initial implementation goal mirrors the delegated Linear issue", () => {
+  const goal = buildInitialImplementationGoal({
+    ...createIssue(),
+    description: [
+      "Players should see their score change during the round.",
+      "",
+      "## Acceptance criteria",
+      "",
+      "- Correct guesses increment the guesser.",
+      "- Successful bluffs increment the bluffer.",
+    ].join("\n"),
+  });
+
+  assert.equal(goal, "Implement scoring for correct guesses, successful bluffs, and title winners");
+  assert.doesNotMatch(goal, /Implement Linear issue/);
+  assert.doesNotMatch(goal, /Acceptance criteria/);
+});
+
+test("initial implementation goal uses only the explicit goal section when present", () => {
+  const goal = buildInitialImplementationGoal({
+    ...createIssue(),
+    title: "iOS remote IVCard content and server API realignment",
+    description: [
+      "## Goal",
+      "",
+      "Realign the native iOS Image Cards app so catalogue metadata and images load from server APIs.",
+      "",
+      "## Acceptance criteria",
+      "",
+      "- The iOS app can fetch catalogue metadata and images from the server.",
+      "- CI prevents accidental re-bundling of large image assets.",
+    ].join("\n"),
+  });
+
+  assert.equal(
+    goal,
+    "iOS remote IVCard content and server API realignment. Realign the native iOS Image Cards app so catalogue metadata and images load from server APIs.",
+  );
+  assert.doesNotMatch(goal, /Acceptance criteria/);
 });
 
 test("repair prompts publish to the existing PR branch with concise self-review guidance", () => {

@@ -18,6 +18,7 @@ import type { PendingRunWake } from "./run-wake-planner.ts";
 import type { AppConfig, LinearAgentActivityContent } from "./types.ts";
 import { configureGitHubBotAuthForWorktree } from "./github-worktree-auth.ts";
 import type { WorktreeManager } from "./worktree-manager.ts";
+import { sanitizeDiagnosticText } from "./utils.ts";
 
 function slugify(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
@@ -32,6 +33,30 @@ function shouldCompactThread(issue: IssueRecord, threadGeneration: number | unde
   return issue.threadId !== undefined
     && (threadGeneration ?? 0) >= 4
     && followUpCount >= 4;
+}
+
+function compactGoalText(value: string, maxLength = 600): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength - 3).trimEnd()}...`;
+}
+
+function extractIssueSection(description: string | undefined, heading: string): string | undefined {
+  if (!description) return undefined;
+  const headingLine = `## ${heading}`.toLowerCase();
+  const lines = description.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim().toLowerCase() === headingLine);
+  if (start === -1) return undefined;
+  const end = lines.findIndex((line, index) => index > start && /^##\s+/.test(line));
+  const body = lines.slice(start + 1, end === -1 ? undefined : end).join("\n").trim();
+  return body && body.length > 0 ? body : undefined;
+}
+
+export function buildInitialImplementationGoal(issue: IssueRecord): string {
+  const title = issue.title?.trim() || `Complete ${issue.issueKey ?? issue.linearIssueId}`;
+  const description = issue.description?.trim();
+  const goal = extractIssueSection(description, "Goal");
+
+  return compactGoalText(goal ? `${title}. ${goal}` : title);
 }
 
 export function shouldReuseIssueThread(params: {
@@ -203,6 +228,8 @@ export class RunLauncher {
     let threadId: string;
     let turnId: string;
     let parentThreadId: string | undefined;
+    let createdThreadForRun = false;
+    const firstThreadForIssue = !params.issue.threadId;
     try {
       await this.worktreeManager.ensureIssueWorktree(
         params.project.repoPath,
@@ -244,6 +271,7 @@ export class RunLauncher {
       } else {
         const thread = await this.codex.startThread({ cwd: params.worktreePath });
         threadId = thread.id;
+        createdThreadForRun = true;
         this.db.issueSessions.upsertIssueWithLease(
           { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, leaseId: params.leaseId },
           { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, threadId },
@@ -259,6 +287,7 @@ export class RunLauncher {
           this.logger.info({ issueKey: params.issue.issueKey, staleThreadId: threadId }, "Thread is stale, retrying with fresh thread");
           const thread = await this.codex.startThread({ cwd: params.worktreePath });
           threadId = thread.id;
+          createdThreadForRun = true;
           this.db.issueSessions.upsertIssueWithLease(
             { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, leaseId: params.leaseId },
             { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, threadId },
@@ -268,6 +297,9 @@ export class RunLauncher {
         } else {
           throw turnError;
         }
+      }
+      if (createdThreadForRun && firstThreadForIssue && params.runType === "implementation") {
+        await this.setInitialImplementationGoal(threadId, params.issue);
       }
       params.assertLaunchLease(params.run, "after starting the Codex turn");
       return { threadId, turnId, ...(parentThreadId ? { parentThreadId } : {}) };
@@ -296,6 +328,30 @@ export class RunLauncher {
       void params.linearSync.syncSession(failedIssue, { activeRunType: params.runType });
       params.releaseLease(params.project.id, params.issue.linearIssueId);
       throw error;
+    }
+  }
+
+  private async setInitialImplementationGoal(threadId: string, issue: IssueRecord): Promise<void> {
+    const goalSetter = (this.codex as unknown as {
+      setThreadGoal?: (options: { threadId: string; objective: string; status: "active" }) => Promise<unknown>;
+    }).setThreadGoal;
+    if (typeof goalSetter !== "function") {
+      return;
+    }
+
+    const objective = buildInitialImplementationGoal(issue);
+    try {
+      await goalSetter.call(this.codex, { threadId, objective, status: "active" });
+      this.logger.info({ issueKey: issue.issueKey, threadId }, "Set Codex thread goal for implementation run");
+    } catch (error) {
+      this.logger.warn(
+        {
+          issueKey: issue.issueKey,
+          threadId,
+          error: sanitizeDiagnosticText(error instanceof Error ? error.message : String(error)),
+        },
+        "Failed to set Codex thread goal for implementation run",
+      );
     }
   }
 }

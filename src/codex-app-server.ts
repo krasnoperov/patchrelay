@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { tmpdir } from "node:os";
 import type { Logger } from "pino";
-import type { CodexAppServerConfig, CodexThreadItem, CodexThreadSummary } from "./types.ts";
+import type { CodexAppServerConfig, CodexThreadGoal, CodexThreadGoalStatus, CodexThreadItem, CodexThreadSummary } from "./types.ts";
 import { sanitizeDiagnosticText } from "./utils.ts";
 
 interface JsonRpcSuccess {
@@ -49,6 +49,13 @@ export interface SteerTurnOptions {
   threadId: string;
   turnId: string;
   input: string;
+}
+
+export interface SetThreadGoalOptions {
+  threadId: string;
+  objective: string;
+  status?: CodexThreadGoalStatus;
+  tokenBudget?: number | null;
 }
 
 interface ForkThreadOverrides {
@@ -286,6 +293,22 @@ export class CodexAppServerClient extends EventEmitter {
     };
   }
 
+  async setThreadGoal(options: SetThreadGoalOptions): Promise<CodexThreadGoal> {
+    const params: Record<string, unknown> = {
+      threadId: options.threadId,
+      objective: options.objective,
+    };
+    if (options.status !== undefined) {
+      params.status = options.status;
+    }
+    if (options.tokenBudget !== undefined) {
+      params.tokenBudget = options.tokenBudget;
+    }
+
+    const response = (await this.sendRequest("thread/goal/set", params)) as { goal: Record<string, unknown> };
+    return this.mapThreadGoal(response.goal);
+  }
+
   async readThread(threadId: string, includeTurns = true): Promise<CodexThreadSummary> {
     const response = (await this.sendRequest("thread/read", {
       threadId,
@@ -311,6 +334,19 @@ export class CodexAppServerClient extends EventEmitter {
         },
       ],
     });
+  }
+
+  private mapThreadGoal(goal: Record<string, unknown>): CodexThreadGoal {
+    return {
+      threadId: String(goal.threadId),
+      objective: String(goal.objective ?? ""),
+      status: String(goal.status ?? "active") as CodexThreadGoalStatus,
+      ...(goal.tokenBudget === null || goal.tokenBudget === undefined ? { tokenBudget: null } : { tokenBudget: Number(goal.tokenBudget) }),
+      tokensUsed: Number(goal.tokensUsed ?? 0),
+      timeUsedSeconds: Number(goal.timeUsedSeconds ?? 0),
+      createdAt: Number(goal.createdAt ?? 0),
+      updatedAt: Number(goal.updatedAt ?? 0),
+    };
   }
 
   private sendNotification(method: string, params?: unknown): void {

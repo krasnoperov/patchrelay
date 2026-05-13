@@ -11,6 +11,7 @@ class FakeChildProcess extends EventEmitter {
   readonly stderr = new PassThrough();
   readonly approvalResponses: Array<{ id: string; decision: string }> = [];
   readonly threadStartParams: Array<Record<string, unknown>> = [];
+  readonly threadGoalSetParams: Array<Record<string, unknown>> = [];
 
   constructor(private readonly scenario: string) {
     super();
@@ -144,6 +145,28 @@ class FakeChildProcess extends EventEmitter {
           turn: {
             id: "turn-2",
             status: "inProgress",
+          },
+        },
+      });
+      return;
+    }
+
+    if (message.method === "thread/goal/set") {
+      const params = (message.params as Record<string, unknown>) ?? {};
+      this.threadGoalSetParams.push(params);
+      this.sendStdout({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          goal: {
+            threadId: params.threadId,
+            objective: params.objective,
+            status: params.status ?? "active",
+            tokenBudget: params.tokenBudget ?? null,
+            tokensUsed: 0,
+            timeUsedSeconds: 0,
+            createdAt: 1778698800,
+            updatedAt: 1778698800,
           },
         },
       });
@@ -334,6 +357,21 @@ test("CodexAppServerClient handles initialize, approval requests, notifications,
       turnId: "turn-2",
       status: "inProgress",
     });
+
+    const goal = await client.setThreadGoal({
+      threadId: "thread-1",
+      objective: "Players see their score change during the round",
+      status: "active",
+    });
+    assert.equal(goal.objective, "Players see their score change during the round");
+    assert.equal(goal.status, "active");
+    assert.deepEqual(child.threadGoalSetParams, [
+      {
+        threadId: "thread-1",
+        objective: "Players see their score change during the round",
+        status: "active",
+      },
+    ]);
 
     await client.steerTurn({
       threadId: "thread-1",
