@@ -1020,6 +1020,70 @@ test("requested changes during an active run are persisted for replay without im
   }
 });
 
+test("a follow-up requested-changes review on an idle issue still re-enqueues even when a wake is already pending", async () => {
+  // Regression: previously the second review's `hadPendingWake=true` short-circuit
+  // skipped enqueueIssue, assuming the first review's enqueue was still in flight.
+  // If that first enqueue had silently dropped (lease race, lost in-memory queue),
+  // the issue stayed orphaned with stacked unprocessed events until an external nudge.
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-stacked-review-"));
+  const previousGitHubToken = process.env.GITHUB_TOKEN;
+  try {
+    process.env.GITHUB_TOKEN = "test-github-token";
+    const { db, enqueueCalls, handler } = createHandler(baseDir, {
+      fetchImpl: async () => createJsonResponse([]),
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-stacked-review",
+      issueKey: "USE-STACKED",
+      branchName: "feat-stacked",
+      prNumber: 141,
+      prState: "open",
+      prAuthorLogin: "patchrelay[bot]",
+      factoryState: "pr_open",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "pull_request_review",
+      rawBody: buildChangesRequestedReviewPayload({
+        branch: "feat-stacked",
+        headSha: "sha-first-head",
+        prNumber: 141,
+        prAuthorLogin: "patchrelay[bot]",
+        reviewId: 911,
+      }),
+    });
+
+    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-stacked-review" }]);
+    enqueueCalls.length = 0;
+
+    // Second review on a new head while the first review's wake is still pending.
+    await handler.processGitHubWebhookEvent({
+      eventType: "pull_request_review",
+      rawBody: buildChangesRequestedReviewPayload({
+        branch: "feat-stacked",
+        headSha: "sha-second-head",
+        prNumber: 141,
+        prAuthorLogin: "patchrelay[bot]",
+        reviewId: 912,
+      }),
+    });
+
+    assert.deepEqual(
+      enqueueCalls,
+      [{ projectId: "usertold", issueId: "issue-stacked-review" }],
+      "second review must re-enqueue even though a wake is already pending",
+    );
+  } finally {
+    if (previousGitHubToken === undefined) {
+      delete process.env.GITHUB_TOKEN;
+    } else {
+      process.env.GITHUB_TOKEN = previousGitHubToken;
+    }
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("push after requested changes does not auto request re-review", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-rereview-"));
   try {

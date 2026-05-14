@@ -150,15 +150,43 @@ export interface IdleReconciliationDeps {
 }
 
 export class IdleIssueReconciler {
+  private deps: IdleReconciliationDeps;
+
   constructor(
     private readonly db: PatchRelayDatabase,
     private readonly config: AppConfig,
-    private readonly deps: IdleReconciliationDeps,
+    deps: IdleReconciliationDeps,
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
-  ) {}
+  ) {
+    this.deps = deps;
+  }
 
   async reconcile(): Promise<void> {
+    // Wrap deps.enqueueIssue for the duration of this pass so the
+    // safety net at the bottom of the method can skip issues that
+    // earlier passes already enqueued. Restored in `finally` so other
+    // call sites (advanceIdleIssue invoked from outside reconcile)
+    // continue to use the original deps.
+    const originalDeps = this.deps;
+    const enqueuedThisPass = new Set<string>();
+    this.deps = {
+      enqueueIssue: (projectId, issueId) => {
+        enqueuedThisPass.add(`${projectId}:${issueId}`);
+        originalDeps.enqueueIssue(projectId, issueId);
+      },
+    };
+    try {
+      await this.reconcileBody(enqueuedThisPass, originalDeps.enqueueIssue);
+    } finally {
+      this.deps = originalDeps;
+    }
+  }
+
+  private async reconcileBody(
+    enqueuedThisPass: Set<string>,
+    rawEnqueueIssue: (projectId: string, issueId: string) => void,
+  ): Promise<void> {
     for (const issue of this.db.issues.listIdleNonTerminalIssues()) {
       if (issue.prState === "merged") {
         this.advanceIdleIssue(issue, "done", { clearFailureProvenance: true });
@@ -238,6 +266,23 @@ export class IdleIssueReconciler {
         issue,
         enqueueIssue: this.deps.enqueueIssue,
       });
+    }
+
+    // Safety net: re-enqueue any idle delegated issue that still has
+    // unprocessed session events. Until this pass existed, a single
+    // dropped enqueueIssue (lease race, in-memory queue lost across
+    // restart) left review_fix / ci_repair / queue_repair wakes stuck
+    // for hours until an external event re-poked the issue. Skip issues
+    // that another pass in the same reconcile cycle already enqueued —
+    // SerialWorkQueue dedupes anyway, but tracking makes the intent
+    // visible to tests and to operators inspecting the call log.
+    for (const issue of this.db.issues.listIdleIssuesWithPendingWake()) {
+      const key = `${issue.projectId}:${issue.linearIssueId}`;
+      if (enqueuedThisPass.has(key)) continue;
+      const wake = this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+      if (!wake) continue;
+      enqueuedThisPass.add(key);
+      rawEnqueueIssue(issue.projectId, issue.linearIssueId);
     }
   }
 

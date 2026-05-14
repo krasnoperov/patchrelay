@@ -184,7 +184,6 @@ export class WebhookHandler {
         project,
         trackedIssue,
         enqueuePendingSessionWake: (projectId, issueId) => this.enqueuePendingSessionWake(projectId, issueId),
-        peekPendingSessionWakeRunType: (projectId, issueId) => this.peekPendingSessionWakeRunType(projectId, issueId),
         isDirectReplyToOutstandingQuestion: (targetIssue) => this.isDirectReplyToOutstandingQuestion(targetIssue),
       });
 

@@ -124,7 +124,6 @@ async function handleCheckFailedEvent(params: {
     if (hasDuplicatePendingReactiveRun(db, feed, issue, "queue_repair", failureContext)) {
       return;
     }
-    const hadPendingWake = db.issueSessions.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
     db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -135,9 +134,9 @@ async function handleCheckFailedEvent(params: {
       }),
       dedupeKey: failureContext.failureSignature,
     });
-    const queuedRunType = hadPendingWake
-      ? db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)?.runType
-      : enqueuePendingSessionWake(db, enqueueIssue, issue.projectId, issue.linearIssueId);
+    // Always enqueue regardless of prior pending wakes; see
+    // handleRequestedChangesEvent for the rationale.
+    const queuedRunType = enqueuePendingSessionWake(db, enqueueIssue, issue.projectId, issue.linearIssueId);
     logger.info({ issueKey: issue.issueKey, checkName: event.checkName }, "Queue eviction detected, enqueued queue repair");
     feed?.publish({
       level: "warn",
@@ -175,7 +174,6 @@ async function handleCheckFailedEvent(params: {
   if (hasDuplicatePendingReactiveRun(db, feed, issue, "ci_repair", failureContext)) {
     return;
   }
-  const hadPendingWake = db.issueSessions.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
   const snapshot = getRelevantGitHubCiSnapshot(db, issue, event);
   db.issues.upsertIssue({
     projectId: issue.projectId,
@@ -200,9 +198,9 @@ async function handleCheckFailedEvent(params: {
     }),
     dedupeKey: failureContext.failureSignature,
   });
-  const queuedRunType = hadPendingWake
-    ? db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)?.runType
-    : enqueuePendingSessionWake(db, enqueueIssue, issue.projectId, issue.linearIssueId);
+  // Always enqueue regardless of prior pending wakes; see
+  // handleRequestedChangesEvent for the rationale.
+  const queuedRunType = enqueuePendingSessionWake(db, enqueueIssue, issue.projectId, issue.linearIssueId);
   logger.info({ issueKey: issue.issueKey, checkName: failureContext.checkName ?? event.checkName }, "Enqueued CI repair run");
   feed?.publish({
     level: "warn",
@@ -226,7 +224,6 @@ async function handleRequestedChangesEvent(params: {
   fetchImpl: FetchLike;
 }): Promise<void> {
   const { db, logger, feed, enqueueIssue, issue, event, fetchImpl } = params;
-  const hadPendingWake = db.issueSessions.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
   const reviewComments = await fetchReviewCommentsForEvent(event, fetchImpl).catch((error) => {
     logger.warn(
       {
@@ -257,11 +254,14 @@ async function handleRequestedChangesEvent(params: {
       event.reviewerName ?? "unknown-reviewer",
     ].join("::"),
   });
-  const queuedRunType = hadPendingWake
-    ? db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)?.runType
-    : issue.activeRunId === undefined
-      ? enqueuePendingSessionWake(db, enqueueIssue, issue.projectId, issue.linearIssueId)
-      : db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)?.runType;
+  // Always enqueue when no run is in flight. SerialWorkQueue dedupes by
+  // issue key, so a redundant enqueue is a no-op; previously the
+  // `hadPendingWake` short-circuit meant a second event captured while a
+  // prior enqueueIssue had silently dropped (lease race, lost in-memory
+  // queue) left the wake orphaned for hours until an external nudge.
+  const queuedRunType = issue.activeRunId === undefined
+    ? enqueuePendingSessionWake(db, enqueueIssue, issue.projectId, issue.linearIssueId)
+    : db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)?.runType;
   logger.info(
     {
       issueKey: issue.issueKey,

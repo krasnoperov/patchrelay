@@ -319,6 +319,28 @@ export class IssueStore {
     return rows.map(mapIssueRow);
   }
 
+  // Safety net for orphaned wakes: any delegated, non-terminal issue
+  // with at least one unprocessed session event but no active run.
+  // The orchestrator's enqueueIssue is the only path that drains these
+  // events, and a prior enqueueIssue call can be silently lost (worker
+  // race, lease contention, in-memory queue cleared by service restart).
+  // The idle reconciler iterates this set and re-enqueues each one.
+  listIdleIssuesWithPendingWake(): IssueRecord[] {
+    const rows = this.connection
+      .prepare(
+        `SELECT DISTINCT i.* FROM issues i
+         INNER JOIN issue_session_events e
+           ON e.project_id = i.project_id
+          AND e.linear_issue_id = i.linear_issue_id
+         WHERE e.processed_at IS NULL
+           AND i.active_run_id IS NULL
+           AND i.delegated_to_patchrelay = 1
+           AND i.factory_state NOT IN ('done', 'escalated', 'failed', 'awaiting_input')`,
+      )
+      .all() as Array<Record<string, unknown>>;
+    return rows.map(mapIssueRow);
+  }
+
   listBlockedDelegatedIssues(): IssueRecord[] {
     const rows = this.connection
       .prepare(

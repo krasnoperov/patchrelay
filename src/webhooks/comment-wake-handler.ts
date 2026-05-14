@@ -29,7 +29,6 @@ export class CommentWakeHandler {
     trackedIssue: TrackedIssueRecord | undefined;
     isDirectReplyToOutstandingQuestion: (issue: ReturnType<PatchRelayDatabase["getIssue"]>) => boolean;
     enqueuePendingSessionWake: (projectId: string, issueId: string) => RunType | undefined;
-    peekPendingSessionWakeRunType: (projectId: string, issueId: string) => RunType | undefined;
   }): Promise<void> {
     const { normalized, project, trackedIssue } = params;
     if (
@@ -133,7 +132,6 @@ export class CommentWakeHandler {
           return;
         }
         const runType = issue.prReviewState === "changes_requested" ? "review_fix" : "implementation";
-        const hadPendingWake = this.db.issueSessions.peekIssueSessionWake(project.id, normalized.issue.id) !== undefined;
         this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
           projectId: project.id,
           linearIssueId: normalized.issue.id,
@@ -143,9 +141,10 @@ export class CommentWakeHandler {
             author: normalized.comment.userName,
           }),
         });
-        const queuedRunType = hadPendingWake
-          ? params.peekPendingSessionWakeRunType(project.id, normalized.issue.id)
-          : params.enqueuePendingSessionWake(project.id, normalized.issue.id);
+        // Always enqueue: a prior enqueue may have silently dropped, and
+        // SerialWorkQueue dedupes by issue key so a redundant enqueue is
+        // a no-op. See github-webhook-reactive-run.ts for full rationale.
+        const queuedRunType = params.enqueuePendingSessionWake(project.id, normalized.issue.id);
         this.feed?.publish({
           level: "info",
           kind: "comment",
@@ -237,7 +236,6 @@ export class CommentWakeHandler {
       });
     } catch (error) {
       this.logger.warn({ issueKey: trackedIssue?.issueKey, error: error instanceof Error ? error.message : String(error) }, "Failed to deliver follow-up comment");
-      const hadPendingWake = this.db.issueSessions.hasPendingIssueSessionEvents(project.id, normalized.issue.id);
       const directReply = params.isDirectReplyToOutstandingQuestion(issue);
       this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
         projectId: project.id,
@@ -248,9 +246,10 @@ export class CommentWakeHandler {
           author: normalized.comment.userName,
         }),
       });
-      if (!hadPendingWake) {
-        params.enqueuePendingSessionWake(project.id, normalized.issue.id);
-      }
+      // Always enqueue, even if a prior wake was already pending: the
+      // earlier enqueue may have been silently dropped. SerialWorkQueue
+      // dedupes by issue key so a redundant enqueue is a no-op.
+      params.enqueuePendingSessionWake(project.id, normalized.issue.id);
       this.feed?.publish({
         level: "warn",
         kind: "comment",

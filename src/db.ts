@@ -252,6 +252,15 @@ export class PatchRelayDatabase {
   }
 
   /**
+   * Idle delegated issues that still have unprocessed session events.
+   * The idle reconciler re-enqueues these to recover from a silently
+   * dropped enqueueIssue (lease race, in-memory queue cleared at restart).
+   */
+  listIdleIssuesWithPendingWake(): IssueRecord[] {
+    return this.issues.listIdleIssuesWithPendingWake();
+  }
+
+  /**
    * Issues in delegated state with dependencies but no pending/active run.
    * Candidates for unblocking when their blockers complete.
    */
