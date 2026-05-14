@@ -14,6 +14,7 @@ import { buildClosedPrCleanupFields, resolveClosedPrDisposition } from "./pr-sta
 import { getReviewFixBudget } from "./run-budgets.ts";
 import { queueSettledOrchestrationIssue } from "./orchestration-parent-wake.ts";
 import { execCommand } from "./utils.ts";
+import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
 function isFailingCheckStatus(status: string | undefined): boolean {
   return status === "failed" || status === "failure";
@@ -145,48 +146,27 @@ function hasFailureProvenance(issue: Pick<
   );
 }
 
-export interface IdleReconciliationDeps {
-  enqueueIssue(projectId: string, issueId: string): void;
-}
-
 export class IdleIssueReconciler {
-  private deps: IdleReconciliationDeps;
-
   constructor(
     private readonly db: PatchRelayDatabase,
     private readonly config: AppConfig,
-    deps: IdleReconciliationDeps,
+    private readonly wakeDispatcher: WakeDispatcher,
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
-  ) {
-    this.deps = deps;
-  }
+  ) {}
 
   async reconcile(): Promise<void> {
-    // Wrap deps.enqueueIssue for the duration of this pass so the
-    // safety net at the bottom of the method can skip issues that
-    // earlier passes already enqueued. Restored in `finally` so other
-    // call sites (advanceIdleIssue invoked from outside reconcile)
-    // continue to use the original deps.
-    const originalDeps = this.deps;
-    const enqueuedThisPass = new Set<string>();
-    this.deps = {
-      enqueueIssue: (projectId, issueId) => {
-        enqueuedThisPass.add(`${projectId}:${issueId}`);
-        originalDeps.enqueueIssue(projectId, issueId);
-      },
-    };
-    try {
-      await this.reconcileBody(enqueuedThisPass, originalDeps.enqueueIssue);
-    } finally {
-      this.deps = originalDeps;
-    }
+    // Wrap the entire reconcile pass in a dispatcher tick. Every
+    // dispatchIfWakePending / recordEventAndDispatch call inside the
+    // callback automatically shares one dedupe Set, so a single pass
+    // produces at most one enqueue per issue even when several sub-
+    // passes detect the same wake. SerialWorkQueue would dedupe anyway,
+    // but keeping the call log clean makes orchestrator behaviour
+    // easier to inspect from tests and the operator feed.
+    return this.wakeDispatcher.withTick(() => this.reconcileBody());
   }
 
-  private async reconcileBody(
-    enqueuedThisPass: Set<string>,
-    rawEnqueueIssue: (projectId: string, issueId: string) => void,
-  ): Promise<void> {
+  private async reconcileBody(): Promise<void> {
     for (const issue of this.db.issues.listIdleNonTerminalIssues()) {
       if (issue.prState === "merged") {
         this.advanceIdleIssue(issue, "done", { clearFailureProvenance: true });
@@ -235,15 +215,10 @@ export class IdleIssueReconciler {
       if (!issue.delegatedToPatchRelay) continue;
       const unresolved = this.db.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId);
       if (unresolved === 0) {
-        this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-          projectId: issue.projectId,
-          linearIssueId: issue.linearIssueId,
+        this.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
           eventType: "delegated",
           dedupeKey: `delegated:${issue.linearIssueId}`,
         });
-        if (this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
-          this.deps.enqueueIssue(issue.projectId, issue.linearIssueId);
-        }
       }
     }
 
@@ -264,7 +239,7 @@ export class IdleIssueReconciler {
       queueSettledOrchestrationIssue({
         db: this.db,
         issue,
-        enqueueIssue: this.deps.enqueueIssue,
+        wakeDispatcher: this.wakeDispatcher,
       });
     }
 
@@ -272,17 +247,11 @@ export class IdleIssueReconciler {
     // unprocessed session events. Until this pass existed, a single
     // dropped enqueueIssue (lease race, in-memory queue lost across
     // restart) left review_fix / ci_repair / queue_repair wakes stuck
-    // for hours until an external event re-poked the issue. Skip issues
-    // that another pass in the same reconcile cycle already enqueued —
-    // SerialWorkQueue dedupes anyway, but tracking makes the intent
-    // visible to tests and to operators inspecting the call log.
+    // for hours until an external event re-poked the issue. The
+    // surrounding withTick scope ensures the call log shows at most one
+    // enqueue per issue per pass even when earlier passes also queued.
     for (const issue of this.db.issues.listIdleIssuesWithPendingWake()) {
-      const key = `${issue.projectId}:${issue.linearIssueId}`;
-      if (enqueuedThisPass.has(key)) continue;
-      const wake = this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
-      if (!wake) continue;
-      enqueuedThisPass.add(key);
-      rawEnqueueIssue(issue.projectId, issue.linearIssueId);
+      this.wakeDispatcher.dispatchIfWakePending(issue.projectId, issue.linearIssueId);
     }
   }
 
@@ -336,7 +305,7 @@ export class IdleIssueReconciler {
         : {}),
     });
     if (options?.pendingRunType) {
-      this.appendWakeEvent(issue, options.pendingRunType, options.pendingRunContext, "idle_reconciliation");
+      this.recordWakeEvent(issue, options.pendingRunType, options.pendingRunContext, "idle_reconciliation");
     }
     this.feed?.publish({
       level: "info",
@@ -347,12 +316,12 @@ export class IdleIssueReconciler {
       status: "reconciled",
       summary: `Reconciliation: ${issue.factoryState} \u2192 ${newState}`,
     });
-    if (options?.pendingRunType && this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
-      this.deps.enqueueIssue(issue.projectId, issue.linearIssueId);
-    }
+    // The dispatcher's recordEventAndDispatch in recordWakeEvent already
+    // handles the enqueue when no run is in flight, so no extra poke
+    // is needed here.
   }
 
-  private appendWakeEvent(
+  private recordWakeEvent(
     issue: Pick<IssueRecord, "projectId" | "linearIssueId" | "prHeadSha" | "lastGitHubFailureHeadSha" | "lastGitHubFailureSignature">,
     runType: RunType,
     context?: Record<string, unknown>,
@@ -373,9 +342,7 @@ export class IdleIssueReconciler {
       eventType = "delegated";
       dedupeKey = `${dedupeScope}:implementation:${issue.linearIssueId}`;
     }
-    this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
+    this.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
       eventType,
       ...(context ? { eventJson: JSON.stringify(context) } : {}),
       dedupeKey,

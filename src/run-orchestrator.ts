@@ -32,6 +32,7 @@ import { RunNotificationHandler } from "./run-notification-handler.ts";
 import { RunReconciler } from "./run-reconciler.ts";
 import { RunRecoveryService } from "./run-recovery-service.ts";
 import { RunWakePlanner, type PendingRunWake } from "./run-wake-planner.ts";
+import { WakeDispatcher } from "./wake-dispatcher.ts";
 import { getRemainingZombieRecoveryDelayMs } from "./zombie-recovery.ts";
 import { classifyIssue } from "./issue-class.ts";
 import { buildIssueTriageHash, IssueTriageService } from "./issue-triage.ts";
@@ -92,7 +93,10 @@ export class RunOrchestrator {
   private readonly idleReconciler: IdleIssueReconciler;
   readonly linearSync: LinearSessionSync;
   private readonly workerId = `patchrelay:${process.pid}`;
-  private readonly leaseService: IssueSessionLeaseService;
+  // Exposed so the WakeDispatcher (constructed in service.ts) can call
+  // release on this same lease service. Kept on the orchestrator because
+  // its construction depends on Codex thread access.
+  readonly leaseService: IssueSessionLeaseService;
   private readonly runFinalizer: RunFinalizer;
   private readonly runLauncher: RunLauncher;
   private readonly runRecovery: RunRecoveryService;
@@ -123,16 +127,51 @@ export class RunOrchestrator {
   readonly activeSessionLeases: Map<string, string>;
   botIdentity?: GitHubAppBotIdentity;
 
+  private readonly wakeDispatcher: WakeDispatcher;
+  private readonly logger: Logger;
+  private readonly feed: OperatorEventFeed | undefined;
+  private readonly configPath: string | undefined;
+
   constructor(
     private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
     private readonly codex: CodexAppServerClient,
     private readonly linearProvider: LinearClientProvider,
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
-    private readonly logger: Logger,
-    private readonly feed?: OperatorEventFeed,
-    private readonly configPath?: string,
+    wakeDispatcherOrLogger: WakeDispatcher | Logger,
+    loggerOrFeed?: Logger | OperatorEventFeed,
+    feedOrConfigPath?: OperatorEventFeed | string,
+    configPathOrUndefined?: string,
   ) {
+    // Backward-compat: tests pass `(config, db, codex, lp, enqueue, logger, feed?, configPath?)`
+    // (no dispatcher). Production passes `(..., enqueue, dispatcher, logger, feed?, configPath?)`.
+    let logger: Logger;
+    let feed: OperatorEventFeed | undefined;
+    let configPath: string | undefined;
+    if (wakeDispatcherOrLogger instanceof WakeDispatcher) {
+      this.wakeDispatcher = wakeDispatcherOrLogger;
+      logger = loggerOrFeed as Logger;
+      feed = feedOrConfigPath as OperatorEventFeed | undefined;
+      configPath = configPathOrUndefined;
+    } else {
+      logger = wakeDispatcherOrLogger;
+      feed = loggerOrFeed as OperatorEventFeed | undefined;
+      configPath = feedOrConfigPath as string | undefined;
+      // Construct a dispatcher with a stub releaseLease — the real one
+      // gets wired below once the lease service exists. The stub is
+      // never called before the wiring completes because the run()
+      // loop is the only consumer of releaseRunAndDispatch.
+      this.wakeDispatcher = new WakeDispatcher(
+        db,
+        enqueueIssue,
+        (projectId, linearIssueId) => this.leaseService?.release(projectId, linearIssueId),
+        logger,
+        feed,
+      );
+    }
+    this.logger = logger;
+    this.feed = feed;
+    this.configPath = configPath;
     this.worktreeManager = new WorktreeManager(config);
     this.codexRuntimeConfig = config.runner.codex;
     this.linearSync = new LinearSessionSync(config, db, linearProvider, logger, feed);
@@ -156,7 +195,7 @@ export class RunOrchestrator {
       db,
       logger,
       this.linearSync,
-      this.enqueueIssue,
+      this.wakeDispatcher,
       this.leasePorts.withHeldLease,
       this.leasePorts.releaseLease,
       (lease, issue, runType, context, dedupeScope) => this.appendWakeEventWithLease(lease, issue, runType, context, dedupeScope),
@@ -216,21 +255,19 @@ export class RunOrchestrator {
       feed,
     );
     this.runWakePlanner = new RunWakePlanner(db);
-    this.idleReconciler = new IdleIssueReconciler(db, config, {
-      enqueueIssue: (projectId, issueId) => this.enqueueIssue(projectId, issueId),
-    }, logger, feed);
+    this.idleReconciler = new IdleIssueReconciler(db, config, this.wakeDispatcher, logger, feed);
     this.mainBranchHealthMonitor = new MainBranchHealthMonitor(
       db,
       config,
       linearProvider,
-      (projectId, issueId) => this.enqueueIssue(projectId, issueId),
+      this.wakeDispatcher,
       logger,
       feed,
     );
     this.mergedLinearCompletionReconciler = new MergedLinearCompletionReconciler(db, linearProvider, logger);
     this.queueHealthMonitor = new QueueHealthMonitor(db, config, {
       advanceIdleIssue: (issue, newState, options) => this.idleReconciler.advanceIdleIssue(issue, newState, options),
-      enqueueIssue: (projectId, issueId) => this.enqueueIssue(projectId, issueId),
+      wakeDispatcher: this.wakeDispatcher,
     }, logger, feed);
   }
 
@@ -364,21 +401,61 @@ export class RunOrchestrator {
     await this.refreshCodexRuntimeConfig();
 
     const project = this.config.projects.find((p) => p.id === item.projectId);
-    if (!project) return;
+    if (!project) {
+      this.logger.info(
+        { projectId: item.projectId, linearIssueId: item.issueId, reason: "project_not_configured" },
+        "Skipped issue run: project missing from config",
+      );
+      return;
+    }
 
+    // Each early-return below logs `{ issueKey, reason }` so the
+    // operator-feed and log streams can explain why an issue with a
+    // pending wake didn't actually run. The original incident
+    // (LSR-495) was undiagnosable because these guards were silent.
     if (this.leaseService.hasLocalLease(item.projectId, item.issueId)) {
+      this.logger.info(
+        { projectId: item.projectId, linearIssueId: item.issueId, reason: "lease_held_locally" },
+        "Skipped issue run: another in-process call still holds the lease",
+      );
       return;
     }
 
     const initialIssue = this.db.issues.getIssue(item.projectId, item.issueId);
-    if (!initialIssue || initialIssue.activeRunId !== undefined) return;
+    if (!initialIssue) {
+      this.logger.info(
+        { projectId: item.projectId, linearIssueId: item.issueId, reason: "issue_missing" },
+        "Skipped issue run: issue row not found",
+      );
+      return;
+    }
+    if (initialIssue.activeRunId !== undefined) {
+      this.logger.info(
+        { issueKey: initialIssue.issueKey, projectId: item.projectId, reason: "active_run_present", activeRunId: initialIssue.activeRunId },
+        "Skipped issue run: an active run is already in flight",
+      );
+      return;
+    }
     const issue = await this.classifyTrackedIssue(initialIssue);
-    if (!issue || issue.activeRunId !== undefined) return;
+    if (!issue) {
+      this.logger.info(
+        { projectId: item.projectId, linearIssueId: item.issueId, reason: "classification_dropped_issue" },
+        "Skipped issue run: classification returned no issue",
+      );
+      return;
+    }
+    if (issue.activeRunId !== undefined) {
+      this.logger.info(
+        { issueKey: issue.issueKey, projectId: item.projectId, reason: "active_run_present_post_classify", activeRunId: issue.activeRunId },
+        "Skipped issue run: an active run appeared during classification",
+      );
+      return;
+    }
     const issueSession = this.db.issueSessions.getIssueSession(item.projectId, item.issueId);
 
     const leaseId = this.leaseService.acquire(item.projectId, item.issueId);
     if (!leaseId) {
-      this.logger.info({ issueKey: issue.issueKey, projectId: item.projectId }, "Skipped run because another worker holds the session lease");
+      this.logger.info({ issueKey: issue.issueKey, projectId: item.projectId, reason: "lease_acquire_failed" }, "Skipped issue run: another worker holds the session lease");
       return;
     }
 
@@ -394,6 +471,10 @@ export class RunOrchestrator {
     const wakeIssue = this.materializeLegacyPendingWake(issue, { projectId: item.projectId, linearIssueId: item.issueId, leaseId });
     const wake = this.resolveRunWake(wakeIssue);
     if (!wake) {
+      this.logger.info(
+        { issueKey: issue.issueKey, projectId: item.projectId, reason: "no_wake_derivable" },
+        "Skipped issue run: no actionable wake derivable from pending events",
+      );
       this.leaseService.release(item.projectId, item.issueId);
       return;
     }

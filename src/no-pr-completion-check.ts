@@ -7,6 +7,7 @@ import type { WithHeldIssueSessionLease } from "./issue-session-lease-service.ts
 import { buildCompletionCheckActivity } from "./linear-session-reporting.ts";
 import { wakeOrchestrationParentsForChildEvent } from "./orchestration-parent-wake.ts";
 import type { buildStageReport } from "./run-reporting.ts";
+import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
 function shouldContinueForUnpublishedLocalChanges(message: string): boolean {
   const normalized = message.trim().toLowerCase();
@@ -66,9 +67,9 @@ export async function handleNoPrCompletionCheck(params: {
     summary: string;
     detail?: string | undefined;
     activity: ReturnType<typeof buildCompletionCheckActivity>;
-    enqueue?: boolean | undefined;
   }) => void;
-  clearProgressAndRelease: (run: Pick<RunRecord, "id" | "projectId" | "linearIssueId">) => void;
+  clearProgressAndRelease: (run: Pick<RunRecord, "id" | "projectId" | "linearIssueId" | "runType">) => void;
+  wakeDispatcher: WakeDispatcher;
 }): Promise<void> {
   const runUpdate = buildRunUpdate({
     status: params.runStatus,
@@ -153,7 +154,6 @@ export async function handleNoPrCompletionCheck(params: {
       summary: "No PR found; continuing automatically",
       detail: completionCheck.summary,
       activity: buildCompletionCheckActivity("continue"),
-      enqueue: true,
     });
     return;
   }
@@ -232,7 +232,6 @@ export async function handleNoPrCompletionCheck(params: {
         summary: "No PR found; continuing automatically to finish publication",
         detail: params.publishedOutcomeError,
         activity: buildCompletionCheckActivity("continue"),
-        enqueue: true,
       });
       return;
     }
@@ -278,7 +277,6 @@ export async function handleNoPrCompletionCheck(params: {
         summary: "No repair PR found; continuing automatically",
         detail: "Main repair cannot close until PatchRelay publishes a repair PR or main recovers externally.",
         activity: buildCompletionCheckActivity("continue"),
-        enqueue: true,
       });
       return;
     }
@@ -335,6 +333,7 @@ export async function handleNoPrCompletionCheck(params: {
       db: params.db,
       child: doneIssue,
       eventType: "child_delivered",
+      wakeDispatcher: params.wakeDispatcher,
     });
     return;
   }

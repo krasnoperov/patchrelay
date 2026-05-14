@@ -6,6 +6,7 @@ import type { AppConfig } from "./types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
 import { execCommand } from "./utils.ts";
+import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
 const QUEUE_HEALTH_GRACE_MS = 120_000;
 const QUEUE_HEALTH_PROBE_FAILURE_COOLDOWN_MS = 300_000;
@@ -25,7 +26,7 @@ export interface QueueHealthAdvancer {
       clearFailureProvenance?: boolean;
     },
   ): void;
-  enqueueIssue(projectId: string, issueId: string): void;
+  wakeDispatcher: WakeDispatcher;
 }
 
 function isDuplicateProbe(
@@ -186,17 +187,12 @@ export class QueueHealthMonitor {
         lastAttemptedFailureHeadSha: headRefOid,
         lastAttemptedFailureSignature: signature,
       });
-      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
+      this.advancer.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
         eventType: "merge_steward_incident",
         eventJson: JSON.stringify(pendingRunContext),
         dedupeKey: `queue_health:queue_repair:${issue.linearIssueId}:${signature}`,
       });
       this.advancer.advanceIdleIssue(issue, "repairing_queue");
-      if (this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
-        this.advancer.enqueueIssue(issue.projectId, issue.linearIssueId);
-      }
       this.logger.info(
         { issueKey: issue.issueKey, prNumber: issue.prNumber, headRefOid, reason },
         "Queue health: queue issue detected, dispatching repair",

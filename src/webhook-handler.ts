@@ -17,6 +17,7 @@ import { IssueRemovalHandler } from "./webhooks/issue-removal-handler.ts";
 import type { AppConfig, LinearClientProvider, LinearWebhookPayload } from "./types.ts";
 import { safeJsonParse, sanitizeDiagnosticText } from "./utils.ts";
 import { extractLatestAssistantSummary } from "./issue-session-events.ts";
+import { WakeDispatcher } from "./wake-dispatcher.ts";
 
 export interface IssueQueueItem {
   projectId: string;
@@ -33,24 +34,35 @@ export class WebhookHandler {
   private readonly dependencyReadinessHandler: DependencyReadinessHandler;
   private readonly linearSync: LinearSessionSync;
 
+  private readonly wakeDispatcher: WakeDispatcher;
+
   constructor(
     private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
     private readonly linearProvider: LinearClientProvider,
     private readonly codex: CodexAppServerClient,
-    private readonly enqueueIssue: (projectId: string, issueId: string) => void,
+    wakeDispatcherOrEnqueueIssue: WakeDispatcher | ((projectId: string, issueId: string) => void),
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
   ) {
+    // Webhook handlers never release leases — the orchestrator's
+    // run finalizer owns that. So when a test passes a bare
+    // enqueueIssue callback, wrap it in a dispatcher with a no-op
+    // releaseLease (any production caller passes a real dispatcher).
+    this.wakeDispatcher = wakeDispatcherOrEnqueueIssue instanceof WakeDispatcher
+      ? wakeDispatcherOrEnqueueIssue
+      : new WakeDispatcher(db, wakeDispatcherOrEnqueueIssue, () => undefined, logger, feed);
+
     this.installationHandler = new InstallationWebhookHandler(config, { linearInstallations: db.linearInstallations }, logger, feed);
     this.issueRemovalHandler = new IssueRemovalHandler(db, feed);
-    this.commentWakeHandler = new CommentWakeHandler(db, codex, logger, feed);
-    this.agentSessionHandler = new AgentSessionHandler(config, db, linearProvider, codex, logger, feed);
-    this.desiredStageRecorder = new DesiredStageRecorder(db, linearProvider, feed);
+    this.commentWakeHandler = new CommentWakeHandler(db, codex, this.wakeDispatcher, logger, feed);
+    this.agentSessionHandler = new AgentSessionHandler(config, db, linearProvider, codex, this.wakeDispatcher, logger, feed);
+    this.desiredStageRecorder = new DesiredStageRecorder(db, linearProvider, this.wakeDispatcher, feed);
     this.contextLoader = new WebhookContextLoader(config, linearProvider);
     this.linearSync = new LinearSessionSync(config, db, linearProvider, logger, feed);
     this.dependencyReadinessHandler = new DependencyReadinessHandler(
       db,
+      this.wakeDispatcher,
       (projectId, issueId) => this.peekPendingSessionWakeRunType(projectId, issueId),
     );
   }
@@ -175,7 +187,6 @@ export class WebhookHandler {
         wakeRunType: result.wakeRunType,
         delegated: result.delegated,
         peekPendingSessionWakeRunType: (projectId, issueId) => this.peekPendingSessionWakeRunType(projectId, issueId),
-        enqueuePendingSessionWake: (projectId, issueId) => this.enqueuePendingSessionWake(projectId, issueId),
         isDirectReplyToOutstandingQuestion: (targetIssue) => this.isDirectReplyToOutstandingQuestion(targetIssue),
       });
 
@@ -183,7 +194,6 @@ export class WebhookHandler {
         normalized: hydrated,
         project,
         trackedIssue,
-        enqueuePendingSessionWake: (projectId, issueId) => this.enqueuePendingSessionWake(projectId, issueId),
         isDirectReplyToOutstandingQuestion: (targetIssue) => this.isDirectReplyToOutstandingQuestion(targetIssue),
       });
 
@@ -207,8 +217,11 @@ export class WebhookHandler {
         });
       }
       for (const dependentIssueId of newlyReadyDependents) {
+        // The dependency-readiness handler already dispatched via the
+        // wake dispatcher; here we just emit the operator-feed event so
+        // the dispatched run shows up in the timeline.
         const dependent = this.db.getTrackedIssue(project.id, dependentIssueId);
-        const queuedRunType = this.enqueuePendingSessionWake(project.id, dependentIssueId);
+        const queuedRunType = this.peekPendingSessionWakeRunType(project.id, dependentIssueId);
         this.feed?.publish({
           level: "info",
           kind: "stage",
@@ -263,12 +276,7 @@ export class WebhookHandler {
   }
 
   private enqueuePendingSessionWake(projectId: string, issueId: string): RunType | undefined {
-    const wake = this.db.issueSessions.peekIssueSessionWake(projectId, issueId);
-    if (!wake) {
-      return undefined;
-    }
-    this.enqueueIssue(projectId, issueId);
-    return wake.runType;
+    return this.wakeDispatcher.dispatchIfWakePending(projectId, issueId);
   }
 
   private isDirectReplyToOutstandingQuestion(issue: ReturnType<PatchRelayDatabase["getIssue"]>): boolean {

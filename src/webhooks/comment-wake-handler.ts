@@ -12,6 +12,7 @@ import {
 } from "./comment-policy.ts";
 import { classifyIssue } from "../issue-class.ts";
 import type { NormalizedEvent, ProjectConfig, TrackedIssueRecord } from "../types.ts";
+import type { WakeDispatcher } from "../wake-dispatcher.ts";
 
 const ENQUEUEABLE_STATES = new Set(["pr_open", "changes_requested", "implementing", "delegated", "awaiting_input"]);
 
@@ -19,6 +20,7 @@ export class CommentWakeHandler {
   constructor(
     private readonly db: PatchRelayDatabase,
     private readonly codex: CodexAppServerClient,
+    private readonly wakeDispatcher: WakeDispatcher,
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
   ) {}
@@ -28,7 +30,6 @@ export class CommentWakeHandler {
     project: ProjectConfig;
     trackedIssue: TrackedIssueRecord | undefined;
     isDirectReplyToOutstandingQuestion: (issue: ReturnType<PatchRelayDatabase["getIssue"]>) => boolean;
-    enqueuePendingSessionWake: (projectId: string, issueId: string) => RunType | undefined;
   }): Promise<void> {
     const { normalized, project, trackedIssue } = params;
     if (
@@ -52,9 +53,7 @@ export class CommentWakeHandler {
     const selfAuthored = isPatchRelayManagedCommentAuthor(installation, normalized.actor, normalized.comment.userName);
     const inertPatchRelayComment = isInertPatchRelayComment(issue, normalized.comment.id, trimmedBody, normalized.actor?.type);
     if (selfAuthored || inertPatchRelayComment) {
-      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
-        projectId: project.id,
-        linearIssueId: normalized.issue.id,
+      this.wakeDispatcher.recordEventAndDispatch(project.id, normalized.issue.id, {
         eventType: "self_comment",
         eventJson: JSON.stringify({
           body: trimmedBody,
@@ -96,9 +95,7 @@ export class CommentWakeHandler {
           return;
         }
         if (intent === "stop") {
-          this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
-            projectId: project.id,
-            linearIssueId: normalized.issue.id,
+          this.wakeDispatcher.recordEventAndDispatch(project.id, normalized.issue.id, {
             eventType: "stop_requested",
             eventJson: JSON.stringify({
               body: trimmedBody,
@@ -132,19 +129,13 @@ export class CommentWakeHandler {
           return;
         }
         const runType = issue.prReviewState === "changes_requested" ? "review_fix" : "implementation";
-        this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
-          projectId: project.id,
-          linearIssueId: normalized.issue.id,
+        const queuedRunType = this.wakeDispatcher.recordEventAndDispatch(project.id, normalized.issue.id, {
           eventType: directReply ? "direct_reply" : "followup_comment",
           eventJson: JSON.stringify({
             body: trimmedBody,
             author: normalized.comment.userName,
           }),
         });
-        // Always enqueue: a prior enqueue may have silently dropped, and
-        // SerialWorkQueue dedupes by issue key so a redundant enqueue is
-        // a no-op. See github-webhook-reactive-run.ts for full rationale.
-        const queuedRunType = params.enqueuePendingSessionWake(project.id, normalized.issue.id);
         this.feed?.publish({
           level: "info",
           kind: "comment",
@@ -178,9 +169,7 @@ export class CommentWakeHandler {
         activeRunId: null,
         factoryState: "awaiting_input",
       });
-      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
-        projectId: project.id,
-        linearIssueId: normalized.issue.id,
+      this.wakeDispatcher.recordEventAndDispatch(project.id, normalized.issue.id, {
         eventType: "stop_requested",
         eventJson: JSON.stringify({
           body: trimmedBody,
@@ -237,19 +226,13 @@ export class CommentWakeHandler {
     } catch (error) {
       this.logger.warn({ issueKey: trackedIssue?.issueKey, error: error instanceof Error ? error.message : String(error) }, "Failed to deliver follow-up comment");
       const directReply = params.isDirectReplyToOutstandingQuestion(issue);
-      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
-        projectId: project.id,
-        linearIssueId: normalized.issue.id,
+      this.wakeDispatcher.recordEventAndDispatch(project.id, normalized.issue.id, {
         eventType: directReply ? "direct_reply" : "followup_comment",
         eventJson: JSON.stringify({
           body: trimmedBody,
           author: normalized.comment.userName,
         }),
       });
-      // Always enqueue, even if a prior wake was already pending: the
-      // earlier enqueue may have been silently dropped. SerialWorkQueue
-      // dedupes by issue key so a redundant enqueue is a no-op.
-      params.enqueuePendingSessionWake(project.id, normalized.issue.id);
       this.feed?.publish({
         level: "warn",
         kind: "comment",

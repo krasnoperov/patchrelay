@@ -6,6 +6,7 @@ import test from "node:test";
 import pino from "pino";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { RunFinalizer } from "../src/run-finalizer.ts";
+import { createTestWakeDispatcher } from "./helpers/wake-dispatcher.ts";
 
 function createDb() {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-run-finalizer-"));
@@ -42,6 +43,25 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
   const activities: Array<Record<string, unknown>> = [];
   const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
   const lease = acquireLease(db, "usertold", "issue-1");
+  const release = () => db.issueSessions.releaseIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId);
+  // Shared feed: the dispatcher publishes the deferred_follow_up_queued
+  // event after a run release, so it must write into the same array
+  // that the finalizer's `feed` writes into.
+  const sharedFeed = {
+    publish(event: unknown) {
+      feedEvents.push(event as Record<string, unknown>);
+      return event as never;
+    },
+  };
+  const dispatcher = createTestWakeDispatcher(
+    db,
+    (projectId, issueId) => {
+      enqueueCalls.push({ projectId, issueId });
+      options?.onEnqueue?.(projectId, issueId);
+    },
+    release,
+    sharedFeed as never,
+  );
   const finalizer = new RunFinalizer(
     db,
     pino({ enabled: false }),
@@ -52,12 +72,9 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
       syncSession: async () => {},
       clearProgress: () => {},
     } as never,
-    (projectId, issueId) => {
-      enqueueCalls.push({ projectId, issueId });
-      options?.onEnqueue?.(projectId, issueId);
-    },
+    dispatcher,
     (_projectId, _linearIssueId, fn) => fn(lease as never),
-    () => db.issueSessions.releaseIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId),
+    release,
     () => true,
     () => {
       throw new Error("failRunAndClear should not be called in completion-check tests");
@@ -91,12 +108,7 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
           }),
         }
       : undefined,
-    {
-      publish(event) {
-        feedEvents.push(event as unknown as Record<string, unknown>);
-        return event as never;
-      },
-    } as never,
+    sharedFeed as never,
   );
   return { finalizer, feedEvents, activities, enqueueCalls };
 }

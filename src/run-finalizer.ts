@@ -16,6 +16,7 @@ import { handleNoPrCompletionCheck } from "./no-pr-completion-check.ts";
 import type { RunCompletionPolicy } from "./run-completion-policy.ts";
 import { resolveCompletedRunState } from "./run-completion-policy.ts";
 import { computeChangeIdentityFromWorktree } from "./change-identity.ts";
+import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
 type StageReport = ReturnType<typeof buildStageReport>;
 
@@ -49,7 +50,7 @@ export class RunFinalizer {
     private readonly db: PatchRelayDatabase,
     private readonly logger: Logger,
     private readonly linearSync: LinearSessionSync,
-    private readonly enqueueIssue: (projectId: string, issueId: string) => void,
+    private readonly wakeDispatcher: WakeDispatcher,
     private readonly withHeldLease: WithHeldIssueSessionLease,
     private readonly releaseLease: ReleaseIssueSessionLease,
     private readonly appendWakeEventWithLease: AppendWakeEventWithLease,
@@ -218,9 +219,24 @@ export class RunFinalizer {
     );
   }
 
-  private clearProgressAndRelease(run: Pick<RunRecord, "id" | "projectId" | "linearIssueId">): void {
+  // Single owner of "clear Linear progress + release lease + drain pending
+  // wake". Every run-end path goes through here. Routes the release through
+  // the WakeDispatcher so a wake that landed during the run is picked up
+  // even on failure paths (the previous implementation only drained on the
+  // success path). Failure and completion-check paths publish their own
+  // more-specific operator-feed event before getting here, so the
+  // dispatcher's "deferred_follow_up_queued" notification is opt-in via
+  // `publishDeferredFollowUp` and used only by the success path.
+  private clearProgressAndRelease(
+    run: Pick<RunRecord, "id" | "projectId" | "linearIssueId" | "runType">,
+    options?: { issueKey?: string | undefined; publishDeferredFollowUp?: boolean },
+  ): void {
     this.linearSync.clearProgress(run.id);
-    this.releaseLease(run.projectId, run.linearIssueId);
+    this.wakeDispatcher.releaseRunAndDispatch({
+      run,
+      ...(options?.issueKey ? { issueKey: options.issueKey } : {}),
+      ...(options?.publishDeferredFollowUp ? { publishDeferredFollowUp: true } : {}),
+    });
   }
 
   // Plan §4.4: finalize a run that was superseded mid-flight. The
@@ -259,28 +275,6 @@ export class RunFinalizer {
     });
   }
 
-  private enqueuePendingWakeIfPresent(params: {
-    run: Pick<RunRecord, "projectId" | "linearIssueId" | "runType">;
-    issueKey?: string | undefined;
-  }): { runType: RunType; wakeReason?: string | undefined } | undefined {
-    const wake = this.db.issueSessions.peekIssueSessionWake(params.run.projectId, params.run.linearIssueId);
-    if (!wake) return undefined;
-    this.enqueueIssue(params.run.projectId, params.run.linearIssueId);
-    this.feed?.publish({
-      level: "info",
-      kind: "stage",
-      issueKey: params.issueKey,
-      projectId: params.run.projectId,
-      stage: wake.runType,
-      status: "deferred_follow_up_queued",
-      summary: `${wake.runType} queued after ${params.run.runType} released authority`,
-      ...(wake.wakeReason ? { detail: `wake reason: ${wake.wakeReason}` } : {}),
-    });
-    return {
-      runType: wake.runType,
-      ...(wake.wakeReason ? { wakeReason: wake.wakeReason } : {}),
-    };
-  }
 
   private publishTurnEvent(params: {
     level: "info" | "warn" | "error";
@@ -346,11 +340,11 @@ export class RunFinalizer {
     });
     void this.linearSync.emitActivity(issue, params.activity, { ephemeral: true });
     void this.linearSync.syncSession(issue);
-    this.linearSync.clearProgress(params.run.id);
-    if (params.enqueue) {
-      this.enqueueIssue(params.run.projectId, params.run.linearIssueId);
-    }
-    this.releaseLease(params.run.projectId, params.run.linearIssueId);
+    // releaseRunAndDispatch always drains any pending wake — the
+    // explicit `params.enqueue` flag is no longer needed because the
+    // dispatcher peeks the wake itself and only enqueues when one
+    // exists. Keeping the parameter would be redundant.
+    this.clearProgressAndRelease(params.run);
   }
 
   async finalizeCompletedRun(params: {
@@ -450,6 +444,7 @@ export class RunFinalizer {
         syncFailureOutcome: (event) => this.syncFailureOutcome(event),
         syncCompletionCheckOutcome: (event) => this.syncCompletionCheckOutcome(event),
         clearProgressAndRelease: (releaseRun) => this.clearProgressAndRelease(releaseRun),
+        wakeDispatcher: this.wakeDispatcher,
       });
       return;
     }
@@ -513,8 +508,7 @@ export class RunFinalizer {
     });
     if (!completed) {
       this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Skipping completion writes after losing issue-session lease");
-      this.linearSync.clearProgress(run.id);
-      this.releaseLease(run.projectId, run.linearIssueId);
+      this.clearProgressAndRelease(run);
       return;
     }
 
@@ -555,9 +549,10 @@ export class RunFinalizer {
       void this.linearSync.emitActivity(updatedIssue, linearActivity);
     }
     void this.linearSync.syncSession(updatedIssue);
-    this.enqueuePendingWakeIfPresent({ run, issueKey: updatedIssue.issueKey });
-    this.linearSync.clearProgress(run.id);
-    this.releaseLease(run.projectId, run.linearIssueId);
+    this.clearProgressAndRelease(run, {
+      ...(updatedIssue.issueKey ? { issueKey: updatedIssue.issueKey } : {}),
+      publishDeferredFollowUp: true,
+    });
   }
 
   async recoverFailedImplementationRun(params: {
@@ -601,6 +596,7 @@ export class RunFinalizer {
       syncFailureOutcome: (event) => this.syncFailureOutcome(event),
       syncCompletionCheckOutcome: (event) => this.syncCompletionCheckOutcome(event),
       clearProgressAndRelease: (releaseRun) => this.clearProgressAndRelease(releaseRun),
+      wakeDispatcher: this.wakeDispatcher,
     });
     return true;
   }

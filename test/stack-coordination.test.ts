@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { maybeFanChildRebaseWakes } from "../src/github-webhook-stack-coordination.ts";
+import { createTestWakeDispatcher } from "./helpers/wake-dispatcher.ts";
 
 function silentLogger() {
   const logger = {
@@ -69,7 +70,7 @@ test("maybeFanChildRebaseWakes enqueues branch_upkeep on stacked children for pr
     maybeFanChildRebaseWakes({
       db,
       logger: silentLogger(),
-      enqueueIssue: (projectId, issueId) => enqueued.push([projectId, issueId]),
+      wakeDispatcher: createTestWakeDispatcher(db, (projectId, issueId) => enqueued.push([projectId, issueId])),
       event: {
         triggerEvent: "pr_synchronize",
         repoFullName: "owner/repo",
@@ -98,7 +99,7 @@ test("maybeFanChildRebaseWakes is a no-op for non-pr_synchronize events", () => 
     maybeFanChildRebaseWakes({
       db,
       logger: silentLogger(),
-      enqueueIssue: (projectId, issueId) => enqueued.push([projectId, issueId]),
+      wakeDispatcher: createTestWakeDispatcher(db, (projectId, issueId) => enqueued.push([projectId, issueId])),
       event: {
         triggerEvent: "review_approved",
         repoFullName: "owner/repo",
@@ -134,7 +135,7 @@ test("maybeFanChildRebaseWakes skips children with an active run", () => {
     maybeFanChildRebaseWakes({
       db,
       logger: silentLogger(),
-      enqueueIssue: (projectId, issueId) => enqueued.push([projectId, issueId]),
+      wakeDispatcher: createTestWakeDispatcher(db, (projectId, issueId) => enqueued.push([projectId, issueId])),
       event: {
         triggerEvent: "pr_synchronize",
         repoFullName: "owner/repo",

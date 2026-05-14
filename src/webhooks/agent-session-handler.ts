@@ -29,6 +29,7 @@ import type {
   ProjectConfig,
   TrackedIssueRecord,
 } from "../types.ts";
+import type { WakeDispatcher } from "../wake-dispatcher.ts";
 
 type LinearClient = NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>;
 
@@ -46,6 +47,7 @@ export class AgentSessionHandler {
     private readonly db: PatchRelayDatabase,
     private readonly linearProvider: LinearClientProvider,
     private readonly codex: CodexAppServerClient,
+    private readonly wakeDispatcher: WakeDispatcher,
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
   ) {}
@@ -90,7 +92,6 @@ export class AgentSessionHandler {
     wakeRunType: RunType | undefined;
     delegated: boolean;
     peekPendingSessionWakeRunType: (projectId: string, issueId: string) => RunType | undefined;
-    enqueuePendingSessionWake: (projectId: string, issueId: string) => RunType | undefined;
     isDirectReplyToOutstandingQuestion: (issue: ReturnType<PatchRelayDatabase["getIssue"]>) => boolean;
   }): Promise<void> {
     const { normalized, project, trackedIssue, wakeRunType, delegated } = params;
@@ -239,7 +240,6 @@ export class AgentSessionHandler {
     }
 
     if (promptBody && existingIssue && automationEnabled) {
-      const hadPendingWake = this.db.issueSessions.peekIssueSessionWake(project.id, normalized.issue.id) !== undefined;
       if (!directReply && promptIntent && followupIntentIsNonActionable(promptIntent)) {
         await this.publishAgentActivity(
           linear,
@@ -248,18 +248,13 @@ export class AgentSessionHandler {
         );
         return;
       }
-      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
-        projectId: project.id,
-        linearIssueId: normalized.issue.id,
+      const queuedRunType = this.wakeDispatcher.recordEventAndDispatch(project.id, normalized.issue.id, {
         eventType: directReply ? "direct_reply" : "followup_prompt",
         eventJson: JSON.stringify({
           text: promptBody,
           source: "linear_agent_prompt",
         }),
       });
-      const queuedRunType = hadPendingWake
-        ? params.peekPendingSessionWakeRunType(project.id, normalized.issue.id)
-        : params.enqueuePendingSessionWake(project.id, normalized.issue.id);
       const latestIssue = this.db.issues.getIssue(project.id, normalized.issue.id);
       await this.syncAgentSession(
         linear,

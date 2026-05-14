@@ -20,17 +20,20 @@ import { maybeEnqueueGitHubReactiveRun } from "./github-webhook-reactive-run.ts"
 import { maybeRunSequenceBackstop } from "./github-webhook-sequence-backstop.ts";
 import { maybeFanChildRebaseWakes } from "./github-webhook-stack-coordination.ts";
 import { handleGitHubTerminalPrEvent } from "./github-webhook-terminal-handler.ts";
+import { WakeDispatcher } from "./wake-dispatcher.ts";
 
 type FetchLike = typeof fetch;
 
 export class GitHubWebhookHandler {
   private readonly prCommentHandler: GitHubPrCommentHandler;
 
+  private readonly wakeDispatcher: WakeDispatcher;
+
   constructor(
     private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
     private readonly linearProvider: LinearClientProvider,
-    private readonly enqueueIssue: (projectId: string, issueId: string) => void,
+    wakeDispatcherOrEnqueueIssue: WakeDispatcher | ((projectId: string, issueId: string) => void),
     private readonly logger: Logger,
     private readonly codex: { steerTurn(options: { threadId: string; turnId: string; input: string }): Promise<void> },
     private readonly feed?: OperatorEventFeed,
@@ -38,9 +41,14 @@ export class GitHubWebhookHandler {
     private readonly ciSnapshotResolver: GitHubCiSnapshotResolver = createGitHubCiSnapshotResolver(),
     private readonly fetchImpl: FetchLike = fetch,
   ) {
+    // GitHub webhook handlers never release leases either — see
+    // WebhookHandler for the same rationale.
+    this.wakeDispatcher = wakeDispatcherOrEnqueueIssue instanceof WakeDispatcher
+      ? wakeDispatcherOrEnqueueIssue
+      : new WakeDispatcher(db, wakeDispatcherOrEnqueueIssue, () => undefined, logger, feed);
     this.prCommentHandler = new GitHubPrCommentHandler(
       db,
-      enqueueIssue,
+      this.wakeDispatcher,
       logger,
       codex,
       feed,
@@ -168,7 +176,7 @@ export class GitHubWebhookHandler {
       db: this.db,
       logger: this.logger,
       feed: this.feed,
-      enqueueIssue: this.enqueueIssue,
+      wakeDispatcher: this.wakeDispatcher,
       issue: freshIssue,
       event,
       project,
@@ -197,7 +205,7 @@ export class GitHubWebhookHandler {
         db: this.db,
         logger: this.logger,
         ...(this.feed ? { feed: this.feed } : {}),
-        enqueueIssue: this.enqueueIssue,
+        wakeDispatcher: this.wakeDispatcher,
         event,
       });
     }
@@ -207,7 +215,7 @@ export class GitHubWebhookHandler {
         config: this.config,
         db: this.db,
         linearProvider: this.linearProvider,
-        enqueueIssue: this.enqueueIssue,
+        wakeDispatcher: this.wakeDispatcher,
         logger: this.logger,
         codex: this.codex,
         feed: this.feed,
