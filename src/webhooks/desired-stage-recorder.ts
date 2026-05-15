@@ -8,7 +8,6 @@ import {
 } from "../orchestration-parent-wake.ts";
 import { triggerEventAllowed } from "../project-resolution.ts";
 import { resolveAwaitingInputReason } from "../awaiting-input-reason.ts";
-import { appendDelegationObservedEvent, type DelegationAuditHydration } from "../delegation-audit.ts";
 import {
   decideActiveRunRelease,
   decideAgentSession,
@@ -16,21 +15,18 @@ import {
   decideUnDelegation,
   isResolvedLinearState,
   isTerminalDelegationState,
-  mergeIssueMetadata,
   resolveReDelegationResume,
 } from "./decision-helpers.ts";
+import { isDelegatedToPatchRelay, resolveDelegationTruth } from "./delegation-truth.ts";
+import { syncIssueDependencies } from "./issue-dependency-sync.ts";
+import { resolveLinkedPrAdoption } from "./linked-pr-adoption.ts";
 import type {
-  IssueRecord,
-  IssueMetadata,
   LinearClientProvider,
   NormalizedEvent,
   ProjectConfig,
   TrackedIssueRecord,
 } from "../types.ts";
 import { buildOperatorRetryEvent } from "../operator-retry-event.ts";
-import { resolveLinkedPullRequest } from "../linear-linked-pr-reconciliation.ts";
-import { readRemotePrState } from "../remote-pr-state.ts";
-import { deriveLinkedPrAdoptionOutcome } from "../delegation-linked-pr.ts";
 import type { WakeDispatcher } from "../wake-dispatcher.ts";
 
 export class DesiredStageRecorder {
@@ -63,13 +59,14 @@ export class DesiredStageRecorder {
     const incomingAgentSessionId = params.normalized.agentSession?.id;
     const hasPendingWake = this.db.issueSessions.peekIssueSessionWake(params.project.id, normalizedIssue.id) !== undefined;
 
-    if (!existingIssue && !this.isDelegatedToPatchRelay(params.project, normalizedIssue) && !incomingAgentSessionId) {
+    if (!existingIssue && !isDelegatedToPatchRelay(this.db, params.project, normalizedIssue) && !incomingAgentSessionId) {
       return { issue: undefined, wakeRunType: undefined, delegated: false };
     }
 
-    const syncResult = await this.syncIssueDependencies(params.project.id, normalizedIssue);
+    const syncResult = await syncIssueDependencies(this.db, this.linearProvider, params.project.id, normalizedIssue);
     const hydratedIssue = syncResult.issue;
-    const delegation = this.resolveDelegationTruth({
+    const delegation = resolveDelegationTruth({
+      db: this.db,
       project: params.project,
       normalizedIssue,
       hydratedIssue,
@@ -81,7 +78,7 @@ export class DesiredStageRecorder {
       activeRunId: activeRun?.id,
     });
     const delegated = delegation.delegated;
-    const linkedPrAdoption = await this.resolveLinkedPrAdoption({
+    const linkedPrAdoption = await resolveLinkedPrAdoption({
       project: params.project,
       issue: hydratedIssue,
       existingIssue,
@@ -372,145 +369,4 @@ export class DesiredStageRecorder {
     };
   }
 
-  private isDelegatedToPatchRelay(project: ProjectConfig, issue: { delegateId?: string | undefined }): boolean {
-    const installation = this.db.linearInstallations.getLinearInstallationForProject(project.id);
-    if (!installation?.actorId) return false;
-    return issue.delegateId === installation.actorId;
-  }
-
-  private resolveDelegationTruth(params: {
-    project: ProjectConfig;
-    normalizedIssue: IssueMetadata;
-    hydratedIssue: IssueMetadata;
-    existingIssue: IssueRecord | undefined;
-    triggerEvent: string;
-    webhookId: string;
-    actorId?: string | undefined;
-    hydration: DelegationAuditHydration;
-    activeRunId?: number | undefined;
-  }): {
-    delegated: boolean;
-  } {
-    const previousDelegated = params.existingIssue?.delegatedToPatchRelay;
-    const observedDelegated = this.isDelegatedToPatchRelay(params.project, params.hydratedIssue);
-    const explicitDelegateSignal = params.triggerEvent === "delegateChanged";
-    const hasObservedDelegate = params.hydratedIssue.delegateId !== undefined;
-
-    let delegated = observedDelegated;
-    let reason = hasObservedDelegate
-      ? "delegate_id_present"
-      : `missing_delegate_identity_after_${params.hydration}`;
-
-    if (!hasObservedDelegate && !explicitDelegateSignal && previousDelegated !== undefined) {
-      delegated = previousDelegated;
-      reason = `preserved_previous_delegation_after_${params.hydration}`;
-    }
-
-    if (
-      previousDelegated !== delegated
-      || params.hydration === "live_linear_failed"
-      || (!hasObservedDelegate && previousDelegated !== undefined)
-    ) {
-      appendDelegationObservedEvent(this.db, {
-        projectId: params.project.id,
-        linearIssueId: params.normalizedIssue.id,
-        payload: {
-          source: "linear_webhook",
-          webhookId: params.webhookId,
-          triggerEvent: params.triggerEvent,
-          ...(params.actorId ? { actorId: params.actorId } : {}),
-          ...(params.hydratedIssue.delegateId ? { observedDelegateId: params.hydratedIssue.delegateId } : {}),
-          ...(previousDelegated !== undefined ? { previousDelegatedToPatchRelay: previousDelegated } : {}),
-          observedDelegatedToPatchRelay: observedDelegated,
-          appliedDelegatedToPatchRelay: delegated,
-          hydration: params.hydration,
-          ...(params.activeRunId !== undefined ? { activeRunId: params.activeRunId } : {}),
-          decision: "none",
-          reason,
-        },
-      });
-    }
-
-    return { delegated };
-  }
-
-  private async syncIssueDependencies(projectId: string, issue: IssueMetadata): Promise<{
-    issue: IssueMetadata;
-    hydration: DelegationAuditHydration;
-  }> {
-    let source = issue;
-    let hydration: DelegationAuditHydration = "webhook_only";
-    if (!source.relationsKnown) {
-      const linear = await this.linearProvider.forProject(projectId);
-      if (linear) {
-        try {
-          source = mergeIssueMetadata(source, await linear.getIssue(issue.id));
-          hydration = "live_linear";
-        } catch {
-          // Preserve existing dependency rows when webhook relation data is incomplete.
-          hydration = "live_linear_failed";
-        }
-      }
-    }
-
-    if (source.relationsKnown) {
-      this.db.issues.replaceIssueDependencies({
-        projectId,
-        linearIssueId: source.id,
-        blockers: source.blockedBy.map((blocker) => ({
-          blockerLinearIssueId: blocker.id,
-          ...(blocker.identifier ? { blockerIssueKey: blocker.identifier } : {}),
-          ...(blocker.title ? { blockerTitle: blocker.title } : {}),
-          ...(blocker.stateName ? { blockerCurrentLinearState: blocker.stateName } : {}),
-          ...(blocker.stateType ? { blockerCurrentLinearStateType: blocker.stateType } : {}),
-        })),
-      });
-    }
-
-    this.db.issues.replaceIssueParentLink({
-      projectId,
-      childLinearIssueId: source.id,
-      parentLinearIssueId: source.parentId ?? null,
-    });
-
-    return { issue: source, hydration };
-  }
-
-  private async resolveLinkedPrAdoption(params: {
-    project: ProjectConfig;
-    issue: IssueMetadata;
-    existingIssue: IssueRecord | undefined;
-    delegated: boolean;
-    triggerEvent: string;
-  }) {
-    if (!params.delegated) return undefined;
-    if (params.triggerEvent !== "delegateChanged") return undefined;
-    if (params.existingIssue?.prNumber !== undefined) return undefined;
-
-    const resolution = resolveLinkedPullRequest(params.issue.attachments, params.project.github?.repoFullName);
-    if (resolution.kind === "none") return undefined;
-    if (resolution.kind === "ambiguous") {
-      return {
-        factoryState: "awaiting_input" as const,
-        pendingRunType: null,
-        pendingRunContext: undefined,
-        issueUpdates: {},
-      };
-    }
-
-    const remote = await readRemotePrState(resolution.reference.repoFullName, resolution.reference.prNumber);
-    if (!remote) {
-      return {
-        factoryState: "awaiting_input" as const,
-        pendingRunType: null,
-        pendingRunContext: undefined,
-        issueUpdates: {
-          prNumber: resolution.reference.prNumber,
-          prUrl: resolution.reference.url,
-        },
-      };
-    }
-
-    return deriveLinkedPrAdoptionOutcome(params.project, resolution.reference.prNumber, remote);
-  }
 }
