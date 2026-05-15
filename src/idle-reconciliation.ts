@@ -13,7 +13,6 @@ import {
   isDuplicateRepairAttempt,
   isFailingCheckStatus,
   isReviewDecisionApproved,
-  isReviewDecisionChangesRequested,
   isReviewDecisionReviewRequired,
 } from "./idle-reconciliation-helpers.ts";
 import { isMainRepairIssue } from "./main-repair.ts";
@@ -23,6 +22,8 @@ import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
 import { buildClosedPrCleanupFields, resolveClosedPrDisposition } from "./pr-state.ts";
 import { getReviewFixBudget } from "./run-budgets.ts";
 import { queueSettledOrchestrationIssue } from "./orchestration-parent-wake.ts";
+import { fetchPullRequestSnapshot } from "./reconcile-pr-fetch.ts";
+import { buildPrStateUpdates } from "./reconcile-pr-state-updates.ts";
 import { execCommand } from "./utils.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
@@ -420,20 +421,25 @@ export class IdleIssueReconciler {
   private async reconcileFromGitHub(issue: IssueRecord): Promise<void> {
     const project = this.config.projects.find((p) => p.id === issue.projectId);
     if (!project?.github?.repoFullName || !issue.prNumber) return;
-    try {
-      const { stdout } = await execCommand("gh", [
-        "pr", "view", String(issue.prNumber),
-        "--repo", project.github.repoFullName,
-        "--json", "headRefOid,state,reviewDecision,mergeable,mergeStateStatus,statusCheckRollup",
-      ], { timeoutMs: 10_000 });
-      const pr = JSON.parse(stdout) as {
-        headRefOid?: string;
-        state?: string;
-        reviewDecision?: string;
-        mergeable?: string;
-        mergeStateStatus?: string;
-        statusCheckRollup?: GitHubStatusRollupEntry[];
-      };
+    const snapshot = await fetchPullRequestSnapshot(project.github.repoFullName, issue.prNumber);
+    if (!snapshot.ok) {
+      this.logger.debug(
+        { issueKey: issue.issueKey, error: snapshot.error.message },
+        "Failed to query GitHub PR state during reconciliation",
+      );
+      if (issue.prReviewState === "approved") {
+        if (issue.factoryState !== "awaiting_queue" || hasFailureProvenance(issue)) {
+          this.advanceIdleIssue(
+            issue,
+            "awaiting_queue",
+            hasFailureProvenance(issue) ? { clearFailureProvenance: true } : {},
+          );
+        }
+      }
+      return;
+    }
+    const pr = snapshot.pr;
+    {
       const previousHeadSha = issue.prHeadSha;
       const gateCheckNames = getGateCheckNames(project);
       const gateCheckStatus = deriveGateCheckStatusFromRollup(pr.statusCheckRollup, gateCheckNames);
@@ -443,24 +449,7 @@ export class IdleIssueReconciler {
       this.db.issues.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
-        ...(pr.headRefOid ? { prHeadSha: pr.headRefOid } : {}),
-        ...(pr.state === "OPEN" ? { prState: "open" as const } : {}),
-        ...(isReviewDecisionApproved(pr.reviewDecision)
-          ? { prReviewState: "approved" as const }
-          : isReviewDecisionChangesRequested(pr.reviewDecision)
-            ? { prReviewState: "changes_requested" as const }
-            : isReviewDecisionReviewRequired(pr.reviewDecision)
-              ? { prReviewState: "commented" as const }
-            : {}),
-        ...(gateCheckStatus ? { prCheckStatus: gateCheckStatus } : {}),
-        ...(pr.headRefOid && gateCheckStatus
-          ? {
-              lastGitHubCiSnapshotHeadSha: pr.headRefOid,
-              lastGitHubCiSnapshotGateCheckName: gateCheckNames[0] ?? "verify",
-              lastGitHubCiSnapshotGateCheckStatus: gateCheckStatus,
-              lastGitHubCiSnapshotSettledAt: gateCheckStatus === "pending" ? null : new Date().toISOString(),
-            }
-          : {}),
+        ...buildPrStateUpdates(pr, gateCheckStatus, gateCheckNames[0] ?? "verify"),
       });
       if (pr.state === "MERGED") {
         this.db.issues.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "merged" });
@@ -702,18 +691,6 @@ export class IdleIssueReconciler {
           { issueKey: issue.issueKey, prNumber: issue.prNumber, mergeable: pr.mergeable, mergeStateStatus: pr.mergeStateStatus },
           "Reconciliation: PR is dirty but no automation owner was derived",
         );
-      }
-    } catch (error) {
-      this.logger.debug(
-        { issueKey: issue.issueKey, error: error instanceof Error ? error.message : String(error) },
-        "Failed to query GitHub PR state during reconciliation",
-      );
-      if (issue.prReviewState === "approved") {
-        if (issue.factoryState !== "awaiting_queue" || hasFailureProvenance(issue)) {
-          this.advanceIdleIssue(issue, "awaiting_queue", {
-            ...(hasFailureProvenance(issue) ? { clearFailureProvenance: true } : {}),
-          });
-        }
       }
     }
   }
