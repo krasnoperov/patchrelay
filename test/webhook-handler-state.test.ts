@@ -2302,7 +2302,10 @@ test("later issue webhooks recover missed re-delegation from live Linear delegat
     assert.equal(issue?.factoryState, "changes_requested");
     const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-52c");
     assert.equal(wake?.runType, "review_fix");
-    assert.deepEqual(enqueued, []);
+    // The recovery comment must enqueue the re-delegated issue so the
+    // orchestrator picks up the captured wake on the next drain. The
+    // SerialWorkQueue dedupes if other passes also enqueue.
+    assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-52c" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

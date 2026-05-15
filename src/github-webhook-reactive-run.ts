@@ -14,6 +14,7 @@ import {
   resolveGitHubCheckClass,
 } from "./github-webhook-failure-context.ts";
 import { isQueueEvictionFailure, isSettledBranchFailure } from "./github-webhook-policy.ts";
+import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
 type FetchLike = typeof fetch;
 
@@ -35,14 +36,14 @@ export async function maybeEnqueueGitHubReactiveRun(params: {
   db: PatchRelayDatabase;
   logger: Logger;
   feed: OperatorEventFeed | undefined;
-  enqueueIssue: (projectId: string, issueId: string) => void;
+  wakeDispatcher: WakeDispatcher;
   issue: IssueRecord;
   event: NormalizedGitHubEvent;
   project: ProjectConfig | undefined;
   failureContextResolver: GitHubFailureContextResolver;
   fetchImpl: FetchLike;
 }): Promise<void> {
-  const { issue, event, project, logger, feed, enqueueIssue, db, fetchImpl, failureContextResolver } = params;
+  const { issue, event, project, logger, feed, wakeDispatcher, db, fetchImpl, failureContextResolver } = params;
 
   if (isIssueTerminal(issue)) return;
 
@@ -67,7 +68,7 @@ export async function maybeEnqueueGitHubReactiveRun(params: {
       db,
       logger,
       feed,
-      enqueueIssue,
+      wakeDispatcher,
       issue,
       event,
       project,
@@ -81,7 +82,7 @@ export async function maybeEnqueueGitHubReactiveRun(params: {
       db,
       logger,
       feed,
-      enqueueIssue,
+      wakeDispatcher,
       issue,
       event,
       fetchImpl,
@@ -93,13 +94,13 @@ async function handleCheckFailedEvent(params: {
   db: PatchRelayDatabase;
   logger: Logger;
   feed: OperatorEventFeed | undefined;
-  enqueueIssue: (projectId: string, issueId: string) => void;
+  wakeDispatcher: WakeDispatcher;
   issue: IssueRecord;
   event: NormalizedGitHubEvent;
   project: ProjectConfig | undefined;
   failureContextResolver: GitHubFailureContextResolver;
 }): Promise<void> {
-  const { db, logger, feed, enqueueIssue, issue, event, project, failureContextResolver } = params;
+  const { db, logger, feed, wakeDispatcher, issue, event, project, failureContextResolver } = params;
 
   // Plan §4.3: while In Deploy (`awaiting_queue`), branch CI is metadata
   // only — the lander owns admission, and its spec CI on the integration
@@ -124,20 +125,14 @@ async function handleCheckFailedEvent(params: {
     if (hasDuplicatePendingReactiveRun(db, feed, issue, "queue_repair", failureContext)) {
       return;
     }
-    const hadPendingWake = db.issueSessions.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
-    db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
+    const queuedRunType = wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
       eventType: "merge_steward_incident",
       eventJson: JSON.stringify({
         ...queueRepairContext,
         ...failureContext,
       }),
-      dedupeKey: failureContext.failureSignature,
+      ...(failureContext.failureSignature ? { dedupeKey: failureContext.failureSignature } : {}),
     });
-    const queuedRunType = hadPendingWake
-      ? db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)?.runType
-      : enqueuePendingSessionWake(db, enqueueIssue, issue.projectId, issue.linearIssueId);
     logger.info({ issueKey: issue.issueKey, checkName: event.checkName }, "Queue eviction detected, enqueued queue repair");
     feed?.publish({
       level: "warn",
@@ -175,7 +170,6 @@ async function handleCheckFailedEvent(params: {
   if (hasDuplicatePendingReactiveRun(db, feed, issue, "ci_repair", failureContext)) {
     return;
   }
-  const hadPendingWake = db.issueSessions.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
   const snapshot = getRelevantGitHubCiSnapshot(db, issue, event);
   db.issues.upsertIssue({
     projectId: issue.projectId,
@@ -189,20 +183,15 @@ async function handleCheckFailedEvent(params: {
     lastGitHubFailureAt: new Date().toISOString(),
     lastQueueIncidentJson: null,
   });
-  db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-    projectId: issue.projectId,
-    linearIssueId: issue.linearIssueId,
+  const queuedRunType = wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
     eventType: "settled_red_ci",
     eventJson: JSON.stringify({
       ...failureContext,
       checkClass: resolveGitHubCheckClass(failureContext.checkName ?? event.checkName, project),
       ...(snapshot ? { ciSnapshot: snapshot } : {}),
     }),
-    dedupeKey: failureContext.failureSignature,
+    ...(failureContext.failureSignature ? { dedupeKey: failureContext.failureSignature } : {}),
   });
-  const queuedRunType = hadPendingWake
-    ? db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)?.runType
-    : enqueuePendingSessionWake(db, enqueueIssue, issue.projectId, issue.linearIssueId);
   logger.info({ issueKey: issue.issueKey, checkName: failureContext.checkName ?? event.checkName }, "Enqueued CI repair run");
   feed?.publish({
     level: "warn",
@@ -220,13 +209,12 @@ async function handleRequestedChangesEvent(params: {
   db: PatchRelayDatabase;
   logger: Logger;
   feed: OperatorEventFeed | undefined;
-  enqueueIssue: (projectId: string, issueId: string) => void;
+  wakeDispatcher: WakeDispatcher;
   issue: IssueRecord;
   event: NormalizedGitHubEvent;
   fetchImpl: FetchLike;
 }): Promise<void> {
-  const { db, logger, feed, enqueueIssue, issue, event, fetchImpl } = params;
-  const hadPendingWake = db.issueSessions.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
+  const { logger, feed, wakeDispatcher, issue, event, fetchImpl } = params;
   const reviewComments = await fetchReviewCommentsForEvent(event, fetchImpl).catch((error) => {
     logger.warn(
       {
@@ -239,9 +227,7 @@ async function handleRequestedChangesEvent(params: {
     );
     return undefined;
   });
-  db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-    projectId: issue.projectId,
-    linearIssueId: issue.linearIssueId,
+  const queuedRunType = wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
     eventType: "review_changes_requested",
     eventJson: JSON.stringify({
       reviewBody: event.reviewBody,
@@ -257,11 +243,6 @@ async function handleRequestedChangesEvent(params: {
       event.reviewerName ?? "unknown-reviewer",
     ].join("::"),
   });
-  const queuedRunType = hadPendingWake
-    ? db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)?.runType
-    : issue.activeRunId === undefined
-      ? enqueuePendingSessionWake(db, enqueueIssue, issue.projectId, issue.linearIssueId)
-      : db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)?.runType;
   logger.info(
     {
       issueKey: issue.issueKey,
@@ -332,20 +313,6 @@ function hasDuplicatePendingReactiveRun(
   }
 
   return false;
-}
-
-function enqueuePendingSessionWake(
-  db: PatchRelayDatabase,
-  enqueueIssue: (projectId: string, issueId: string) => void,
-  projectId: string,
-  issueId: string,
-): string | undefined {
-  const wake = db.issueSessions.peekIssueSessionWake(projectId, issueId);
-  if (!wake) {
-    return undefined;
-  }
-  enqueueIssue(projectId, issueId);
-  return wake.runType;
 }
 
 async function fetchReviewCommentsForEvent(

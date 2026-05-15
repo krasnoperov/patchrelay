@@ -12,6 +12,7 @@ import {
 } from "./comment-policy.ts";
 import { classifyIssue } from "../issue-class.ts";
 import type { NormalizedEvent, ProjectConfig, TrackedIssueRecord } from "../types.ts";
+import type { WakeDispatcher } from "../wake-dispatcher.ts";
 
 const ENQUEUEABLE_STATES = new Set(["pr_open", "changes_requested", "implementing", "delegated", "awaiting_input"]);
 
@@ -19,6 +20,7 @@ export class CommentWakeHandler {
   constructor(
     private readonly db: PatchRelayDatabase,
     private readonly codex: CodexAppServerClient,
+    private readonly wakeDispatcher: WakeDispatcher,
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
   ) {}
@@ -28,8 +30,6 @@ export class CommentWakeHandler {
     project: ProjectConfig;
     trackedIssue: TrackedIssueRecord | undefined;
     isDirectReplyToOutstandingQuestion: (issue: ReturnType<PatchRelayDatabase["getIssue"]>) => boolean;
-    enqueuePendingSessionWake: (projectId: string, issueId: string) => RunType | undefined;
-    peekPendingSessionWakeRunType: (projectId: string, issueId: string) => RunType | undefined;
   }): Promise<void> {
     const { normalized, project, trackedIssue } = params;
     if (
@@ -53,9 +53,7 @@ export class CommentWakeHandler {
     const selfAuthored = isPatchRelayManagedCommentAuthor(installation, normalized.actor, normalized.comment.userName);
     const inertPatchRelayComment = isInertPatchRelayComment(issue, normalized.comment.id, trimmedBody, normalized.actor?.type);
     if (selfAuthored || inertPatchRelayComment) {
-      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
-        projectId: project.id,
-        linearIssueId: normalized.issue.id,
+      this.wakeDispatcher.recordEventAndDispatch(project.id, normalized.issue.id, {
         eventType: "self_comment",
         eventJson: JSON.stringify({
           body: trimmedBody,
@@ -97,9 +95,7 @@ export class CommentWakeHandler {
           return;
         }
         if (intent === "stop") {
-          this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
-            projectId: project.id,
-            linearIssueId: normalized.issue.id,
+          this.wakeDispatcher.recordEventAndDispatch(project.id, normalized.issue.id, {
             eventType: "stop_requested",
             eventJson: JSON.stringify({
               body: trimmedBody,
@@ -133,19 +129,13 @@ export class CommentWakeHandler {
           return;
         }
         const runType = issue.prReviewState === "changes_requested" ? "review_fix" : "implementation";
-        const hadPendingWake = this.db.issueSessions.peekIssueSessionWake(project.id, normalized.issue.id) !== undefined;
-        this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
-          projectId: project.id,
-          linearIssueId: normalized.issue.id,
+        const queuedRunType = this.wakeDispatcher.recordEventAndDispatch(project.id, normalized.issue.id, {
           eventType: directReply ? "direct_reply" : "followup_comment",
           eventJson: JSON.stringify({
             body: trimmedBody,
             author: normalized.comment.userName,
           }),
         });
-        const queuedRunType = hadPendingWake
-          ? params.peekPendingSessionWakeRunType(project.id, normalized.issue.id)
-          : params.enqueuePendingSessionWake(project.id, normalized.issue.id);
         this.feed?.publish({
           level: "info",
           kind: "comment",
@@ -179,9 +169,7 @@ export class CommentWakeHandler {
         activeRunId: null,
         factoryState: "awaiting_input",
       });
-      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
-        projectId: project.id,
-        linearIssueId: normalized.issue.id,
+      this.wakeDispatcher.recordEventAndDispatch(project.id, normalized.issue.id, {
         eventType: "stop_requested",
         eventJson: JSON.stringify({
           body: trimmedBody,
@@ -237,20 +225,14 @@ export class CommentWakeHandler {
       });
     } catch (error) {
       this.logger.warn({ issueKey: trackedIssue?.issueKey, error: error instanceof Error ? error.message : String(error) }, "Failed to deliver follow-up comment");
-      const hadPendingWake = this.db.issueSessions.hasPendingIssueSessionEvents(project.id, normalized.issue.id);
       const directReply = params.isDirectReplyToOutstandingQuestion(issue);
-      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
-        projectId: project.id,
-        linearIssueId: normalized.issue.id,
+      this.wakeDispatcher.recordEventAndDispatch(project.id, normalized.issue.id, {
         eventType: directReply ? "direct_reply" : "followup_comment",
         eventJson: JSON.stringify({
           body: trimmedBody,
           author: normalized.comment.userName,
         }),
       });
-      if (!hadPendingWake) {
-        params.enqueuePendingSessionWake(project.id, normalized.issue.id);
-      }
       this.feed?.publish({
         level: "warn",
         kind: "comment",

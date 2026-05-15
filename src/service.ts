@@ -22,6 +22,7 @@ import {
 import { ServiceRuntime } from "./service-runtime.ts";
 import { ServiceIssueActions } from "./service-issue-actions.ts";
 import { ServiceStartupRecovery } from "./service-startup-recovery.ts";
+import { WakeDispatcher } from "./wake-dispatcher.ts";
 import { WebhookHandler } from "./webhook-handler.ts";
 import { acceptIncomingWebhook } from "./service-webhooks.ts";
 import type { AppConfig, LinearClient, LinearClientProvider } from "./types.ts";
@@ -55,6 +56,23 @@ export class PatchRelayService {
     let enqueueIssue: (projectId: string, issueId: string) => void = () => {
       throw new Error("Service runtime enqueueIssue is not initialized");
     };
+    let leaseRelease: (projectId: string, issueId: string) => void = () => {
+      throw new Error("WakeDispatcher releaseLease is not yet bound");
+    };
+
+    // The dispatcher owns every "append event + maybe enqueue" and every
+    // "release run + drain pending wake" call. See src/wake-dispatcher.ts
+    // for why. Both `enqueueIssue` and `leaseRelease` are late-bound — the
+    // runtime owns the queue, and the lease service lives inside the
+    // orchestrator (its construction depends on the Codex client). All
+    // downstream consumers receive this single dispatcher instance.
+    const dispatcher = new WakeDispatcher(
+      db,
+      (projectId, issueId) => enqueueIssue(projectId, issueId),
+      (projectId, issueId) => leaseRelease(projectId, issueId),
+      logger,
+      this.feed,
+    );
 
     this.orchestrator = new RunOrchestrator(
       config,
@@ -62,24 +80,26 @@ export class PatchRelayService {
       codex,
       this.linearProvider,
       (projectId: string, issueId: string) => enqueueIssue(projectId, issueId),
+      dispatcher,
       logger,
       this.feed,
       this.configPath,
     );
+    leaseRelease = (projectId, issueId) => this.orchestrator.leaseService.release(projectId, issueId);
 
     this.webhookHandler = new WebhookHandler(
       config,
       db,
       this.linearProvider,
       codex,
-      (projectId, issueId) => enqueueIssue(projectId, issueId),
+      dispatcher,
       logger,
       this.feed,
     );
 
     this.githubWebhookHandler = new GitHubWebhookHandler(
       config, db, this.linearProvider,
-      (projectId, issueId) => enqueueIssue(projectId, issueId),
+      dispatcher,
       logger, codex, this.feed,
     );
     const runtime = new ServiceRuntime(

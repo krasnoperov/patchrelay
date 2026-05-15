@@ -14,6 +14,7 @@ import {
   type MainRepairCheckSummary,
 } from "./main-repair.ts";
 import { execCommand } from "./utils.ts";
+import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
 const MAIN_BRANCH_HEALTH_GRACE_MS = 120_000;
 
@@ -37,7 +38,7 @@ export class MainBranchHealthMonitor {
     private readonly db: PatchRelayDatabase,
     private readonly config: AppConfig,
     private readonly linearProvider: LinearClientProvider,
-    private readonly enqueueIssue: (projectId: string, issueId: string) => void,
+    private readonly wakeDispatcher: WakeDispatcher,
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
   ) {}
@@ -105,9 +106,7 @@ export class MainBranchHealthMonitor {
       factoryState: "delegated",
     });
 
-    this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(projectId, issue.linearIssueId, {
-      projectId,
-      linearIssueId: issue.linearIssueId,
+    this.wakeDispatcher.recordEventAndDispatch(projectId, issue.linearIssueId, {
       eventType: "delegated",
       eventJson: JSON.stringify({
         runType: "main_repair",
@@ -119,10 +118,6 @@ export class MainBranchHealthMonitor {
       }),
       dedupeKey: `main_repair:${projectId}:${summary.baseSha}:${summary.failingChecks.map((check) => check.name).join("|")}`,
     });
-
-    if (this.db.issueSessions.peekIssueSessionWake(projectId, issue.linearIssueId)) {
-      this.enqueueIssue(projectId, issue.linearIssueId);
-    }
 
     this.feed?.publish({
       level: "warn",
@@ -178,9 +173,7 @@ export class MainBranchHealthMonitor {
       activeRunId: null,
     });
 
-    this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
+    this.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
       eventType: "delegated",
       eventJson: JSON.stringify({
         runType: "main_repair",
@@ -196,9 +189,6 @@ export class MainBranchHealthMonitor {
       }),
       dedupeKey: `main_repair:${issue.projectId}:${summary.baseSha}:${summary.failingChecks.map((check) => check.name).join("|")}`,
     });
-    if (this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
-      this.enqueueIssue(issue.projectId, issue.linearIssueId);
-    }
   }
 
   private async resolveRecoveredMainRepair(issue: IssueRecord): Promise<void> {

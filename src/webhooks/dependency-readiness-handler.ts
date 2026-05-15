@@ -1,9 +1,11 @@
 import type { PatchRelayDatabase } from "../db.ts";
 import type { RunType } from "../factory-state.ts";
+import type { WakeDispatcher } from "../wake-dispatcher.ts";
 
 export class DependencyReadinessHandler {
   constructor(
     private readonly db: PatchRelayDatabase,
+    private readonly wakeDispatcher: WakeDispatcher,
     private readonly peekPendingSessionWakeRunType: (projectId: string, issueId: string) => RunType | undefined,
   ) {}
 
@@ -45,9 +47,7 @@ export class DependencyReadinessHandler {
           pendingRunContextJson: null,
         });
       }
-      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(projectId, dependent.linearIssueId, {
-        projectId,
-        linearIssueId: dependent.linearIssueId,
+      this.wakeDispatcher.recordEventAndDispatch(projectId, dependent.linearIssueId, {
         eventType: "delegated",
         dedupeKey: `delegated:${dependent.linearIssueId}`,
       });

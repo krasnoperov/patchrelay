@@ -2,6 +2,7 @@ import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
+import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
 // Plan §8.3-8.4: when a parent PR's head moves (review-fix push,
 // eviction repair, base-branch update), child PRs stacked on it
@@ -12,10 +13,10 @@ export function maybeFanChildRebaseWakes(params: {
   db: PatchRelayDatabase;
   logger: Logger;
   feed?: OperatorEventFeed;
-  enqueueIssue: (projectId: string, issueId: string) => void;
+  wakeDispatcher: WakeDispatcher;
   event: NormalizedGitHubEvent;
 }): void {
-  const { db, logger, feed, enqueueIssue, event } = params;
+  const { db, logger, feed, wakeDispatcher, event } = params;
   if (event.triggerEvent !== "pr_synchronize") return;
   if (!event.branchName) return;
 
@@ -37,7 +38,10 @@ export function maybeFanChildRebaseWakes(params: {
       linearIssueId: child.linearIssueId,
       pendingRunType: "branch_upkeep",
     });
-    enqueueIssue(child.projectId, child.linearIssueId);
+    // The pending_run_type field above isn't an event, so we still need
+    // an explicit dispatch call. dispatchIfWakePending will pick up the
+    // wake derived from the legacy pendingRunType column.
+    wakeDispatcher.dispatchIfWakePending(child.projectId, child.linearIssueId);
     logger.info(
       {
         parentBranch: event.branchName,

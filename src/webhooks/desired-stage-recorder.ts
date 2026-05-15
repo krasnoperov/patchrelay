@@ -31,11 +31,13 @@ import { buildOperatorRetryEvent } from "../operator-retry-event.ts";
 import { resolveLinkedPullRequest } from "../linear-linked-pr-reconciliation.ts";
 import { readRemotePrState } from "../remote-pr-state.ts";
 import { deriveLinkedPrAdoptionOutcome } from "../delegation-linked-pr.ts";
+import type { WakeDispatcher } from "../wake-dispatcher.ts";
 
 export class DesiredStageRecorder {
   constructor(
     private readonly db: PatchRelayDatabase,
     private readonly linearProvider: LinearClientProvider,
+    private readonly wakeDispatcher: WakeDispatcher,
     private readonly feed?: OperatorEventFeed,
   ) {}
 
@@ -333,6 +335,7 @@ export class DesiredStageRecorder {
         },
         eventType: "child_changed",
         changeKind: "detached",
+        wakeDispatcher: this.wakeDispatcher,
       });
     }
 
@@ -357,6 +360,7 @@ export class DesiredStageRecorder {
           child: issue,
           eventType,
           changeKind,
+          wakeDispatcher: this.wakeDispatcher,
         });
       }
     }

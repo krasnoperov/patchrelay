@@ -235,6 +235,96 @@ function normalizeRunOutcomeForComparison(outcome: ReturnType<typeof summarizeRu
   };
 }
 
+test("idle reconciliation re-enqueues issues with orphaned pending wakes", async () => {
+  // Regression: an unprocessed review_changes_requested event sat for hours
+  // because the original enqueueIssue silently dropped (lease race / lost
+  // in-memory queue) and no safety net re-enqueued it. The idle reconciler
+  // must drain stuck wakes on every tick.
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-orphan-wake-"));
+  try {
+    const { db, enqueueCalls, orchestrator } = createOrchestrator(baseDir);
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-orphan-wake",
+      issueKey: "USE-ORPHAN",
+      branchName: "feat-orphan",
+      prNumber: 200,
+      prState: "open",
+      prHeadSha: "sha-orphan",
+      prAuthorLogin: "patchrelay[bot]",
+      factoryState: "changes_requested",
+      prReviewState: "changes_requested",
+      prCheckStatus: "success",
+      delegatedToPatchRelay: true,
+    });
+    db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "review_changes_requested",
+      eventJson: JSON.stringify({ reviewerName: "review-quill[bot]" }),
+      dedupeKey: "review_changes_requested::sha-orphan::review-quill[bot]",
+    });
+    enqueueCalls.length = 0;
+
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    const orphanedEnqueues = enqueueCalls.filter(
+      (call) => call.projectId === "usertold" && call.issueId === "issue-orphan-wake",
+    );
+    assert.ok(orphanedEnqueues.length >= 1, "stuck pending wake should be re-enqueued");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("idle reconciliation does not re-enqueue issues that already have an active run", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-active-run-orphan-"));
+  try {
+    const { db, enqueueCalls, orchestrator } = createOrchestrator(baseDir);
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-active-with-wake",
+      issueKey: "USE-ACTIVE",
+      branchName: "feat-active",
+      prNumber: 201,
+      prState: "open",
+      prAuthorLogin: "patchrelay[bot]",
+      factoryState: "changes_requested",
+      prReviewState: "changes_requested",
+      prCheckStatus: "success",
+      delegatedToPatchRelay: true,
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+    });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+    db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "review_changes_requested",
+      eventJson: JSON.stringify({ reviewerName: "review-quill[bot]" }),
+      dedupeKey: "review_changes_requested::sha-active::review-quill[bot]",
+    });
+    enqueueCalls.length = 0;
+
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    const orphanedEnqueues = enqueueCalls.filter(
+      (call) => call.projectId === "usertold" && call.issueId === "issue-active-with-wake",
+    );
+    assert.equal(orphanedEnqueues.length, 0, "issues with an active run own their drain via the finalizer");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("reconcileIdleIssues advances approved idle issues to awaiting_queue", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-approved-"));
   try {

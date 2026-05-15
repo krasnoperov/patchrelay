@@ -7,6 +7,7 @@ import test from "node:test";
 import pino from "pino";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { MainBranchHealthMonitor } from "../src/main-branch-health-monitor.ts";
+import { createTestWakeDispatcher } from "./helpers/wake-dispatcher.ts";
 import type { LinearClient, LinearIssueSnapshot } from "../src/linear-types.ts";
 import type { AppConfig } from "../src/types.ts";
 
@@ -167,7 +168,7 @@ test("main branch health monitor creates a main_repair issue and wake when main 
       db,
       config,
       { forProject: async () => linearClient },
-      (projectId, issueId) => { enqueueCalls.push({ projectId, issueId }); },
+      createTestWakeDispatcher(db, (projectId, issueId) => { enqueueCalls.push({ projectId, issueId }); }),
       pino({ enabled: false }),
     );
 
@@ -225,7 +226,7 @@ test("main branch health monitor treats timed_out checks as broken main", async 
       db,
       config,
       { forProject: async () => linearClient },
-      () => undefined,
+      createTestWakeDispatcher(db, () => undefined),
       pino({ enabled: false }),
     );
 
@@ -289,7 +290,7 @@ test("main branch health monitor closes stale main_repair issues once main recov
       db,
       config,
       { forProject: async () => linearClient },
-      () => undefined,
+      createTestWakeDispatcher(db, () => undefined),
       pino({ enabled: false }),
     );
 
@@ -351,7 +352,7 @@ test("main branch health monitor reuses a failed main_repair issue instead of cr
       db,
       config,
       { forProject: async () => linearClient },
-      (projectId, issueId) => { enqueueCalls.push({ projectId, issueId }); },
+      createTestWakeDispatcher(db, (projectId, issueId) => { enqueueCalls.push({ projectId, issueId }); }),
       pino({ enabled: false }),
     );
 

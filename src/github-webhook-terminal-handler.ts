@@ -9,19 +9,20 @@ import { resolvePreferredCompletedLinearState } from "./linear-workflow.ts";
 import { syncGitHubLinearSession } from "./github-linear-session-sync.ts";
 import type { AppConfig } from "./types.ts";
 import { wakeOrchestrationParentsForChildEvent } from "./orchestration-parent-wake.ts";
+import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
 export async function handleGitHubTerminalPrEvent(params: {
   config: AppConfig;
   db: PatchRelayDatabase;
   linearProvider: LinearClientProvider;
-  enqueueIssue: (projectId: string, issueId: string) => void;
+  wakeDispatcher: WakeDispatcher;
   logger: Logger;
   codex: { steerTurn(options: { threadId: string; turnId: string; input: string }): Promise<void> };
   feed: OperatorEventFeed | undefined;
   issue: IssueRecord;
   event: NormalizedGitHubEvent;
 }): Promise<void> {
-  const { db, linearProvider, enqueueIssue, logger, codex, issue, event, config } = params;
+  const { db, linearProvider, wakeDispatcher, logger, codex, issue, event, config } = params;
   const eventType = event.triggerEvent === "pr_merged" ? "pr_merged" : "pr_closed";
   db.issueSessions.appendIssueSessionEvent({
     projectId: issue.projectId,
@@ -74,22 +75,17 @@ export async function handleGitHubTerminalPrEvent(params: {
   db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(issue.projectId, issue.linearIssueId);
   const updatedIssue = db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
   if (event.triggerEvent === "pr_closed" && resolveClosedPrDisposition(issue) === "redelegate") {
-    db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
+    wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
       eventType: "delegated",
       dedupeKey: `github_pr_closed:implementation:${issue.linearIssueId}`,
     });
-    if (db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
-      enqueueIssue(issue.projectId, issue.linearIssueId);
-    }
   }
   if (event.triggerEvent === "pr_merged") {
     wakeOrchestrationParentsForChildEvent({
       db,
       child: updatedIssue,
       eventType: "child_delivered",
-      enqueueIssue,
+      wakeDispatcher,
     });
     await completeLinearIssueAfterMerge(params, updatedIssue);
   }

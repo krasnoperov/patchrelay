@@ -1,6 +1,7 @@
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
 import { classifyIssue } from "./issue-class.ts";
+import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
 export const ORCHESTRATION_SETTLE_WINDOW_MS = 10_000;
 
@@ -53,7 +54,7 @@ export function startOrchestrationSettleWindow(
 export function queueSettledOrchestrationIssue(params: {
   db: PatchRelayDatabase;
   issue: Pick<IssueRecord, "projectId" | "linearIssueId">;
-  enqueueIssue?: ((projectId: string, issueId: string) => void) | undefined;
+  wakeDispatcher: WakeDispatcher;
   promptContext?: string | undefined;
 }): boolean {
   params.db.issues.upsertIssue({
@@ -61,22 +62,20 @@ export function queueSettledOrchestrationIssue(params: {
     linearIssueId: params.issue.linearIssueId,
     orchestrationSettleUntil: null,
   });
-  params.db.issueSessions.appendIssueSessionEventRespectingActiveLease(params.issue.projectId, params.issue.linearIssueId, {
-    projectId: params.issue.projectId,
-    linearIssueId: params.issue.linearIssueId,
-    eventType: "delegated",
-    eventJson: JSON.stringify({
-      ...(params.promptContext
-        ? { promptContext: params.promptContext }
-        : { promptContext: "The orchestration child set has settled enough to begin planning." }),
-    }),
-    dedupeKey: `delegated:orchestration_settle:${params.issue.linearIssueId}`,
-  });
-  if (params.db.issueSessions.peekIssueSessionWake(params.issue.projectId, params.issue.linearIssueId)) {
-    params.enqueueIssue?.(params.issue.projectId, params.issue.linearIssueId);
-    return true;
-  }
-  return false;
+  const dispatched = params.wakeDispatcher.recordEventAndDispatch(
+    params.issue.projectId,
+    params.issue.linearIssueId,
+    {
+      eventType: "delegated",
+      eventJson: JSON.stringify({
+        ...(params.promptContext
+          ? { promptContext: params.promptContext }
+          : { promptContext: "The orchestration child set has settled enough to begin planning." }),
+      }),
+      dedupeKey: `delegated:orchestration_settle:${params.issue.linearIssueId}`,
+    },
+  );
+  return dispatched !== undefined;
 }
 
 export function wakeOrchestrationParentsForChildEvent(params: {
@@ -84,7 +83,7 @@ export function wakeOrchestrationParentsForChildEvent(params: {
   child: Pick<IssueRecord, "projectId" | "linearIssueId" | "parentLinearIssueId" | "issueKey" | "title" | "factoryState" | "currentLinearState" | "prNumber" | "prState">;
   eventType: "child_changed" | "child_delivered" | "child_regressed";
   changeKind?: "attached" | "detached" | "duplicate" | "canceled" | "updated" | undefined;
-  enqueueIssue?: ((projectId: string, issueId: string) => void) | undefined;
+  wakeDispatcher: WakeDispatcher;
   now?: number | undefined;
 }): string[] {
   const parentIds: string[] = [];
@@ -107,9 +106,7 @@ export function wakeOrchestrationParentsForChildEvent(params: {
       continue;
     }
 
-    params.db.issueSessions.appendIssueSessionEventRespectingActiveLease(parent.projectId, parent.linearIssueId, {
-      projectId: parent.projectId,
-      linearIssueId: parent.linearIssueId,
+    params.wakeDispatcher.recordEventAndDispatch(parent.projectId, parent.linearIssueId, {
       eventType: params.eventType,
       eventJson: JSON.stringify({
         childIssueId: params.child.linearIssueId,
@@ -123,9 +120,6 @@ export function wakeOrchestrationParentsForChildEvent(params: {
       }),
       dedupeKey: `${params.eventType}:${parent.linearIssueId}:${params.child.linearIssueId}:${params.child.factoryState}:${params.changeKind ?? params.child.prState ?? "no-pr"}`,
     });
-    if (params.db.issueSessions.peekIssueSessionWake(parent.projectId, parent.linearIssueId)) {
-      params.enqueueIssue?.(parent.projectId, parent.linearIssueId);
-    }
     parentIds.push(parent.linearIssueId);
   }
 

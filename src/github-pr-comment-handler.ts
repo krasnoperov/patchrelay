@@ -1,11 +1,12 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
+import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
 export class GitHubPrCommentHandler {
   constructor(
     private readonly db: PatchRelayDatabase,
-    private readonly enqueueIssue: (projectId: string, issueId: string) => void,
+    private readonly wakeDispatcher: WakeDispatcher,
     private readonly logger: Logger,
     private readonly codex: { steerTurn(options: { threadId: string; turnId: string; input: string }): Promise<void> },
     private readonly feed?: OperatorEventFeed,
@@ -56,14 +57,9 @@ export class GitHubPrCommentHandler {
       }
     }
 
-    this.db.issueSessions.appendIssueSessionEvent({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
+    this.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
       eventType: "followup_comment",
       eventJson: JSON.stringify({ body, author }),
     });
-    if (this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
-      this.enqueueIssue(issue.projectId, issue.linearIssueId);
-    }
   }
 }
