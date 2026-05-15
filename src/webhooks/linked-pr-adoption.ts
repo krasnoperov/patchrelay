@@ -28,7 +28,7 @@ export async function resolveLinkedPrAdoption(
   if (resolution.kind === "none") return undefined;
   if (resolution.kind === "ambiguous") {
     return {
-      factoryState: "awaiting_input",
+      factoryState: "awaiting_input" as const,
       pendingRunType: null,
       pendingRunContext: undefined,
       issueUpdates: {},
@@ -38,7 +38,7 @@ export async function resolveLinkedPrAdoption(
   const remote = await readRemotePrState(resolution.reference.repoFullName, resolution.reference.prNumber);
   if (!remote) {
     return {
-      factoryState: "awaiting_input",
+      factoryState: "awaiting_input" as const,
       pendingRunType: null,
       pendingRunContext: undefined,
       issueUpdates: {
