@@ -1,5 +1,5 @@
 import type { runPreflight } from "../preflight.ts";
-import type { ClusterHealthReport } from "./cluster-health.ts";
+import type { ClusterHealthReport } from "./cluster-health/index.ts";
 import type { Output } from "./command-types.ts";
 import type { CliUsageError } from "./errors.ts";
 import { helpTextFor } from "./help.ts";

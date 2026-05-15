@@ -1,6 +1,6 @@
 import type { AppConfig } from "../../types.ts";
 import type { CommandRunner, Output, ParsedArgs } from "../command-types.ts";
-import { collectClusterHealth } from "../cluster-health.ts";
+import { collectClusterHealth } from "../cluster-health/index.ts";
 import type { CliDataAccess } from "../data.ts";
 import { CliUsageError } from "../errors.ts";
 import { formatJson } from "../formatters/json.ts";
