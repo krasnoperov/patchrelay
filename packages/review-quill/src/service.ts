@@ -13,8 +13,8 @@ import type {
 import type { SqliteStore } from "./db/sqlite-store.ts";
 import type { GitHubClient } from "./github-client.ts";
 import type { ReviewRunner } from "./review-runner.ts";
-import type { PullRequestReviewRecord } from "./types.ts";
-import { decorateAttempt, describeAttemptState, isAttemptActive } from "./attempt-state.ts";
+import { AttemptReconciler } from "./attempt-reconciler.ts";
+import { decorateAttempt } from "./attempt-state.ts";
 import { getLatestAttemptsByPullRequest } from "./attempt-summary.ts";
 import { CannotIntegrateError, buildReviewContext } from "./review-context.ts";
 import {
@@ -23,17 +23,21 @@ import {
   tryCarryForward,
 } from "./carry-forward.ts";
 import {
+  determinePendingCheckState,
+  pendingCheckNames,
+} from "./pending-check-classifier.ts";
+import {
   buildInlineCommentBody,
   buildReviewBody,
   classifyPublicationDisposition,
   filterFindings,
-  findStaleDecisiveReviews,
   hasMatchingLatestReviewForHead,
   REVIEW_FINDING_CONFIDENCE_THRESHOLD,
   REVIEW_MAX_INLINE_COMMENTS,
   resolveEvent,
 } from "./review-publication-policy.ts";
 import { evaluateReviewEligibility } from "./review-eligibility.ts";
+import { ReviewSemaphore } from "./review-semaphore.ts";
 
 /** Default cap on parallel review executions. ~20 is comfortable on a
  *  single host: each review materializes its own tmp worktree (small)
@@ -55,10 +59,8 @@ export class ReviewQuillService {
    * head_sha)` constraint on `review_attempts`.
    */
   private readonly inFlightReviews = new Map<string, Promise<void>>();
-  /** Semaphore-style waiter list so dispatch fans out under a soft cap. */
-  private readonly reviewSemaphoreWaiters: Array<() => void> = [];
-  private inFlightReviewCount = 0;
-  private readonly maxConcurrentReviews: number;
+  private readonly semaphore: ReviewSemaphore;
+  private readonly reconciler: AttemptReconciler;
   private readonly runtime: ReviewQuillRuntimeStatus = {
     lastReconcileStartedAt: null,
     lastReconcileCompletedAt: null,
@@ -76,8 +78,18 @@ export class ReviewQuillService {
     private readonly logger: Logger,
     private readonly reviewerLogin?: string,
   ) {
-    this.maxConcurrentReviews =
-      config.reconciliation.maxConcurrentReviews ?? DEFAULT_MAX_CONCURRENT_REVIEWS;
+    const capacity = config.reconciliation.maxConcurrentReviews ?? DEFAULT_MAX_CONCURRENT_REVIEWS;
+    this.semaphore = new ReviewSemaphore(capacity, (inFlight) => {
+      this.runtime.inFlightReviews = inFlight;
+    });
+    this.reconciler = new AttemptReconciler({
+      store: this.store,
+      github: this.github,
+      logger: this.logger,
+      config: this.config,
+      serviceStartedAt: this.startedAt,
+      reviewerLogin: this.reviewerLogin,
+    });
   }
 
   async start(): Promise<void> {
@@ -152,90 +164,13 @@ export class ReviewQuillService {
     };
   }
 
-  private static determinePendingCheckState(
-    checks: Array<{ name: string; status: string; conclusion?: string }>,
-    requiredChecks: string[],
-  ): ReviewQuillPendingReview["reason"] {
-    const loweredChecks = checks.map((check) => ({
-      name: check.name.toLowerCase(),
-      status: check.status.toLowerCase(),
-      conclusion: check.conclusion?.toLowerCase(),
-    }));
-    const byName = new Map(loweredChecks.map((check) => [check.name, check]));
-    if (requiredChecks.length > 0) {
-      for (const required of requiredChecks) {
-        const check = byName.get(required.toLowerCase());
-        if (!check || check.status !== "completed") {
-          return "checks_running";
-        }
-        if (!["success", "neutral", "skipped"].includes(check.conclusion ?? "")) {
-          return "checks_failed";
-        }
-      }
-      return "checks_unknown";
-    }
-
-    if (loweredChecks.length === 0) {
-      return "checks_unknown";
-    }
-    if (loweredChecks.some((check) => check.status !== "completed")) {
-      return "checks_running";
-    }
-    if (loweredChecks.some((check) => !["success", "neutral", "skipped"].includes(check.conclusion ?? ""))) {
-      return "checks_failed";
-    }
-    return "checks_unknown";
-  }
-
-  private static pendingCheckNames(
-    checks: Array<{ name: string; status: string; conclusion?: string }>,
-    requiredChecks: string[],
-  ): { failed: string[]; pending: string[] } {
-    const loweredChecks = checks.map((check) => ({
-      name: check.name.toLowerCase(),
-      status: check.status.toLowerCase(),
-      conclusion: check.conclusion?.toLowerCase(),
-    }));
-    const byName = new Map(loweredChecks.map((check) => [check.name, check]));
-    if (requiredChecks.length > 0) {
-      return requiredChecks.reduce((acc, required) => {
-        const check = byName.get(required.toLowerCase());
-        if (!check) {
-          acc.pending.push(required);
-          return acc;
-        }
-        if (check.status !== "completed") {
-          acc.pending.push(required);
-          return acc;
-        }
-        if (!["success", "neutral", "skipped"].includes(check.conclusion ?? "")) {
-          acc.failed.push(required);
-        }
-        return acc;
-      }, { failed: [], pending: [] } as { failed: string[]; pending: string[] });
-    }
-
-    return checks.reduce((acc, check) => {
-      if (check.status !== "completed") {
-        acc.pending.push(check.name);
-      } else if (!["success", "neutral", "skipped"].includes(check.conclusion ?? "")) {
-        acc.failed.push(check.name);
-      }
-      return acc;
-    }, { failed: [], pending: [] } as { failed: string[]; pending: string[] });
-  }
-
   private setPendingReviews(repoId: string, pending: ReviewQuillPendingReview[]): void {
     this.pendingReviewsByRepo.set(repoId, pending);
   }
 
-  private get pendingRepoIds(): string[] {
-    return [...this.pendingReviewsByRepo.keys()];
-  }
-
   private prunePendingReviews(openRepoIds: string[]): void {
     const toKeep = new Set(openRepoIds);
-    for (const repoId of this.pendingRepoIds) {
+    for (const repoId of Array.from(this.pendingReviewsByRepo.keys())) {
       if (!toKeep.has(repoId)) {
         this.pendingReviewsByRepo.delete(repoId);
       }
@@ -318,33 +253,6 @@ export class ReviewQuillService {
   }
 
   /**
-   * Acquires one slot in the review-execution semaphore (default cap 20).
-   * Returns a `release` function the caller MUST invoke in `finally` —
-   * otherwise the slot leaks and parallelism degrades over time.
-   */
-  private async acquireReviewSlot(): Promise<() => void> {
-    if (this.inFlightReviewCount < this.maxConcurrentReviews) {
-      this.inFlightReviewCount += 1;
-      this.runtime.inFlightReviews = this.inFlightReviewCount;
-      return () => this.releaseReviewSlot();
-    }
-    return new Promise<() => void>((resolve) => {
-      this.reviewSemaphoreWaiters.push(() => {
-        this.inFlightReviewCount += 1;
-        this.runtime.inFlightReviews = this.inFlightReviewCount;
-        resolve(() => this.releaseReviewSlot());
-      });
-    });
-  }
-
-  private releaseReviewSlot(): void {
-    this.inFlightReviewCount -= 1;
-    this.runtime.inFlightReviews = this.inFlightReviewCount;
-    const waiter = this.reviewSemaphoreWaiters.shift();
-    if (waiter) waiter();
-  }
-
-  /**
    * Dispatches a review as an independent worker. Idempotent: if the same
    * (repo, pr, head) is already in flight, the existing promise is returned
    * so the caller doesn't double-fire. The promise resolves when the review
@@ -361,7 +269,7 @@ export class ReviewQuillService {
     if (inFlight) return inFlight;
 
     const work = (async () => {
-      const release = await this.acquireReviewSlot();
+      const release = await this.semaphore.acquire();
       try {
         await this.executeReview(repo, pr, existing, identity);
       } catch (error) {
@@ -393,16 +301,16 @@ export class ReviewQuillService {
   private async discoverRepo(repo: ReviewQuillRepositoryConfig): Promise<void> {
     const prs = await this.github.listOpenPullRequests(repo.repoFullName);
     const pendingForRepo: ReviewQuillPendingReview[] = [];
-    await this.reconcileClosedPullRequestAttempts(repo, prs);
+    await this.reconciler.reconcileClosedPullRequestAttempts(repo, prs);
     for (const pr of prs) {
-      await this.reconcileActiveAttemptsForPullRequest(repo, pr);
+      await this.reconciler.reconcileActiveAttemptsForPullRequest(repo, pr);
       const currentReviews = await this.github.listPullRequestReviews(repo.repoFullName, pr.number);
       const existing = this.store.getAttempt(repo.repoFullName, pr.number, pr.headSha);
       const eligibility = await this.evaluateEligibility(repo, pr.number, pr.headSha, pr.isDraft, pr.headRefName);
       if (!eligibility.eligible && !pr.isDraft && eligibility.reason === "required_checks_not_green") {
         const checks = eligibility.checkRuns ?? [];
-        const state = ReviewQuillService.determinePendingCheckState(checks, repo.requiredChecks);
-        const summary = ReviewQuillService.pendingCheckNames(checks, repo.requiredChecks);
+        const state = determinePendingCheckState(checks, repo.requiredChecks);
+        const summary = pendingCheckNames(checks, repo.requiredChecks);
         if (state !== "checks_unknown" || summary.failed.length > 0 || summary.pending.length > 0) {
           pendingForRepo.push({
             repoId: repo.repoId,
@@ -448,7 +356,7 @@ export class ReviewQuillService {
       // Now safe: either we already re-emitted on the current head
       // (carry-forward hit) or we are about to run a fresh review that
       // will publish a new verdict (executeReview branch).
-      await this.dismissStaleDecisiveReviews(repo, pr, currentReviews);
+      await this.reconciler.dismissStaleDecisiveReviews(repo, pr, currentReviews);
 
       if (needsExecution) {
         // Fire-and-forget. The discovery pass returns once all PRs have
@@ -464,99 +372,6 @@ export class ReviewQuillService {
     this.runtime.repoLastReconciledAt[repo.repoFullName] = new Date().toISOString();
   }
 
-  private async reconcileClosedPullRequestAttempts(
-    repo: ReviewQuillRepositoryConfig,
-    openPullRequests: Awaited<ReturnType<GitHubClient["listOpenPullRequests"]>>,
-  ): Promise<void> {
-    const openPullRequestNumbers = new Set(openPullRequests.map((pr) => pr.number));
-    const activeAttempts = this.store.listActiveAttemptsForRepo(repo.repoFullName, 50);
-    for (const attempt of activeAttempts) {
-      if (openPullRequestNumbers.has(attempt.prNumber)) {
-        continue;
-      }
-
-      let pr: Awaited<ReturnType<GitHubClient["getPullRequest"]>>;
-      try {
-        pr = await this.github.getPullRequest(repo.repoFullName, attempt.prNumber);
-      } catch (error) {
-        this.logger.warn({
-          repo: repo.repoFullName,
-          prNumber: attempt.prNumber,
-          attemptId: attempt.id,
-          error: error instanceof Error ? error.message : String(error),
-        }, "Could not inspect non-open pull request while recovering active attempt");
-        continue;
-      }
-
-      if (pr.state === "OPEN") {
-        continue;
-      }
-
-      if (pr.headSha !== attempt.headSha) {
-        await this.retireAttempt(repo, attempt, {
-          status: "superseded",
-          conclusion: "skipped",
-          checkConclusion: "cancelled",
-          summary: `Superseded by newer head ${pr.headSha.slice(0, 12)} before review finished.`,
-        });
-        continue;
-      }
-
-      const closure = pr.mergedAt ? "merged" : "closed";
-      await this.retireAttempt(repo, attempt, {
-        status: "cancelled",
-        conclusion: "skipped",
-        checkConclusion: "cancelled",
-        summary: `Pull request was ${closure} before the review attempt finished.`,
-      });
-      this.logger.warn({
-        repo: repo.repoFullName,
-        prNumber: attempt.prNumber,
-        attemptId: attempt.id,
-        headSha: attempt.headSha,
-        closure,
-      }, "Recovered stranded review attempt for a non-open pull request");
-    }
-  }
-
-  private async dismissStaleDecisiveReviews(
-    repo: ReviewQuillRepositoryConfig,
-    pr: Awaited<ReturnType<GitHubClient["listOpenPullRequests"]>>[number],
-    reviews: PullRequestReviewRecord[],
-  ): Promise<void> {
-    const staleReviews = findStaleDecisiveReviews({
-      reviews,
-      reviewerLogin: this.reviewerLogin,
-      headSha: pr.headSha,
-    });
-    if (staleReviews.length === 0) return;
-
-    const message = `Superseded by newer head ${pr.headSha.slice(0, 12)}; review-quill will re-review the latest commit separately.`;
-    for (const review of staleReviews) {
-      try {
-        await this.github.dismissReview(repo.repoFullName, pr.number, review.id, message);
-        this.logger.info({
-          repo: repo.repoFullName,
-          prNumber: pr.number,
-          reviewId: review.id,
-          dismissedReviewCommitId: review.commitId,
-          currentHeadSha: pr.headSha,
-          state: review.state,
-        }, "Dismissed stale decisive review on superseded head");
-      } catch (error) {
-        const failure = error instanceof Error ? error.message : String(error);
-        this.logger.warn({
-          repo: repo.repoFullName,
-          prNumber: pr.number,
-          reviewId: review.id,
-          dismissedReviewCommitId: review.commitId,
-          currentHeadSha: pr.headSha,
-          error: failure,
-        }, "Failed to dismiss stale decisive review on superseded head");
-      }
-    }
-  }
-
   private decorateAttempt(attempt: ReviewAttemptRecord): ReviewAttemptRecord {
     return decorateAttempt(attempt, {
       serviceStartedAt: this.startedAt,
@@ -565,76 +380,6 @@ export class ReviewQuillService {
         runningAfterMs: this.config.reconciliation.staleRunningAfterMs,
       },
     });
-  }
-
-  private async reconcileActiveAttemptsForPullRequest(
-    repo: ReviewQuillRepositoryConfig,
-    pr: Awaited<ReturnType<GitHubClient["listOpenPullRequests"]>>[number],
-  ): Promise<void> {
-    const attempts = this.store.listAttemptsForPullRequest(repo.repoFullName, pr.number, 20);
-    for (const attempt of attempts) {
-      if (!isAttemptActive(attempt)) continue;
-      if (attempt.headSha !== pr.headSha) {
-        await this.retireAttempt(repo, attempt, {
-          status: "superseded",
-          conclusion: "skipped",
-          checkConclusion: "cancelled",
-          summary: `Superseded by newer head ${pr.headSha.slice(0, 12)} before review started.`,
-        });
-        continue;
-      }
-      const state = describeAttemptState(attempt, {
-        serviceStartedAt: this.startedAt,
-        policy: {
-          queuedAfterMs: this.config.reconciliation.staleQueuedAfterMs,
-          runningAfterMs: this.config.reconciliation.staleRunningAfterMs,
-        },
-      });
-      if (!state.stale) continue;
-      const summary = `Marked stale and queued for retry. ${state.staleReason ?? "Attempt stopped making progress."}`;
-      await this.retireAttempt(repo, attempt, {
-        status: "failed",
-        conclusion: "error",
-        checkConclusion: "neutral",
-        summary,
-      });
-      this.logger.warn({
-        repo: repo.repoFullName,
-        prNumber: pr.number,
-        attemptId: attempt.id,
-        headSha: attempt.headSha,
-        staleReason: state.staleReason,
-      }, "Recovered stale review attempt");
-    }
-  }
-
-  private async retireAttempt(
-    repo: ReviewQuillRepositoryConfig,
-    attempt: ReviewAttemptRecord,
-    params: {
-      status: "failed" | "cancelled" | "superseded";
-      conclusion: "error" | "skipped";
-      checkConclusion: "neutral" | "cancelled";
-      summary: string;
-    },
-  ): Promise<void> {
-    const detailsUrl = this.config.server.publicBaseUrl
-      ? `${this.config.server.publicBaseUrl.replace(/\/$/, "")}/attempts/${attempt.id}`
-      : undefined;
-    this.store.updateAttempt(attempt.id, {
-      status: params.status,
-      conclusion: params.conclusion,
-      summary: params.summary,
-      completedAt: new Date().toISOString(),
-    });
-    if (attempt.externalCheckRunId === undefined) return;
-    await this.github.updateCheckRun(repo.repoFullName, attempt.externalCheckRunId, {
-      status: "completed",
-      conclusion: params.checkConclusion,
-      summary: params.summary,
-      text: params.summary,
-      ...(detailsUrl ? { detailsUrl } : {}),
-    }).catch(() => undefined);
   }
 
   private async evaluateEligibility(
