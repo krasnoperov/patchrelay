@@ -27,6 +27,7 @@ import type {
   TrackedIssueRecord,
 } from "../types.ts";
 import { buildOperatorRetryEvent } from "../operator-retry-event.ts";
+import { resolveIssueUpdatePlan } from "./issue-update-plan.ts";
 import type { WakeDispatcher } from "../wake-dispatcher.ts";
 
 export class DesiredStageRecorder {
@@ -182,6 +183,21 @@ export class DesiredStageRecorder {
       delegated,
     });
     const terminalRunRelease = effectiveRunRelease.release && terminal;
+    const resolvedPlan = resolveIssueUpdatePlan({
+      existingIssue: Boolean(existingIssue),
+      delegated,
+      incomingAgentSessionId,
+      startupResume,
+      desiredStage,
+      terminalRunRelease,
+      blockerPausedImplementation,
+      undelegation,
+      clearPending,
+      effectiveRunRelease,
+      shouldEnterOrchestrationSettle,
+      agentSessionId,
+      computeOrchestrationSettleUntil,
+    });
 
     const commitIssueUpdate = () => {
       const record = this.db.issues.upsertIssue({
@@ -201,24 +217,7 @@ export class DesiredStageRecorder {
         ...(hydratedIssue.stateType ? { currentLinearStateType: hydratedIssue.stateType } : {}),
         ...(linkedPrAdoption?.issueUpdates ?? {}),
         delegatedToPatchRelay: delegated,
-        ...(!existingIssue && !delegated && incomingAgentSessionId ? { factoryState: "awaiting_input" as const } : {}),
-        ...(startupResume.factoryState ? { factoryState: startupResume.factoryState as never } : {}),
-        ...(startupResume.pendingRunType !== undefined
-          ? {
-              pendingRunType: null,
-              pendingRunContextJson: startupResume.pendingRunContext
-                ? JSON.stringify(startupResume.pendingRunContext)
-                : null,
-            }
-          : {}),
-        ...(!startupResume.factoryState && desiredStage ? { pendingRunType: null, pendingRunContextJson: null, factoryState: "delegated" as const } : {}),
-        ...(clearPending ? { pendingRunType: null, pendingRunContextJson: null } : {}),
-        ...(agentSessionId !== undefined ? { agentSessionId } : {}),
-        ...(effectiveRunRelease.release ? { activeRunId: null } : {}),
-        ...(terminalRunRelease ? { factoryState: "done" as const, pendingRunType: null, pendingRunContextJson: null } : {}),
-        ...(blockerPausedImplementation ? { factoryState: "delegated" as const } : {}),
-        ...(undelegation.factoryState ? { factoryState: undelegation.factoryState as never } : {}),
-        ...(shouldEnterOrchestrationSettle ? { orchestrationSettleUntil: computeOrchestrationSettleUntil() } : {}),
+        ...resolvedPlan,
       });
       if (effectiveRunRelease.release && activeRun && effectiveRunRelease.reason) {
         this.db.runs.finishRun(activeRun.id, { status: "released", failureReason: effectiveRunRelease.reason });
