@@ -7,6 +7,7 @@ import type {
 } from "../db-types.ts";
 import type { FactoryState, RunType } from "../factory-state.ts";
 import type { IssueClass, IssueClassSource } from "../issue-class.ts";
+import { buildInsertBindings, buildUpdateAssignments } from "./issue-upsert-columns.ts";
 import { isoNow, type DatabaseConnection } from "./shared.ts";
 
 export interface UpsertIssueParams {
@@ -85,171 +86,21 @@ export class IssueStore {
     const now = isoNow();
     const existing = this.getIssue(params.projectId, params.linearIssueId);
     if (existing) {
-      const sets: string[] = ["updated_at = @now"];
-      const values: Record<string, unknown> = {
+      const { assignments, values } = buildUpdateAssignments(params);
+      const sql = `UPDATE issues SET ${["updated_at = @now", ...assignments].join(", ")} WHERE project_id = @projectId AND linear_issue_id = @linearIssueId`;
+      this.connection.prepare(sql).run({
+        ...values,
         now,
         projectId: params.projectId,
         linearIssueId: params.linearIssueId,
-      };
-      if (params.delegatedToPatchRelay !== undefined) { sets.push("delegated_to_patchrelay = @delegatedToPatchRelay"); values.delegatedToPatchRelay = params.delegatedToPatchRelay ? 1 : 0; }
-      if (params.issueClass !== undefined) { sets.push("issue_class = @issueClass"); values.issueClass = params.issueClass; }
-      if (params.issueClassSource !== undefined) { sets.push("issue_class_source = @issueClassSource"); values.issueClassSource = params.issueClassSource; }
-      if (params.issueTriageHash !== undefined) { sets.push("issue_triage_hash = @issueTriageHash"); values.issueTriageHash = params.issueTriageHash; }
-      if (params.issueTriageResultJson !== undefined) { sets.push("issue_triage_result_json = @issueTriageResultJson"); values.issueTriageResultJson = params.issueTriageResultJson; }
-      if (params.parentLinearIssueId !== undefined) { sets.push("parent_linear_issue_id = @parentLinearIssueId"); values.parentLinearIssueId = params.parentLinearIssueId; }
-      if (params.parentIssueKey !== undefined) { sets.push("parent_issue_key = @parentIssueKey"); values.parentIssueKey = params.parentIssueKey; }
-      if (params.issueKey !== undefined) { sets.push("issue_key = COALESCE(@issueKey, issue_key)"); values.issueKey = params.issueKey; }
-      if (params.title !== undefined) { sets.push("title = COALESCE(@title, title)"); values.title = params.title; }
-      if (params.description !== undefined) { sets.push("description = COALESCE(@description, description)"); values.description = params.description; }
-      if (params.url !== undefined) { sets.push("url = COALESCE(@url, url)"); values.url = params.url; }
-      if (params.priority !== undefined) { sets.push("priority = @priority"); values.priority = params.priority; }
-      if (params.estimate !== undefined) { sets.push("estimate = @estimate"); values.estimate = params.estimate; }
-      if (params.currentLinearState !== undefined) { sets.push("current_linear_state = COALESCE(@currentLinearState, current_linear_state)"); values.currentLinearState = params.currentLinearState; }
-      if (params.currentLinearStateType !== undefined) { sets.push("current_linear_state_type = COALESCE(@currentLinearStateType, current_linear_state_type)"); values.currentLinearStateType = params.currentLinearStateType; }
-      if (params.factoryState !== undefined) { sets.push("factory_state = @factoryState"); values.factoryState = params.factoryState; }
-      if (params.pendingRunType !== undefined) { sets.push("pending_run_type = @pendingRunType"); values.pendingRunType = params.pendingRunType; }
-      if (params.pendingRunContextJson !== undefined) { sets.push("pending_run_context_json = @pendingRunContextJson"); values.pendingRunContextJson = params.pendingRunContextJson; }
-      if (params.branchName !== undefined) { sets.push("branch_name = COALESCE(@branchName, branch_name)"); values.branchName = params.branchName; }
-      if (params.worktreePath !== undefined) { sets.push("worktree_path = COALESCE(@worktreePath, worktree_path)"); values.worktreePath = params.worktreePath; }
-      if (params.threadId !== undefined) { sets.push("thread_id = @threadId"); values.threadId = params.threadId; }
-      if (params.activeRunId !== undefined) { sets.push("active_run_id = @activeRunId"); values.activeRunId = params.activeRunId; }
-      if (params.statusCommentId !== undefined) { sets.push("status_comment_id = @statusCommentId"); values.statusCommentId = params.statusCommentId; }
-      if (params.agentSessionId !== undefined) { sets.push("agent_session_id = @agentSessionId"); values.agentSessionId = params.agentSessionId; }
-      if (params.lastLinearActivityKey !== undefined) { sets.push("last_linear_activity_key = @lastLinearActivityKey"); values.lastLinearActivityKey = params.lastLinearActivityKey; }
-      if (params.prNumber !== undefined) { sets.push("pr_number = @prNumber"); values.prNumber = params.prNumber; }
-      if (params.prUrl !== undefined) { sets.push("pr_url = @prUrl"); values.prUrl = params.prUrl; }
-      if (params.prState !== undefined) { sets.push("pr_state = @prState"); values.prState = params.prState; }
-      if (params.prIsDraft !== undefined) { sets.push("pr_is_draft = @prIsDraft"); values.prIsDraft = params.prIsDraft == null ? null : params.prIsDraft ? 1 : 0; }
-      if (params.prHeadSha !== undefined) { sets.push("pr_head_sha = @prHeadSha"); values.prHeadSha = params.prHeadSha; }
-      if (params.prAuthorLogin !== undefined) { sets.push("pr_author_login = @prAuthorLogin"); values.prAuthorLogin = params.prAuthorLogin; }
-      if (params.prReviewState !== undefined) { sets.push("pr_review_state = @prReviewState"); values.prReviewState = params.prReviewState; }
-      if (params.prCheckStatus !== undefined) { sets.push("pr_check_status = @prCheckStatus"); values.prCheckStatus = params.prCheckStatus; }
-      if (params.lastBlockingReviewHeadSha !== undefined) { sets.push("last_blocking_review_head_sha = @lastBlockingReviewHeadSha"); values.lastBlockingReviewHeadSha = params.lastBlockingReviewHeadSha; }
-      if (params.lastGitHubFailureSource !== undefined) { sets.push("last_github_failure_source = @lastGitHubFailureSource"); values.lastGitHubFailureSource = params.lastGitHubFailureSource; }
-      if (params.lastGitHubFailureHeadSha !== undefined) { sets.push("last_github_failure_head_sha = @lastGitHubFailureHeadSha"); values.lastGitHubFailureHeadSha = params.lastGitHubFailureHeadSha; }
-      if (params.lastGitHubFailureSignature !== undefined) { sets.push("last_github_failure_signature = @lastGitHubFailureSignature"); values.lastGitHubFailureSignature = params.lastGitHubFailureSignature; }
-      if (params.lastGitHubFailureCheckName !== undefined) { sets.push("last_github_failure_check_name = @lastGitHubFailureCheckName"); values.lastGitHubFailureCheckName = params.lastGitHubFailureCheckName; }
-      if (params.lastGitHubFailureCheckUrl !== undefined) { sets.push("last_github_failure_check_url = @lastGitHubFailureCheckUrl"); values.lastGitHubFailureCheckUrl = params.lastGitHubFailureCheckUrl; }
-      if (params.lastGitHubFailureContextJson !== undefined) { sets.push("last_github_failure_context_json = @lastGitHubFailureContextJson"); values.lastGitHubFailureContextJson = params.lastGitHubFailureContextJson; }
-      if (params.lastGitHubFailureAt !== undefined) { sets.push("last_github_failure_at = @lastGitHubFailureAt"); values.lastGitHubFailureAt = params.lastGitHubFailureAt; }
-      if (params.lastGitHubCiSnapshotHeadSha !== undefined) { sets.push("last_github_ci_snapshot_head_sha = @lastGitHubCiSnapshotHeadSha"); values.lastGitHubCiSnapshotHeadSha = params.lastGitHubCiSnapshotHeadSha; }
-      if (params.lastGitHubCiSnapshotGateCheckName !== undefined) { sets.push("last_github_ci_snapshot_gate_check_name = @lastGitHubCiSnapshotGateCheckName"); values.lastGitHubCiSnapshotGateCheckName = params.lastGitHubCiSnapshotGateCheckName; }
-      if (params.lastGitHubCiSnapshotGateCheckStatus !== undefined) { sets.push("last_github_ci_snapshot_gate_check_status = @lastGitHubCiSnapshotGateCheckStatus"); values.lastGitHubCiSnapshotGateCheckStatus = params.lastGitHubCiSnapshotGateCheckStatus; }
-      if (params.lastGitHubCiSnapshotJson !== undefined) { sets.push("last_github_ci_snapshot_json = @lastGitHubCiSnapshotJson"); values.lastGitHubCiSnapshotJson = params.lastGitHubCiSnapshotJson; }
-      if (params.lastGitHubCiSnapshotSettledAt !== undefined) { sets.push("last_github_ci_snapshot_settled_at = @lastGitHubCiSnapshotSettledAt"); values.lastGitHubCiSnapshotSettledAt = params.lastGitHubCiSnapshotSettledAt; }
-      if (params.lastQueueSignalAt !== undefined) { sets.push("last_queue_signal_at = @lastQueueSignalAt"); values.lastQueueSignalAt = params.lastQueueSignalAt; }
-      if (params.lastQueueIncidentJson !== undefined) { sets.push("last_queue_incident_json = @lastQueueIncidentJson"); values.lastQueueIncidentJson = params.lastQueueIncidentJson; }
-      if (params.lastAttemptedFailureHeadSha !== undefined) { sets.push("last_attempted_failure_head_sha = @lastAttemptedFailureHeadSha"); values.lastAttemptedFailureHeadSha = params.lastAttemptedFailureHeadSha; }
-      if (params.lastAttemptedFailureSignature !== undefined) { sets.push("last_attempted_failure_signature = @lastAttemptedFailureSignature"); values.lastAttemptedFailureSignature = params.lastAttemptedFailureSignature; }
-      if (params.lastAttemptedFailureAt !== undefined) { sets.push("last_attempted_failure_at = @lastAttemptedFailureAt"); values.lastAttemptedFailureAt = params.lastAttemptedFailureAt; }
-      if (params.lastPublishedPatchId !== undefined) { sets.push("last_published_patch_id = @lastPublishedPatchId"); values.lastPublishedPatchId = params.lastPublishedPatchId; }
-      if (params.lastPublishedIntegrationTreeId !== undefined) { sets.push("last_published_integration_tree_id = @lastPublishedIntegrationTreeId"); values.lastPublishedIntegrationTreeId = params.lastPublishedIntegrationTreeId; }
-      if (params.lastPublishedHeadSha !== undefined) { sets.push("last_published_head_sha = @lastPublishedHeadSha"); values.lastPublishedHeadSha = params.lastPublishedHeadSha; }
-      if (params.parentPrBranch !== undefined) { sets.push("parent_pr_branch = @parentPrBranch"); values.parentPrBranch = params.parentPrBranch; }
-      if (params.ciRepairAttempts !== undefined) { sets.push("ci_repair_attempts = @ciRepairAttempts"); values.ciRepairAttempts = params.ciRepairAttempts; }
-      if (params.queueRepairAttempts !== undefined) { sets.push("queue_repair_attempts = @queueRepairAttempts"); values.queueRepairAttempts = params.queueRepairAttempts; }
-      if (params.reviewFixAttempts !== undefined) { sets.push("review_fix_attempts = @reviewFixAttempts"); values.reviewFixAttempts = params.reviewFixAttempts; }
-      if (params.zombieRecoveryAttempts !== undefined) { sets.push("zombie_recovery_attempts = @zombieRecoveryAttempts"); values.zombieRecoveryAttempts = params.zombieRecoveryAttempts; }
-      if (params.lastZombieRecoveryAt !== undefined) { sets.push("last_zombie_recovery_at = @lastZombieRecoveryAt"); values.lastZombieRecoveryAt = params.lastZombieRecoveryAt; }
-      if (params.orchestrationSettleUntil !== undefined) { sets.push("orchestration_settle_until = @orchestrationSettleUntil"); values.orchestrationSettleUntil = params.orchestrationSettleUntil; }
-      this.connection.prepare(`UPDATE issues SET ${sets.join(", ")} WHERE project_id = @projectId AND linear_issue_id = @linearIssueId`).run(values);
+      });
     } else {
-      this.connection.prepare(`
-        INSERT INTO issues (
-          project_id, linear_issue_id, delegated_to_patchrelay, issue_class, issue_class_source, issue_triage_hash, issue_triage_result_json, parent_linear_issue_id, parent_issue_key, issue_key, title, description, url,
-          priority, estimate,
-          current_linear_state, current_linear_state_type, factory_state, pending_run_type, pending_run_context_json,
-          branch_name, worktree_path, thread_id, active_run_id, status_comment_id,
-          agent_session_id, last_linear_activity_key,
-          pr_number, pr_url, pr_state, pr_is_draft, pr_head_sha, pr_author_login, pr_review_state, pr_check_status, last_blocking_review_head_sha,
-          last_github_failure_source, last_github_failure_head_sha, last_github_failure_signature, last_github_failure_check_name, last_github_failure_check_url, last_github_failure_context_json, last_github_failure_at,
-          last_github_ci_snapshot_head_sha, last_github_ci_snapshot_gate_check_name, last_github_ci_snapshot_gate_check_status, last_github_ci_snapshot_json, last_github_ci_snapshot_settled_at,
-          last_queue_signal_at, last_queue_incident_json,
-          last_attempted_failure_head_sha, last_attempted_failure_signature, last_attempted_failure_at,
-          last_published_patch_id, last_published_integration_tree_id, last_published_head_sha,
-          parent_pr_branch,
-          ci_repair_attempts, queue_repair_attempts, review_fix_attempts, zombie_recovery_attempts, last_zombie_recovery_at, orchestration_settle_until,
-          updated_at
-        ) VALUES (
-          @projectId, @linearIssueId, @delegatedToPatchRelay, @issueClass, @issueClassSource, @issueTriageHash, @issueTriageResultJson, @parentLinearIssueId, @parentIssueKey, @issueKey, @title, @description, @url,
-          @priority, @estimate,
-          @currentLinearState, @currentLinearStateType, @factoryState, @pendingRunType, @pendingRunContextJson,
-          @branchName, @worktreePath, @threadId, @activeRunId, @statusCommentId,
-          @agentSessionId, @lastLinearActivityKey,
-          @prNumber, @prUrl, @prState, @prIsDraft, @prHeadSha, @prAuthorLogin, @prReviewState, @prCheckStatus, @lastBlockingReviewHeadSha,
-          @lastGitHubFailureSource, @lastGitHubFailureHeadSha, @lastGitHubFailureSignature, @lastGitHubFailureCheckName, @lastGitHubFailureCheckUrl, @lastGitHubFailureContextJson, @lastGitHubFailureAt,
-          @lastGitHubCiSnapshotHeadSha, @lastGitHubCiSnapshotGateCheckName, @lastGitHubCiSnapshotGateCheckStatus, @lastGitHubCiSnapshotJson, @lastGitHubCiSnapshotSettledAt,
-          @lastQueueSignalAt, @lastQueueIncidentJson,
-          @lastAttemptedFailureHeadSha, @lastAttemptedFailureSignature, @lastAttemptedFailureAt,
-          @lastPublishedPatchId, @lastPublishedIntegrationTreeId, @lastPublishedHeadSha,
-          @parentPrBranch,
-          @ciRepairAttempts, @queueRepairAttempts, @reviewFixAttempts, @zombieRecoveryAttempts, @lastZombieRecoveryAt, @orchestrationSettleUntil,
-          @now
-        )
-      `).run({
+      const { columns, placeholders, values } = buildInsertBindings(params);
+      const sql = `INSERT INTO issues (project_id, linear_issue_id, ${columns.join(", ")}, updated_at) VALUES (@projectId, @linearIssueId, ${placeholders.join(", ")}, @now)`;
+      this.connection.prepare(sql).run({
+        ...values,
         projectId: params.projectId,
         linearIssueId: params.linearIssueId,
-        delegatedToPatchRelay: params.delegatedToPatchRelay === false ? 0 : 1,
-        issueClass: params.issueClass ?? null,
-        issueClassSource: params.issueClassSource ?? null,
-        issueTriageHash: params.issueTriageHash ?? null,
-        issueTriageResultJson: params.issueTriageResultJson ?? null,
-        parentLinearIssueId: params.parentLinearIssueId ?? null,
-        parentIssueKey: params.parentIssueKey ?? null,
-        issueKey: params.issueKey ?? null,
-        title: params.title ?? null,
-        description: params.description ?? null,
-        url: params.url ?? null,
-        priority: params.priority ?? null,
-        estimate: params.estimate ?? null,
-        currentLinearState: params.currentLinearState ?? null,
-        currentLinearStateType: params.currentLinearStateType ?? null,
-        factoryState: params.factoryState ?? "delegated",
-        pendingRunType: params.pendingRunType ?? null,
-        pendingRunContextJson: params.pendingRunContextJson ?? null,
-        branchName: params.branchName ?? null,
-        worktreePath: params.worktreePath ?? null,
-        threadId: params.threadId ?? null,
-        activeRunId: params.activeRunId ?? null,
-        statusCommentId: params.statusCommentId ?? null,
-        agentSessionId: params.agentSessionId ?? null,
-        lastLinearActivityKey: params.lastLinearActivityKey ?? null,
-        prNumber: params.prNumber ?? null,
-        prUrl: params.prUrl ?? null,
-        prState: params.prState ?? null,
-        prIsDraft: params.prIsDraft == null ? null : params.prIsDraft ? 1 : 0,
-        prHeadSha: params.prHeadSha ?? null,
-        prAuthorLogin: params.prAuthorLogin ?? null,
-        prReviewState: params.prReviewState ?? null,
-        prCheckStatus: params.prCheckStatus ?? null,
-        lastBlockingReviewHeadSha: params.lastBlockingReviewHeadSha ?? null,
-        lastGitHubFailureSource: params.lastGitHubFailureSource ?? null,
-        lastGitHubFailureHeadSha: params.lastGitHubFailureHeadSha ?? null,
-        lastGitHubFailureSignature: params.lastGitHubFailureSignature ?? null,
-        lastGitHubFailureCheckName: params.lastGitHubFailureCheckName ?? null,
-        lastGitHubFailureCheckUrl: params.lastGitHubFailureCheckUrl ?? null,
-        lastGitHubFailureContextJson: params.lastGitHubFailureContextJson ?? null,
-        lastGitHubFailureAt: params.lastGitHubFailureAt ?? null,
-        lastGitHubCiSnapshotHeadSha: params.lastGitHubCiSnapshotHeadSha ?? null,
-        lastGitHubCiSnapshotGateCheckName: params.lastGitHubCiSnapshotGateCheckName ?? null,
-        lastGitHubCiSnapshotGateCheckStatus: params.lastGitHubCiSnapshotGateCheckStatus ?? null,
-        lastGitHubCiSnapshotJson: params.lastGitHubCiSnapshotJson ?? null,
-        lastGitHubCiSnapshotSettledAt: params.lastGitHubCiSnapshotSettledAt ?? null,
-        lastQueueSignalAt: params.lastQueueSignalAt ?? null,
-        lastQueueIncidentJson: params.lastQueueIncidentJson ?? null,
-        lastAttemptedFailureHeadSha: params.lastAttemptedFailureHeadSha ?? null,
-        lastAttemptedFailureSignature: params.lastAttemptedFailureSignature ?? null,
-        lastAttemptedFailureAt: params.lastAttemptedFailureAt ?? null,
-        lastPublishedPatchId: params.lastPublishedPatchId ?? null,
-        lastPublishedIntegrationTreeId: params.lastPublishedIntegrationTreeId ?? null,
-        lastPublishedHeadSha: params.lastPublishedHeadSha ?? null,
-        parentPrBranch: params.parentPrBranch ?? null,
-        ciRepairAttempts: params.ciRepairAttempts ?? 0,
-        queueRepairAttempts: params.queueRepairAttempts ?? 0,
-        reviewFixAttempts: params.reviewFixAttempts ?? 0,
-        zombieRecoveryAttempts: params.zombieRecoveryAttempts ?? 0,
-        lastZombieRecoveryAt: params.lastZombieRecoveryAt ?? null,
-        orchestrationSettleUntil: params.orchestrationSettleUntil ?? null,
         now,
       });
     }
