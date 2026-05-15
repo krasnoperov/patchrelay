@@ -27,15 +27,14 @@ import {
   pendingCheckNames,
 } from "./pending-check-classifier.ts";
 import {
-  buildInlineCommentBody,
   buildReviewBody,
   classifyPublicationDisposition,
-  filterFindings,
   hasMatchingLatestReviewForHead,
   REVIEW_FINDING_CONFIDENCE_THRESHOLD,
   REVIEW_MAX_INLINE_COMMENTS,
-  resolveEvent,
 } from "./review-publication-policy.ts";
+import { renderReviewArtifacts } from "./review-artifact-renderer.ts";
+import { submitReviewWithFallback } from "./submit-review-with-fallback.ts";
 import { evaluateReviewEligibility } from "./review-eligibility.ts";
 import { ReviewSemaphore } from "./review-semaphore.ts";
 
@@ -509,55 +508,22 @@ export class ReviewQuillService {
       } finally {
         await prepared.dispose();
       }
-      // Build the set of paths the model was actually allowed to comment
-      // on. The diff inventory is the authoritative list — any finding
-      // pointing outside it is a hallucinated path and gets dropped
-      // before the GitHub POST so a single bad comment doesn't 422 the
-      // whole review.
-      const knownPaths = new Set(prepared.context.diff.inventory.map((entry) => entry.path));
-      const filteredFindings = filterFindings(result.verdict.findings, knownPaths);
-      const droppedTotal = result.verdict.findings.length - filteredFindings.length;
-      if (droppedTotal > 0) {
-        const droppedByPath = result.verdict.findings.filter((f) => !knownPaths.has(f.path)).length;
-        const droppedByConfidence = droppedTotal - droppedByPath;
+      const { reviewBody, inlineComments, filteredFindings, event, dropStats } = renderReviewArtifacts({
+        verdict: result.verdict,
+        inventoryPaths: prepared.context.diff.inventory.map((entry) => entry.path),
+        surfaceMode,
+      });
+      if (dropStats.droppedTotal > 0) {
         this.logger.info({
           repo: repo.repoFullName,
           prNumber: pr.number,
-          droppedByConfidence,
-          droppedByPath,
+          droppedByConfidence: dropStats.droppedByConfidence,
+          droppedByPath: dropStats.droppedByPath,
           threshold: REVIEW_FINDING_CONFIDENCE_THRESHOLD,
           kept: filteredFindings.length,
           cap: REVIEW_MAX_INLINE_COMMENTS,
         }, "Dropped low-confidence, hallucinated-path, or over-cap findings before posting");
       }
-      const event = resolveEvent(result.verdict, filteredFindings);
-      // Plan §3.6: in integration_tree mode the agent reviewed a
-      // synthetic merge commit, so inline comments anchored to
-      // `pr.headSha` would point at lines that may not exist on the
-      // PR head. Body-only publication keeps the verdict on the PR
-      // (admission gate satisfied) while encoding findings inline
-      // in markdown text. `with_annotations` (PR review + check_run
-      // companion) is deferred per implementation.md §B.1.
-      // surfaceMode is the repo-resolved value (not identity.mode)
-      // so this stays correct even when identity computation
-      // returned undefined.
-      const useBodyOnly = surfaceMode === "integration_tree";
-      // Two body renderings: the primary one keeps findings inline as
-      // GitHub comments (no `## Findings` section in the body), the
-      // body-only fallback folds findings into the body markdown so
-      // their specifics survive when inline comments cannot be posted
-      // (integration_tree mode upfront, 422 retry on demand).
-      const reviewBody = useBodyOnly
-        ? buildReviewBody({ verdict: result.verdict, event, inlineFindings: filteredFindings })
-        : buildReviewBody({ verdict: result.verdict, event });
-      const inlineComments = useBodyOnly
-        ? []
-        : filteredFindings.map((finding) => ({
-            path: finding.path,
-            line: finding.line,
-            side: "RIGHT" as const,
-            body: buildInlineCommentBody(finding),
-          }));
       const currentPr = await this.github.getPullRequest(repo.repoFullName, pr.number);
       const publicationDisposition = classifyPublicationDisposition(currentPr, pr.headSha);
       if (publicationDisposition.action !== "publish") {
@@ -595,48 +561,21 @@ export class ReviewQuillService {
           event,
         }, "Skipping duplicate GitHub review for unchanged head verdict");
       } else {
-        // Atomic POST with body + inline comments + verdict. If GitHub
-        // rejects with 422 it usually means at least one of the inline
-        // comments references a path/line that isn't in the diff (e.g.
-        // a context line, or a line on the LHS of the diff). The whole
-        // POST is rejected as a unit, so a single bad comment kills the
-        // entire review. To survive that case we retry ONCE without the
-        // inline comments, and re-render the body with findings folded
-        // into a `## Findings` markdown section so their specifics
-        // still reach the author and the next implementation run.
-        try {
-          await this.github.submitReview(repo.repoFullName, pr.number, {
-            event,
-            body: reviewBody,
-            commitId: pr.headSha,
-            ...(inlineComments.length > 0 ? { comments: inlineComments } : {}),
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          const isUnprocessableEntity = /^GitHub API 422\b/.test(message);
-          if (!isUnprocessableEntity || inlineComments.length === 0) {
-            throw error;
-          }
-          const bodyOnlyReviewBody = buildReviewBody({
+        publishedBody = await submitReviewWithFallback({
+          github: this.github,
+          logger: this.logger,
+          repoFullName: repo.repoFullName,
+          prNumber: pr.number,
+          headSha: pr.headSha,
+          event,
+          primaryBody: reviewBody,
+          inlineComments,
+          buildFallbackBody: () => buildReviewBody({
             verdict: result.verdict,
             event,
             inlineFindings: filteredFindings,
-          });
-          this.logger.warn({
-            repo: repo.repoFullName,
-            prNumber: pr.number,
-            headSha: pr.headSha,
-            droppedInlineComments: inlineComments.length,
-            findingsInlinedIntoBody: filteredFindings.length,
-            githubError: message.slice(0, 500),
-          }, "GitHub rejected review with inline comments (422); retrying body-only with findings folded into body");
-          await this.github.submitReview(repo.repoFullName, pr.number, {
-            event,
-            body: bodyOnlyReviewBody,
-            commitId: pr.headSha,
-          });
-          publishedBody = bodyOnlyReviewBody;
-        }
+          }),
+        });
       }
       const attemptConclusion = event === "REQUEST_CHANGES" ? "declined" : "approved";
       // Persist the rendered review on the attempt row so future heads
