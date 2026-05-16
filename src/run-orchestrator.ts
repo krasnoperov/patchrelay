@@ -252,6 +252,7 @@ export class RunOrchestrator {
       this.leasePorts.releaseLease,
       this.threadPorts.readThreadWithRetry,
       this.recoveryPorts.recoverOrEscalate,
+      (projectId) => this.config.projects.find((project) => project.id === projectId)?.github?.repoFullName,
       feed,
     );
     this.runWakePlanner = new RunWakePlanner(db);

@@ -1207,6 +1207,78 @@ test("reconcileRun keeps a still-materializing thread active instead of launchin
   }
 });
 
+test("reconcileRun releases active run when GitHub says the PR already merged", { concurrency: false }, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-active-merged-pr-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = writeGhViewScript(
+      baseDir,
+      '{"headRefOid":"sha-merged","state":"MERGED","reviewDecision":"APPROVED","mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","statusCheckRollup":[]}',
+    );
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, enqueueCalls, orchestrator } = createOrchestrator(baseDir, undefined, {
+      startThreadForIssueTriage: async () => ({ id: "triage-thread-1", cwd: "/tmp/triage", preview: "", status: "idle", turns: [] }),
+      startThread: async () => ({ threadId: "thread-1" }),
+      steerTurn: async () => undefined,
+      readThread: async () => {
+        throw new Error("reconcile should release from GitHub truth before reading the Codex thread");
+      },
+    });
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-active-merged-pr",
+      issueKey: "USE-ACTIVE-MERGED",
+      branchName: "feat-active-merged",
+      prNumber: 899,
+      prState: "open",
+      prHeadSha: "sha-before-merge",
+      prAuthorLogin: "patchrelay[bot]",
+      prReviewState: "changes_requested",
+      prCheckStatus: "success",
+      factoryState: "implementing",
+      delegatedToPatchRelay: true,
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+      promptText: "implementation still watching checks",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-active-merged", turnId: "turn-active-merged" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+      threadId: "thread-active-merged",
+      factoryState: "implementing",
+    });
+    db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "review_changes_requested",
+      eventJson: JSON.stringify({ reviewerName: "review-quill[bot]" }),
+      dedupeKey: "review_changes_requested::sha-before-merge::review-quill[bot]",
+    });
+
+    await (orchestrator as unknown as { reconcileRun: (targetRun: typeof run) => Promise<void> }).reconcileRun(db.runs.getRunById(run.id)!);
+
+    const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId);
+    const updatedRun = db.runs.getRunById(run.id);
+    assert.equal(updatedIssue?.factoryState, "done");
+    assert.equal(updatedIssue?.prState, "merged");
+    assert.equal(updatedIssue?.activeRunId, undefined);
+    assert.equal(updatedRun?.status, "released");
+    assert.match(updatedRun?.failureReason ?? "", /Pull request merged/);
+    assert.equal(db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId), undefined);
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("run defers recovered zombie retries until the backoff window expires", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-run-zombie-delay-"));
   try {

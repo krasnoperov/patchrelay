@@ -15,6 +15,7 @@ import type { RunFinalizer } from "./run-finalizer.ts";
 import type { ReleaseIssueSessionLease, WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import { resolveEffectiveActiveRun } from "./effective-active-run.ts";
 import { isThreadMaterializingError } from "./codex-thread-errors.ts";
+import { fetchPullRequestSnapshot } from "./reconcile-pr-fetch.ts";
 
 const THREAD_MATERIALIZATION_GRACE_MS = 10 * 60_000;
 
@@ -36,6 +37,7 @@ export class RunReconciler {
     private readonly releaseLease: ReleaseIssueSessionLease,
     private readonly readThreadWithRetry: (threadId: string, maxRetries?: number) => Promise<CodexThreadSummary>,
     private readonly recoverOrEscalate: (issue: IssueRecord, runType: RunRecord["runType"], reason: string) => void,
+    private readonly resolveRepoFullName: (projectId: string) => string | undefined = () => undefined,
     private readonly feed?: OperatorEventFeed,
   ) {}
 
@@ -85,6 +87,10 @@ export class RunReconciler {
       const releasedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? effectiveIssue;
       void this.linearSync.syncSession(releasedIssue, { activeRunType: run.runType });
       this.releaseLease(run.projectId, run.linearIssueId);
+      return;
+    }
+
+    if (await this.releaseRunIfPullRequestMerged(run, effectiveIssue)) {
       return;
     }
 
@@ -198,6 +204,60 @@ export class RunReconciler {
     if (acquiredRecoveryLease) {
       this.releaseLease(run.projectId, run.linearIssueId);
     }
+  }
+
+  private async releaseRunIfPullRequestMerged(run: RunRecord, issue: IssueRecord): Promise<boolean> {
+    if (issue.prNumber === undefined) return false;
+    if (issue.prState === "merged") {
+      this.releaseMergedRun(run, issue, "Cached PR state is merged");
+      return true;
+    }
+
+    const repoFullName = this.resolveRepoFullName(issue.projectId);
+    if (!repoFullName) return false;
+    const snapshot = await fetchPullRequestSnapshot(repoFullName, issue.prNumber);
+    if (!snapshot.ok) {
+      this.logger.debug(
+        { issueKey: issue.issueKey, prNumber: issue.prNumber, error: snapshot.error.message },
+        "Could not refresh active-run PR state during reconciliation",
+      );
+      return false;
+    }
+    if (snapshot.pr.state !== "MERGED") return false;
+
+    this.releaseMergedRun(run, issue, "Pull request merged while the active Codex run was still marked running");
+    return true;
+  }
+
+  private releaseMergedRun(run: RunRecord, issue: IssueRecord, reason: string): void {
+    this.withHeldLease(run.projectId, run.linearIssueId, () => {
+      this.db.issueSessions.clearPendingIssueSessionEvents(run.projectId, run.linearIssueId);
+      this.db.runs.finishRun(run.id, {
+        status: "released",
+        failureReason: reason,
+      });
+      this.db.issues.upsertIssue({
+        projectId: run.projectId,
+        linearIssueId: run.linearIssueId,
+        activeRunId: null,
+        factoryState: "done",
+        prState: "merged",
+        pendingRunType: null,
+        pendingRunContextJson: null,
+      });
+    });
+    this.feed?.publish({
+      level: "info",
+      kind: "stage",
+      issueKey: issue.issueKey,
+      projectId: run.projectId,
+      stage: "done",
+      status: "reconciled",
+      summary: `Released active ${run.runType} run after PR merge`,
+    });
+    const doneIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
+    void this.linearSync.syncSession(doneIssue, { activeRunType: run.runType });
+    this.releaseLease(run.projectId, run.linearIssueId);
   }
 
   private async confirmDelegationAuthorityBeforeRelease(
