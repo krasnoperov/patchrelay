@@ -566,6 +566,22 @@ test("CodexAppServerClient restarts automatically after an unexpected exit befor
   }
 });
 
+test("CodexAppServerClient fails fast when stdin is already closed", async () => {
+  const { logger, entries } = createCaptureLogger();
+  const { client, child } = createClient("normal", "never", logger);
+
+  try {
+    await client.start();
+    child.stdin.end();
+
+    await assert.rejects(() => client.startThread({ cwd: "/tmp/worktree" }), /stdin is closed/);
+    assert.equal(client.isStarted(), false);
+    assert.ok(entries.some((entry) => entry.message === "Codex app-server transport failed"));
+  } finally {
+    await client.stop();
+  }
+});
+
 test("CodexAppServerClient rejects server approval requests when policy is not accept-all", async () => {
   const { client, child } = createClient("normal", "on-request");
   const notifications: Array<{ method: string; params: Record<string, unknown> }> = [];

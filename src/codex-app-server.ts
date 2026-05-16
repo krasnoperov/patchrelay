@@ -382,12 +382,21 @@ export class CodexAppServerClient extends EventEmitter {
       });
     });
 
-    this.writeMessage({
-      jsonrpc: "2.0",
-      id,
-      method,
-      params,
-    });
+    try {
+      this.writeMessage({
+        jsonrpc: "2.0",
+        id,
+        method,
+        params,
+      });
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      const pending = this.pending.get(id);
+      if (pending) {
+        this.pending.delete(id);
+        pending.reject(err);
+      }
+    }
 
     return promise.catch((error) => {
       const err = error instanceof Error ? error : new Error(String(error));
@@ -509,11 +518,41 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   private writeMessage(message: Record<string, unknown>): void {
-    if (!this.child?.stdin) {
-      throw new Error("Codex app-server stdin is unavailable");
+    const child = this.child;
+    const stdin = child?.stdin;
+    if (!stdin || stdin.destroyed || stdin.writableEnded || !stdin.writable) {
+      const error = new Error("Codex app-server stdin is closed");
+      this.handleTransportFailure(error);
+      throw error;
     }
 
-    this.child.stdin.write(`${JSON.stringify(message)}\n`);
+    try {
+      stdin.write(`${JSON.stringify(message)}\n`, (error) => {
+        if (error) {
+          this.handleTransportFailure(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      this.handleTransportFailure(err);
+      throw err;
+    }
+  }
+
+  private handleTransportFailure(error: Error): void {
+    const child = this.child;
+    this.started = false;
+    this.child = undefined;
+    this.stdoutBuffer = "";
+    this.logger.error(
+      {
+        error: sanitizeDiagnosticText(error.message),
+        pendingRequestCount: this.pending.size,
+      },
+      "Codex app-server transport failed",
+    );
+    this.rejectAllPending(error);
+    child?.kill("SIGTERM");
   }
 
   private drainMessages(): void {
