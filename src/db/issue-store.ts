@@ -76,6 +76,16 @@ export interface UpsertIssueParams {
   orchestrationSettleUntil?: string | null;
 }
 
+const CANCELED_OR_DUPLICATE_CHILD_PREDICATE = `
+  LOWER(TRIM(COALESCE(child.current_linear_state_type, ''))) NOT IN ('canceled', 'cancelled')
+  AND LOWER(TRIM(COALESCE(child.current_linear_state, ''))) NOT IN ('duplicate', 'canceled', 'cancelled')
+`;
+
+const OPEN_CHILD_PREDICATE = `
+  LOWER(TRIM(COALESCE(child.current_linear_state_type, ''))) NOT IN ('completed', 'canceled', 'cancelled')
+  AND LOWER(TRIM(COALESCE(child.current_linear_state, ''))) NOT IN ('done', 'completed', 'duplicate', 'canceled', 'cancelled')
+`;
+
 export class IssueStore {
   constructor(
     private readonly connection: DatabaseConnection,
@@ -445,6 +455,21 @@ export class IssueStore {
     return rows.map(mapIssueRow);
   }
 
+  listCanonicalChildIssues(projectId: string, parentLinearIssueId: string): IssueRecord[] {
+    const rows = this.connection.prepare(`
+      SELECT child.*
+      FROM issue_children edges
+      JOIN issues child
+        ON child.project_id = edges.project_id
+       AND child.linear_issue_id = edges.child_linear_issue_id
+      WHERE edges.project_id = ? AND edges.parent_linear_issue_id = ?
+        AND ${CANCELED_OR_DUPLICATE_CHILD_PREDICATE}
+      ORDER BY COALESCE(child.issue_key, child.linear_issue_id) ASC
+    `).all(projectId, parentLinearIssueId) as Array<Record<string, unknown>>;
+
+    return rows.map(mapIssueRow);
+  }
+
   countOpenChildIssues(projectId: string, parentLinearIssueId: string): number {
     const row = this.connection.prepare(`
       SELECT COUNT(*) AS count
@@ -455,10 +480,7 @@ export class IssueStore {
       WHERE edges.project_id = ? AND edges.parent_linear_issue_id = ?
         AND (
           child.linear_issue_id IS NULL
-          OR (
-            COALESCE(child.current_linear_state_type, '') NOT IN ('completed', 'canceled')
-            AND LOWER(TRIM(COALESCE(child.current_linear_state, ''))) NOT IN ('done', 'duplicate', 'canceled')
-          )
+          OR (${OPEN_CHILD_PREDICATE})
         )
     `).get(projectId, parentLinearIssueId) as Record<string, unknown> | undefined;
 

@@ -15,7 +15,7 @@ function resolveOrchestrationIssueClass(
 ): "implementation" | "orchestration" {
   return classifyIssue({
     issue,
-    childIssueCount: db.issues.listChildIssues(issue.projectId, issue.linearIssueId).length,
+    childIssueCount: db.issues.listCanonicalChildIssues(issue.projectId, issue.linearIssueId).length,
   }).issueClass;
 }
 

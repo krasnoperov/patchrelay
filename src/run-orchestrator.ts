@@ -333,7 +333,7 @@ export class RunOrchestrator {
       }));
 
     const childIssues = this.db.issues
-      .listChildIssues(issue.projectId, issue.linearIssueId)
+      .listCanonicalChildIssues(issue.projectId, issue.linearIssueId)
       .map((entry) => ({
         linearIssueId: entry.linearIssueId,
         ...(entry.issueKey ? { issueKey: entry.issueKey } : {}),
@@ -355,7 +355,7 @@ export class RunOrchestrator {
   }
 
   private async classifyTrackedIssue(issue: IssueRecord): Promise<IssueRecord> {
-    const childIssues = this.db.issues.listChildIssues(issue.projectId, issue.linearIssueId);
+    const childIssues = this.db.issues.listCanonicalChildIssues(issue.projectId, issue.linearIssueId);
     const classification = classifyIssue({ issue, childIssueCount: childIssues.length });
     const triageHash = buildIssueTriageHash({ issue, childIssues });
     const triageCacheFresh = issue.issueClassSource === "triage" && issue.issueTriageHash === triageHash;

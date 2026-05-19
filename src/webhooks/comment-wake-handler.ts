@@ -45,7 +45,7 @@ export class CommentWakeHandler {
     if (!issue) return;
     const issueClass = classifyIssue({
       issue,
-      childIssueCount: this.db.issues.listChildIssues(project.id, normalized.issue.id).length,
+      childIssueCount: this.db.issues.listCanonicalChildIssues(project.id, normalized.issue.id).length,
     }).issueClass;
     const trimmedBody = normalized.comment.body.trim();
 

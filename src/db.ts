@@ -227,6 +227,10 @@ export class PatchRelayDatabase {
     return this.issues.listChildIssues(projectId, parentLinearIssueId);
   }
 
+  listCanonicalChildIssues(projectId: string, parentLinearIssueId: string): IssueRecord[] {
+    return this.issues.listCanonicalChildIssues(projectId, parentLinearIssueId);
+  }
+
   countOpenChildIssues(projectId: string, parentLinearIssueId: string): number {
     return this.issues.countOpenChildIssues(projectId, parentLinearIssueId);
   }
