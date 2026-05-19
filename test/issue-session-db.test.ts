@@ -575,6 +575,80 @@ test("orchestration child delivery wakes the next turn on the same thread", () =
   }
 });
 
+test("canonical child issues exclude duplicate and canceled Linear children", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-canonical-children-"));
+  try {
+    const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
+    db.runMigrations();
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-parent",
+      issueKey: "USE-PARENT",
+      factoryState: "delegated",
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-active-child",
+      issueKey: "USE-ACTIVE",
+      factoryState: "delegated",
+      currentLinearState: "Backlog",
+      currentLinearStateType: "backlog",
+      parentLinearIssueId: "issue-parent",
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-done-child",
+      issueKey: "USE-DONE",
+      factoryState: "done",
+      currentLinearState: "Done",
+      currentLinearStateType: "completed",
+      parentLinearIssueId: "issue-parent",
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-duplicate-child",
+      issueKey: "USE-DUP",
+      factoryState: "delegated",
+      currentLinearState: "Duplicate",
+      currentLinearStateType: "canceled",
+      parentLinearIssueId: "issue-parent",
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-canceled-child",
+      issueKey: "USE-CANCELED",
+      factoryState: "delegated",
+      currentLinearState: "Canceled",
+      currentLinearStateType: "canceled",
+      parentLinearIssueId: "issue-parent",
+    });
+    for (const childLinearIssueId of [
+      "issue-active-child",
+      "issue-done-child",
+      "issue-duplicate-child",
+      "issue-canceled-child",
+    ]) {
+      db.issues.replaceIssueParentLink({
+        projectId: "usertold",
+        childLinearIssueId,
+        parentLinearIssueId: "issue-parent",
+      });
+    }
+
+    assert.deepEqual(
+      db.issues.listCanonicalChildIssues("usertold", "issue-parent").map((issue) => issue.issueKey),
+      ["USE-ACTIVE", "USE-DONE"],
+    );
+    assert.deepEqual(
+      db.issues.listChildIssues("usertold", "issue-parent").map((issue) => issue.issueKey),
+      ["USE-ACTIVE", "USE-CANCELED", "USE-DONE", "USE-DUP"],
+    );
+    assert.equal(db.issues.countOpenChildIssues("usertold", "issue-parent"), 1);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("direct_reply wakes the next turn in direct-reply mode on the same thread", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-direct-reply-"));
   try {

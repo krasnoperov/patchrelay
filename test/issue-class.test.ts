@@ -26,6 +26,30 @@ test("classifyIssue only marks parent issues with child issues as orchestration"
   );
 });
 
+test("classifyIssue marks no-code planning splits as orchestration before children exist", () => {
+  assert.deepEqual(
+    classifyIssue({
+      issue: {
+        title: "Analyze latency and create follow-up tasks",
+        description: "Code is not needed here. Only analysis and planning. Create follow-up issues for the implementation work.",
+      },
+      childIssueCount: 0,
+    }),
+    { issueClass: "orchestration", issueClassSource: "heuristic" },
+  );
+
+  assert.deepEqual(
+    classifyIssue({
+      issue: {
+        title: "Проанализировать где тратится время",
+        description: "выдай отчет в Linear и поставь задачи на переделать. Код в этой задаче не делаем, только анализ и планирование.",
+      },
+      childIssueCount: 0,
+    }),
+    { issueClass: "orchestration", issueClassSource: "heuristic" },
+  );
+});
+
 test("classifyIssue never marks child issues as orchestration", () => {
   assert.deepEqual(
     classifyIssue({

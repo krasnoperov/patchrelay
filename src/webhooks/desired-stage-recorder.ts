@@ -108,7 +108,7 @@ export class DesiredStageRecorder {
         currentState: existingIssue?.factoryState,
       });
 
-    const childIssueCount = this.db.issues.listChildIssues(params.project.id, normalizedIssue.id).length;
+    const childIssueCount = this.db.issues.listCanonicalChildIssues(params.project.id, normalizedIssue.id).length;
     const classification = classifyIssue({
       issue: {
         issueClass: existingIssue?.issueClass,
