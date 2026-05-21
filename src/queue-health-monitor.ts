@@ -36,6 +36,7 @@ function isDuplicateProbe(
   const signature = typeof context?.failureSignature === "string" ? context.failureSignature : undefined;
   const headSha = typeof context?.failureHeadSha === "string" ? context.failureHeadSha : undefined;
   if (!signature) return false;
+  if (context?.requiresFreshHead === true) return false;
   return issue.lastAttemptedFailureSignature === signature
     && (headSha === undefined || issue.lastAttemptedFailureHeadSha === headSha);
 }
@@ -169,12 +170,25 @@ export class QueueHealthMonitor {
     if (isDirty || hasEvictionCheckRun) {
       const headRefOid = pr.headRefOid ?? "unknown";
       const reason = hasEvictionCheckRun ? "queue_eviction_missed" : "preemptive_conflict";
-      const signature = `preemptive_queue_conflict:${headRefOid}`;
+      const signature = hasEvictionCheckRun
+        ? `same_head_queue_eviction:${headRefOid}`
+        : `preemptive_queue_conflict:${headRefOid}`;
       const pendingRunContext: Record<string, unknown> = {
         source: "queue_health_monitor",
         failureReason: reason,
         failureHeadSha: headRefOid,
         failureSignature: signature,
+        ...(hasEvictionCheckRun
+          ? {
+              requiresFreshHead: true,
+              promptContext: [
+                `merge-steward/queue is already failed on PR #${issue.prNumber} at head ${headRefOid}.`,
+                "merge-steward will not re-admit the same evicted head SHA.",
+                "Preserve the approved diff, but publish a new head SHA on the existing PR branch before finishing.",
+                "If rebasing onto the current base produces no content change, create an empty queue-kick commit.",
+              ].join(" "),
+            }
+          : {}),
       };
 
       if (isDuplicateProbe(issue, pendingRunContext)) {

@@ -306,6 +306,46 @@ exit 1`;
   }
 });
 
+// ─── Stale queue eviction — same head needs explicit new SHA ─────
+
+test("reconcileQueueHealth dispatches fresh-head queue_repair for stale queue eviction check", { concurrency: false }, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "qhm-stale-eviction-"));
+  let oldPath: string | undefined;
+  try {
+    const ghScript = `
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '{"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"UNSTABLE","headRefOid":"evictedhead"}'
+  exit 0
+fi
+if [ "$1" = "api" ]; then
+  printf 'merge-steward/queue\n'
+  exit 0
+fi
+exit 1`;
+    const harness = createTestHarness(baseDir, ghScript);
+    oldPath = harness.oldPath;
+    insertQueuedIssue(harness.db, {
+      lastAttemptedFailureHeadSha: "evictedhead",
+      lastAttemptedFailureSignature: "same_head_queue_eviction:evictedhead",
+    });
+
+    await harness.reconcileQueueHealth();
+
+    const issue = harness.db.getIssue("proj", "issue-1");
+    assert.equal(issue?.factoryState, "repairing_queue");
+    const wake = harness.db.issueSessions.peekIssueSessionWake("proj", "issue-1");
+    assert.equal(wake?.runType, "queue_repair");
+    assert.equal(wake?.context.failureReason, "queue_eviction_missed");
+    assert.equal(wake?.context.failureSignature, "same_head_queue_eviction:evictedhead");
+    assert.equal(wake?.context.requiresFreshHead, true);
+    assert.match(String(wake?.context.promptContext), /will not re-admit the same evicted head SHA/);
+    assert.deepEqual(harness.enqueueCalls, [{ projectId: "proj", issueId: "issue-1" }]);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 // ─── Deduplication — same headRefOid ──────────────────────────────
 
 test("reconcileQueueHealth deduplicates on same headRefOid", { concurrency: false }, async () => {

@@ -33,6 +33,8 @@ test("buildOperatorRetryEvent preserves queue incident and failure context for q
   assert.equal(payload.checkName, "merge-steward");
   assert.equal(payload.summary, "Evicted from queue");
   assert.equal(payload.source, "operator_retry");
+  assert.equal(payload.requiresFreshHead, true);
+  assert.match(String(payload.promptContext), /publish a new head SHA/);
 });
 
 test("buildOperatorRetryEvent emits settled_red_ci for ci repair", () => {

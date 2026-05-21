@@ -660,6 +660,7 @@ function buildPrePushSelfReviewSection(target: "new_pr" | "existing_pr", runType
 function buildPublicationContract(
   runType: RunType,
   issueClass?: IssueClass,
+  context?: Record<string, unknown>,
 ): string {
   if (issueClass === "orchestration") {
     return [
@@ -684,6 +685,8 @@ function buildPublicationContract(
     ].join("\n");
   }
 
+  const requiresFreshQueueHead = runType === "queue_repair" && context?.requiresFreshHead === true;
+
   return [
     "## Publish",
     "",
@@ -691,8 +694,16 @@ function buildPublicationContract(
     "Do not open a new PR.",
     "A PR-less stop is not a successful outcome for a repair run unless a genuine external blocker prevents any correct push.",
     "",
-    "Before pushing, compute `git diff $(git merge-base origin/main HEAD)..HEAD | git patch-id --stable` and compare its first field to the `Last published patch-id` shown in the prompt header (if any).",
-    "If they match, do not push — finish the run as a no-op. Edit the PR body via `gh pr edit` instead if a textual update is needed.",
+    ...(requiresFreshQueueHead
+      ? [
+          "This queue repair requires a fresh PR head SHA because the previous head was terminally evicted by merge-steward.",
+          "Before pushing, compute `git diff $(git merge-base origin/main HEAD)..HEAD | git patch-id --stable` and compare its first field to the `Last published patch-id` shown in the prompt header (if any).",
+          "If the patch-id matches, preserve the approved diff and still push a new head SHA on the existing PR branch. Prefer a real rebase onto current `origin/main`; if that produces no content change, create an empty queue-kick commit.",
+        ]
+      : [
+          "Before pushing, compute `git diff $(git merge-base origin/main HEAD)..HEAD | git patch-id --stable` and compare its first field to the `Last published patch-id` shown in the prompt header (if any).",
+          "If they match, do not push — finish the run as a no-op. Edit the PR body via `gh pr edit` instead if a textual update is needed.",
+        ]),
     "",
     ...buildPrePushSelfReviewSection("existing_pr", runType),
   ].join("\n");
@@ -731,7 +742,7 @@ function buildSections(
     sections.push({ id: "workflow-guidance", content: workflow });
   }
 
-  sections.push({ id: "publication-contract", content: buildPublicationContract(runType, issueClass) });
+  sections.push({ id: "publication-contract", content: buildPublicationContract(runType, issueClass, context) });
   return sections;
 }
 

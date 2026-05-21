@@ -389,6 +389,7 @@ export class CliDataAccess extends CliOperatorApiClient {
         prState: dbIssue.prState,
         prReviewState: dbIssue.prReviewState,
         prCheckStatus: dbIssue.prCheckStatus,
+        factoryState: dbIssue.factoryState,
         pendingRunType: dbIssue.pendingRunType,
         lastRunType: issueSession?.lastRunType,
         lastGitHubFailureSource: issue.latestFailureSource,

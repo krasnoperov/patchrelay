@@ -12,6 +12,7 @@ export function resolveRetryTarget(params: {
   prState: string | undefined;
   prReviewState: string | undefined;
   prCheckStatus: string | undefined;
+  factoryState: FactoryState | undefined;
   pendingRunType: RunType | undefined;
   lastRunType: RunType | undefined;
   lastGitHubFailureSource: string | undefined;
@@ -21,6 +22,13 @@ export function resolveRetryTarget(params: {
   }
 
   if (hasOpenPr(params.prNumber, params.prState) && params.lastGitHubFailureSource === "queue_eviction") {
+    return { runType: "queue_repair", factoryState: "repairing_queue" };
+  }
+  if (
+    hasOpenPr(params.prNumber, params.prState)
+    && params.prReviewState === "approved"
+    && (params.factoryState === "awaiting_queue" || params.lastRunType === "queue_repair")
+  ) {
     return { runType: "queue_repair", factoryState: "repairing_queue" };
   }
   if (
