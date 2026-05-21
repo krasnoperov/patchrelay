@@ -43,10 +43,18 @@ export async function evictEntry(
   const retryHistory: EvictionContext["retryHistory"] = [];
   for (const event of events) {
     const eventBaseSha = event.baseSha || "unknown";
+    const detail = event.detail ?? "";
     if (event.fromStatus === "preparing_head" && event.toStatus === "validating") {
       retryHistory.push({ at: event.at, baseSha: eventBaseSha, outcome: "passed_to_validation" });
     } else if (event.fromStatus === "validating" && event.toStatus === "preparing_head") {
-      retryHistory.push({ at: event.at, baseSha: eventBaseSha, outcome: "ci_failed_retry" });
+      const outcome = detail.startsWith("invalidated:")
+        ? "invalidated"
+        : detail.toLowerCase().includes("ci failed")
+          ? "ci_failed_retry"
+          : "validation_reset";
+      retryHistory.push({ at: event.at, baseSha: eventBaseSha, outcome });
+    } else if (event.fromStatus === "merging" && event.toStatus === "preparing_head") {
+      retryHistory.push({ at: event.at, baseSha: eventBaseSha, outcome: "push_failed_retry" });
     } else if (event.fromStatus === "preparing_head" && event.toStatus === "preparing_head") {
       retryHistory.push({ at: event.at, baseSha: eventBaseSha, outcome: "conflict_retry" });
     }

@@ -71,6 +71,7 @@ export class Harness {
         defaultBranch: this.baseBranch,
         branch: this.baseBranch,
         requiredChecks: [],
+        requireAllChecksOnEmptyRequiredSet: false,
         warnings: [],
       }),
     });

@@ -21,6 +21,7 @@ describe("GitHub policy refresh safety", () => {
         defaultBranch: "main",
         branch: "main",
         requiredChecks: refreshedChecks,
+        requireAllChecksOnEmptyRequiredSet: false,
         warnings: [],
       }),
     });
