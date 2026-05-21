@@ -133,6 +133,37 @@ test("repair prompts publish to the existing PR branch with concise self-review 
   }
 });
 
+test("fresh-head queue repair prompt overrides patch-id no-op guard", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
+  try {
+    writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), "# Implementation Workflow\n");
+
+    const prompt = buildLayeredRunPrompt({
+      issue: {
+        ...createIssue(),
+        factoryState: "repairing_queue",
+        prNumber: 1125,
+        prHeadSha: "evictedhead",
+        lastPublishedPatchId: "patch-id-1",
+      },
+      runType: "queue_repair",
+      repoPath: baseDir,
+      context: {
+        failureReason: "queue_eviction_missed",
+        requiresFreshHead: true,
+        promptContext: "merge-steward will not re-admit this same head.",
+      },
+    });
+
+    assert.match(prompt, /This queue repair requires a fresh PR head SHA/);
+    assert.match(prompt, /If the patch-id matches, preserve the approved diff and still push a new head SHA/);
+    assert.match(prompt, /create an empty queue-kick commit/);
+    assert.doesNotMatch(prompt, /If they match, do not push — finish the run as a no-op/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("main_repair prompts require persistence checks before speculative infra changes", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
   try {

@@ -20,6 +20,13 @@ export function buildOperatorRetryEvent(issue: IssueRecord, runType: string, sou
         ...(queueIncident ?? {}),
         ...(failureContext ?? {}),
         source,
+        requiresFreshHead: true,
+        promptContext: [
+          "Operator retry is recovering a merge queue rejection on an approved PR.",
+          "If the previous repair left the same head SHA in place, merge-steward may still consider it terminally evicted.",
+          "Preserve the approved diff, but publish a new head SHA on the existing PR branch before finishing.",
+          "If rebasing onto the current base produces no content change, create an empty queue-kick commit.",
+        ].join(" "),
       }),
       dedupeKey: `${source}:queue_repair:${issue.linearIssueId}:${issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown-sha"}`,
     };

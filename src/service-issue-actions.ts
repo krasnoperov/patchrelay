@@ -117,6 +117,7 @@ export class ServiceIssueActions {
       prState: issue.prState,
       prReviewState: issue.prReviewState,
       prCheckStatus: issue.prCheckStatus,
+      factoryState: issue.factoryState,
       pendingRunType: issue.pendingRunType,
       lastRunType: issueSession?.lastRunType,
       lastGitHubFailureSource: issue.lastGitHubFailureSource,
