@@ -152,7 +152,7 @@ export class InterruptedRunRecovery {
       dedupeKey: `interrupted_implementation:implementation:${run.linearIssueId}`,
     });
 
-    if (!this.db.issueSessions.peekIssueSessionWake(run.projectId, run.linearIssueId)) {
+    if (!this.db.workflowWakes.peekIssueWake(run.projectId, run.linearIssueId)) {
       const failedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? refreshedIssue;
       this.feed?.publish({
         level: "error",

@@ -598,7 +598,7 @@ export class IdleIssueReconciler {
       if (
         issue.delegatedToPatchRelay
         && reactiveIntent?.runType === "review_fix"
-        && this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId) === undefined
+        && this.db.workflowWakes.peekIssueWake(issue.projectId, issue.linearIssueId) === undefined
       ) {
         this.logger.info(
           {

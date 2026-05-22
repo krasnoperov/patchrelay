@@ -18,11 +18,6 @@ export class IssueSessionStore {
     private readonly mapIssueSessionEventRow: (row: Record<string, unknown>) => IssueSessionEventRecord,
     private readonly issues: IssueStore,
     private readonly runs: RunStore,
-    private readonly deriveImplicitReactiveWake: (issue: IssueRecord) => {
-      runType: RunType;
-      wakeReason: string;
-      context: Record<string, unknown>;
-    } | undefined,
   ) {}
 
   getIssueSession(projectId: string, linearIssueId: string): IssueSessionRecord | undefined {
@@ -168,15 +163,7 @@ export class IssueSessionStore {
         resumeThread: plan.resumeThread,
       };
     }
-    const implicitWake = this.deriveImplicitReactiveWake(issue);
-    if (!implicitWake) return undefined;
-    return {
-      eventIds: [],
-      runType: implicitWake.runType,
-      context: implicitWake.context,
-      wakeReason: implicitWake.wakeReason,
-      resumeThread: false,
-    };
+    return undefined;
   }
 
   acquireIssueSessionLease(params: {

@@ -424,7 +424,7 @@ test("branch CI failures clear stale queue incident context", async () => {
     });
 
     const issue = db.getIssue("usertold", "issue-4");
-    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-4");
+    const wake = db.workflowWakes.peekIssueWake("usertold", "issue-4");
     assert.equal(wake?.runType, "ci_repair");
     assert.equal(issue?.lastGitHubFailureSource, "branch_ci");
     assert.equal(issue?.lastQueueIncidentJson, undefined);

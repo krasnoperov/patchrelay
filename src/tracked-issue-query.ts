@@ -6,11 +6,13 @@ import type { IssueStore } from "./db/issue-store.ts";
 import type { IssueSessionStore } from "./db/issue-session-store.ts";
 import type { RunStore } from "./db/run-store.ts";
 import { resolveEffectiveActiveRun } from "./effective-active-run.ts";
+import type { WorkflowWakeResolver } from "./workflow-wake-resolver.ts";
 
 export class TrackedIssueQuery {
   constructor(
     private readonly issues: IssueStore,
     private readonly issueSessions: IssueSessionStore,
+    private readonly workflowWakes: WorkflowWakeResolver,
     private readonly runs: RunStore,
   ) {}
 
@@ -24,7 +26,7 @@ export class TrackedIssueQuery {
         }),
         activeRunId: issue.activeRunId,
         blockedByCount: this.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId),
-        hasPendingWake: this.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId) !== undefined,
+        hasPendingWake: this.workflowWakes.hasPendingWake(issue.projectId, issue.linearIssueId),
         hasLegacyPendingRun: issue.pendingRunType !== undefined,
         prNumber: issue.prNumber,
         prState: issue.prState,
@@ -43,7 +45,7 @@ export class TrackedIssueQuery {
       issue,
       session: this.issueSessions.getIssueSession(issue.projectId, issue.linearIssueId),
       blockedBy: this.issues.listIssueDependencies(issue.projectId, issue.linearIssueId),
-      hasPendingWake: this.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId) !== undefined,
+      hasPendingWake: this.workflowWakes.hasPendingWake(issue.projectId, issue.linearIssueId),
       latestRun: this.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId),
       latestEvent: this.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 1 }).at(-1),
     });
