@@ -117,8 +117,12 @@ test("renderReviewPrompt includes explicit guidance docs and suppressed summarie
   assert.match(prompt, /## Review rules/);
   assert.match(prompt, /Flag only high-signal issues/);
   assert.match(prompt, /previous blocking review concerns are now resolved, still blocking, or no longer relevant/);
+  assert.match(prompt, /Include still-blocking prior concerns and newly discovered independent blockers in the same review, up to the blocker cap/);
   assert.match(prompt, /Only raise a new blocker when it is clearly independent from the previous blockers/);
   assert.match(prompt, /When several symptoms share one root cause, report them as one blocker/);
+  assert.match(prompt, /Report the complete set of independent merge-blocking concerns you can substantiate on the current head, up to 5 blockers/);
+  assert.match(prompt, /do not intentionally stop after the first blocker/);
+  assert.match(prompt, /Include nits only when they are high-confidence, directly tied to the diff, and useful to fix while touching this code/);
   assert.match(prompt, /Start by identifying the PR's primary task from the title, body, and diff/);
   assert.match(prompt, /Treat explicit scope notes, out-of-scope notes, supersedes notes, and threat-model notes in the PR body as evidence of author intent, not automatic waivers/);
   assert.match(prompt, /Do not let the PR description waive direct regressions or correctness issues introduced by the diff/);
