@@ -86,7 +86,7 @@ export async function handleLiveCommand(params: IssueCommandParams): Promise<num
     throw new Error(`${params.parsed.flags.get("watch") === true ? "watch" : "status"} requires <issueKey>.`);
   }
   const watch = params.parsed.flags.get("watch") === true;
-  do {
+  for (;;) {
     const result = await params.data.live(issueKey);
     if (!result) {
       throw new Error(`No active stage found for ${issueKey}`);
@@ -96,7 +96,7 @@ export async function handleLiveCommand(params: IssueCommandParams): Promise<num
       break;
     }
     await delay(2000);
-  } while (true);
+  }
   return 0;
 }
 

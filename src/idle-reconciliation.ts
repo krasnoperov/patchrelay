@@ -17,7 +17,7 @@ import {
 } from "./idle-reconciliation-helpers.ts";
 import { isMainRepairIssue } from "./main-repair.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
-import { deriveGateCheckStatusFromRollup, type GitHubStatusRollupEntry } from "./github-rollup.ts";
+import { deriveGateCheckStatusFromRollup } from "./github-rollup.ts";
 import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
 import { buildClosedPrCleanupFields, resolveClosedPrDisposition } from "./pr-state.ts";
 import { getReviewFixBudget } from "./run-budgets.ts";
@@ -680,9 +680,8 @@ export class IdleIssueReconciler {
           prReviewState: "approved",
         });
         if (issue.factoryState !== "awaiting_queue" || hasFailureProvenance(issue)) {
-          this.advanceIdleIssue(issue, "awaiting_queue", {
-            ...(hasFailureProvenance(issue) ? { clearFailureProvenance: true } : {}),
-          });
+          const options = hasFailureProvenance(issue) ? { clearFailureProvenance: true } : undefined;
+          this.advanceIdleIssue(issue, "awaiting_queue", options);
         }
         return;
       }

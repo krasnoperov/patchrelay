@@ -17,8 +17,8 @@ export function buildOperatorRetryEvent(issue: IssueRecord, runType: string, sou
     return {
       eventType: "merge_steward_incident" as const,
       eventJson: JSON.stringify({
-        ...(queueIncident ?? {}),
-        ...(failureContext ?? {}),
+        ...queueIncident,
+        ...failureContext,
         source,
         requiresFreshHead: true,
         promptContext: [
@@ -37,7 +37,7 @@ export function buildOperatorRetryEvent(issue: IssueRecord, runType: string, sou
     return {
       eventType: "settled_red_ci" as const,
       eventJson: JSON.stringify({
-        ...(failureContext ?? {}),
+        ...failureContext,
         source,
       }),
       dedupeKey: `${source}:ci_repair:${issue.linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? "unknown-sha"}`,

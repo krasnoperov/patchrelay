@@ -32,7 +32,7 @@ export async function runProjectHook(
 
   const result = await execCommand(hookPath, [], {
     cwd: options.cwd,
-    env: { ...sanitizedParentEnv(), ...(options.env ?? {}) },
+    env: { ...sanitizedParentEnv(), ...options.env },
     timeoutMs: options.timeoutMs ?? 120_000,
   });
 

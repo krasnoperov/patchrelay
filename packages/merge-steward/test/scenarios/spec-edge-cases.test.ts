@@ -84,10 +84,6 @@ describe("speculative edge cases", () => {
     assert.strictEqual(h.entryStatus(prB), "dequeued", "B should be dequeued");
     assert.ok(h.merged.includes(3), "C should merge after rebuilding spec");
 
-    // Check invalidation event was emitted.
-    const invalidEvents = h.reconcileEvents.filter(
-      (e) => e.prNumber === 3 && e.action === "invalidated",
-    );
     // C may or may not have been invalidated depending on timing.
     // But it should definitely merge in the end.
 

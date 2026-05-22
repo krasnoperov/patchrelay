@@ -1,6 +1,6 @@
 import git from "isomorphic-git";
 import { Volume } from "memfs";
-import type { GitOperations, SpeculativeBranchBuilder } from "../interfaces.ts";
+import type { GitOperations } from "../interfaces.ts";
 import type { MergeResult } from "../types.ts";
 
 const AUTHOR = { name: "steward-sim", email: "sim@test" };
@@ -192,7 +192,6 @@ export class GitSim implements GitOperations {
     // When pushing to a different branch (e.g., spec → main), fast-forward
     // the target to the source branch's HEAD in the in-memory repo.
     if (targetBranch && branch) {
-      const sha = await this.headSha(branch);
       const currentBranch = await git.currentBranch({ fs: this.vol, dir: this.dir });
       await git.checkout({ fs: this.vol, dir: this.dir, ref: targetBranch, force: true });
       // Fast-forward: set target branch to the source commit.

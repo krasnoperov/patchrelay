@@ -16,7 +16,7 @@ export class GitHubActionsRunner implements CIRunner {
   constructor(
     private readonly repoFullName: string,
     private readonly getRequiredChecks: () => string[] = () => [],
-    private readonly shouldRequireAllChecksOnEmptyRequiredSet: () => boolean = () => false,
+    _shouldRequireAllChecksOnEmptyRequiredSet: () => boolean = () => false,
   ) {}
 
   async triggerRun(_branch: string, sha: string): Promise<string> {
@@ -47,7 +47,6 @@ export class GitHubActionsRunner implements CIRunner {
       const requiredChecks = this.getRequiredChecks();
       const normalizedRequired = requiredChecks.map(normalizeCheckName);
       const hasRequired = requiredChecks.length > 0;
-      const requireAllChecks = !hasRequired && this.shouldRequireAllChecksOnEmptyRequiredSet();
       const relevant = hasRequired
         ? checkRuns.filter((c) => normalizedRequired.includes(normalizeCheckName(c.name)))
         : checkRuns;
