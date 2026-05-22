@@ -27,6 +27,8 @@ import { WebhookHandler } from "./webhook-handler.ts";
 import { acceptIncomingWebhook } from "./service-webhooks.ts";
 import type { AppConfig, LinearClient, LinearClientProvider } from "./types.ts";
 import { parseStringArray, TrackedIssueListQuery } from "./tracked-issue-list-query.ts";
+import { AgentInputService } from "./agent-input-service.ts";
+import { CodexFollowupIntentClassifier } from "./followup-intent.ts";
 
 export class PatchRelayService {
   readonly linearProvider: LinearClientProvider;
@@ -73,6 +75,14 @@ export class PatchRelayService {
       logger,
       this.feed,
     );
+    const agentInput = new AgentInputService(
+      db,
+      codex,
+      dispatcher,
+      logger,
+      this.feed,
+      new CodexFollowupIntentClassifier(codex, logger),
+    );
 
     this.orchestrator = new RunOrchestrator(
       config,
@@ -95,6 +105,8 @@ export class PatchRelayService {
       dispatcher,
       logger,
       this.feed,
+      undefined,
+      agentInput,
     );
 
     this.githubWebhookHandler = new GitHubWebhookHandler(
@@ -119,7 +131,7 @@ export class PatchRelayService {
     this.oauthService = new LinearOAuthService(config, { linearInstallations: db.linearInstallations }, logger);
     this.queryService = new IssueQueryService(db, codex, this.orchestrator);
     this.runtime = runtime;
-    this.issueActions = new ServiceIssueActions(db, codex, runtime, this.feed, logger);
+    this.issueActions = new ServiceIssueActions(config, db, agentInput, codex, runtime, this.feed, logger);
     this.startupRecovery = new ServiceStartupRecovery(
       db,
       this.linearProvider,

@@ -1,4 +1,4 @@
-import type { CodexConversationAdapter } from "../codex-conversation-adapter.ts";
+import type { AgentInputService } from "../agent-input-service.ts";
 import type { PatchRelayDatabase } from "../db.ts";
 import type { OperatorEventFeed } from "../operator-feed.ts";
 import { triggerEventAllowed } from "../project-resolution.ts";
@@ -15,7 +15,7 @@ export class CommentWakeHandler {
     private readonly db: PatchRelayDatabase,
     private readonly wakeDispatcher: WakeDispatcher,
     private readonly feed?: OperatorEventFeed,
-    private readonly conversationAdapter?: CodexConversationAdapter,
+    private readonly agentInput?: AgentInputService,
     private readonly emitLinearActivity?: (
       issue: NonNullable<ReturnType<PatchRelayDatabase["getIssue"]>>,
       content: LinearAgentActivityContent,
@@ -84,10 +84,10 @@ export class CommentWakeHandler {
       return;
     }
 
-    const result = await this.conversationAdapter?.deliverAgentInput({
+    const result = await this.agentInput?.deliverAgentInput({
       project,
       issue,
-      source: "addressed_issue_comment",
+      source: "linear_addressed_comment",
       body: addressedText,
       author: normalized.comment.userName,
       directReply: params.isDirectReplyToOutstandingQuestion(issue),
