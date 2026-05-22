@@ -63,7 +63,7 @@ function setupEnv(baseDir: string) {
   };
 }
 
-async function initAndAttach(baseDir: string) {
+async function initAndAttach() {
   await runCli(["init", "queue.example.com"], {
     stdout: createBufferStream().stream,
     stderr: createBufferStream().stream,
@@ -80,7 +80,7 @@ test("service logs outputs journalctl content", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "ms-svc-logs-"));
   try {
     await withEnv(setupEnv(baseDir), async () => {
-      await initAndAttach(baseDir);
+      await initAndAttach();
 
       const logLines = [
         "2026-03-28T10:00:00+0000 merge-steward[1234]: tick started",
@@ -114,7 +114,7 @@ test("service logs --lines passes custom line count", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "ms-svc-logs-lines-"));
   try {
     await withEnv(setupEnv(baseDir), async () => {
-      await initAndAttach(baseDir);
+      await initAndAttach();
 
       const commands: string[][] = [];
       const runCommand = async (_cmd: string, args: string[]) => {
@@ -140,7 +140,7 @@ test("service logs --json emits structured output", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "ms-svc-logs-json-"));
   try {
     await withEnv(setupEnv(baseDir), async () => {
-      await initAndAttach(baseDir);
+      await initAndAttach();
 
       const runCommand = async () => ({
         exitCode: 0,
@@ -169,7 +169,7 @@ test("service logs reports error on journalctl failure", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "ms-svc-logs-fail-"));
   try {
     await withEnv(setupEnv(baseDir), async () => {
-      await initAndAttach(baseDir);
+      await initAndAttach();
 
       const runCommand = async (_cmd: string, args: string[]) => {
         if (args.includes("journalctl")) {
@@ -196,7 +196,7 @@ test("service restart outputs daemon-reload and restart result", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "ms-svc-restart-"));
   try {
     await withEnv(setupEnv(baseDir), async () => {
-      await initAndAttach(baseDir);
+      await initAndAttach();
 
       const stdout = createBufferStream();
       const code = await runCli(["service", "restart"], {
@@ -218,7 +218,7 @@ test("service restart --json emits structured output", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "ms-svc-restart-json-"));
   try {
     await withEnv(setupEnv(baseDir), async () => {
-      await initAndAttach(baseDir);
+      await initAndAttach();
 
       const stdout = createBufferStream();
       const code = await runCli(["service", "restart", "--json"], {

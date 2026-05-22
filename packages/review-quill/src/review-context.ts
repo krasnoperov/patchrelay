@@ -49,7 +49,7 @@ function mergePromptCustomization(
       : {}),
     replaceSections: {
       ...base.replaceSections,
-      ...(override?.replaceSections ?? {}),
+      ...override?.replaceSections,
     },
   };
 }

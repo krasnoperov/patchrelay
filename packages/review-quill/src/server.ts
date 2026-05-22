@@ -6,7 +6,7 @@ import { loadConfig } from "./config.ts";
 import { getDefaultConfigPath, getReviewQuillPathLayout } from "./runtime-paths.ts";
 import { ensureDir } from "./utils.ts";
 import { SqliteStore } from "./db/sqlite-store.ts";
-import { resolveGitHubAuthConfig, createGitHubAppTokenManager, resolveAppSlug, type GitHubAppTokenManager } from "./github-auth.ts";
+import { resolveGitHubAuthConfig, createGitHubAppTokenManager, resolveAppSlug } from "./github-auth.ts";
 import { GitHubClient } from "./github-client.ts";
 import { ReviewRunner } from "./review-runner.ts";
 import { ReviewQuillService } from "./service.ts";

@@ -53,7 +53,7 @@ export async function runConnectFlow(params: {
 
   const deadline = Date.now() + (params.timeoutSeconds ?? 180) * 1000;
   const pollIntervalMs = params.connectPollIntervalMs ?? 1000;
-  do {
+  for (;;) {
     const status = await params.data.connectStatus(result.state);
     if (status.status === "completed") {
       const label = status.installation?.workspaceName ?? status.installation?.actorName ?? `installation #${status.installation?.id ?? "unknown"}`;
@@ -77,5 +77,5 @@ export async function runConnectFlow(params: {
       throw new Error(`Timed out waiting for Linear OAuth after ${params.timeoutSeconds ?? 180} seconds.`);
     }
     await delay(pollIntervalMs);
-  } while (true);
+  }
 }

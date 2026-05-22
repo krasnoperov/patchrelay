@@ -68,9 +68,7 @@ export function queueSettledOrchestrationIssue(params: {
     {
       eventType: "delegated",
       eventJson: JSON.stringify({
-        ...(params.promptContext
-          ? { promptContext: params.promptContext }
-          : { promptContext: "The orchestration child set has settled enough to begin planning." }),
+        promptContext: params.promptContext ?? "The orchestration child set has settled enough to begin planning.",
       }),
       dedupeKey: `delegated:orchestration_settle:${params.issue.linearIssueId}`,
     },

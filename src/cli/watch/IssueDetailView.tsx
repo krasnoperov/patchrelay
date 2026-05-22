@@ -48,7 +48,6 @@ export function IssueDetailView({
   connected,
   lastServerMessageAt,
   reservedRows = 0,
-  compact = false,
   onLayoutChange,
 }: IssueDetailViewProps): React.JSX.Element {
   const { stdout } = useStdout();

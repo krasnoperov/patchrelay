@@ -8,7 +8,7 @@ import {
   type CommandRunner,
 } from "../cli-system.ts";
 import { loadConfig } from "../config.ts";
-import { getDefaultConfigPath, getReviewQuillPathLayout } from "../runtime-paths.ts";
+import { getReviewQuillPathLayout } from "../runtime-paths.ts";
 import type { Output } from "./shared.ts";
 import { formatJson, writeOutput } from "./shared.ts";
 import { discoverRepoSettingsViaGhCli, queryReviewGateState } from "./gh.ts";

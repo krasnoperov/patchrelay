@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { DEFAULT_MERGE_QUEUE_CHECK_NAME, parseConfig, type StewardConfig } from "./config.ts";
-import { getBuiltCliEntryPath, getDefaultConfigPath, getDefaultRepoConfigDir, getDefaultRuntimeEnvPath, getDefaultServiceEnvPath, getDefaultStateDir, getMergeStewardPathLayout, getRepoConfigPath, getSystemdUnitPath, readBundledAsset } from "./runtime-paths.ts";
+import { getBuiltCliEntryPath, getDefaultConfigPath, getDefaultRuntimeEnvPath, getDefaultServiceEnvPath, getDefaultStateDir, getMergeStewardPathLayout, getRepoConfigPath, getSystemdUnitPath, readBundledAsset } from "./runtime-paths.ts";
 import { parseHomeConfigObject, stringifyJson, type StewardHomeConfig } from "./steward-home.ts";
 
 function renderTemplate(template: string, replacements?: { publicBaseUrl?: string }): string {
@@ -63,7 +63,7 @@ async function applyPublicBaseUrlToConfig(configPath: string, publicBaseUrl: str
   const next: StewardHomeConfig = {
     ...document,
     server: {
-      ...(document.server ?? {}),
+      ...document.server,
       public_base_url: publicBaseUrl,
     },
   };

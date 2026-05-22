@@ -1,4 +1,3 @@
-import pino from "pino";
 import { installServiceUnit } from "../install.ts";
 import { fetchServiceHealthStatus, formatCommandFailure, parseSystemctlShowOutput, runSystemctl, type CommandRunner } from "../cli-system.ts";
 import type { Output } from "./shared.ts";

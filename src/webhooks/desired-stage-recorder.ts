@@ -215,7 +215,7 @@ export class DesiredStageRecorder {
         ...(hydratedIssue.estimate != null ? { estimate: hydratedIssue.estimate } : {}),
         ...(hydratedIssue.stateName ? { currentLinearState: hydratedIssue.stateName } : {}),
         ...(hydratedIssue.stateType ? { currentLinearStateType: hydratedIssue.stateType } : {}),
-        ...(linkedPrAdoption?.issueUpdates ?? {}),
+        ...linkedPrAdoption?.issueUpdates,
         delegatedToPatchRelay: delegated,
         ...resolvedPlan,
       });

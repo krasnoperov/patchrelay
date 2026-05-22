@@ -1,6 +1,4 @@
 import { spawnSync } from "node:child_process";
-import type { ReviewQuillRepositoryConfig } from "../types.ts";
-import { defaultDiffRepoConfig } from "../diff-context/index.ts";
 
 export interface GhBranchProtectionResponse {
   required_status_checks?: {

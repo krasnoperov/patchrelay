@@ -10,7 +10,7 @@ import { GitHubActionsRunner } from "../src/github/actions-runner.ts";
  * passed in the URL.  Maps SHA → JSON array via env var GH_CHECKS_MAP
  * (JSON object keyed by SHA).
  */
-function buildGhStub(checksMap: Record<string, unknown[]>): string {
+function buildGhStub(): string {
   // Shell script that extracts the SHA from the API URL and returns the
   // matching check-runs array from the encoded map.
   return `#!/usr/bin/env node
@@ -44,7 +44,7 @@ describe("GitHubActionsRunner.getStatus", () => {
 
   function setup(checksMap: Record<string, unknown[]>): GitHubActionsRunner {
     const ghPath = path.join(baseDir, "gh");
-    writeFileSync(ghPath, buildGhStub(checksMap), "utf8");
+    writeFileSync(ghPath, buildGhStub(), "utf8");
     chmodSync(ghPath, 0o755);
     process.env.PATH = `${baseDir}${path.delimiter}${prevPath ?? ""}`;
     process.env.GH_CHECKS_MAP = JSON.stringify(checksMap);
@@ -53,7 +53,7 @@ describe("GitHubActionsRunner.getStatus", () => {
 
   function setupAllChecksRequired(checksMap: Record<string, unknown[]>): GitHubActionsRunner {
     const ghPath = path.join(baseDir, "gh");
-    writeFileSync(ghPath, buildGhStub(checksMap), "utf8");
+    writeFileSync(ghPath, buildGhStub(), "utf8");
     chmodSync(ghPath, 0o755);
     process.env.PATH = `${baseDir}${path.delimiter}${prevPath ?? ""}`;
     process.env.GH_CHECKS_MAP = JSON.stringify(checksMap);
