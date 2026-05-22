@@ -1,22 +1,9 @@
 import type { PatchRelayDatabase } from "../db.ts";
 import type { RunType } from "../factory-state.ts";
 import type { OperatorEventFeed } from "../operator-feed.ts";
-import { classifyIssue } from "../issue-class.ts";
-import {
-  computeOrchestrationSettleUntil,
-  wakeOrchestrationParentsForChildEvent,
-} from "../orchestration-parent-wake.ts";
+import { wakeOrchestrationParentsForChildEvent } from "../orchestration-parent-wake.ts";
 import { triggerEventAllowed } from "../project-resolution.ts";
-import { resolveAwaitingInputReason } from "../awaiting-input-reason.ts";
-import {
-  decideActiveRunRelease,
-  decideAgentSession,
-  decideRunIntent,
-  decideUnDelegation,
-  isResolvedLinearState,
-  isTerminalDelegationState,
-  resolveReDelegationResume,
-} from "./decision-helpers.ts";
+import { isResolvedLinearState } from "./decision-helpers.ts";
 import { isDelegatedToPatchRelay, resolveDelegationTruth } from "./delegation-truth.ts";
 import { syncIssueDependencies } from "./issue-dependency-sync.ts";
 import { resolveLinkedPrAdoption } from "./linked-pr-adoption.ts";
@@ -27,7 +14,7 @@ import type {
   TrackedIssueRecord,
 } from "../types.ts";
 import { buildOperatorRetryEvent } from "../operator-retry-event.ts";
-import { resolveIssueUpdatePlan } from "./issue-update-plan.ts";
+import { planIssueWebhookWorkflow } from "./issue-webhook-workflow-planner.ts";
 import type { WakeDispatcher } from "../wake-dispatcher.ts";
 
 export class DesiredStageRecorder {
@@ -87,116 +74,25 @@ export class DesiredStageRecorder {
       triggerEvent: params.normalized.triggerEvent,
     });
     const unresolvedBlockers = this.db.issues.countUnresolvedBlockers(params.project.id, normalizedIssue.id);
-    const terminal = isTerminalDelegationState(existingIssue, hydratedIssue);
-    const openPrExists = existingIssue?.prNumber !== undefined
-      && existingIssue.prState !== "closed"
-      && existingIssue.prState !== "merged";
-    const blockerPausedImplementation = unresolvedBlockers > 0
-      && activeRun?.runType === "implementation"
-      && !openPrExists;
-
-    const desiredStage = linkedPrAdoption
-      ? undefined
-      : decideRunIntent({
-        delegated,
-        triggerAllowed,
-        triggerEvent: params.normalized.triggerEvent,
-        unresolvedBlockers,
-        hasActiveRun: Boolean(activeRun),
-        hasPendingWake,
-        terminal,
-        currentState: existingIssue?.factoryState,
-      });
-
     const childIssueCount = this.db.issues.listCanonicalChildIssues(params.project.id, normalizedIssue.id).length;
-    const classification = classifyIssue({
-      issue: {
-        issueClass: existingIssue?.issueClass,
-        issueClassSource: existingIssue?.issueClassSource,
-        title: hydratedIssue.title ?? existingIssue?.title,
-        description: hydratedIssue.description ?? existingIssue?.description,
-        parentLinearIssueId: hydratedIssue.parentId ?? existingIssue?.parentLinearIssueId,
-      },
-      childIssueCount,
-    });
-    const shouldEnterOrchestrationSettle = Boolean(
-      delegated
-      && desiredStage === "implementation"
-      && classification.issueClass === "orchestration"
-      && childIssueCount === 0
-      && !existingIssue?.threadId
-      && !activeRun
-      && !terminal,
-    );
-
-    const runRelease = decideActiveRunRelease({
-      hasActiveRun: Boolean(activeRun),
-      terminal,
-      triggerEvent: params.normalized.triggerEvent,
-      delegated,
-    });
-    const effectiveRunRelease = blockerPausedImplementation
-      ? { release: true, reason: "Issue became blocked during implementation" }
-      : runRelease;
-
-    const undelegation = decideUnDelegation({
-      triggerEvent: params.normalized.triggerEvent,
-      delegated,
-      currentState: existingIssue?.factoryState,
-      hasPr: existingIssue?.prNumber !== undefined && existingIssue?.prState !== "merged",
-    });
-    const startupResume = linkedPrAdoption
-      ? {
-          factoryState: linkedPrAdoption.factoryState,
-          pendingRunType: linkedPrAdoption.pendingRunType,
-          pendingRunContext: linkedPrAdoption.pendingRunContext,
-          source: "linked_pr_adoption",
-        }
-      : {
-          ...resolveReDelegationResume({
-            delegated,
-            previouslyDelegated: existingIssue?.delegatedToPatchRelay,
-            currentState: existingIssue?.factoryState,
-            awaitingInputReason: existingIssue
-              ? resolveAwaitingInputReason({ issue: existingIssue, latestRun })
-              : undefined,
-            unresolvedBlockers,
-            prNumber: existingIssue?.prNumber,
-            prState: existingIssue?.prState,
-            prIsDraft: existingIssue?.prIsDraft,
-            prReviewState: existingIssue?.prReviewState,
-            prCheckStatus: existingIssue?.prCheckStatus,
-            latestFailureSource: existingIssue?.lastGitHubFailureSource,
-          }),
-          source: "re_delegated",
-        };
-
     const existingWakeRunType = existingIssue
       ? params.peekPendingSessionWakeRunType(params.project.id, normalizedIssue.id)
       : undefined;
-    const clearPending = (unresolvedBlockers > 0 && existingWakeRunType === "implementation" && !activeRun)
-      || undelegation.clearPending;
-
-    const agentSessionId = decideAgentSession({
-      sessionId: params.normalized.agentSession?.id,
+    const workflowPlan = planIssueWebhookWorkflow({
+      existingIssue,
+      hydratedIssue,
+      latestRun,
+      delegated,
+      linkedPrAdoption,
+      triggerAllowed,
       triggerEvent: params.normalized.triggerEvent,
-      delegated,
-    });
-    const terminalRunRelease = effectiveRunRelease.release && terminal;
-    const resolvedPlan = resolveIssueUpdatePlan({
-      existingIssue: Boolean(existingIssue),
-      delegated,
+      unresolvedBlockers,
+      hasActiveRun: Boolean(activeRun),
+      activeRunType: activeRun?.runType,
+      hasPendingWake,
+      existingWakeRunType,
       incomingAgentSessionId,
-      startupResume,
-      desiredStage,
-      terminalRunRelease,
-      blockerPausedImplementation,
-      undelegation,
-      clearPending,
-      effectiveRunRelease,
-      shouldEnterOrchestrationSettle,
-      agentSessionId,
-      computeOrchestrationSettleUntil,
+      childIssueCount,
     });
 
     const commitIssueUpdate = () => {
@@ -206,8 +102,8 @@ export class DesiredStageRecorder {
         ...(hydratedIssue.identifier ? { issueKey: hydratedIssue.identifier } : {}),
         ...(hydratedIssue.parentId !== undefined ? { parentLinearIssueId: hydratedIssue.parentId ?? null } : {}),
         ...(hydratedIssue.parentIdentifier !== undefined ? { parentIssueKey: hydratedIssue.parentIdentifier ?? null } : {}),
-        issueClass: classification.issueClass,
-        issueClassSource: classification.issueClassSource,
+        issueClass: workflowPlan.classification.issueClass,
+        issueClassSource: workflowPlan.classification.issueClassSource,
         ...(hydratedIssue.title ? { title: hydratedIssue.title } : {}),
         ...(hydratedIssue.description ? { description: hydratedIssue.description } : {}),
         ...(hydratedIssue.url ? { url: hydratedIssue.url } : {}),
@@ -217,10 +113,10 @@ export class DesiredStageRecorder {
         ...(hydratedIssue.stateType ? { currentLinearStateType: hydratedIssue.stateType } : {}),
         ...linkedPrAdoption?.issueUpdates,
         delegatedToPatchRelay: delegated,
-        ...resolvedPlan,
+        ...workflowPlan.resolvedIssueUpdate,
       });
-      if (effectiveRunRelease.release && activeRun && effectiveRunRelease.reason) {
-        this.db.runs.finishRun(activeRun.id, { status: "released", failureReason: effectiveRunRelease.reason });
+      if (workflowPlan.effectiveRunRelease.release && activeRun && workflowPlan.effectiveRunRelease.reason) {
+        this.db.runs.finishRun(activeRun.id, { status: "released", failureReason: workflowPlan.effectiveRunRelease.reason });
       }
       return record;
     };
@@ -239,7 +135,7 @@ export class DesiredStageRecorder {
     const wasResolved = isResolvedLinearState(existingIssue?.currentLinearStateType, existingIssue?.currentLinearState);
     const isResolved = isResolvedLinearState(issue.currentLinearStateType, issue.currentLinearState);
 
-    if (undelegation.factoryState) {
+    if (workflowPlan.undelegation.factoryState) {
       if (activeRun?.threadId && activeRun.turnId) {
         await params.stopActiveRun(activeRun, "STOP: The issue was un-delegated from PatchRelay. Stop working immediately and exit.");
       }
@@ -262,7 +158,7 @@ export class DesiredStageRecorder {
           ? "Issue un-delegated from PatchRelay"
           : `Issue un-delegated from PatchRelay; ${issue.factoryState} is now paused`,
       });
-    } else if (blockerPausedImplementation) {
+    } else if (workflowPlan.blockerPausedImplementation) {
       if (activeRun?.threadId && activeRun.turnId) {
         await params.stopActiveRun(activeRun, "STOP: The issue is now blocked by another task. Stop working immediately and exit without publishing.");
       }
@@ -277,13 +173,13 @@ export class DesiredStageRecorder {
         status: "blocked",
         summary: `Implementation paused because ${issue.issueKey ?? normalizedIssue.id} is now blocked`,
       });
-    } else if (startupResume.pendingRunType) {
+    } else if (workflowPlan.startupResume.pendingRunType) {
       this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(params.project.id, normalizedIssue.id, {
         projectId: params.project.id,
         linearIssueId: normalizedIssue.id,
-        ...buildOperatorRetryEvent(issue, startupResume.pendingRunType, startupResume.source),
+        ...buildOperatorRetryEvent(issue, workflowPlan.startupResume.pendingRunType, workflowPlan.startupResume.source),
       });
-    } else if (shouldEnterOrchestrationSettle) {
+    } else if (workflowPlan.shouldEnterOrchestrationSettle) {
       this.feed?.publish({
         level: "info",
         kind: "stage",
@@ -294,10 +190,9 @@ export class DesiredStageRecorder {
         summary: "Waiting briefly for child issues to settle before orchestration starts",
       });
     } else if (
-      !startupResume.factoryState
-      && !startupResume.pendingRunType
-      &&
-      desiredStage === "implementation"
+      !workflowPlan.startupResume.factoryState
+      && !workflowPlan.startupResume.pendingRunType
+      && workflowPlan.desiredStage === "implementation"
       && params.normalized.triggerEvent !== "commentCreated"
       && params.normalized.triggerEvent !== "commentUpdated"
       && params.normalized.triggerEvent !== "agentPrompted"
