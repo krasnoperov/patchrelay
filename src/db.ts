@@ -9,9 +9,6 @@ import type {
 } from "./db-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
 import {
-  deriveIssueSessionReactiveIntent,
-} from "./issue-session.ts";
-import {
   type IssueSessionEventType,
 } from "./issue-session-events.ts";
 import { IssueStore, type UpsertIssueParams } from "./db/issue-store.ts";
@@ -25,88 +22,7 @@ import { runPatchRelayMigrations } from "./db/migrations.ts";
 import { SqliteConnection, type DatabaseConnection } from "./db/shared.ts";
 import { syncIssueSessionFromIssue } from "./issue-session-projector.ts";
 import { TrackedIssueQuery } from "./tracked-issue-query.ts";
-
-function parseObjectJson(raw: string | undefined): Record<string, unknown> | undefined {
-  if (!raw) return undefined;
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function hasUnattemptedFailureSignature(issue: IssueRecord, fallbackHeadSha?: string): boolean {
-  const signature = issue.lastGitHubFailureSignature;
-  if (!signature) return false;
-  const headSha = issue.lastGitHubFailureHeadSha ?? fallbackHeadSha;
-  return issue.lastAttemptedFailureSignature !== signature
-    || (headSha !== undefined && issue.lastAttemptedFailureHeadSha !== headSha);
-}
-
-function deriveImplicitReactiveWake(issue: IssueRecord):
-  | { runType: RunType; wakeReason: string; context: Record<string, unknown> }
-  | undefined {
-  const reactiveIntent = deriveIssueSessionReactiveIntent({
-    delegatedToPatchRelay: issue.delegatedToPatchRelay,
-    activeRunId: issue.activeRunId,
-    prNumber: issue.prNumber,
-    prState: issue.prState,
-    prReviewState: issue.prReviewState,
-    prCheckStatus: issue.prCheckStatus,
-    latestFailureSource: issue.lastGitHubFailureSource,
-  });
-  if (!reactiveIntent) return undefined;
-
-  if (reactiveIntent.runType === "ci_repair") {
-    const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson) ?? {};
-    const snapshot = parseObjectJson(issue.lastGitHubCiSnapshotJson);
-    const fallbackHeadSha = typeof failureContext.failureHeadSha === "string"
-      ? failureContext.failureHeadSha
-      : issue.lastGitHubFailureHeadSha ?? issue.prHeadSha;
-    const failureSignature = issue.lastGitHubFailureSignature
-      ?? (fallbackHeadSha ? `implicit_branch_ci::${fallbackHeadSha}` : undefined);
-    if (!failureSignature || issue.prState !== "open") return undefined;
-    if (
-      issue.lastAttemptedFailureSignature === failureSignature
-      && (fallbackHeadSha === undefined || issue.lastAttemptedFailureHeadSha === fallbackHeadSha)
-    ) {
-      return undefined;
-    }
-    return {
-      runType: reactiveIntent.runType,
-      wakeReason: reactiveIntent.wakeReason,
-      context: {
-        ...failureContext,
-        failureSignature,
-        ...(fallbackHeadSha ? { failureHeadSha: fallbackHeadSha } : {}),
-        ...(issue.lastGitHubFailureCheckName ? { checkName: issue.lastGitHubFailureCheckName } : {}),
-        ...(snapshot ? { ciSnapshot: snapshot } : {}),
-      },
-    };
-  }
-
-  if (reactiveIntent.runType === "queue_repair") {
-    const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson) ?? {};
-    const incidentContext = parseObjectJson(issue.lastQueueIncidentJson) ?? {};
-    const fallbackHeadSha = typeof failureContext.failureHeadSha === "string"
-      ? failureContext.failureHeadSha
-      : undefined;
-    if (!hasUnattemptedFailureSignature(issue, fallbackHeadSha)) return undefined;
-    return {
-      runType: reactiveIntent.runType,
-      wakeReason: reactiveIntent.wakeReason,
-      context: {
-        ...incidentContext,
-        ...failureContext,
-      },
-    };
-  }
-
-  return undefined;
-}
+import { WorkflowWakeResolver } from "./workflow-wake-resolver.ts";
 
 export class PatchRelayDatabase {
   readonly connection: DatabaseConnection;
@@ -116,6 +32,7 @@ export class PatchRelayDatabase {
   readonly webhookEvents: WebhookEventStore;
   readonly issues: IssueStore;
   readonly issueSessions: IssueSessionStore;
+  readonly workflowWakes: WorkflowWakeResolver;
   readonly runs: RunStore;
   readonly trackedIssues: TrackedIssueQuery;
 
@@ -152,9 +69,9 @@ export class PatchRelayDatabase {
       mapIssueSessionEventRow,
       this.issues,
       this.runs,
-      deriveImplicitReactiveWake,
     );
-    this.trackedIssues = new TrackedIssueQuery(this.issues, this.issueSessions, this.runs);
+    this.workflowWakes = new WorkflowWakeResolver(this.issues, this.issueSessions);
+    this.trackedIssues = new TrackedIssueQuery(this.issues, this.issueSessions, this.workflowWakes, this.runs);
   }
 
   runMigrations(): void {

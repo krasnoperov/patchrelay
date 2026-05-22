@@ -97,7 +97,7 @@ export class WakeDispatcher {
   ): RunType | undefined {
     const issue = this.db.issues.getIssue(projectId, linearIssueId);
     if (issue?.activeRunId !== undefined) return undefined;
-    const wake = this.db.issueSessions.peekIssueSessionWake(projectId, linearIssueId);
+    const wake = this.db.workflowWakes.peekIssueWake(projectId, linearIssueId);
     // Fall back to the legacy pending_run_type column. The orchestrator
     // materializes it into a real event at run time, but the poke still
     // needs to happen now so the orchestrator gets called at all.
@@ -129,7 +129,7 @@ export class WakeDispatcher {
     publishDeferredFollowUp?: boolean;
   }): WakeDispatchResult | undefined {
     this.releaseLease(params.run.projectId, params.run.linearIssueId);
-    const wake = this.db.issueSessions.peekIssueSessionWake(
+    const wake = this.db.workflowWakes.peekIssueWake(
       params.run.projectId,
       params.run.linearIssueId,
     );

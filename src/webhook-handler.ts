@@ -284,7 +284,7 @@ export class WebhookHandler {
   }
 
   private peekPendingSessionWakeRunType(projectId: string, issueId: string): RunType | undefined {
-    return this.db.issueSessions.peekIssueSessionWake(projectId, issueId)?.runType;
+    return this.db.workflowWakes.peekIssueWake(projectId, issueId)?.runType;
   }
 
   private enqueuePendingSessionWake(projectId: string, issueId: string): RunType | undefined {

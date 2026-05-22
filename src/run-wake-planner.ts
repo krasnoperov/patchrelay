@@ -30,7 +30,7 @@ export class RunWakePlanner {
   constructor(private readonly db: PatchRelayDatabase) {}
 
   resolveRunWake(issue: IssueRecord): PendingRunWake | undefined {
-    const sessionWake = this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    const sessionWake = this.db.workflowWakes.peekIssueWake(issue.projectId, issue.linearIssueId);
     if (!sessionWake) return undefined;
     return {
       runType: sessionWake.runType,

@@ -95,7 +95,7 @@ export class ServiceStartupRecovery {
       }
       const unresolvedBlockers = this.db.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId);
       const latestRun = this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
-      const hasPendingWake = this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId) !== undefined;
+      const hasPendingWake = this.db.workflowWakes.peekIssueWake(issue.projectId, issue.linearIssueId) !== undefined;
       const shouldRecoverPausedLocalWork =
         delegated
         && isResumablePausedLocalWork({
@@ -156,7 +156,7 @@ export class ServiceStartupRecovery {
             dedupeKey: `delegated:${issue.linearIssueId}`,
           });
         }
-        if (this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
+        if (this.db.workflowWakes.peekIssueWake(issue.projectId, issue.linearIssueId)) {
           this.enqueueIssue(issue.projectId, issue.linearIssueId);
         }
         this.logger.info(

@@ -58,7 +58,7 @@ export class DesiredStageRecorder {
     const latestRun = existingIssue ? this.db.runs.getLatestRunForIssue(params.project.id, normalizedIssue.id) : undefined;
     const triggerAllowed = triggerEventAllowed(params.project, params.normalized.triggerEvent);
     const incomingAgentSessionId = params.normalized.agentSession?.id;
-    const hasPendingWake = this.db.issueSessions.peekIssueSessionWake(params.project.id, normalizedIssue.id) !== undefined;
+    const hasPendingWake = params.peekPendingSessionWakeRunType(params.project.id, normalizedIssue.id) !== undefined;
 
     if (!existingIssue && !isDelegatedToPatchRelay(this.db, params.project, normalizedIssue) && !incomingAgentSessionId) {
       return { issue: undefined, wakeRunType: undefined, delegated: false };

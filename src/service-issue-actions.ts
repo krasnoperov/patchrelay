@@ -141,7 +141,7 @@ export class ServiceIssueActions {
       status: "retry",
       summary: `Retry queued: ${retryTarget.runType}`,
     });
-    if (this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
+    if (this.db.workflowWakes.peekIssueWake(issue.projectId, issue.linearIssueId)) {
       this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
     }
     return { issueKey, runType: retryTarget.runType };
