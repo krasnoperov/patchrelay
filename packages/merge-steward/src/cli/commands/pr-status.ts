@@ -158,8 +158,12 @@ async function loadQueueEntry(config: StewardConfig, prNumber: number): Promise<
   }
 }
 
-function latestEventForPr(snapshot: QueueWatchSnapshot, prNumber: number): QueueEventSummary | undefined {
-  return snapshot.recentEvents.find((event) => event.prNumber === prNumber);
+export function latestEventForPr(snapshot: QueueWatchSnapshot, prNumber: number): QueueEventSummary | undefined {
+  for (let index = snapshot.recentEvents.length - 1; index >= 0; index -= 1) {
+    const event = snapshot.recentEvents[index];
+    if (event?.prNumber === prNumber) return event;
+  }
+  return undefined;
 }
 
 export interface BuildReportOptions {

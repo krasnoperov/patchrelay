@@ -9,10 +9,11 @@ import {
   classifyQueueEntry,
   formatReportText,
   handlePrStatus,
+  latestEventForPr,
 } from "../src/cli/commands/pr-status.ts";
 import type { PrGitHubOverview } from "../src/cli/commands/pr-github.ts";
 import { parseArgs } from "../src/cli/args.ts";
-import type { QueueEntry } from "../src/types.ts";
+import type { QueueEntry, QueueWatchSnapshot } from "../src/types.ts";
 import { runCli } from "../src/cli.ts";
 
 function createBufferStream() {
@@ -218,6 +219,94 @@ test("pr status text includes active reconcile context for queued PRs", () => {
   assert.match(text, /Reconcile: running for 12s/);
   assert.match(text, /Latest action: ci_passed PR #42/);
   assert.match(text, /Latest event for this PR: merging \(CI passed, ready to merge\)/);
+});
+
+test("pr status text uses the newest fetched event for a PR", () => {
+  const report = buildPrStatusReport({
+    repoId: "app",
+    repoFullName: "owner/app",
+    prNumber: 42,
+    queueEntry: makeEntry("merged"),
+    queueSource: "service",
+    queueLatestEvent: {
+      id: 8,
+      entryId: "entry-1",
+      at: "2026-05-22T07:15:43.757Z",
+      fromStatus: "merging",
+      toStatus: "merged",
+      detail: "spec pushed to main; all required checks passed",
+      prNumber: 42,
+      branch: "feat/x",
+      issueKey: null,
+    },
+  });
+
+  const text = formatReportText(report);
+  assert.match(text, /Latest event for this PR: merged \(spec pushed to main; all required checks passed\)/);
+  assert.doesNotMatch(text, /CI passed, ready to merge/);
+});
+
+test("latestEventForPr scans chronological events from newest to oldest", () => {
+  const snapshot: QueueWatchSnapshot = {
+    repoId: "app",
+    repoFullName: "owner/app",
+    baseBranch: "main",
+    githubPolicy: {
+      requiredChecks: [],
+      requireAllChecksOnEmptyRequiredSet: false,
+      fetchedAt: null,
+      lastRefreshReason: null,
+      lastRefreshChanged: null,
+    },
+    summary: {
+      total: 1,
+      active: 0,
+      queued: 0,
+      preparingHead: 0,
+      validating: 0,
+      merging: 0,
+      merged: 1,
+      evicted: 0,
+      dequeued: 0,
+      headEntryId: null,
+      headPrNumber: null,
+    },
+    runtime: {
+      tickInProgress: false,
+      lastTickStartedAt: null,
+      lastTickCompletedAt: null,
+      lastTickOutcome: "succeeded",
+      lastTickError: null,
+    },
+    queueBlock: null,
+    entries: [makeEntry("merged")],
+    recentEvents: [
+      {
+        id: 1,
+        entryId: "entry-1",
+        at: "2026-05-22T07:14:56.318Z",
+        fromStatus: "validating",
+        toStatus: "merging",
+        detail: "CI passed, ready to merge",
+        prNumber: 42,
+        branch: "feat/x",
+        issueKey: null,
+      },
+      {
+        id: 2,
+        entryId: "entry-1",
+        at: "2026-05-22T07:15:43.757Z",
+        fromStatus: "merging",
+        toStatus: "merged",
+        detail: "spec pushed to main; all required checks passed",
+        prNumber: 42,
+        branch: "feat/x",
+        issueKey: null,
+      },
+    ],
+  };
+
+  assert.equal(latestEventForPr(snapshot, 42)?.toStatus, "merged");
 });
 
 test("buildPrStatusReport: github approved_clean returns exit 0", () => {

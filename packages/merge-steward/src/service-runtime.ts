@@ -134,6 +134,7 @@ export class MergeStewardRuntime {
     this.lastTickStartedAt = new Date().toISOString();
     this.lastTickOutcome = "running";
     this.lastTickError = null;
+    this.lastReconcileEvent = null;
     this.scheduleStaleTickWarning(this.lastTickStartedAt);
     try {
       await this.beforeTick?.();
