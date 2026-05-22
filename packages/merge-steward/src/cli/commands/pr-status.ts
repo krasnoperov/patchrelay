@@ -1,5 +1,5 @@
 import { SqliteStore } from "../../db/sqlite-store.ts";
-import type { QueueEntry, QueueWatchSnapshot } from "../../types.ts";
+import type { QueueEntry, QueueEventSummary, QueueRuntimeStatus, QueueWatchSnapshot } from "../../types.ts";
 import type { StewardConfig } from "../../config.ts";
 import type { Output, ParsedArgs } from "../types.ts";
 import { formatJson, writeOutput } from "../output.ts";
@@ -7,6 +7,7 @@ import { ServiceApiError, fetchLocalJson, loadRepoConfigById } from "../system.t
 import { defaultResolveRunner, resolvePrNumber, resolveRepo, type ResolveCommandRunner } from "../resolve.ts";
 import { parseIntegerFlag } from "../args.ts";
 import { fetchPrGitHubOverview, type PrGitHubOverview } from "./pr-github.ts";
+import { formatRuntimeActivity } from "../../runtime-format.ts";
 
 export type PrStatusKind =
   | "merged"
@@ -36,6 +37,9 @@ export interface PrStatusReport {
   exitCode: number;
   reason?: string;
   queueEntry?: QueueEntry;
+  queueSource?: "service" | "database";
+  queueRuntime?: QueueRuntimeStatus;
+  queueLatestEvent?: QueueEventSummary;
   github?: PrGitHubOverview;
   checkedAt: string;
 }
@@ -117,14 +121,22 @@ function findEntryForPr(snapshot: QueueWatchSnapshot, prNumber: number): QueueEn
 }
 
 async function loadQueueEntry(config: StewardConfig, prNumber: number): Promise<
-  | { kind: "found"; entry: QueueEntry; source: "service" | "database" }
+  | { kind: "found"; entry: QueueEntry; source: "service" | "database"; runtime?: QueueRuntimeStatus; latestEvent?: QueueEventSummary }
   | { kind: "not_found" }
   | { kind: "unavailable" }
 > {
   try {
-    const snapshot = await fetchLocalJson<QueueWatchSnapshot>(config.repoId, "/queue/watch?eventLimit=1");
+    const snapshot = await fetchLocalJson<QueueWatchSnapshot>(config.repoId, "/queue/watch?eventLimit=40");
     const entry = findEntryForPr(snapshot, prNumber);
-    return entry ? { kind: "found", entry, source: "service" } : { kind: "not_found" };
+    if (!entry) return { kind: "not_found" };
+    const latestEvent = latestEventForPr(snapshot, prNumber);
+    return {
+      kind: "found",
+      entry,
+      source: "service",
+      runtime: snapshot.runtime,
+      ...(latestEvent ? { latestEvent } : {}),
+    };
   } catch (error) {
     if (error instanceof ServiceApiError) {
       return { kind: "unavailable" };
@@ -146,11 +158,22 @@ async function loadQueueEntry(config: StewardConfig, prNumber: number): Promise<
   }
 }
 
+export function latestEventForPr(snapshot: QueueWatchSnapshot, prNumber: number): QueueEventSummary | undefined {
+  for (let index = snapshot.recentEvents.length - 1; index >= 0; index -= 1) {
+    const event = snapshot.recentEvents[index];
+    if (event?.prNumber === prNumber) return event;
+  }
+  return undefined;
+}
+
 export interface BuildReportOptions {
   repoId: string;
   repoFullName: string;
   prNumber: number;
   queueEntry?: QueueEntry | undefined;
+  queueSource?: "service" | "database" | undefined;
+  queueRuntime?: QueueRuntimeStatus | undefined;
+  queueLatestEvent?: QueueEventSummary | undefined;
   github?: PrGitHubOverview | undefined;
 }
 
@@ -167,6 +190,9 @@ export function buildPrStatusReport(options: BuildReportOptions): PrStatusReport
       terminal: isTerminalKind(kind),
       exitCode: exitCodeForKind(kind),
       queueEntry: options.queueEntry,
+      ...(options.queueSource ? { queueSource: options.queueSource } : {}),
+      ...(options.queueRuntime ? { queueRuntime: options.queueRuntime } : {}),
+      ...(options.queueLatestEvent ? { queueLatestEvent: options.queueLatestEvent } : {}),
       checkedAt,
     };
   }
@@ -188,7 +214,7 @@ export function buildPrStatusReport(options: BuildReportOptions): PrStatusReport
   throw new Error("buildPrStatusReport requires either queueEntry or github overview");
 }
 
-function formatReportText(report: PrStatusReport): string {
+export function formatReportText(report: PrStatusReport): string {
   const lines = [
     `Repo: ${report.repoFullName} (${report.repoId})`,
     `PR: #${report.prNumber}`,
@@ -203,6 +229,12 @@ function formatReportText(report: PrStatusReport): string {
     lines.push(`Branch: ${entry.branch}`);
     lines.push(`Head SHA: ${entry.headSha}`);
     if (entry.waitDetail) lines.push(`Wait detail: ${entry.waitDetail}`);
+    if (report.queueRuntime) {
+      lines.push(...formatRuntimeActivity(report.queueRuntime));
+    }
+    if (report.queueLatestEvent) {
+      lines.push(`Latest event for this PR: ${report.queueLatestEvent.toStatus}${report.queueLatestEvent.detail ? ` (${report.queueLatestEvent.detail})` : ""} at ${report.queueLatestEvent.at}`);
+    }
   }
   if (report.github) {
     const gh = report.github;
@@ -315,6 +347,9 @@ export async function handlePrStatus(options: HandlePrStatusOptions): Promise<nu
         repoFullName: resolvedRepo.repoFullName,
         prNumber: resolvedPr.prNumber,
         queueEntry: queueResult.entry,
+        queueSource: queueResult.source,
+        ...(queueResult.runtime ? { queueRuntime: queueResult.runtime } : {}),
+        ...(queueResult.latestEvent ? { queueLatestEvent: queueResult.latestEvent } : {}),
       });
     }
     const overview = await fetchGh(resolvedRepo.repoFullName, resolvedPr.prNumber);

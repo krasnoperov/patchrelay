@@ -1,4 +1,5 @@
 import type { DiscoveredRepoSettings } from "./github-repo-discovery.ts";
+import type { QueueRuntimeStatus } from "./types.ts";
 
 export type RepoRuntimeState = "initializing" | "ready" | "failed";
 
@@ -11,6 +12,7 @@ export interface RepoRuntimeStatus {
   readyAt?: string | undefined;
   failedAt?: string | undefined;
   lastError?: string | undefined;
+  runtime?: QueueRuntimeStatus | undefined;
 }
 
 export interface ServiceHealthResponse {

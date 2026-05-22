@@ -177,7 +177,7 @@ export function specChainLabel(entry: { specBranch: string | null; specBasedOn: 
 
 export function runtimeLabel(runtime: QueueRuntimeStatus): string {
   if (runtime.tickInProgress) {
-    return "running";
+    return runtime.staleTick ? "stale" : "running";
   }
   if (runtime.lastTickOutcome === "idle") {
     return "idle";

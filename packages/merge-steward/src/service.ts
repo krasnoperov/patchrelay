@@ -1,6 +1,6 @@
 import type { Logger } from "pino";
 import type { GitOperations, CIRunner, GitHubPRApi, EvictionReporter, SpeculativeBranchBuilder } from "./interfaces.ts";
-import type { QueueEntry, QueueEntryDetail, IncidentRecord, QueueRuntimeStatus, QueueWatchSnapshot } from "./types.ts";
+import type { QueueEntry, QueueEntryDetail, IncidentRecord, QueueReconcileResult, QueueRuntimeStatus, QueueWatchSnapshot } from "./types.ts";
 import type { StewardConfig } from "./config.ts";
 import type { GitHubPolicyCache, GitHubPolicyRefreshResult, GitHubPolicySnapshot } from "./github-policy.ts";
 import type { QueueStore } from "./store.ts";
@@ -132,7 +132,7 @@ export class MergeStewardService {
     return this.watchQueries.getEntryDetail(entryId, options);
   }
 
-  async triggerReconcile(): Promise<{ started: boolean; runtime: ReturnType<MergeStewardRuntime["getRuntimeStatus"]> }> {
+  async triggerReconcile(): Promise<QueueReconcileResult> {
     return await this.runtime.triggerReconcile();
   }
 

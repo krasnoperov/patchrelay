@@ -1,9 +1,11 @@
 import { installServiceUnit } from "../../install.ts";
+import type { RepoRuntimeStatus } from "../../admin-types.ts";
 import type { ParsedArgs, Output, CommandRunner } from "../types.ts";
 import { UsageError } from "../types.ts";
 import { parseIntegerFlag } from "../args.ts";
 import { formatJson, writeOutput } from "../output.ts";
 import { fetchServiceHealthStatus, formatCommandFailure, parseSystemctlShowOutput, runSystemctl } from "../system.ts";
+import { formatDurationMs } from "../../runtime-format.ts";
 
 const UNIT_NAME = "merge-steward.service";
 
@@ -85,6 +87,7 @@ export async function handleService(parsed: ParsedArgs, stdout: Output, runComma
         health.reachable
           ? `Health: ${health.ok ? "ok" : "unhealthy"} (HTTP ${health.status})`
           : `Health: not reachable (${health.error})`,
+        ...(health.reachable && health.health ? staleRuntimeLines(health.health.repos) : []),
       ]
         .filter(Boolean)
         .join("\n") + "\n",
@@ -110,4 +113,14 @@ export async function handleService(parsed: ParsedArgs, stdout: Output, runComma
   }
 
   throw new UsageError(`Unknown service command: ${subcommand}`, "service");
+}
+
+function staleRuntimeLines(repos: RepoRuntimeStatus[]): string[] {
+  return repos
+    .filter((repo) => repo.runtime?.staleTick)
+    .map((repo) => {
+      const event = repo.runtime?.lastReconcileEvent;
+      const latest = event ? `; latest action ${event.action} PR #${event.prNumber}` : "";
+      return `Warning: ${repo.repoId} reconcile tick is stale after ${formatDurationMs(repo.runtime?.tickAgeMs)}${latest}`;
+    });
 }

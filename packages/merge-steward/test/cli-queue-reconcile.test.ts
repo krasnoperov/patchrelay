@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { runCli } from "../src/cli.ts";
-import { formatQueueStatusText } from "../src/cli/commands/queue.ts";
+import { formatQueueStatusText, formatReconcileRequestText } from "../src/cli/commands/queue.ts";
 import type { QueueWatchSnapshot } from "../src/types.ts";
 
 function createBufferStream() {
@@ -55,6 +55,74 @@ function withEnv(values: Record<string, string | undefined>, run: () => Promise<
 }
 
 const noop = async () => ({ exitCode: 0, stdout: "", stderr: "" });
+
+function makeSnapshot(overrides: Partial<QueueWatchSnapshot> = {}): QueueWatchSnapshot {
+  return {
+    repoId: "app",
+    repoFullName: "owner/repo",
+    baseBranch: "main",
+    githubPolicy: {
+      requiredChecks: [],
+      fetchedAt: null,
+      lastRefreshReason: null,
+      lastRefreshChanged: null,
+      requireAllChecksOnEmptyRequiredSet: false,
+    },
+    summary: {
+      total: 1,
+      active: 1,
+      queued: 0,
+      preparingHead: 0,
+      validating: 1,
+      merging: 0,
+      merged: 0,
+      evicted: 0,
+      dequeued: 0,
+      headEntryId: "entry-1",
+      headPrNumber: 42,
+    },
+    runtime: {
+      tickInProgress: false,
+      lastTickStartedAt: null,
+      lastTickCompletedAt: null,
+      lastTickOutcome: "idle",
+      lastTickError: null,
+    },
+    queueBlock: null,
+    entries: [{
+      id: "entry-1",
+      repoId: "app",
+      prNumber: 42,
+      branch: "feat/x",
+      headSha: "abc123",
+      baseSha: "def456",
+      status: "validating",
+      position: 0,
+      priority: 0,
+      generation: 0,
+      ciRunId: null,
+      ciRetries: 0,
+      retryAttempts: 0,
+      maxRetries: 2,
+      lastFailedBaseSha: null,
+      issueKey: null,
+      specBranch: null,
+      specSha: null,
+      specBasedOn: null,
+      postMergeStatus: null,
+      postMergeSha: null,
+      postMergeSummary: null,
+      postMergeCheckedAt: null,
+      baseRefName: null,
+      headPatchId: null,
+      specTreeId: null,
+      enqueuedAt: "2026-04-06T16:21:37.417Z",
+      updatedAt: "2026-04-06T16:25:25.481Z",
+    }],
+    recentEvents: [],
+    ...overrides,
+  };
+}
 
 test("queue reconcile reports error when service is unreachable", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "ms-queue-reconcile-"));
@@ -277,6 +345,76 @@ test("queue status text output surfaces failed tick errors ahead of stale queue 
   assert.match(text, /Last tick: failed/);
   assert.match(text, /Last error: Command failed: git push/);
   assert.match(text, /Queue blocked: main_broken on main @ edc495b5/);
+});
+
+test("queue status text output explains an active reconcile tick", () => {
+  const snapshot = makeSnapshot({
+    runtime: {
+      tickInProgress: true,
+      lastTickStartedAt: "2026-05-22T07:14:54.449Z",
+      lastTickCompletedAt: "2026-05-22T07:14:24.449Z",
+      lastTickOutcome: "running",
+      lastTickError: null,
+      tickAgeMs: 12_000,
+      staleTickThresholdMs: 300_000,
+      staleTick: false,
+      lastReconcileEvent: {
+        at: "2026-05-22T07:14:56.318Z",
+        entryId: "entry-1",
+        prNumber: 42,
+        action: "ci_passed",
+      },
+    },
+  });
+
+  const text = formatQueueStatusText("service", snapshot);
+  assert.match(text, /Reconcile: running for 12s, started 2026-05-22T07:14:54\.449Z/);
+  assert.match(text, /Latest action: ci_passed PR #42/);
+});
+
+test("queue status text output warns about a stale reconcile tick", () => {
+  const snapshot = makeSnapshot({
+    runtime: {
+      tickInProgress: true,
+      lastTickStartedAt: "2026-05-22T07:10:00.000Z",
+      lastTickCompletedAt: "2026-05-22T07:09:30.000Z",
+      lastTickOutcome: "running",
+      lastTickError: null,
+      tickAgeMs: 301_000,
+      staleTickThresholdMs: 300_000,
+      staleTick: true,
+      lastReconcileEvent: null,
+    },
+  });
+
+  const text = formatQueueStatusText("service", snapshot);
+  assert.match(text, /Reconcile: stale for 5m1s/);
+  assert.match(text, /Warning: reconcile tick appears stale; threshold 5m\./);
+});
+
+test("queue reconcile text output gives guidance when a tick is already running", () => {
+  const text = formatReconcileRequestText({
+    started: false,
+    reason: "already_running",
+    runtime: {
+      tickInProgress: true,
+      lastTickStartedAt: "2026-05-22T07:14:54.449Z",
+      lastTickCompletedAt: "2026-05-22T07:14:24.449Z",
+      lastTickOutcome: "running",
+      lastTickError: null,
+      tickAgeMs: 12_000,
+      staleTickThresholdMs: 300_000,
+      staleTick: false,
+      lastReconcileEvent: {
+        at: "2026-05-22T07:14:56.318Z",
+        entryId: "entry-1",
+        prNumber: 42,
+        action: "ci_passed",
+      },
+    },
+  });
+
+  assert.equal(text, "Reconcile already running for 12s; latest action ci_passed PR #42; wait for the current tick before restarting.");
 });
 
 test("queue status reports initializing repos from the service without falling back to the database", async () => {

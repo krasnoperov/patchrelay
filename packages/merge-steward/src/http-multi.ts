@@ -71,6 +71,7 @@ export async function buildMultiRepoHttpServer(options: {
       ...(record.readyAt ? { readyAt: record.readyAt } : {}),
       ...(record.failedAt ? { failedAt: record.failedAt } : {}),
       ...(record.lastError ? { lastError: record.lastError } : {}),
+      ...(record.instance ? { runtime: record.instance.service.getRuntimeStatus() } : {}),
     })),
   }));
 
