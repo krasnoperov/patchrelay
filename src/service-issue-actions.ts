@@ -1,15 +1,19 @@
 import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
+import type { AgentInputService } from "./agent-input-service.ts";
 import type { IssueRecord } from "./db-types.ts";
 import { buildOperatorRetryEvent } from "./operator-retry-event.ts";
 import { buildManualRetryAttemptReset, resolveRetryTarget } from "./manual-issue-actions.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { ServiceRuntime } from "./service-runtime.ts";
+import type { AppConfig } from "./types.ts";
 
 export class ServiceIssueActions {
   constructor(
+    private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
+    private readonly agentInput: AgentInputService,
     private readonly codex: CodexAppServerClient,
     private readonly runtime: ServiceRuntime,
     private readonly feed: OperatorEventFeed,
@@ -26,6 +30,8 @@ export class ServiceIssueActions {
     if (!issue.delegatedToPatchRelay && !issue.activeRunId) {
       return { error: "Issue is undelegated from PatchRelay; delegate it again before prompting work" };
     }
+    const project = this.config.projects.find((entry) => entry.id === issue.projectId);
+    if (!project) return { error: `Project ${issue.projectId} is not configured` };
 
     this.feed.publish({
       level: "info",
@@ -38,29 +44,16 @@ export class ServiceIssueActions {
       detail: text.slice(0, 200),
     });
 
-    if (!issue.activeRunId) {
-      this.queueOperatorPrompt(issue, text, source);
-      return { delivered: false, queued: true };
-    }
-
-    const run = this.db.runs.getRunById(issue.activeRunId);
-    if (!run?.threadId || !run.turnId) {
-      return { error: "Active run has no thread or turn yet" };
-    }
-
-    try {
-      await this.codex.steerTurn({
-        threadId: run.threadId,
-        turnId: run.turnId,
-        input: `Operator prompt (${source}):\n\n${text}`,
-      });
-      return { delivered: true };
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      this.logger.warn({ issueKey, error: msg }, "steerTurn failed, queuing prompt for next run");
-      this.queueOperatorPrompt(issue, text, source);
-      return { delivered: false, queued: true };
-    }
+    const result = await this.agentInput.deliverAgentInput({
+      project,
+      issue,
+      source: "patchrelay_operator_prompt",
+      body: text,
+      operatorSource: source,
+    });
+    if (result.status === "ignored") return { delivered: false };
+    if (result.status === "delivery_failed" || result.status === "queued") return { delivered: false, queued: true };
+    return { delivered: result.status === "steered" || result.status === "answered" || result.status === "stopped" };
   }
 
   async stopIssue(issueKey: string): Promise<{ stopped: boolean } | { error: string } | undefined> {
@@ -223,16 +216,6 @@ export class ServiceIssueActions {
       factoryState: terminalState,
       ...(run ? { releasedRunId: run.id } : {}),
     };
-  }
-
-  private queueOperatorPrompt(issue: IssueRecord, text: string, source: string): void {
-    this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      eventType: "operator_prompt",
-      eventJson: JSON.stringify({ text, source }),
-    });
-    this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
   }
 
   private appendOperatorRetryEvent(issue: IssueRecord, runType: string): void {

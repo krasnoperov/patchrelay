@@ -4,7 +4,7 @@ import {
 } from "../agent-session-plan.ts";
 import { buildAgentSessionExternalUrls } from "../agent-session-presentation.ts";
 import type { CodexAppServerClient } from "../codex-app-server.ts";
-import type { CodexConversationAdapter } from "../codex-conversation-adapter.ts";
+import type { AgentInputService } from "../agent-input-service.ts";
 import type { PatchRelayDatabase } from "../db.ts";
 import type { RunType } from "../factory-state.ts";
 import {
@@ -45,7 +45,7 @@ export class AgentSessionHandler {
     private readonly wakeDispatcher: WakeDispatcher,
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
-    private readonly conversationAdapter?: CodexConversationAdapter,
+    private readonly agentInput?: AgentInputService,
   ) {}
 
   async acknowledgeCreated(normalized: NormalizedEvent): Promise<void> {
@@ -163,11 +163,11 @@ export class AgentSessionHandler {
 
     const promptBody = normalized.agentSession.promptBody?.trim();
     const directReply = promptBody && existingIssue ? params.isDirectReplyToOutstandingQuestion(existingIssue) : false;
-    if (promptBody && existingIssue && this.conversationAdapter) {
-      const result = await this.conversationAdapter.deliverAgentInput({
+    if (promptBody && existingIssue && this.agentInput) {
+      const result = await this.agentInput.deliverAgentInput({
         project,
         issue: existingIssue,
-        source: "agent_session_prompt",
+        source: "linear_agent_session",
         body: promptBody,
         directReply,
         emitActivity: (content, options) => this.publishAgentActivity(linear, normalized.agentSession!.id, content, options),

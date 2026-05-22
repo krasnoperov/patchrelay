@@ -110,6 +110,73 @@ test("promptIssue queues operator input for the next run when no run is active",
   }
 });
 
+test("promptIssue steers active runs through the shared agent input path", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-actions-active-"));
+  let db: PatchRelayDatabase | undefined;
+  try {
+    const config = createConfig(baseDir);
+    db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const steers: Array<{ threadId: string; turnId: string; input: string }> = [];
+    let classifierStarts = 0;
+    const service = new PatchRelayService(
+      config,
+      db,
+      {
+        on: () => undefined,
+        steerTurn: async ({ threadId, turnId, input }) => {
+          steers.push({ threadId, turnId, input });
+        },
+        startThreadForFollowupIntent: async () => {
+          classifierStarts += 1;
+          throw new Error("operator prompts must not run Linear follow-up classification");
+        },
+      } as never,
+      undefined,
+      pino({ enabled: false }),
+    );
+
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-active",
+      issueKey: "USE-1A",
+      factoryState: "implementing",
+      delegatedToPatchRelay: true,
+      title: "Active prompt",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-active", turnId: "turn-active" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+
+    const result = await service.promptIssue("USE-1A", "Please retry carefully", "test");
+
+    assert.deepEqual(result, { delivered: true });
+    assert.equal(classifierStarts, 0);
+    assert.equal(steers.length, 1);
+    assert.equal(steers[0]?.threadId, "thread-active");
+    assert.equal(steers[0]?.turnId, "turn-active");
+    assert.match(steers[0]?.input ?? "", /New PatchRelay operator prompt received while you are working/);
+    assert.match(steers[0]?.input ?? "", /Checkpoint contract/);
+    assert.match(steers[0]?.input ?? "", /Please retry carefully/);
+
+    const latestEvent = db.issueSessions.listIssueSessionEvents("usertold", "issue-active", { limit: 1 }).at(-1);
+    assert.equal(latestEvent?.eventType, "prompt_delivered");
+    assert.match(latestEvent?.eventJson ?? "", /patchrelay_operator_prompt/);
+  } finally {
+    db?.connection.close();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("retryIssue preserves branch upkeep retries for requested-changes issues", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-retry-"));
   let db: PatchRelayDatabase | undefined;
