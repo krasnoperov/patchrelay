@@ -25,13 +25,13 @@ Environment=PATH=/home/your-user/.local/share/patchrelay/bin:/home/your-user/.lo
 #
 # When credstore is not configured, PatchRelay falls back to reading secrets
 # from env vars (EnvironmentFile, op run, etc.) via the resolve-secret module.
-LoadCredentialEncrypted=linear-webhook-secret
-LoadCredentialEncrypted=token-encryption-key
-LoadCredentialEncrypted=linear-oauth-client-id
-LoadCredentialEncrypted=linear-oauth-client-secret
+LoadCredentialEncrypted=linear-webhook-secret:/etc/credstore.encrypted/linear-webhook-secret.cred
+LoadCredentialEncrypted=token-encryption-key:/etc/credstore.encrypted/token-encryption-key.cred
+LoadCredentialEncrypted=linear-oauth-client-id:/etc/credstore.encrypted/linear-oauth-client-id.cred
+LoadCredentialEncrypted=linear-oauth-client-secret:/etc/credstore.encrypted/linear-oauth-client-secret.cred
 # Uncomment when GitHub App integration is configured:
-# LoadCredentialEncrypted=github-app-pem
-# LoadCredentialEncrypted=github-app-webhook-secret
+# LoadCredentialEncrypted=github-app-pem:/etc/credstore.encrypted/github-app-pem.cred
+# LoadCredentialEncrypted=github-app-webhook-secret:/etc/credstore.encrypted/github-app-webhook-secret.cred
 
 ExecStart=/usr/bin/env patchrelay serve
 Restart=on-failure

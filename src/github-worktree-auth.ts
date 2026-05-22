@@ -16,13 +16,15 @@ export async function configureGitHubBotAuthForWorktree(params: {
   botIdentity: GitHubAppBotIdentity;
 }): Promise<void> {
   const helper = buildGitHubBotCredentialHelper(params.botIdentity.tokenFile);
-  const gitArgs = ["-C", params.worktreePath, "config"];
+  const gitConfigArgs = ["-C", params.worktreePath, "config"];
+  const gitWorktreeConfigArgs = [...gitConfigArgs, "--worktree"];
 
-  await execCommand(params.gitBin, [...gitArgs, "user.name", params.botIdentity.name], { timeoutMs: 5_000 });
-  await execCommand(params.gitBin, [...gitArgs, "user.email", params.botIdentity.email], { timeoutMs: 5_000 });
+  await execCommand(params.gitBin, [...gitConfigArgs, "extensions.worktreeConfig", "true"], { timeoutMs: 5_000 });
+  await execCommand(params.gitBin, [...gitWorktreeConfigArgs, "user.name", params.botIdentity.name], { timeoutMs: 5_000 });
+  await execCommand(params.gitBin, [...gitWorktreeConfigArgs, "user.email", params.botIdentity.email], { timeoutMs: 5_000 });
 
   // Clear inherited GitHub-specific helpers such as `gh auth git-credential`
   // so git HTTPS operations use the same bot token as the wrapped `gh` CLI.
-  await execCommand(params.gitBin, [...gitArgs, "--replace-all", "credential.https://github.com.helper", ""], { timeoutMs: 5_000 });
-  await execCommand(params.gitBin, [...gitArgs, "--add", "credential.https://github.com.helper", helper], { timeoutMs: 5_000 });
+  await execCommand(params.gitBin, [...gitWorktreeConfigArgs, "--replace-all", "credential.https://github.com.helper", ""], { timeoutMs: 5_000 });
+  await execCommand(params.gitBin, [...gitWorktreeConfigArgs, "--add", "credential.https://github.com.helper", helper], { timeoutMs: 5_000 });
 }
