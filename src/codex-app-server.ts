@@ -94,6 +94,14 @@ const ISSUE_TRIAGE_DEVELOPER_INSTRUCTIONS = [
   "Return only the requested JSON object.",
 ].join("\n");
 
+const FOLLOWUP_INTENT_DEVELOPER_INSTRUCTIONS = [
+  "You are PatchRelay's follow-up intent classifier.",
+  "This is a read-only routing step used only to classify one human Linear follow-up.",
+  "Do not run commands, do not call tools, do not edit files, and do not inspect or modify the repository.",
+  "Use only the text and state facts in the current prompt.",
+  "Return only the requested JSON object.",
+].join("\n");
+
 export function resolveCodexAppServerLaunch(config: CodexAppServerConfig): { command: string; args: string[] } {
   if (!config.sourceBashrc) {
     return {
@@ -199,6 +207,18 @@ export class CodexAppServerClient extends EventEmitter {
       reasoningEffort: "low",
       baseInstructions: null,
       developerInstructions: ISSUE_TRIAGE_DEVELOPER_INSTRUCTIONS,
+    });
+  }
+
+  async startThreadForFollowupIntent(): Promise<CodexThreadSummary> {
+    return await this.startThreadWithOverrides({ cwd: tmpdir() }, {
+      approvalPolicy: "never",
+      sandboxMode: "read-only",
+      model: this.config.triageModel ?? "gpt-5.4-mini",
+      modelProvider: this.config.triageModelProvider ?? this.config.modelProvider ?? null,
+      reasoningEffort: "low",
+      baseInstructions: null,
+      developerInstructions: FOLLOWUP_INTENT_DEVELOPER_INSTRUCTIONS,
     });
   }
 

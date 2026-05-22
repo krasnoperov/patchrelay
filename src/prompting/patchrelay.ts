@@ -321,11 +321,22 @@ function buildStructuredReviewContext(context?: Record<string, unknown>): string
   const reviewCommitId = typeof context?.reviewCommitId === "string" ? context.reviewCommitId : undefined;
   const reviewUrl = typeof context?.reviewUrl === "string" ? context.reviewUrl : undefined;
   const reviewComments = readReviewFixComments(context);
-  if (!reviewId && !reviewCommitId && !reviewUrl && reviewComments.length === 0) {
+  const degraded = context?.reviewContextDegraded === true;
+  if (!degraded && !reviewId && !reviewCommitId && !reviewUrl && reviewComments.length === 0) {
     return undefined;
   }
 
   const lines = ["## Structured Review Context", ""];
+  if (degraded) {
+    const reason = typeof context?.reviewContextDegradedReason === "string" && context.reviewContextDegradedReason.trim()
+      ? context.reviewContextDegradedReason.trim()
+      : "GitHub requested-changes context could not be refreshed before launch.";
+    lines.push(
+      "GitHub review context refresh: degraded",
+      reason,
+      "Do not assume cached review details are current. Re-read the PR review in GitHub before making review-fix changes.",
+    );
+  }
   if (reviewId !== undefined) lines.push(`Review ID: ${reviewId}`);
   if (reviewCommitId) lines.push(`Reviewed commit: ${reviewCommitId}`);
   if (reviewUrl) lines.push(`Review URL: ${reviewUrl}`);
@@ -529,6 +540,23 @@ function buildFollowUpContextLines(issue: IssueRecord, runType: RunType, context
   if (followUpLines.length > 0) {
     lines.push("", "Recent updates:");
     followUpLines.forEach((line) => lines.push(`- ${line}`));
+  }
+
+  if (context?.replacementPrRequired === true) {
+    lines.push("", "Previous PR facts:");
+    if (typeof context.previousPrNumber === "number") {
+      lines.push(`Previous PR: #${context.previousPrNumber} (replacement PR needed)`);
+    }
+    if (typeof context.previousPrUrl === "string") {
+      lines.push(`Previous PR URL: ${context.previousPrUrl}`);
+    }
+    if (typeof context.previousPrState === "string") {
+      lines.push(`Previous PR state: ${context.previousPrState}`);
+    }
+    if (typeof context.previousPrHeadSha === "string") {
+      lines.push(`Previous PR head SHA: ${context.previousPrHeadSha}`);
+    }
+    lines.push("Create a fresh replacement PR for the new requested changes; do not mutate or republish the completed PR.");
   }
 
   if (issue.prNumber || issue.prHeadSha || issue.prReviewState || context?.mergeStateStatus) {
@@ -827,8 +855,8 @@ export function mergePromptCustomizationLayers(
       ? { extraInstructions: base.extraInstructions }
       : {}),
     replaceSections: {
-      ...(base?.replaceSections ?? {}),
-      ...(override?.replaceSections ?? {}),
+      ...base?.replaceSections,
+      ...override?.replaceSections,
     },
   };
 }

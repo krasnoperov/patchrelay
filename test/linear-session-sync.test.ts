@@ -1611,3 +1611,63 @@ test("emitActivity deduplicates repeated durable milestone activities", async ()
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("emitActivity deduplicates repeated terminal response and error activities", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-terminal-dedupe-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const issue = db.upsertIssue({
+      projectId: "krasnoperov/ballony-i-nasosy",
+      linearIssueId: "issue-tst-terminal-dedupe",
+      issueKey: "TST-92",
+      title: "Avoid duplicate terminal activities",
+      factoryState: "changes_requested",
+      agentSessionId: "session-terminal-dedupe",
+    });
+
+    const activities: Array<Record<string, unknown>> = [];
+    const linear: Partial<LinearClient> = {
+      updateAgentSession: async (params) => ({ id: params.agentSessionId }),
+      upsertIssueComment: async (params) => ({ id: "comment-terminal-dedupe", body: params.body }),
+      createAgentActivity: async (params) => {
+        activities.push(params as unknown as Record<string, unknown>);
+        return { id: `activity-${activities.length}` };
+      },
+      getIssue: async () => { throw new Error("not used"); },
+      setIssueState: async () => { throw new Error("not used"); },
+      updateIssueLabels: async () => { throw new Error("not used"); },
+      getActorProfile: async () => ({ actorId: "patchrelay-actor" }),
+      getWorkspaceCatalog: async () => ({ workspace: {}, teams: [], projects: [] }),
+    };
+
+    const sync = new LinearSessionSync(
+      config,
+      db,
+      { forProject: async () => linear as LinearClient },
+      pino({ enabled: false }),
+    );
+
+    const response = {
+      type: "response" as const,
+      body: "Review round 1 completed.\n\nAddressed:\n- Fixed requested comments.",
+    };
+    await sync.emitActivity(issue, response);
+    await sync.emitActivity(db.getIssue(issue.projectId, issue.linearIssueId)!, response);
+
+    const error = {
+      type: "error" as const,
+      body: "Review fix failed.\n\nCould not fetch review context.",
+    };
+    await sync.emitActivity(db.getIssue(issue.projectId, issue.linearIssueId)!, error);
+    await sync.emitActivity(db.getIssue(issue.projectId, issue.linearIssueId)!, error);
+
+    assert.equal(activities.length, 2);
+    assert.equal((activities[0]?.content as { type?: string } | undefined)?.type, "response");
+    assert.equal((activities[1]?.content as { type?: string } | undefined)?.type, "error");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

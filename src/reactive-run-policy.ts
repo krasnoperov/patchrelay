@@ -360,22 +360,26 @@ export class ReactiveRunPolicy {
     headSha: string | undefined,
     context: Record<string, unknown> | undefined,
   ): Promise<Record<string, unknown> | undefined> {
-    const merged: Record<string, unknown> = {
-      ...(context ?? {}),
-      ...(headSha ? { headSha } : {}),
-    };
-
-    if (hasStructuredReviewContext(merged)) {
-      return merged;
+    const merged: Record<string, unknown> = { ...context };
+    if (headSha) {
+      merged.headSha = headSha;
+      merged.currentPrHeadSha = headSha;
     }
 
     const liveReview = await readLatestRequestedChangesReviewContext(repoFullName, prNumber);
     if (!liveReview) {
-      return Object.keys(merged).length > 0 ? merged : context;
+      return {
+        ...merged,
+        reviewContextStatus: "degraded",
+        reviewContextDegraded: true,
+        reviewContextDegradedReason: "GitHub requested-changes review context could not be fetched before launch.",
+      };
     }
 
     return {
       ...merged,
+      reviewContextStatus: "fresh",
+      reviewContextDegraded: false,
       ...(liveReview.reviewId !== undefined ? { reviewId: liveReview.reviewId } : {}),
       ...(liveReview.reviewCommitId ? { reviewCommitId: liveReview.reviewCommitId } : {}),
       ...(liveReview.reviewUrl ? { reviewUrl: liveReview.reviewUrl } : {}),
@@ -409,19 +413,4 @@ function resolveRequestedChangesBlockingHead(
 function isReactiveScopeRiskPath(filePath: string): boolean {
   return REACTIVE_SCOPE_RISK_EXACT_PATHS.has(filePath)
     || REACTIVE_SCOPE_RISK_PREFIXES.some((prefix) => filePath.startsWith(prefix));
-}
-
-function hasStructuredReviewContext(context: Record<string, unknown> | undefined): boolean {
-  if (!context) return false;
-  const reviewBody = typeof context.reviewBody === "string" ? context.reviewBody.trim() : "";
-  const isOperatorRetryPlaceholder = typeof context.source === "string"
-    && context.source === "operator_retry"
-    && /^operator requested retry of review-fix work\.?$/i.test(reviewBody);
-  if (isOperatorRetryPlaceholder) {
-    return false;
-  }
-  if (reviewBody) return true;
-  if (typeof context.reviewUrl === "string" && context.reviewUrl.trim()) return true;
-  if (typeof context.reviewerName === "string" && context.reviewerName.trim()) return true;
-  return Array.isArray(context.reviewComments) && context.reviewComments.length > 0;
 }

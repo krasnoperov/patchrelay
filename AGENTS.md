@@ -12,6 +12,7 @@
 
 ## PatchRelay Workflow
 
+- PatchRelay is an agent, not a command parser. Do not route human Linear comments, agent-session prompts, or other natural-language operator input by brittle string parsing, keyword lists, or regex intent gates. Use agentic interpretation or structured intent classification that can understand ordinary user requests, then route the result through explicit workflow states. Deterministic parsing is acceptable only for machine-owned protocol fields, IDs, webhook event types, and other structured data.
 - PatchRelay must not hand off the same PR head back to review after requested changes. A requested-changes repair must produce a new pushed head before the issue can return to review.
 - If the app-server terminates, loses the turn, or otherwise finishes requested-changes work without pushing a new head, treat that as a PatchRelay/system failure that must be evaluated and fixed in PatchRelay so the state cannot recur.
 

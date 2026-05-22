@@ -37,6 +37,25 @@ function buildRunSummaryJson(report: StageReport, publicationRecapSummary?: stri
   });
 }
 
+function summarizePromptDeliveryEvents(
+  events: IssueSessionEventRecord[],
+  run: Pick<RunRecord, "id">,
+): { delivered: number; failed: number } {
+  let delivered = 0;
+  let failed = 0;
+  for (const event of events) {
+    if (event.eventType !== "prompt_delivered") continue;
+    const payload = parseEventJson(event.eventJson);
+    if (payload?.runId !== run.id) continue;
+    if (payload.status === "delivered") {
+      delivered += 1;
+    } else if (payload.status === "delivery_failed") {
+      failed += 1;
+    }
+  }
+  return { delivered, failed };
+}
+
 function shouldGeneratePublicationRecap(runType: RunType): boolean {
   return runType === "implementation"
     || runType === "review_fix"
@@ -539,11 +558,19 @@ export class RunFinalizer {
     const completionSummary = publicationRecapSummary
       ?? report.assistantMessages.at(-1)?.slice(0, 300)
       ?? `${run.runType} completed.`;
+    const steeringSummary = summarizePromptDeliveryEvents(
+      this.db.issueSessions.listIssueSessionEvents(run.projectId, run.linearIssueId),
+      run,
+    );
     const linearActivity = buildRunCompletedActivity({
       runType: run.runType,
       completionSummary,
       postRunState: updatedIssue.factoryState,
       ...(updatedIssue.prNumber !== undefined ? { prNumber: updatedIssue.prNumber } : {}),
+      ...(run.runType === "review_fix" ? { reviewRound: Math.max(1, updatedIssue.reviewFixAttempts) } : {}),
+      ...(run.runType === "review_fix" && updatedIssue.prHeadSha ? { resultHeadSha: updatedIssue.prHeadSha } : {}),
+      ...(steeringSummary.delivered > 0 ? { steeringDeliveredCount: steeringSummary.delivered } : {}),
+      ...(steeringSummary.failed > 0 ? { steeringFailedCount: steeringSummary.failed } : {}),
     });
     if (linearActivity) {
       void this.linearSync.emitActivity(updatedIssue, linearActivity);

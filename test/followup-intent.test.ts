@@ -1,26 +1,95 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { classifyFollowupIntent } from "../src/followup-intent.ts";
+import pino from "pino";
+import {
+  buildFollowupIntentPrompt,
+  CodexFollowupIntentClassifier,
+  followupIntentShouldSteerActiveRun,
+  lowConfidenceFollowupIntent,
+  parseFollowupIntentClassification,
+} from "../src/followup-intent.ts";
+import type { CodexThreadSummary } from "../src/types.ts";
 
-test("classifyFollowupIntent detects status questions without treating them as work", () => {
-  assert.equal(classifyFollowupIntent("what's the status?"), "status");
-  assert.equal(classifyFollowupIntent("what is deployed so far?"), "status");
-  assert.equal(classifyFollowupIntent("any progress update"), "status");
+test("parseFollowupIntentClassification accepts the structured classifier shape", () => {
+  assert.deepEqual(
+    parseFollowupIntentClassification('{"intent":"status","confidence":0.82,"reason":"The user asks for progress."}'),
+    {
+      intent: "status",
+      confidence: 0.82,
+      reason: "The user asks for progress.",
+    },
+  );
 });
 
-test("classifyFollowupIntent detects retry prompts", () => {
-  assert.equal(classifyFollowupIntent("please continue"), "retry");
-  assert.equal(classifyFollowupIntent("retry the run"), "retry");
-  assert.equal(classifyFollowupIntent("go on"), "retry");
+test("parseFollowupIntentClassification extracts a JSON object from surrounding text", () => {
+  assert.deepEqual(
+    parseFollowupIntentClassification('classification: {"intent":"resume_or_retry","confidence":1.4,"reason":"Continue requested."} done'),
+    {
+      intent: "resume_or_retry",
+      confidence: 1,
+      reason: "Continue requested.",
+    },
+  );
 });
 
-test("classifyFollowupIntent prefers implementation requests over generic questions", () => {
-  assert.equal(classifyFollowupIntent("can you implement USE-167?"), "implementation_request");
-  assert.equal(classifyFollowupIntent("PatchRelay, please keep this compatible with the old contract."), "implementation_request");
-  assert.equal(classifyFollowupIntent("merge this when green"), "implementation_request");
+test("parseFollowupIntentClassification rejects invalid intent results", () => {
+  assert.equal(parseFollowupIntentClassification('{"intent":"ship_it","confidence":0.9,"reason":"No."}'), undefined);
+  assert.equal(parseFollowupIntentClassification('{"intent":"status","confidence":"high","reason":"No."}'), undefined);
+  assert.equal(parseFollowupIntentClassification('{"intent":"status","confidence":0.9,"reason":""}'), undefined);
 });
 
-test("classifyFollowupIntent separates clarification and stop prompts", () => {
-  assert.equal(classifyFollowupIntent("FYI, the API must stay stable."), "clarification");
-  assert.equal(classifyFollowupIntent("stop working on this"), "stop");
+test("low-confidence unknown classifications still steer active turns", () => {
+  const classification = lowConfidenceFollowupIntent("Classifier unavailable.");
+  assert.equal(classification.intent, "unknown_needs_ack");
+  assert.equal(followupIntentShouldSteerActiveRun(classification), true);
+});
+
+test("low-confidence classifier control intents downgrade to unknown", async () => {
+  const thread: CodexThreadSummary = {
+    id: "thread-low-confidence",
+    preview: "",
+    cwd: "/tmp",
+    status: "completed",
+    turns: [{
+      id: "turn-low-confidence",
+      status: "completed",
+      items: [{
+        id: "item-low-confidence",
+        type: "agentMessage",
+        text: '{"intent":"stop","confidence":0.2,"reason":"Maybe asking to stop."}',
+      }],
+    }],
+  };
+  const classifier = new CodexFollowupIntentClassifier({
+    startThreadForFollowupIntent: async () => thread,
+    startTurn: async () => ({ threadId: thread.id, turnId: "turn-low-confidence", status: "completed" }),
+    readThread: async () => thread,
+  }, pino({ enabled: false }));
+
+  const classification = await classifier.classify("hold maybe?", {
+    source: "agentPrompted",
+    activeRunType: "implementation",
+    factoryState: "implementing",
+    delegatedToPatchRelay: true,
+    explicitWakeIntent: true,
+  });
+
+  assert.equal(classification.intent, "unknown_needs_ack");
+  assert.equal(classification.confidence, 0.2);
+  assert.match(classification.reason, /Low confidence/);
+});
+
+test("buildFollowupIntentPrompt carries state facts without encoding keyword routing", () => {
+  const prompt = buildFollowupIntentPrompt("Here is the extra constraint.", {
+    source: "comment",
+    activeRunType: "review_fix",
+    factoryState: "changes_requested",
+    directReply: false,
+    delegatedToPatchRelay: true,
+    prReviewState: "changes_requested",
+    explicitWakeIntent: true,
+  });
+  assert.match(prompt, /Return exactly one JSON object/);
+  assert.match(prompt, /Active run type: review_fix/);
+  assert.match(prompt, /Explicit PatchRelay wake context: yes/);
 });

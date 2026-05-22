@@ -45,6 +45,7 @@ export function isPatchRelayGeneratedActivityComment(body: string): boolean {
     || body.startsWith("PatchRelay is already working on ")
     || body.startsWith("PatchRelay received the ")
     || body.startsWith("PatchRelay routed your latest instructions into ")
+    || body.startsWith("PatchRelay could not route your latest instructions into ")
     || body.startsWith("PatchRelay status:")
     || body.startsWith("PatchRelay did not start implementation ")
     || body.startsWith("PatchRelay has stopped work as requested.")
@@ -53,5 +54,23 @@ export function isPatchRelayGeneratedActivityComment(body: string): boolean {
 }
 
 export function hasExplicitPatchRelayWakeIntent(body: string): boolean {
-  return /\bpatchrelay\b/i.test(body);
+  return extractPatchRelayAddressedText(body) !== undefined;
+}
+
+export function extractPatchRelayAddressedText(body: string): string | undefined {
+  const trimmed = body.trim();
+  if (!trimmed) return undefined;
+
+  const patterns = [
+    /^@?patchrelay\b[\s,:;-]*/i,
+    /^\bhey\s+@?patchrelay\b[\s,:;-]*/i,
+  ];
+  for (const pattern of patterns) {
+    const match = trimmed.match(pattern);
+    if (!match) continue;
+    const rest = trimmed.slice(match[0].length).trim();
+    return rest || trimmed;
+  }
+
+  return undefined;
 }

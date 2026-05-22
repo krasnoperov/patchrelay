@@ -92,7 +92,10 @@ When a project's Linear workflow does not include an In Deploy state, PatchRelay
 - Requested changes:
   - produced by a GitHub pull request review whose state is `CHANGES_REQUESTED`
   - PatchRelay records the blocking review head SHA and routes delegated issues to `review_fix`
+  - before launching every repair, PatchRelay refreshes review context from GitHub directly: latest requested-changes review id, review body, inline review comments, review commit SHA, current PR head SHA, and reviewer login when available
+  - cached Linear or prior-run context may enrich the prompt, but it cannot skip the GitHub refresh; if the refresh is degraded, the repair prompt must say so before launch
   - the repair must push a new remote PR head before PatchRelay can return the issue to review or queue
+  - the Linear completion response reports the review round, resulting head when known, and structured addressed/deferred/not-applicable sections
   - if the run finishes while the remote PR head is still the blocking review head, PatchRelay must fail the run and surface a system failure instead of handing the same SHA back to the reviewer
 
 - Queue eviction:
