@@ -1,5 +1,5 @@
 import type { ServiceHealthResponse } from "../admin-types.ts";
-import type { QueueEntryDetail, QueueWatchSnapshot } from "../types.ts";
+import type { QueueEntryDetail, QueueReconcileResult, QueueWatchSnapshot } from "../types.ts";
 
 export class ServiceApiError extends Error {
   constructor(
@@ -80,8 +80,8 @@ export async function fetchEntryDetail(gatewayBaseUrl: string, repoId: string, e
   );
 }
 
-export async function triggerReconcile(gatewayBaseUrl: string, repoId: string): Promise<{ ok: true; started: boolean }> {
-  return await requestJson<{ ok: true; started: boolean }>(buildUrl(repoBaseUrl(gatewayBaseUrl, repoId), "/queue/reconcile"), { method: "POST" });
+export async function triggerReconcile(gatewayBaseUrl: string, repoId: string): Promise<{ ok: true } & QueueReconcileResult> {
+  return await requestJson<{ ok: true } & QueueReconcileResult>(buildUrl(repoBaseUrl(gatewayBaseUrl, repoId), "/queue/reconcile"), { method: "POST" });
 }
 
 export async function dequeueEntry(gatewayBaseUrl: string, repoId: string, entryId: string): Promise<void> {

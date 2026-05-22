@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import { fetchGatewayHealth, fetchSnapshot, triggerReconcile } from "./api.ts";
+import { formatDurationMs } from "../runtime-format.ts";
 import type { DashboardRepoConfig, DashboardRepoState } from "./dashboard-model.ts";
 import { buildDashboard, matchRepoRef, repoSelector, stepRepo } from "./dashboard-model.ts";
 import { HelpBar } from "./HelpBar.tsx";
@@ -159,7 +160,9 @@ export function App({ gatewayBaseUrl, repos, initialRepoRef, initialPrNumber }: 
     if (!repoId) return;
     try {
       const result = await triggerReconcile(gatewayBaseUrl, repoId);
-      setFlashMessage(result.started ? `reconcile tick completed for ${repoId}` : `reconcile already running for ${repoId}`);
+      setFlashMessage(result.started
+        ? `reconcile tick completed for ${repoId}`
+        : `reconcile already running for ${formatDurationMs(result.runtime.tickAgeMs)} in ${repoId}`);
     } catch (error) {
       setFlashMessage(error instanceof Error ? error.message : String(error));
     }

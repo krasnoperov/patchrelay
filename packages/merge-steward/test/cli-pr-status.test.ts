@@ -7,6 +7,7 @@ import {
   buildPrStatusReport,
   classifyGitHubOverview,
   classifyQueueEntry,
+  formatReportText,
   handlePrStatus,
 } from "../src/cli/commands/pr-status.ts";
 import type { PrGitHubOverview } from "../src/cli/commands/pr-github.ts";
@@ -174,6 +175,49 @@ test("buildPrStatusReport: queue queued returns exit 3 non-terminal", () => {
   assert.equal(report.kind, "queued");
   assert.equal(report.exitCode, 3);
   assert.equal(report.terminal, false);
+});
+
+test("pr status text includes active reconcile context for queued PRs", () => {
+  const report = buildPrStatusReport({
+    repoId: "app",
+    repoFullName: "owner/app",
+    prNumber: 42,
+    queueEntry: makeEntry("validating"),
+    queueSource: "service",
+    queueRuntime: {
+      tickInProgress: true,
+      lastTickStartedAt: "2026-05-22T07:14:54.449Z",
+      lastTickCompletedAt: "2026-05-22T07:14:24.449Z",
+      lastTickOutcome: "running",
+      lastTickError: null,
+      tickAgeMs: 12_000,
+      staleTickThresholdMs: 300_000,
+      staleTick: false,
+      lastReconcileEvent: {
+        at: "2026-05-22T07:14:56.318Z",
+        entryId: "entry-1",
+        prNumber: 42,
+        action: "ci_passed",
+      },
+    },
+    queueLatestEvent: {
+      id: 7,
+      entryId: "entry-1",
+      at: "2026-05-22T07:14:56.318Z",
+      fromStatus: "validating",
+      toStatus: "merging",
+      detail: "CI passed, ready to merge",
+      prNumber: 42,
+      branch: "feat/x",
+      issueKey: null,
+    },
+  });
+
+  const text = formatReportText(report);
+  assert.match(text, /State: validating/);
+  assert.match(text, /Reconcile: running for 12s/);
+  assert.match(text, /Latest action: ci_passed PR #42/);
+  assert.match(text, /Latest event for this PR: merging \(CI passed, ready to merge\)/);
 });
 
 test("buildPrStatusReport: github approved_clean returns exit 0", () => {

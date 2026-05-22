@@ -1,5 +1,5 @@
 import { SqliteStore } from "../../db/sqlite-store.ts";
-import { TERMINAL_STATUSES, type QueueEntry, type QueueEntryDetail, type QueueWatchSnapshot } from "../../types.ts";
+import { TERMINAL_STATUSES, type QueueEntry, type QueueEntryDetail, type QueueReconcileResult, type QueueWatchSnapshot } from "../../types.ts";
 import type { StewardConfig } from "../../config.ts";
 import type { ParsedArgs, Output } from "../types.ts";
 import { UsageError } from "../types.ts";
@@ -8,6 +8,7 @@ import { formatJson, writeOutput } from "../output.ts";
 import { ServiceApiError, loadRepoConfigById, fetchLocalJson } from "../system.ts";
 import { resolveRepo, type ResolveCommandRunner } from "../resolve.ts";
 import { buildQueueSummary } from "../../watch/dashboard-model.ts";
+import { formatDurationMs, formatRuntimeActivity } from "../../runtime-format.ts";
 
 async function resolveRepoIdWithCwdFallback(
   parsed: ParsedArgs,
@@ -93,6 +94,7 @@ export function formatQueueStatusText(source: "service" | "database", snapshot: 
     `Queued: ${snapshot.summary.queued}  preparing: ${snapshot.summary.preparingHead}  validating: ${snapshot.summary.validating}  merging: ${snapshot.summary.merging}`,
     `Merged: ${snapshot.summary.merged}  evicted: ${snapshot.summary.evicted}  dequeued: ${snapshot.summary.dequeued}`,
     snapshot.summary.headPrNumber ? `Head PR: #${snapshot.summary.headPrNumber}` : "Head PR: none",
+    ...formatRuntimeActivity(snapshot.runtime),
     ...(snapshot.runtime.lastTickOutcome === "failed"
       ? [
         "Last tick: failed",
@@ -260,7 +262,7 @@ export async function handleQueue(
 
   if (subcommand === "reconcile") {
     try {
-      const result = await fetchLocalJson<{ ok: boolean; started: boolean; runtime: QueueWatchSnapshot["runtime"] }>(
+      const result = await fetchLocalJson<{ ok: boolean } & QueueReconcileResult>(
         config.repoId,
         "/queue/reconcile",
         { method: "POST" },
@@ -272,7 +274,7 @@ export async function handleQueue(
           stdout,
           [
             `Repo: ${repoId}`,
-            result.started ? "Reconcile started." : "Reconcile request accepted; a tick was already in progress.",
+            formatReconcileRequestText(result),
             `Last outcome: ${result.runtime.lastTickOutcome}`,
           ].join("\n") + "\n",
         );
@@ -284,4 +286,19 @@ export async function handleQueue(
   }
 
   throw new UsageError(`Unknown queue command: ${subcommand}`, "queue");
+}
+
+export function formatReconcileRequestText(result: QueueReconcileResult): string {
+  if (result.started) return "Reconcile started.";
+  if (result.reason === "already_running") {
+    const age = formatDurationMs(result.runtime.tickAgeMs);
+    const latest = result.runtime.lastReconcileEvent
+      ? `; latest action ${result.runtime.lastReconcileEvent.action} PR #${result.runtime.lastReconcileEvent.prNumber}`
+      : "";
+    const guidance = result.runtime.staleTick
+      ? "inspect logs before restarting"
+      : "wait for the current tick before restarting";
+    return `Reconcile already running for ${age}${latest}; ${guidance}.`;
+  }
+  return "Reconcile request accepted; a tick was already in progress.";
 }

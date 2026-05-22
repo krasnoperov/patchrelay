@@ -1,18 +1,20 @@
 import type { Logger } from "pino";
 import type { GitOperations, CIRunner, GitHubPRApi, EvictionReporter, SpeculativeBranchBuilder } from "./interfaces.ts";
 import type { QueueStore } from "./store.ts";
-import type { CheckResult, QueueBlockState, QueueRuntimeStatus, ReconcileEvent } from "./types.ts";
+import type { CheckResult, QueueBlockState, QueueReconcileResult, QueueRuntimeStatus, ReconcileEvent, ReconcileEventSummary } from "./types.ts";
 import type { StewardConfig } from "./config.ts";
 import type { GitHubPolicyCache } from "./github-policy.ts";
 import { reconcile } from "./reconciler.ts";
 
 export class MergeStewardRuntime {
   private tickTimer: ReturnType<typeof setTimeout> | undefined;
+  private staleTickTimer: ReturnType<typeof setTimeout> | undefined;
   private tickInProgress = false;
   private lastTickStartedAt: string | null = null;
   private lastTickCompletedAt: string | null = null;
   private lastTickOutcome: QueueRuntimeStatus["lastTickOutcome"] = "idle";
   private lastTickError: string | null = null;
+  private lastReconcileEvent: ReconcileEventSummary | null = null;
   private currentQueueBlock: QueueBlockState | null = null;
   // Per-entry timestamp of the last info-level `merge_waiting_main` log.
   // The event fires every tick while the gate waits, so subsequent ticks
@@ -44,6 +46,7 @@ export class MergeStewardRuntime {
       clearTimeout(this.tickTimer);
       this.tickTimer = undefined;
     }
+    this.clearStaleTickTimer();
     const deadline = Date.now() + 10_000;
     while (this.tickInProgress && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -51,21 +54,28 @@ export class MergeStewardRuntime {
     this.logger.info("Steward service stopped");
   }
 
-  async triggerReconcile(): Promise<{ started: boolean; runtime: QueueRuntimeStatus }> {
+  async triggerReconcile(): Promise<QueueReconcileResult> {
     const started = await this.runTick();
     return {
       started,
+      ...(!started ? { reason: "already_running" as const } : {}),
       runtime: this.getRuntimeStatus(),
     };
   }
 
   getRuntimeStatus(): QueueRuntimeStatus {
+    const tickAgeMs = this.getTickAgeMs();
+    const staleTickThresholdMs = this.config.reconcileStaleAfterMs;
     return {
       tickInProgress: this.tickInProgress,
       lastTickStartedAt: this.lastTickStartedAt,
       lastTickCompletedAt: this.lastTickCompletedAt,
       lastTickOutcome: this.lastTickOutcome,
       lastTickError: this.lastTickError,
+      tickAgeMs,
+      staleTickThresholdMs,
+      staleTick: tickAgeMs !== null && tickAgeMs >= staleTickThresholdMs,
+      lastReconcileEvent: this.lastReconcileEvent,
     };
   }
 
@@ -85,12 +95,46 @@ export class MergeStewardRuntime {
     this.tickTimer.unref?.();
   }
 
+  private getTickAgeMs(): number | null {
+    if (!this.tickInProgress || !this.lastTickStartedAt) return null;
+    const startedMs = Date.parse(this.lastTickStartedAt);
+    if (!Number.isFinite(startedMs)) return null;
+    return Math.max(0, Date.now() - startedMs);
+  }
+
+  private scheduleStaleTickWarning(startedAt: string): void {
+    this.clearStaleTickTimer();
+    const timer = setTimeout(() => {
+      if (!this.tickInProgress || this.lastTickStartedAt !== startedAt) return;
+      const runtime = this.getRuntimeStatus();
+      this.logger.warn(
+        {
+          startedAt,
+          tickAgeMs: runtime.tickAgeMs,
+          staleTickThresholdMs: runtime.staleTickThresholdMs,
+          lastReconcileEvent: runtime.lastReconcileEvent,
+        },
+        "Reconcile tick appears stale",
+      );
+    }, this.config.reconcileStaleAfterMs);
+    timer.unref?.();
+    this.staleTickTimer = timer;
+  }
+
+  private clearStaleTickTimer(): void {
+    if (this.staleTickTimer) {
+      clearTimeout(this.staleTickTimer);
+      this.staleTickTimer = undefined;
+    }
+  }
+
   private async runTick(): Promise<boolean> {
     if (this.tickInProgress) return false;
     this.tickInProgress = true;
     this.lastTickStartedAt = new Date().toISOString();
     this.lastTickOutcome = "running";
     this.lastTickError = null;
+    this.scheduleStaleTickWarning(this.lastTickStartedAt);
     try {
       await this.beforeTick?.();
       let tickQueueBlockEvent: ReconcileEvent | null = null;
@@ -108,6 +152,7 @@ export class MergeStewardRuntime {
         flakyRetries: this.config.flakyRetries,
         policy: this.policy,
         onEvent: (event) => {
+          this.lastReconcileEvent = summarizeReconcileEvent(event);
           const isWarn = event.action === "evicted" || event.action === "spec_build_conflict"
             || event.action === "ci_failed"
             || event.action === "merge_rejected" || event.action === "budget_exhausted";
@@ -148,6 +193,7 @@ export class MergeStewardRuntime {
         "Reconcile tick failed",
       );
     } finally {
+      this.clearStaleTickTimer();
       this.tickInProgress = false;
       this.lastTickCompletedAt = new Date().toISOString();
       this.scheduleNextTick();
@@ -197,4 +243,16 @@ export class MergeStewardRuntime {
     const available = new Set(checks.map((check) => check.name.trim().toLowerCase()).filter(Boolean));
     return requiredChecks.filter((check) => !available.has(check.trim().toLowerCase()));
   }
+}
+
+function summarizeReconcileEvent(event: ReconcileEvent): ReconcileEventSummary {
+  return {
+    at: event.at,
+    entryId: event.entryId,
+    prNumber: event.prNumber,
+    action: event.action,
+    ...(event.detail ? { detail: event.detail } : {}),
+    ...(event.ciRunId ? { ciRunId: event.ciRunId } : {}),
+    ...(event.specBranch ? { specBranch: event.specBranch } : {}),
+  };
 }

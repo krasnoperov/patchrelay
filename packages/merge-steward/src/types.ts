@@ -155,6 +155,26 @@ export interface QueueRuntimeStatus {
   lastTickCompletedAt: string | null;
   lastTickOutcome: "idle" | "running" | "succeeded" | "failed";
   lastTickError: string | null;
+  tickAgeMs?: number | null;
+  staleTickThresholdMs?: number;
+  staleTick?: boolean;
+  lastReconcileEvent?: ReconcileEventSummary | null;
+}
+
+export interface ReconcileEventSummary {
+  at: string;
+  entryId: string;
+  prNumber: number;
+  action: ReconcileAction;
+  detail?: string | undefined;
+  ciRunId?: string | undefined;
+  specBranch?: string | undefined;
+}
+
+export interface QueueReconcileResult {
+  started: boolean;
+  reason?: "already_running" | undefined;
+  runtime: QueueRuntimeStatus;
 }
 
 export interface QueueStatusSummary {
