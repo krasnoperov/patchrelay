@@ -327,11 +327,149 @@ test("progress reporter keeps durable history full when the ephemeral status is 
 
     assert.equal(emitted.length, 2);
     assert.equal(emitted[0]?.options?.ephemeral, true);
-    assert.match((emitted[0]?.content as { body?: string }).body ?? "", /\.\.\.$/);
+    assert.match((emitted[0]!.content as { body?: string }).body ?? "", /\.\.\.$/);
     assert.equal(
-      (emitted[1]?.content as { body?: string }).body,
+      (emitted[1]!.content as { body?: string }).body,
       "The build output reached the packaging step cleanly and the session closed normally, so I’m on the final publish pass now: checking the exact changed files, rerunning the focused verification, and preparing the push.",
     );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("progress reporter emits a quiet-period heartbeat without durable history noise", async () => {
+  const { baseDir, db } = createDatabase();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "project-1",
+      linearIssueId: "issue-6",
+      issueKey: "TST-6",
+      factoryState: "implementing",
+      delegatedToPatchRelay: true,
+      agentSessionId: "session-6",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+
+    let now = 1_000;
+    const emitted: Array<{ content: LinearAgentActivityContent; options?: { ephemeral?: boolean } }> = [];
+    const reporter = new LinearProgressReporter(
+      db,
+      async (_issue, content, options) => {
+        emitted.push({ content, options });
+      },
+      { heartbeatIntervalMs: 5_000, now: () => now },
+    );
+
+    const notification = {
+      method: "item/started",
+      params: {
+        item: {
+          id: "cmd-6",
+          type: "commandExecution",
+          status: "running",
+          command: "pnpm test",
+        },
+      },
+    };
+
+    reporter.maybeEmitProgress(notification, run);
+    now += 4_999;
+    reporter.maybeEmitProgress(notification, run);
+    now += 1;
+    reporter.maybeEmitProgress(notification, run);
+    reporter.maybeEmitProgress(notification, run);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(emitted.length, 1);
+    assert.deepEqual(emitted[0], {
+      content: {
+        type: "thought",
+        body: "PatchRelay is still working on implementation. Latest signal: command pnpm test.",
+      },
+      options: { ephemeral: true },
+    });
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("progress reporter resets heartbeat quiet window after meaningful progress", async () => {
+  const { baseDir, db } = createDatabase();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "project-1",
+      linearIssueId: "issue-7",
+      issueKey: "TST-7",
+      factoryState: "implementing",
+      delegatedToPatchRelay: true,
+      agentSessionId: "session-7",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+
+    let now = 1_000;
+    const emitted: Array<{ content: LinearAgentActivityContent; options?: { ephemeral?: boolean } }> = [];
+    const reporter = new LinearProgressReporter(
+      db,
+      async (_issue, content, options) => {
+        emitted.push({ content, options });
+      },
+      { heartbeatIntervalMs: 5_000, now: () => now },
+    );
+
+    const commandNotification = {
+      method: "item/started",
+      params: {
+        item: {
+          id: "cmd-7",
+          type: "commandExecution",
+          status: "running",
+          command: "pnpm test",
+        },
+      },
+    };
+
+    reporter.maybeEmitProgress(commandNotification, run);
+    now += 5_000;
+    reporter.maybeEmitProgress(commandNotification, run);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(emitted.length, 1);
+
+    now += 1_000;
+    reporter.maybeEmitProgress({
+      method: "turn/plan/updated",
+      params: {
+        plan: [{ step: "Run targeted verification before publishing", status: "in_progress" }],
+      },
+    }, run);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(emitted.length, 3);
+
+    now += 4_999;
+    reporter.maybeEmitProgress(commandNotification, run);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(emitted.length, 3);
+
+    now += 1;
+    reporter.maybeEmitProgress(commandNotification, run);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(emitted.length, 4);
+    assert.deepEqual(emitted.at(-1), {
+      content: {
+        type: "thought",
+        body: "PatchRelay is still working on implementation. Latest signal: command pnpm test.",
+      },
+      options: { ephemeral: true },
+    });
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

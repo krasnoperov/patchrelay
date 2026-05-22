@@ -89,7 +89,8 @@ Owns:
 - conversion from Linear webhook payloads to normalized events
 - delegation detection and implementation run scheduling
 - agent session acknowledgment, plan publishing, and activity emission
-- comment and prompt forwarding to active Codex runs
+- Codex conversation input routing for agent-session prompts and explicitly addressed issue comments
+- checkpoint-aware forwarding to active Codex runs
 - preserving high-signal session context from Linear webhooks for run startup
 
 ### GitHub Webhook Handler (`github-webhook-handler.ts`)
@@ -279,6 +280,24 @@ The mapping is consolidated in `src/linear-workflow-state-sync.ts:resolveDesired
 
 A complementary `shouldNotPublish` flag on the run record makes cancellation hard rather than advisory. Even if the Codex turn races ahead and produces output before the release lands, the run-finalizer reads this flag and refuses to invoke `git push` / `gh pr create` / `gh pr edit`. This is the "no further side effects accepted" contract — soft cancellation alone is not enough because the agent runs in a separate process.
 
+### Codex conversation input
+
+PatchRelay treats the Linear agent session as the chat surface for the delegated agent. A human `agentPrompted` event is ordinary Codex input: if a run is active, PatchRelay delivers it through `turn/steer`; if the issue is idle but still delegated, PatchRelay queues the next run on the existing issue thread. Linear issue comments are different. They are issue discussion by default and become Codex input only when the comment explicitly addresses PatchRelay at the start, for example `PatchRelay, ...` or `@PatchRelay ...`.
+
+Accepted natural-language input is routed through the Codex conversation adapter, not a command parser. The adapter uses the structured follow-up classifier only for narrow control decisions such as status and stop, with state facts like source surface, active run type, factory state, delegation state, direct-reply status, and PR review state. Explicit protocol fields, such as Linear's agent stop signal, remain deterministic; ordinary operator language must not be routed by keyword-only intent gates.
+
+When a run is active, accepted follow-up input is delivered to the active Codex turn instead of being dropped. The steering prompt carries a checkpoint contract: finish any non-interruptible command, then fold the new instruction into the next decision before the next meaningful side effect when possible. Status questions during an active run are answered as ephemeral `thought` activity so they do not close the agent session; idle status questions can use a normal `response`.
+
+Delivery success or failure is recorded as a non-actionable `prompt_delivered` session event for diagnostics. Failed delivery is also surfaced as operator/feed activity and Linear-visible activity, then the input is queued for the next wake. Terminal run summaries include the count of delivered and failed steering attempts when any occurred.
+
+If a completed issue with a published PR receives a new accepted prompt, PatchRelay reopens the issue as replacement work. The old PR facts are kept as context, current PR fields are cleared, and the next implementation run is instructed to create a fresh replacement PR rather than mutate or republish the completed one.
+
+### Requested-changes repair context
+
+Requested-changes repair owns its GitHub review context directly. Before a `review_fix` run starts, PatchRelay always refreshes the live PR state and hydrates the wake context from GitHub with the latest requested-changes review id, review body, inline comments, review commit SHA, current PR head SHA, and reviewer login when available. Existing Linear issue text or agent-session history can add context, but it cannot suppress the GitHub refresh and is not the source of truth for review feedback. If GitHub review context cannot be fetched, the launch context is explicitly marked degraded so the worker re-reads the review before changing code.
+
+Each review-fix run emits a review-round start activity that identifies the round number, reviewer, reviewed head, and captured comment count when known. The final Linear response for the run includes the review round, resulting head SHA when available, and structured `Addressed`, `Deferred`, and `Not applicable` sections.
+
 ### No-op publish detection
 
 When a run finishes, the finalizer recomputes `patch_id` for the new head and compares it to `IssueRecord.lastPublishedPatchId` (cached on every successful push):
@@ -386,4 +405,4 @@ The run orchestrator points Codex at these files from the lean per-run scaffold 
 - The repository is part of the harness. If an agent cannot rediscover a rule in-repo, the rule is operationally weak. Keep root docs navigational and treat deeper `docs/` material as the durable system of record.
 - Historical designs are reference material only unless reaffirmed in current docs.
 - Preserve compact verification evidence (failing check names, review comments, queue incidents) rather than replaying ever-growing transcripts.
-- Linear communication stays high-signal: immediate acknowledgment, concise in-flight activity, lifecycle-aware plans; deeper status lives behind session links, not in transcript dumps.
+- Linear communication stays high-signal: immediate acknowledgment, concise in-flight activity, lifecycle-aware plans, quiet-period heartbeats, and exactly one terminal response/error per meaningful outcome; deeper status lives behind session links, not in transcript dumps.

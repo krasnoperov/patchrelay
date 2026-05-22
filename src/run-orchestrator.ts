@@ -7,6 +7,7 @@ import type { FactoryState, RunType } from "./factory-state.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { summarizeCurrentThread } from "./run-reporting.ts";
 import {
+  buildReviewRoundStartedActivity,
   buildRunStartedActivity,
 } from "./linear-session-reporting.ts";
 import { CompletionCheckService } from "./completion-check.ts";
@@ -626,7 +627,16 @@ export class RunOrchestrator {
 
     // Emit Linear activity + plan
     const freshIssue = this.db.issues.getIssue(item.projectId, item.issueId) ?? issue;
-    void this.linearSync.emitActivity(freshIssue, buildRunStartedActivity(runType));
+    const reviewComments = Array.isArray(effectiveContext?.reviewComments) ? effectiveContext.reviewComments : undefined;
+    const reviewRoundActivity = runType === "review_fix"
+      ? buildReviewRoundStartedActivity({
+          round: Math.max(1, freshIssue.reviewFixAttempts),
+          ...(typeof effectiveContext?.reviewerName === "string" ? { reviewerName: effectiveContext.reviewerName } : {}),
+          ...(reviewComments ? { commentCount: reviewComments.length } : {}),
+          ...(typeof sourceHeadSha === "string" ? { headSha: sourceHeadSha } : {}),
+        })
+      : undefined;
+    void this.linearSync.emitActivity(freshIssue, reviewRoundActivity ?? buildRunStartedActivity(runType));
     void this.linearSync.syncSession(freshIssue, { activeRunType: runType });
   }
 

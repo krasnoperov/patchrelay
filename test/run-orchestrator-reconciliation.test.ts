@@ -2688,6 +2688,104 @@ exit 1
   }
 });
 
+test("review-fix launch emits one review-round start activity with refreshed GitHub context", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-review-round-start-once-"));
+  const oldPath = process.env.PATH;
+  try {
+    const activities: Array<{ type?: string; action?: string; parameter?: string; ephemeral?: boolean }> = [];
+    const { db, orchestrator } = createOrchestrator(baseDir, {
+      forProject: async () => ({
+        createAgentActivity: async ({ content, ephemeral }) => {
+          activities.push({
+            type: content.type,
+            ...("action" in content ? { action: content.action, parameter: content.parameter } : {}),
+            ...(ephemeral !== undefined ? { ephemeral } : {}),
+          });
+          return { id: `activity-${activities.length}` };
+        },
+        updateAgentSession: async (params) => ({ id: params.agentSessionId }),
+        getIssue: async () => { throw new Error("not used"); },
+        setIssueState: async () => { throw new Error("not used"); },
+        updateIssueLabels: async () => { throw new Error("not used"); },
+        getActorProfile: async () => ({ actorId: "patchrelay-actor" }),
+        getWorkspaceCatalog: async () => ({ workspace: {}, teams: [], projects: [] }),
+      } as unknown as LinearClient),
+    });
+
+    const fakeBin = path.join(baseDir, "fake-bin");
+    mkdirSync(fakeBin, { recursive: true });
+    const ghPath = path.join(fakeBin, "gh");
+    writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '{"headRefOid":"sha-round-live","state":"OPEN","reviewDecision":"CHANGES_REQUESTED","mergeStateStatus":"CLEAN"}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/pulls/33/reviews?per_page=100" ]; then
+  printf '[{"id":902,"state":"CHANGES_REQUESTED","body":"Please address the edge cases.","commit_id":"commit-902","html_url":"https://github.com/owner/repo/pull/33#pullrequestreview-902","user":{"login":"review-quill"}}]'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/pulls/33/reviews/902/comments?per_page=100" ]; then
+  printf '[{"body":"Cover the missing branch.","path":"src/feature.ts","line":42,"side":"RIGHT","html_url":"https://github.com/owner/repo/pull/33#discussion_r902","user":{"login":"review-quill"}}]'
+  exit 0
+fi
+echo "unexpected gh args: $*" >&2
+exit 1
+`);
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-review-round-start",
+      issueKey: "USE-ROUND-START",
+      title: "Review round activity",
+      prNumber: 33,
+      prState: "open",
+      prHeadSha: "sha-round-stale",
+      prReviewState: "changes_requested",
+      factoryState: "changes_requested",
+      delegatedToPatchRelay: true,
+      agentSessionId: "session-review-round-start",
+      issueClass: "implementation",
+      issueClassSource: "explicit",
+    });
+    db.issueSessions.appendIssueSessionEvent({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "review_changes_requested",
+      eventJson: JSON.stringify({ reviewerName: "stale-reviewer" }),
+      dedupeKey: "review_changes_requested::sha-round-stale::stale-reviewer",
+    });
+
+    const runLauncher = (orchestrator as unknown as {
+      runLauncher: {
+        prepareLaunchPlan: (params: unknown) => { prompt: string; branchName: string; worktreePath: string };
+        launchTurn: (params: unknown) => Promise<{ threadId: string; turnId: string }>;
+      };
+    }).runLauncher;
+    runLauncher.prepareLaunchPlan = () => ({
+      prompt: "review fix prompt",
+      branchName: "use/round-start",
+      worktreePath: path.join(baseDir, "worktrees", "USE-ROUND-START"),
+    });
+    runLauncher.launchTurn = async () => ({ threadId: "thread-review-round-start", turnId: "turn-review-round-start" });
+
+    await orchestrator.run({ projectId: issue.projectId, issueId: issue.linearIssueId });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const reviewRoundActivities = activities.filter((activity) => activity.action === "Review round");
+    assert.equal(reviewRoundActivities.length, 1);
+    assert.deepEqual(reviewRoundActivities[0], {
+      type: "action",
+      action: "Review round",
+      parameter: "1 from @review-quill on head sha-roun; 1 inline comment captured",
+    });
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("completed notification for a released run is ignored", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-notification-ignore-released-"));
   const oldPath = process.env.PATH;

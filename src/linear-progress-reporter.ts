@@ -8,9 +8,12 @@ interface ProgressPublicationState {
   ephemeralPublishedAtMs?: number;
   historyMeaningKey?: string;
   historyPublishedAtMs?: number;
+  quietSinceMs?: number;
+  lastHeartbeatAtMs?: number;
 }
 
 export class LinearProgressReporter {
+  private static readonly DEFAULT_HEARTBEAT_INTERVAL_MS = 15 * 60 * 1000;
   private readonly publicationsByRun = new Map<number, ProgressPublicationState>();
 
   constructor(
@@ -20,6 +23,10 @@ export class LinearProgressReporter {
       content: LinearAgentActivityContent,
       options?: { ephemeral?: boolean },
     ) => Promise<void>,
+    private readonly options: {
+      heartbeatIntervalMs?: number;
+      now?: () => number;
+    } = {},
   ) {}
 
   maybeEmitProgress(notification: { method: string; params: Record<string, unknown> }, run: RunRecord): void {
@@ -30,6 +37,7 @@ export class LinearProgressReporter {
 
     const fact = deriveLinearProgressFact(notification, issue);
     if (!fact) {
+      this.maybeEmitHeartbeat(notification, run);
       return;
     }
 
@@ -40,9 +48,10 @@ export class LinearProgressReporter {
       return;
     }
 
-    const now = Date.now();
+    const now = this.now();
     const publication: ProgressPublicationState = {
       ...previous,
+      quietSinceMs: now,
       ...(shouldEmitEphemeral
         ? {
             ephemeralMeaningKey: fact.meaningKey,
@@ -73,6 +82,58 @@ export class LinearProgressReporter {
 
   clearProgress(runId: number): void {
     this.publicationsByRun.delete(runId);
+  }
+
+  private maybeEmitHeartbeat(notification: { method: string; params: Record<string, unknown> }, run: RunRecord): void {
+    const previous = this.publicationsByRun.get(run.id);
+    const now = this.now();
+    const quietSinceMs = previous?.quietSinceMs ?? previous?.ephemeralPublishedAtMs ?? previous?.historyPublishedAtMs ?? now;
+    const elapsedMs = now - quietSinceMs;
+    const intervalMs = this.options.heartbeatIntervalMs ?? LinearProgressReporter.DEFAULT_HEARTBEAT_INTERVAL_MS;
+    if (elapsedMs < intervalMs) {
+      if (!previous) {
+        this.publicationsByRun.set(run.id, { quietSinceMs });
+      }
+      return;
+    }
+    if (previous?.lastHeartbeatAtMs !== undefined && now - previous.lastHeartbeatAtMs < intervalMs) {
+      return;
+    }
+
+    const issue = this.db.getIssue(run.projectId, run.linearIssueId);
+    if (!issue) {
+      return;
+    }
+    const detail = describeHeartbeatDetail(notification);
+    const content: LinearAgentActivityContent = {
+      type: "thought",
+      body: detail
+        ? `PatchRelay is still working on ${run.runType.replaceAll("_", " ")}. Latest signal: ${detail}.`
+        : `PatchRelay is still working on ${run.runType.replaceAll("_", " ")}.`,
+    };
+    this.publicationsByRun.set(run.id, {
+      ...previous,
+      quietSinceMs,
+      lastHeartbeatAtMs: now,
+    });
+    void this.emitActivity(issue, content, { ephemeral: true }).catch(() => {
+      const current = this.publicationsByRun.get(run.id);
+      if (current?.lastHeartbeatAtMs === now) {
+        const restored: ProgressPublicationState = {
+          ...current,
+        };
+        if (previous?.lastHeartbeatAtMs !== undefined) {
+          restored.lastHeartbeatAtMs = previous.lastHeartbeatAtMs;
+        } else {
+          delete restored.lastHeartbeatAtMs;
+        }
+        this.publicationsByRun.set(run.id, restored);
+      }
+    });
+  }
+
+  private now(): number {
+    return this.options.now?.() ?? Date.now();
   }
 
   private clearFailedPublication(
@@ -121,4 +182,29 @@ export class LinearProgressReporter {
     }
     this.publicationsByRun.set(runId, next);
   }
+}
+
+function describeHeartbeatDetail(notification: { method: string; params: Record<string, unknown> }): string | undefined {
+  if (notification.method === "item/started" || notification.method === "item/updated" || notification.method === "item/completed") {
+    const item = notification.params.item;
+    if (item && typeof item === "object") {
+      const typed = item as Record<string, unknown>;
+      if (typed.type === "commandExecution" && typeof typed.command === "string") {
+        return `command ${trimHeartbeatDetail(typed.command)}`;
+      }
+      if (typed.type === "dynamicToolCall" && typeof typed.tool === "string") {
+        return `tool ${trimHeartbeatDetail(typed.tool)}`;
+      }
+      if (typed.type === "mcpToolCall" && typeof typed.server === "string" && typeof typed.tool === "string") {
+        return `tool ${trimHeartbeatDetail(`${typed.server}/${typed.tool}`)}`;
+      }
+    }
+  }
+  return notification.method;
+}
+
+function trimHeartbeatDetail(value: string, maxLength = 120): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (compact.length <= maxLength) return compact;
+  return `${compact.slice(0, maxLength).trimEnd()}...`;
 }

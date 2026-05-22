@@ -18,6 +18,8 @@ import type { AppConfig, LinearClientProvider, LinearWebhookPayload } from "./ty
 import { safeJsonParse, sanitizeDiagnosticText } from "./utils.ts";
 import { extractLatestAssistantSummary } from "./issue-session-events.ts";
 import { WakeDispatcher } from "./wake-dispatcher.ts";
+import { CodexFollowupIntentClassifier, type FollowupIntentClassifier } from "./followup-intent.ts";
+import { CodexConversationAdapter } from "./codex-conversation-adapter.ts";
 
 export interface IssueQueueItem {
   projectId: string;
@@ -44,6 +46,7 @@ export class WebhookHandler {
     wakeDispatcherOrEnqueueIssue: WakeDispatcher | ((projectId: string, issueId: string) => void),
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
+    followupClassifier?: FollowupIntentClassifier,
   ) {
     // Webhook handlers never release leases — the orchestrator's
     // run finalizer owns that. So when a test passes a bare
@@ -55,11 +58,19 @@ export class WebhookHandler {
 
     this.installationHandler = new InstallationWebhookHandler(config, { linearInstallations: db.linearInstallations }, logger, feed);
     this.issueRemovalHandler = new IssueRemovalHandler(db, feed);
-    this.commentWakeHandler = new CommentWakeHandler(db, codex, this.wakeDispatcher, logger, feed);
-    this.agentSessionHandler = new AgentSessionHandler(config, db, linearProvider, codex, this.wakeDispatcher, logger, feed);
+    this.linearSync = new LinearSessionSync(config, db, linearProvider, logger, feed);
+    const intentClassifier = followupClassifier ?? new CodexFollowupIntentClassifier(codex, logger);
+    const conversationAdapter = new CodexConversationAdapter(db, codex, this.wakeDispatcher, logger, feed, intentClassifier);
+    this.commentWakeHandler = new CommentWakeHandler(
+      db,
+      this.wakeDispatcher,
+      feed,
+      conversationAdapter,
+      (issue, content, options) => this.linearSync.emitActivity(issue, content, options),
+    );
+    this.agentSessionHandler = new AgentSessionHandler(config, db, linearProvider, codex, this.wakeDispatcher, logger, feed, conversationAdapter);
     this.desiredStageRecorder = new DesiredStageRecorder(db, linearProvider, this.wakeDispatcher, feed);
     this.contextLoader = new WebhookContextLoader(config, linearProvider);
-    this.linearSync = new LinearSessionSync(config, db, linearProvider, logger, feed);
     this.dependencyReadinessHandler = new DependencyReadinessHandler(
       db,
       this.wakeDispatcher,

@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildAgentSessionPlan, buildAgentSessionPlanForIssue } from "../src/agent-session-plan.ts";
 import { buildAgentSessionExternalUrls } from "../src/agent-session-presentation.ts";
-import { buildGitHubStateActivity, buildRunCompletedActivity, summarizeIssueStateForLinear } from "../src/linear-session-reporting.ts";
+import {
+  buildGitHubStateActivity,
+  buildReviewRoundStartedActivity,
+  buildRunCompletedActivity,
+  summarizeIssueStateForLinear,
+} from "../src/linear-session-reporting.ts";
 import type { AppConfig } from "../src/types.ts";
 
 function createConfig(): AppConfig {
@@ -238,7 +243,18 @@ test("run completion activity strips repo-local absolute paths from publish comm
 
   assert.deepEqual(activity, {
     type: "response",
-    body: "Updated `sessionSchema.ts` and `local path omitted`, then pushed a new head.",
+    body: [
+      "Review fix completed.",
+      "",
+      "Addressed:",
+      "- Updated `sessionSchema.ts` and `local path omitted`, then pushed a new head.",
+      "",
+      "Deferred:",
+      "- None reported.",
+      "",
+      "Not applicable:",
+      "- None reported.",
+    ].join("\n"),
   });
 });
 
@@ -262,7 +278,18 @@ test("run completion activity keeps repair comments concise and human-facing", (
   });
   assert.deepEqual(reviewFix, {
     type: "response",
-    body: "Fixed the mobile header regression and pushed a new head.",
+    body: [
+      "Review fix completed.",
+      "",
+      "Addressed:",
+      "- Fixed the mobile header regression and pushed a new head.",
+      "",
+      "Deferred:",
+      "- None reported.",
+      "",
+      "Not applicable:",
+      "- None reported.",
+    ].join("\n"),
   });
 
   const queueRepair = buildRunCompletedActivity({
@@ -275,6 +302,49 @@ test("run completion activity keeps repair comments concise and human-facing", (
     type: "response",
     body: "Resolved the merge conflict and force-pushed the repaired branch.",
   });
+});
+
+test("review round activities summarize reviewer, head, and captured comments", () => {
+  assert.deepEqual(
+    buildReviewRoundStartedActivity({
+      round: 2,
+      reviewerName: "reviewer",
+      commentCount: 3,
+      headSha: "abcdef123456",
+    }),
+    {
+      type: "action",
+      action: "Review round",
+      parameter: "2 from @reviewer on head abcdef12; 3 inline comments captured",
+    },
+  );
+
+  assert.deepEqual(
+    buildRunCompletedActivity({
+      runType: "review_fix",
+      completionSummary: "Addressed the requested changes and pushed.",
+      postRunState: "pr_open",
+      prNumber: 50,
+      reviewRound: 2,
+      resultHeadSha: "fedcba987654",
+    }),
+    {
+      type: "response",
+      body: [
+        "Review round 2 completed.",
+        "Resulting head: fedcba98.",
+        "",
+        "Addressed:",
+        "- Addressed the requested changes and pushed.",
+        "",
+        "Deferred:",
+        "- None reported.",
+        "",
+        "Not applicable:",
+        "- None reported.",
+      ].join("\n"),
+    },
+  );
 });
 
 test("linear summaries prefer session state over factory state", () => {

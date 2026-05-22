@@ -400,6 +400,36 @@ test("review_fix prompt keeps concise reviewer context plus structured comments"
   }
 });
 
+test("review_fix prompt surfaces degraded GitHub review context before launch", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-degraded-review-"));
+  try {
+    writeFileSync(path.join(baseDir, "REVIEW_WORKFLOW.md"), "# Review Workflow\n");
+
+    const prompt = buildFollowUpRunPrompt({
+      issue: {
+        ...createIssue(),
+        factoryState: "changes_requested",
+        prNumber: 27,
+        prReviewState: "changes_requested",
+      },
+      runType: "review_fix",
+      repoPath: baseDir,
+      context: {
+        currentPrHeadSha: "sha-current",
+        reviewContextStatus: "degraded",
+        reviewContextDegraded: true,
+        reviewContextDegradedReason: "GitHub requested-changes review context could not be fetched before launch.",
+      },
+    });
+
+    assert.match(prompt, /GitHub review context refresh: degraded/);
+    assert.match(prompt, /GitHub requested-changes review context could not be fetched before launch\./);
+    assert.match(prompt, /Do not assume cached review details are current\. Re-read the PR review in GitHub before making review-fix changes\./);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("thread reuse is limited to explicit follow-up continuity", () => {
   assert.equal(
     shouldReuseIssueThread({

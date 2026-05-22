@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -321,6 +321,102 @@ test("verifyReviewFixAdvancedHead fails closed when no blocking or starting head
     const result = await policy.verifyReviewFixAdvancedHead(run, issue);
     assert.match(result ?? "", /without a recorded blocking review or starting head SHA/);
   } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("resolveRequestedChangesWakeContext refreshes GitHub review context even when cached context exists", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-review-context-refresh-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = path.join(baseDir, "bin");
+    const ghPath = path.join(fakeBin, "gh");
+    const callsPath = path.join(baseDir, "gh-calls.log");
+    mkdirSync(fakeBin, { recursive: true });
+    writeFileSync(ghPath, `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> '${callsPath}'
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '%s' '{"headRefOid":"sha-live","state":"OPEN","reviewDecision":"CHANGES_REQUESTED","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [[ "$2" == *"/pulls/59/reviews?per_page=100" ]]; then
+  printf '%s' '[{"id":123,"state":"CHANGES_REQUESTED","body":"Live review body","commit_id":"sha-reviewed","html_url":"https://github.test/review","user":{"login":"reviewer"}}]'
+  exit 0
+fi
+if [ "$1" = "api" ] && [[ "$2" == *"/pulls/59/reviews/123/comments?per_page=100" ]]; then
+  printf '%s' '[{"body":"Inline review comment","path":"src/app.ts","line":7,"side":"RIGHT","html_url":"https://github.test/comment","user":{"login":"reviewer"}}]'
+  exit 0
+fi
+exit 1
+`, "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, policy } = setupPolicy(baseDir);
+    const issue = db.upsertIssue({
+      ...baseIssue(),
+      prReviewState: "changes_requested",
+    });
+
+    const context = await policy.resolveRequestedChangesWakeContext(issue, "review_fix", {
+      reviewBody: "stale cached review",
+      reviewerName: "stale-reviewer",
+    });
+
+    assert.equal(context?.reviewContextStatus, "fresh");
+    assert.equal(context?.reviewBody, "Live review body");
+    assert.equal(context?.reviewerName, "reviewer");
+    assert.equal(context?.reviewCommitId, "sha-reviewed");
+    assert.equal(context?.currentPrHeadSha, "sha-live");
+    assert.equal((context?.reviewComments as Array<Record<string, unknown>> | undefined)?.[0]?.body, "Inline review comment");
+    const apiCalls = readFileSync(callsPath, "utf8")
+      .split("\n")
+      .filter((line) => line.startsWith("api "));
+    assert.equal(apiCalls.length, 2);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("resolveRequestedChangesWakeContext marks review context degraded when GitHub review fetch fails", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-review-context-degraded-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = path.join(baseDir, "bin");
+    const ghPath = path.join(fakeBin, "gh");
+    mkdirSync(fakeBin, { recursive: true });
+    writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '%s' '{"headRefOid":"sha-degraded","state":"OPEN","reviewDecision":"CHANGES_REQUESTED","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}'
+  exit 0
+fi
+if [ "$1" = "api" ]; then
+  echo "GitHub unavailable" >&2
+  exit 1
+fi
+exit 1
+`, "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, policy } = setupPolicy(baseDir);
+    const issue = db.upsertIssue({
+      ...baseIssue(),
+      prReviewState: "changes_requested",
+    });
+
+    const context = await policy.resolveRequestedChangesWakeContext(issue, "review_fix", {
+      reviewBody: "cached review that might be stale",
+    });
+
+    assert.equal(context?.reviewContextStatus, "degraded");
+    assert.equal(context?.reviewContextDegraded, true);
+    assert.equal(context?.reviewContextDegradedReason, "GitHub requested-changes review context could not be fetched before launch.");
+    assert.equal(context?.reviewBody, "cached review that might be stale");
+    assert.equal(context?.currentPrHeadSha, "sha-degraded");
+  } finally {
+    process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });
   }
 });

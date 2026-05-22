@@ -106,7 +106,7 @@ The cluster-health entry above is the one alert that today is also raised throug
 | Symptom | Look for |
 |-|-|
 | Linear did nothing after a delegation or mention | Webhook intake lines — accepted, rejected, stale, or duplicate deliveries |
-| Agent ignored a new Linear comment or prompt | Queued turn-input delivery lines and any delivery failure warnings |
+| Agent ignored a new Linear comment or prompt | Whether the issue comment explicitly started with `PatchRelay` or `@PatchRelay`, `prompt_delivered` session events, queued turn-input delivery lines, and any delivery failure warnings |
 | Codex execution looks broken or stops unexpectedly | `Starting Codex app-server`, `Codex app-server request failed`, `Codex app-server stderr`, `Codex app-server exited` |
 | Requested-changes repair stopped without returning to review | `Requested-changes run finished ... without pushing a new head past blocking review SHA` |
 | Queue repair started after an integration failure | `PR needs queue repair from fresh GitHub truth`, `Started queue_repair run`, and the `merge-steward/queue` check run |
@@ -165,7 +165,22 @@ Escalate when the incident is product ambiguity, a broken required check on `mai
 
 ## Waking a run with new input
 
-While an issue is still delegated, additional prompts in the Linear agent session are forwarded into the active run (or queued until the next run wakes). This is the intended steering surface; do not take over in the worktree unless automation is clearly stuck.
+While an issue is still delegated, additional prompts in the Linear agent session are treated like chat with the agent. They are forwarded into the active run or queued until the next run wakes. Active-run steering is checkpoint-aware: PatchRelay does not kill arbitrary in-flight shell commands, but it tells the agent to fold the new instruction into the next decision before the next meaningful side effect when possible.
+
+Linear issue comments are not chat by default. They become agent input only when they explicitly address PatchRelay at the start, for example:
+
+```text
+PatchRelay, use the existing billing helper instead.
+@PatchRelay please continue with option B.
+```
+
+Plain issue discussion, even on an awaiting-input issue, is ignored by PatchRelay unless it is addressed that way. This keeps teammate discussion from accidentally steering the agent.
+
+PatchRelay classifies accepted follow-up text with a structured intent classifier, not a magic phrase list. Status questions during active work get a lightweight ephemeral thought; real instructions are delivered or queued. Delivery attempts are recorded as `prompt_delivered` session events. If delivery fails, the operator feed and Linear session activity call that out instead of silently losing the prompt, and final run summaries report delivered or failed steering attempts.
+
+When a PR is already completed and someone asks for more work, use the agent session or an addressed issue comment. PatchRelay keeps the old PR facts as context, clears the current PR fields, and starts replacement implementation work that should publish a fresh PR.
+
+Requested-changes repairs fetch review feedback from GitHub directly on every repair wake. If a reviewer says "fix the PR comments" in Linear, PatchRelay still reads the review body, inline comments, reviewer, reviewed head, and current PR head from GitHub before launching the repair. If that refresh is degraded, the worker prompt says so explicitly and instructs the worker to re-read the GitHub review before changing code.
 
 ## Taking a run over manually
 

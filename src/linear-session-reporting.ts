@@ -1,7 +1,6 @@
 import type { IssueRecord } from "./db-types.ts";
 import type { CompletionCheckResult } from "./completion-check-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
-import type { FollowupIntent } from "./followup-intent.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
 import type { LinearAgentActivityContent } from "./linear-types.ts";
 import { formatRunTypeLabel } from "./agent-session-plan.ts";
@@ -75,7 +74,15 @@ export function buildBlockedDelegationActivity(blockedByKeys: string[] = []): Li
 export function buildPromptDeliveredThought(runType: RunType): LinearAgentActivityContent {
   return {
     type: "thought",
-    body: `PatchRelay routed your latest instructions into the active ${lowerRunTypeLabel(runType)} workflow.`,
+    body: `PatchRelay routed your latest instructions into the active ${lowerRunTypeLabel(runType)} workflow; it will fold them in at the next checkpoint.`,
+  };
+}
+
+export function buildPromptDeliveryFailedActivity(runType: RunType, reason?: string): LinearAgentActivityContent {
+  const suffix = reason ? ` ${trimSummary(reason, 180)}` : "";
+  return {
+    type: "thought",
+    body: `PatchRelay could not route your latest instructions into the active ${lowerRunTypeLabel(runType)} workflow.${suffix}`,
   };
 }
 
@@ -84,6 +91,7 @@ export function buildFollowupStatusActivity(params: {
   statusNote?: string | undefined;
   activeRunType?: RunType | undefined;
   pendingRunType?: RunType | undefined;
+  activityType?: "thought" | "response" | undefined;
 }): LinearAgentActivityContent {
   const subject = params.issue.issueKey ? `${params.issue.issueKey}` : "this issue";
   const runNote = params.activeRunType
@@ -92,15 +100,17 @@ export function buildFollowupStatusActivity(params: {
   const prNote = params.issue.prNumber ? ` PR #${params.issue.prNumber}.` : "";
   const statusNote = params.statusNote ? ` ${params.statusNote}` : "";
   return {
-    type: "response",
+    type: params.activityType ?? "response",
     body: `PatchRelay status: ${subject} is ${formatFactoryState(params.issue.factoryState)}.${prNote}${runNote}${statusNote}`.trim(),
   };
 }
 
-export function buildNonActionableFollowupActivity(intent: Exclude<FollowupIntent, "implementation_request" | "retry" | "stop">): LinearAgentActivityContent {
+export function buildNonActionableFollowupActivity(intent: "status" | "context_only" | "unknown_needs_ack"): LinearAgentActivityContent {
   const body = intent === "status"
     ? "PatchRelay status is available in the current agent session."
-    : "PatchRelay did not start implementation because this looks like a question or clarification. Ask PatchRelay to continue, retry, or implement when you want work to run.";
+    : intent === "context_only"
+      ? "PatchRelay recorded this as context and did not start a new run. Ask PatchRelay to continue, retry, or implement when you want work to run."
+      : "PatchRelay did not start a run because this did not clearly request work. Ask PatchRelay to continue, retry, or implement when you want work to run.";
   return { type: "response", body };
 }
 
@@ -120,6 +130,24 @@ export function buildRunStartedActivity(runType: RunType): LinearAgentActivityCo
   }
 }
 
+export function buildReviewRoundStartedActivity(params: {
+  round: number;
+  reviewerName?: string;
+  commentCount?: number;
+  headSha?: string;
+}): LinearAgentActivityContent {
+  const reviewer = params.reviewerName ? ` from @${params.reviewerName}` : "";
+  const head = params.headSha ? ` on head ${params.headSha.slice(0, 8)}` : "";
+  const comments = params.commentCount !== undefined
+    ? `; ${params.commentCount} inline comment${params.commentCount === 1 ? "" : "s"} captured`
+    : "";
+  return {
+    type: "action",
+    action: "Review round",
+    parameter: `${params.round}${reviewer}${head}${comments}`,
+  };
+}
+
 function formatFactoryState(state: FactoryState): string {
   return state.replaceAll("_", " ");
 }
@@ -129,49 +157,62 @@ export function buildRunCompletedActivity(params: {
   completionSummary?: string;
   postRunState?: FactoryState;
   prNumber?: number;
+  reviewRound?: number;
+  resultHeadSha?: string;
+  steeringDeliveredCount?: number;
+  steeringFailedCount?: number;
 }): LinearAgentActivityContent | undefined {
   const prLabel = params.prNumber ? `PR #${params.prNumber}` : "the pull request";
   const summary = trimSummary(params.completionSummary);
   const detail = summary ? ` ${summary}` : "";
+  const steeringSummary = buildSteeringSummary(params.steeringDeliveredCount, params.steeringFailedCount);
 
   switch (params.runType) {
     case "implementation":
       if (params.postRunState === "pr_open") {
+        const body = `${prLabel} opened:${detail || " Published and ready for review."}`;
         return {
           type: "response",
-          body: `${prLabel} opened:${detail || " Published and ready for review."}`,
+          body: steeringSummary ? `${body}\n\n${steeringSummary}` : body,
         };
       }
       return undefined;
     case "review_fix":
-      return summary
-        ? {
-            type: "response",
-            body: summary,
-          }
-        : {
-            type: "response",
-            body: `Updated ${prLabel} to address review feedback.`,
-          };
+      {
+        const lines: string[] = [];
+        lines.push(params.reviewRound ? `Review round ${params.reviewRound} completed.` : "Review fix completed.");
+        if (params.resultHeadSha) lines.push(`Resulting head: ${params.resultHeadSha.slice(0, 8)}.`);
+        if (steeringSummary) lines.push(steeringSummary);
+
+        const resolution = buildReviewResolutionSections(summary);
+        lines.push("", "Addressed:", resolution.addressed, "", "Deferred:", resolution.deferred, "", "Not applicable:", resolution.notApplicable);
+        if (!summary && !params.resultHeadSha) {
+          lines[0] = `Updated ${prLabel} to address review feedback.`;
+        }
+        return {
+          type: "response",
+          body: lines.join("\n").trim(),
+        };
+      }
     case "ci_repair":
       return summary
         ? {
             type: "response",
-            body: summary,
+            body: steeringSummary ? `${summary}\n\n${steeringSummary}` : summary,
           }
         : {
             type: "response",
-            body: `Updated ${prLabel} after CI repair.`,
+            body: steeringSummary ? `Updated ${prLabel} after CI repair.\n\n${steeringSummary}` : `Updated ${prLabel} after CI repair.`,
           };
     case "queue_repair":
       return summary
         ? {
             type: "response",
-            body: summary,
+            body: steeringSummary ? `${summary}\n\n${steeringSummary}` : summary,
           }
         : {
             type: "response",
-            body: `Updated ${prLabel} after merge-queue repair.`,
+            body: steeringSummary ? `Updated ${prLabel} after merge-queue repair.\n\n${steeringSummary}` : `Updated ${prLabel} after merge-queue repair.`,
           };
     case "branch_upkeep":
       return undefined;
@@ -185,12 +226,46 @@ export function buildRunCompletedActivity(params: {
       if (summary) {
         lines.push("", summary);
       }
+      if (steeringSummary) {
+        lines.push("", steeringSummary);
+      }
       return {
         type: "response",
         body: lines.join("\n"),
       };
     }
   }
+}
+
+function buildSteeringSummary(delivered = 0, failed = 0): string | undefined {
+  if (delivered === 0 && failed === 0) return undefined;
+  const parts: string[] = [];
+  if (delivered > 0) {
+    parts.push(`${delivered} follow-up prompt${delivered === 1 ? "" : "s"} delivered`);
+  }
+  if (failed > 0) {
+    parts.push(`${failed} follow-up delivery failure${failed === 1 ? "" : "s"}`);
+  }
+  return `Steering: ${parts.join("; ")}.`;
+}
+
+function buildReviewResolutionSections(summary: string | undefined): {
+  addressed: string;
+  deferred: string;
+  notApplicable: string;
+} {
+  if (!summary) {
+    return {
+      addressed: "- Review feedback addressed and published.",
+      deferred: "- None reported.",
+      notApplicable: "- None reported.",
+    };
+  }
+  return {
+    addressed: `- ${summary}`,
+    deferred: "- None reported.",
+    notApplicable: "- None reported.",
+  };
 }
 
 export function buildRunFailureActivity(runType: RunType, reason?: string): LinearAgentActivityContent {

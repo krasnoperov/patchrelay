@@ -12,6 +12,7 @@ export type IssueSessionEventType =
   | "completion_check_continue"
   | "followup_prompt"
   | "followup_comment"
+  | "prompt_delivered"
   | "self_comment"
   | "operator_prompt"
   | "review_changes_requested"
@@ -55,6 +56,7 @@ const TERMINAL_SESSION_EVENTS = new Set<IssueSessionEventType>([
 
 const NON_ACTIONABLE_SESSION_EVENTS = new Set<IssueSessionEventType>([
   "delegation_observed",
+  "prompt_delivered",
   "run_released_authority",
 ]);
 
@@ -169,6 +171,13 @@ export function deriveSessionWakePlan(
             text,
             ...(typeof payload?.author === "string" ? { author: payload.author } : {}),
           });
+        }
+        if (payload?.replacementPrRequired === true) {
+          context.replacementPrRequired = true;
+          if (typeof payload.previousPrNumber === "number") context.previousPrNumber = payload.previousPrNumber;
+          if (typeof payload.previousPrUrl === "string") context.previousPrUrl = payload.previousPrUrl;
+          if (typeof payload.previousPrState === "string") context.previousPrState = payload.previousPrState;
+          if (typeof payload.previousPrHeadSha === "string") context.previousPrHeadSha = payload.previousPrHeadSha;
         }
         if (
           event.eventType === "followup_prompt"
