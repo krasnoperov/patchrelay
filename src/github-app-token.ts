@@ -1,11 +1,11 @@
 import { createSign } from "node:crypto";
-import { writeFile, mkdir } from "node:fs/promises";
-import path from "node:path";
 import type { Logger } from "pino";
 import { resolveSecretWithSource, type SecretSource } from "./resolve-secret.ts";
 import { getPatchRelayDataDir } from "./runtime-paths.ts";
+import { getGhConfigDir, writeGhHostsToken, type GitHubBotIdentity } from "./github-cli-auth.ts";
 
-const TOKEN_REFRESH_MS = 30 * 60_000; // 30 minutes (tokens last 1 hour)
+const TOKEN_REFRESH_MS = 30 * 60_000; // 30 minutes (installation tokens last 1 hour)
+const TOKEN_EXPIRY_MARGIN_MS = 5 * 60_000; // treat a token expiring within 5 min as stale
 
 export interface GitHubAppCredentials {
   appId: string;
@@ -14,21 +14,32 @@ export interface GitHubAppCredentials {
   installationId?: string;
 }
 
-export interface GitHubAppBotIdentity {
-  name: string;   // e.g. "patchrelay[bot]"
-  email: string;  // e.g. "267939867+patchrelay[bot]@users.noreply.github.com"
-  tokenFile: string; // Path to the App installation token file for git push auth
+/** Re-exported for callers that attribute commits to the bot. */
+export type GitHubAppBotIdentity = GitHubBotIdentity;
+
+export interface GitHubAppAuthStatus {
+  /** True when a fresh installation token is currently available. */
+  healthy: boolean;
+  installationId: string | null;
+  lastRefreshAt: string | null;
+  lastRefreshError: string | null;
+  consecutiveFailures: number;
+  expiresAt: string | null;
 }
 
 export interface GitHubAppTokenManager {
-  /** Start the background refresh loop. */
+  /** Start the background refresh loop (initial refresh runs synchronously). */
   start(): Promise<void>;
   /** Stop the background loop. */
   stop(): void;
-  /** Read the current token (from the file), or undefined if not available. */
+  /** Read the current token (from memory), or undefined if not available/fresh. */
   currentToken(): string | undefined;
-  /** Bot identity for git config (resolved on first token refresh). */
+  /** Force a re-mint + hosts.yml rotation (e.g. after an observed auth failure). */
+  refresh(): Promise<void>;
+  /** Bot identity for git commit attribution (resolved on first token refresh). */
   botIdentity(): GitHubAppBotIdentity | undefined;
+  /** Current auth health, for readiness reporting and escalation. */
+  authStatus(): GitHubAppAuthStatus;
 }
 
 /**
@@ -56,43 +67,9 @@ export function resolveGitHubAppCredentials(): (GitHubAppCredentials & { secretS
   };
 }
 
-/**
- * Well-known paths for the token file and the gh wrapper.
- */
+/** Well-known path for the per-service `gh` config directory (holds the rotated hosts.yml). */
 export function getGitHubAppPaths() {
-  const shareDir = getPatchRelayDataDir();
-  return {
-    tokenFile: path.join(shareDir, "gh-token"),
-    binDir: path.join(shareDir, "bin"),
-    ghWrapper: path.join(shareDir, "bin", "gh"),
-  };
-}
-
-/**
- * Create the gh wrapper script that reads the token file.
- * Idempotent — safe to call on every startup.
- */
-export async function ensureGhWrapper(logger: Logger): Promise<void> {
-  const { binDir, ghWrapper, tokenFile } = getGitHubAppPaths();
-  await mkdir(binDir, { recursive: true });
-
-  const script = `#!/bin/bash
-# PatchRelay gh wrapper — uses GitHub App token when available.
-# Falls through to the user's own gh auth if the token file is missing.
-TOKEN_FILE="${tokenFile}"
-if [ -f "$TOKEN_FILE" ]; then
-  export GH_TOKEN=$(cat "$TOKEN_FILE")
-fi
-exec /usr/bin/gh "$@"
-`;
-
-  await writeFile(ghWrapper, script, { mode: 0o755 });
-  const currentPath = process.env.PATH ?? "";
-  const pathEntries = currentPath.split(path.delimiter).filter(Boolean);
-  if (!pathEntries.includes(binDir)) {
-    process.env.PATH = [binDir, ...pathEntries].join(path.delimiter);
-  }
-  logger.debug({ path: ghWrapper }, "Wrote gh wrapper script");
+  return { ghConfigDir: getGhConfigDir(getPatchRelayDataDir()) };
 }
 
 /**
@@ -117,7 +94,7 @@ function generateJwt(appId: string, privateKey: string): string {
 /**
  * Exchange a JWT for an installation access token (1-hour lifetime).
  */
-async function fetchInstallationToken(jwt: string, installationId: string): Promise<string> {
+async function fetchInstallationToken(jwt: string, installationId: string): Promise<{ token: string; expiresAt: string | null }> {
   const response = await fetch(`https://api.github.com/app/installations/${installationId}/access_tokens`, {
     method: "POST",
     headers: {
@@ -130,8 +107,8 @@ async function fetchInstallationToken(jwt: string, installationId: string): Prom
     const body = await response.text();
     throw new Error(`Failed to fetch installation token (${response.status}): ${body}`);
   }
-  const data = await response.json() as { token: string };
-  return data.token;
+  const data = await response.json() as { token: string; expires_at?: string };
+  return { token: data.token, expiresAt: data.expires_at ?? null };
 }
 
 /**
@@ -159,20 +136,44 @@ async function resolveInstallationId(jwt: string): Promise<string> {
 }
 
 /**
- * Creates a token manager that writes a fresh GitHub App installation token
- * to a well-known file every 30 minutes. The gh wrapper script reads this file.
+ * Creates a token manager that proactively re-mints a GitHub App installation token
+ * every 30 minutes and rewrites `gh`'s `hosts.yml` so both `gh` and `git` (via
+ * `gh auth git-credential`) authenticate as the bot with an always-fresh token.
  *
- * Returns undefined if credentials are not configured (optional feature).
+ * `onRefreshResult` is invoked after every refresh attempt so the service can update
+ * readiness/health and escalate when auth breaks.
  */
 export function createGitHubAppTokenManager(
   credentials: GitHubAppCredentials,
   logger: Logger,
+  onRefreshResult?: (status: GitHubAppAuthStatus) => void,
 ): GitHubAppTokenManager {
-  const { tokenFile } = getGitHubAppPaths();
+  const { ghConfigDir } = getGitHubAppPaths();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let resolvedInstallationId: string | undefined = credentials.installationId;
   let cachedToken: string | undefined;
+  let expiresAtMs: number | undefined;
   let resolvedBotIdentity: GitHubAppBotIdentity | undefined;
+  let lastRefreshAt: string | null = null;
+  let lastRefreshError: string | null = null;
+  let consecutiveFailures = 0;
+
+  function isFresh(): boolean {
+    if (!cachedToken) return false;
+    if (expiresAtMs === undefined) return true;
+    return expiresAtMs - Date.now() > TOKEN_EXPIRY_MARGIN_MS;
+  }
+
+  function status(): GitHubAppAuthStatus {
+    return {
+      healthy: isFresh() && lastRefreshError === null,
+      installationId: resolvedInstallationId ?? null,
+      lastRefreshAt,
+      lastRefreshError,
+      consecutiveFailures,
+      expiresAt: expiresAtMs ? new Date(expiresAtMs).toISOString() : null,
+    };
+  }
 
   async function refresh(): Promise<void> {
     try {
@@ -188,18 +189,28 @@ export function createGitHubAppTokenManager(
         logger.info({ botName: resolvedBotIdentity.name, botEmail: resolvedBotIdentity.email }, "Resolved GitHub App bot identity");
       }
 
-      const token = await fetchInstallationToken(jwt, resolvedInstallationId);
-      await mkdir(path.dirname(tokenFile), { recursive: true });
-      await writeFile(tokenFile, token, { mode: 0o600 });
+      const { token, expiresAt } = await fetchInstallationToken(jwt, resolvedInstallationId);
+      await writeGhHostsToken(ghConfigDir, token, resolvedBotIdentity.name);
       cachedToken = token;
-      process.env.GH_TOKEN = token;
-      process.env.GITHUB_TOKEN = token;
-      logger.debug("Refreshed GitHub App installation token");
-    } catch (error) {
-      logger.warn(
-        { error: error instanceof Error ? error.message : String(error) },
-        "Failed to refresh GitHub App token (will retry in 30 minutes)",
+      expiresAtMs = expiresAt ? Date.parse(expiresAt) : undefined;
+      lastRefreshAt = new Date().toISOString();
+      lastRefreshError = null;
+      consecutiveFailures = 0;
+      logger.info(
+        { installationId: resolvedInstallationId, expiresAt, ghConfigDir },
+        "Rotated GitHub App token (gh + git now authenticate as the bot with a fresh token)",
       );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      lastRefreshError = message;
+      consecutiveFailures += 1;
+      // Escalate: a broken App token means every git/gh operation will fail.
+      logger.error(
+        { error: message, consecutiveFailures, installationId: resolvedInstallationId ?? null },
+        "Failed to refresh GitHub App token — gh/git auth is degraded until this recovers",
+      );
+    } finally {
+      onRefreshResult?.(status());
     }
   }
 
@@ -222,10 +233,16 @@ export function createGitHubAppTokenManager(
       }
     },
     currentToken() {
-      return cachedToken;
+      return isFresh() ? cachedToken : undefined;
+    },
+    async refresh() {
+      await refresh();
     },
     botIdentity() {
       return resolvedBotIdentity;
+    },
+    authStatus() {
+      return status();
     },
   };
 }
@@ -260,10 +277,8 @@ async function resolveBotIdentity(jwt: string): Promise<GitHubAppBotIdentity> {
   }
   const user = await userResponse.json() as { id: number; login: string };
 
-  const { tokenFile } = getGitHubAppPaths();
   return {
     name: user.login,
     email: `${user.id}+${user.login}@users.noreply.github.com`,
-    tokenFile,
   };
 }

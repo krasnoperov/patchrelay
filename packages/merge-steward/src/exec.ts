@@ -108,6 +108,28 @@ function shouldRetryWithoutRuntimeGitHubAuth(
   return (failure.stderr ?? "").includes(WORKFLOW_PERMISSION_REJECTION);
 }
 
+// Markers that indicate GitHub rejected our credentials (stale/expired installation token).
+const AUTH_FAILURE_MARKERS = [
+  "Bad credentials",
+  "Invalid username or token",
+  "Authentication failed",
+  "could not read Username",
+  "401 Unauthorized",
+  "HTTP 401",
+];
+
+function isGitHubAuthFailure(
+  command: string,
+  githubEnv: Record<string, string>,
+  failure: ExecFailure,
+): boolean {
+  if (command !== "git" && command !== "gh") return false;
+  if (Object.keys(githubEnv).length === 0) return false;
+  if (failure.timedOut) return false;
+  const text = `${failure.stderr ?? ""}\n${failure.stdout ?? ""}\n${failure.message ?? ""}`;
+  return AUTH_FAILURE_MARKERS.some((marker) => text.includes(marker));
+}
+
 async function runExecFile(
   command: string,
   args: string[],
@@ -188,6 +210,26 @@ export async function exec(
     return await runExecFile(command, args, authEnv, options);
   } catch (error) {
     const failure = error as ExecFailure;
+    // Self-heal on broken auth: record the failure, proactively re-mint the installation
+    // token, and retry once with a fresh credential before giving up.
+    const repoFullName = options?.githubRepoFullName;
+    if (
+      repoFullName
+      && isGitHubAuthFailure(command, githubEnv, failure)
+      && runtimeGitHubAuthProvider?.refreshTokenForRepo
+    ) {
+      runtimeGitHubAuthProvider.recordAuthFailure?.(repoFullName, (failure.stderr ?? failure.message ?? "").slice(0, 200));
+      try {
+        await runtimeGitHubAuthProvider.refreshTokenForRepo(repoFullName, "github_401");
+        const refreshedGithubEnv = resolveGitHubCommandEnv(command, baseEnv, {
+          githubRepoFullName: repoFullName,
+          runtimeAuthProvider: runtimeGitHubAuthProvider,
+        });
+        return await runExecFile(command, args, { ...baseEnv, ...refreshedGithubEnv }, options);
+      } catch {
+        // Fall through to the original error / workflow-permission fallback below.
+      }
+    }
     if (!shouldRetryWithoutRuntimeGitHubAuth(command, githubEnv, failure)) {
       throw error;
     }

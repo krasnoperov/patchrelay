@@ -41,6 +41,8 @@ export class ServiceRuntime {
   readonly issueQueue: SerialWorkQueue<RuntimeIssueQueueItem>;
   private ready = false;
   private linearConnected = false;
+  private githubAppAuthHealthy = true;
+  private githubAppAuthError: string | undefined;
   private startupError: string | undefined;
   private reconcileTimer: ReturnType<typeof setTimeout> | undefined;
   private reconcileInProgress = false;
@@ -92,11 +94,18 @@ export class ServiceRuntime {
     this.linearConnected = connected;
   }
 
+  setGithubAppAuthHealthy(healthy: boolean, reason?: string): void {
+    this.githubAppAuthHealthy = healthy;
+    this.githubAppAuthError = healthy ? undefined : reason;
+  }
+
   getReadiness() {
     return {
       ready: this.ready && this.codex.isStarted() && this.linearConnected,
       codexStarted: this.codex.isStarted(),
       linearConnected: this.linearConnected,
+      githubAppAuthHealthy: this.githubAppAuthHealthy,
+      ...(this.githubAppAuthError ? { githubAppAuthError: this.githubAppAuthError } : {}),
       ...(this.startupError ? { startupError: this.startupError } : {}),
     };
   }
