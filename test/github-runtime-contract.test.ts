@@ -984,7 +984,7 @@ test("requested changes during an active run are persisted for replay without im
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
-      runType: "main_repair",
+      runType: "implementation",
     });
     db.upsertIssue({
       projectId: issue.projectId,
