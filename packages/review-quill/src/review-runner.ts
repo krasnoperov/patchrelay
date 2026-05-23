@@ -1,5 +1,6 @@
 import type { Logger } from "pino";
 import { CodexAppServerClient } from "./codex-app-server.ts";
+import { buildAgentChildEnv } from "./github-cli-auth.ts";
 import { renderCorrectivePrompt } from "./prompt-builder/index.ts";
 import { extractFirstJsonObject, forgivingJsonParse } from "./utils.ts";
 import type {
@@ -210,7 +211,10 @@ export class ReviewRunner {
     codex?: CodexRunnerClient,
     private readonly sleep: (ms: number) => Promise<void> = delay,
   ) {
-    this.codex = codex ?? new CodexAppServerClient(config.codex, logger.child({ component: "codex" }));
+    // The Codex review agent is long-lived: give it an env without GH_TOKEN/GITHUB_TOKEN
+    // so its git/gh authenticate as the App via the inherited GH_CONFIG_DIR (rotated),
+    // never falling back to the operator's personal credentials.
+    this.codex = codex ?? new CodexAppServerClient(config.codex, logger.child({ component: "codex" }), undefined, () => buildAgentChildEnv());
   }
 
   async start(): Promise<void> {

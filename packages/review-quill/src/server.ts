@@ -7,6 +7,7 @@ import { getDefaultConfigPath, getReviewQuillPathLayout } from "./runtime-paths.
 import { ensureDir } from "./utils.ts";
 import { SqliteStore } from "./db/sqlite-store.ts";
 import { resolveGitHubAuthConfig, createGitHubAppTokenManager, resolveAppSlug, type GitHubAuthRuntimeStatus } from "./github-auth.ts";
+import { applyGitHubCliAuthEnv, getGhConfigDir, resolveGhBin } from "./github-cli-auth.ts";
 import { GitHubClient } from "./github-client.ts";
 import { ReviewRunner } from "./review-runner.ts";
 import { ReviewQuillService } from "./service.ts";
@@ -72,7 +73,13 @@ export async function startServer(configPath = process.env.REVIEW_QUILL_CONFIG ?
     throw new Error("Review Quill requires GitHub App auth. Set REVIEW_QUILL_GITHUB_APP_ID and REVIEW_QUILL_GITHUB_APP_PRIVATE_KEY.");
   }
 
-  const tokenManager = createGitHubAppTokenManager(auth.credentials, config.repositories.map((repo) => repo.repoFullName), logger.child({ component: "github-auth" }));
+  const ghConfigDir = getGhConfigDir(layout.dataDir);
+  const tokenManager = createGitHubAppTokenManager(
+    auth.credentials,
+    config.repositories.map((repo) => repo.repoFullName),
+    logger.child({ component: "github-auth" }),
+    { ghConfigDir },
+  );
   await tokenManager.start();
   let appSlug: string | undefined;
   try {
@@ -80,6 +87,19 @@ export async function startServer(configPath = process.env.REVIEW_QUILL_CONFIG ?
   } catch {
     logger.warn("Could not resolve GitHub App slug for review-quill");
   }
+
+  // Point the review agent's gh + git at the bot config dir (rotated by the token
+  // manager) before the Codex app-server spawns. The agent inherits this process env;
+  // GH_TOKEN/GITHUB_TOKEN are stripped at spawn so it authenticates as review-quill[bot]
+  // and never falls back to the operator's personal credentials.
+  applyGitHubCliAuthEnv(process.env, {
+    ghConfigDir,
+    ghBin: resolveGhBin(),
+    ...(appSlug
+      ? { identity: { name: `${appSlug}[bot]`, email: `${auth.credentials.appId}+${appSlug}[bot]@users.noreply.github.com` } }
+      : {}),
+  });
+  logger.info({ ghConfigDir, botLogin: appSlug ? `${appSlug}[bot]` : undefined }, "Review agent git/gh will authenticate as the GitHub App");
 
   const store = new SqliteStore(config.database.path);
   const github = new GitHubClient({
