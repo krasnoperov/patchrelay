@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { createSign } from "node:crypto";
 import type { Logger } from "pino";
 import { resolveSecretWithSource, type SecretSource } from "./resolve-secret.ts";
+import { writeGhHostsToken } from "./github-cli-auth.ts";
 
 const TOKEN_REFRESH_MS = 30 * 60_000;
 const TOKEN_EXPIRY_MARGIN_MS = 5 * 60_000;
@@ -147,8 +148,10 @@ export function createGitHubAppTokenManager(
   credentials: GitHubAppCredentials,
   repoFullNames: string[],
   logger: Logger,
+  options?: { ghConfigDir?: string },
 ): GitHubAppTokenManager {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let botLogin: string | undefined;
   const repoInstallationIds = new Map<string, string>();
   const installationTokens = new Map<string, {
     token: string;
@@ -265,6 +268,26 @@ export function createGitHubAppTokenManager(
       logger.warn({ error: message }, "Failed to refresh GitHub App installation token");
     } finally {
       escalateIfDegraded();
+      await rotateAgentGhConfig();
+    }
+  }
+
+  // Keep the review agent's gh config dir fresh: the long-lived Codex agent reads this
+  // file on every gh/git call, so each rotation re-mints the bot token it uses.
+  async function rotateAgentGhConfig(): Promise<void> {
+    const ghConfigDir = options?.ghConfigDir;
+    if (!ghConfigDir) return;
+    const token = currentTokenForRepo();
+    if (!token) return;
+    try {
+      if (!botLogin) {
+        const slug = await resolveAppSlug(credentials);
+        botLogin = `${slug}[bot]`;
+      }
+      await writeGhHostsToken(ghConfigDir, token, botLogin);
+      logger.info({ ghConfigDir, botLogin }, "Rotated review agent gh credentials (gh + git authenticate as the App)");
+    } catch (error) {
+      logger.warn({ error: error instanceof Error ? error.message : String(error) }, "Failed to rotate review agent gh config");
     }
   }
 
