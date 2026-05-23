@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ReviewQuillService } from "../src/service.ts";
+import { GitHubApiError } from "../src/github-client.ts";
 import { normalizeVerdict } from "../src/review-runner.ts";
 import { extractFirstJsonObject, forgivingJsonParse, sanitizeJsonPayload } from "../src/utils.ts";
 
@@ -369,6 +370,23 @@ test("discovery passes run in parallel — neither repo blocks the other", async
     order.slice(0, 2).sort(),
     ["enter:krasnoperov/alpha", "enter:krasnoperov/beta"],
   );
+});
+
+test("reconcile outcome is failed when every repo discovery fails with GitHub auth errors", async () => {
+  const service = buildParallelTestService();
+
+  (service as unknown as {
+    discoverRepo: (repo: { repoFullName: string }) => Promise<void>;
+  }).discoverRepo = async () => {
+    throw new GitHubApiError(401, "/repos/owner/repo/pulls", "Bad credentials");
+  };
+
+  await service.triggerReconcile();
+
+  const runtime = service.getWatchSnapshot().runtime;
+  assert.equal(runtime.lastReconcileOutcome, "failed");
+  assert.match(runtime.lastReconcileError ?? "", /Bad credentials/);
+  assert.equal(Object.keys(runtime.repoLastReconcileErrors).length, 2);
 });
 
 test("dispatchReview deduplicates the same (repo, pr, head) — only one execution runs", async () => {

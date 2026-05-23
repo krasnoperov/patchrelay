@@ -36,6 +36,8 @@ export async function startServer(configPath = process.env.REVIEW_QUILL_CONFIG ?
   const store = new SqliteStore(config.database.path);
   const github = new GitHubClient({
     currentTokenForRepo: (repoFullName?: string) => tokenManager.currentTokenForRepo(repoFullName),
+    refreshTokenForRepo: (repoFullName, reason) => tokenManager.refreshTokenForRepo(repoFullName, reason),
+    recordAuthFailure: (repoFullName, message) => tokenManager.recordAuthFailure(repoFullName, message),
   });
   const runner = new ReviewRunner(config, logger.child({ component: "review-runner" }));
   const service = new ReviewQuillService(config, store, github, runner, logger.child({ component: "service" }), appSlug);
@@ -43,15 +45,36 @@ export async function startServer(configPath = process.env.REVIEW_QUILL_CONFIG ?
   const app = fastify({ loggerInstance: logger, disableRequestLogging: true });
   await app.register(rawBody, { runFirst: true });
 
-  app.get("/health", async () => ({
-    ok: true,
-    service: "review-quill",
-    repos: config.repositories.map((repo) => repo.repoFullName),
-  }));
+  app.get("/health", async () => {
+    const authStatus = tokenManager.authStatus();
+    const runtime = service.getRuntimeStatus();
+    const status = !authStatus.ready || runtime.lastReconcileOutcome === "failed"
+      ? "failed"
+      : runtime.lastReconcileOutcome === "degraded" || authStatus.lastRefreshError || authStatus.recentAuthFailureCount > 0
+        ? "degraded"
+        : "ok";
+    return {
+      ok: status === "ok",
+      status,
+      service: "review-quill",
+      repos: config.repositories.map((repo) => repo.repoFullName),
+      auth: {
+        ready: authStatus.ready,
+        lastRefreshAt: authStatus.lastRefreshAt,
+        lastRefreshError: authStatus.lastRefreshError,
+        recentAuthFailureCount: authStatus.recentAuthFailureCount,
+        lastAuthFailureAt: authStatus.lastAuthFailureAt,
+      },
+      runtime: {
+        lastReconcileOutcome: runtime.lastReconcileOutcome,
+        lastReconcileError: runtime.lastReconcileError,
+      },
+    };
+  });
 
   app.get("/admin/runtime/auth", async () => ({
     mode: auth.mode,
-    ready: true,
+    ...tokenManager.authStatus(),
     appId: auth.credentials.appId,
     installationMode: auth.credentials.installationId ? "pinned" : "per_repo",
     appSlug,

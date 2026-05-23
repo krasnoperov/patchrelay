@@ -9,6 +9,8 @@ import type {
 
 export interface GitHubClientAuthProvider {
   currentTokenForRepo(repoFullName?: string): string | undefined;
+  refreshTokenForRepo?(repoFullName: string, reason: "before_use" | "github_401"): Promise<void>;
+  recordAuthFailure?(repoFullName: string, message: string): void;
 }
 
 function githubHeaders(token: string): Record<string, string> {
@@ -175,6 +177,21 @@ function normalizePullRequestLabels(pr: Record<string, unknown>): string[] {
     .filter((name) => name.length > 0);
 }
 
+export class GitHubApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly path: string,
+    public readonly bodySummary: string,
+  ) {
+    super(`GitHub API ${status} for ${path}: ${bodySummary}`);
+    this.name = "GitHubApiError";
+  }
+}
+
+export function isGitHubAuthError(error: unknown): boolean {
+  return error instanceof GitHubApiError && error.status === 401;
+}
+
 export class GitHubClient {
   constructor(private readonly auth: GitHubClientAuthProvider) {}
 
@@ -182,27 +199,37 @@ export class GitHubClient {
     return this.auth.currentTokenForRepo(repoFullName);
   }
 
-  private async request<T>(repoFullName: string, path: string, init: RequestInit = {}): Promise<T> {
-    const token = this.currentTokenForRepo(repoFullName);
+  private async tokenForRequest(repoFullName: string): Promise<string> {
+    let token = this.currentTokenForRepo(repoFullName);
+    if (!token && this.auth.refreshTokenForRepo) {
+      await this.auth.refreshTokenForRepo(repoFullName, "before_use");
+      token = this.currentTokenForRepo(repoFullName);
+    }
     if (!token) throw new Error(`No GitHub installation token available for ${repoFullName}`);
+    return token;
+  }
 
+  private async request<T>(repoFullName: string, path: string, init: RequestInit = {}): Promise<T> {
     const method = (init.method ?? "GET").toUpperCase();
     const url = `https://api.github.com${path}`;
-    const fetchInit: RequestInit = {
-      ...init,
-      method,
-      headers: {
-        ...githubHeaders(token),
-        ...(init.headers ? init.headers as Record<string, string> : {}),
-      },
-    };
 
     let lastError: Error | undefined;
+    let retriedAfterAuthRefresh = false;
     const maxAttempts = isIdempotentMethod(method)
       ? HTTP_IDEMPOTENT_RETRY_MAX_ATTEMPTS
       : HTTP_NON_IDEMPOTENT_NETWORK_RETRY_MAX_ATTEMPTS;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const token = await this.tokenForRequest(repoFullName);
+      const fetchInit: RequestInit = {
+        ...init,
+        method,
+        headers: {
+          ...githubHeaders(token),
+          ...(init.headers ? init.headers as Record<string, string> : {}),
+        },
+      };
+
       // Try the request.
       let response: Response;
       try {
@@ -226,8 +253,17 @@ export class GitHubClient {
       // single-use) and decide whether to retry.
       const body = await response.text();
       const bodySummary = summarizeErrorBody(body, response.headers.get("content-type"));
-      const httpError = new Error(`GitHub API ${response.status} for ${path}: ${bodySummary}`);
+      const httpError = new GitHubApiError(response.status, path, bodySummary);
       lastError = httpError;
+
+      if (response.status === 401) {
+        this.auth.recordAuthFailure?.(repoFullName, bodySummary);
+        if (!retriedAfterAuthRefresh && this.auth.refreshTokenForRepo) {
+          retriedAfterAuthRefresh = true;
+          await this.auth.refreshTokenForRepo(repoFullName, "github_401");
+          continue;
+        }
+      }
 
       const retryable = isRetryableStatus(response.status) && isIdempotentMethod(method);
       if (!retryable || attempt >= maxAttempts) {

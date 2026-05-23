@@ -353,7 +353,7 @@ export interface ReviewQuillRuntimeStatus {
    * a long-running discovery doesn't block a new one from starting.
    */
   lastReconcileCompletedAt: string | null;
-  lastReconcileOutcome: "idle" | "running" | "succeeded" | "failed";
+  lastReconcileOutcome: "idle" | "running" | "succeeded" | "degraded" | "failed";
   lastReconcileError: string | null;
   /**
    * Number of review executions currently in flight. Bounded by
@@ -366,6 +366,11 @@ export interface ReviewQuillRuntimeStatus {
    * at least once. Surfaced so operators can spot stalled discovery.
    */
   repoLastReconciledAt: Record<string, string>;
+  /**
+   * Most recent discovery failure per repo. Entries are cleared after a
+   * successful discovery for that repo.
+   */
+  repoLastReconcileErrors: Record<string, string>;
 }
 
 export interface ReviewQuillRepoSummary {

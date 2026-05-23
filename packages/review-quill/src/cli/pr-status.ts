@@ -293,6 +293,8 @@ async function loadFailureDetailsFromGitHub(params: {
   try {
     const github = new GitHubClient({
       currentTokenForRepo: (repoFullName?: string) => tokenManager.currentTokenForRepo(repoFullName),
+      refreshTokenForRepo: (repoFullName, reason) => tokenManager.refreshTokenForRepo(repoFullName, reason),
+      recordAuthFailure: (repoFullName, message) => tokenManager.recordAuthFailure(repoFullName, message),
     });
     const [reviews, comments, checks] = await Promise.all([
       github.listPullRequestReviews(params.repoFullName, params.prNumber),
@@ -342,6 +344,8 @@ async function loadCurrentHeadShaFromGitHub(params: {
       await tokenManager.start();
       const github = new GitHubClient({
         currentTokenForRepo: (repoFullName?: string) => tokenManager.currentTokenForRepo(repoFullName),
+        refreshTokenForRepo: (repoFullName, reason) => tokenManager.refreshTokenForRepo(repoFullName, reason),
+        recordAuthFailure: (repoFullName, message) => tokenManager.recordAuthFailure(repoFullName, message),
       });
       const pr = await github.getPullRequest(params.repoFullName, params.prNumber);
       const headSha = pr.headSha.trim();

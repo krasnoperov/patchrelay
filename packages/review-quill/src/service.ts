@@ -67,6 +67,7 @@ export class ReviewQuillService {
     lastReconcileError: null,
     inFlightReviews: 0,
     repoLastReconciledAt: {},
+    repoLastReconcileErrors: {},
   };
 
   constructor(
@@ -163,6 +164,14 @@ export class ReviewQuillService {
     };
   }
 
+  getRuntimeStatus(): ReviewQuillRuntimeStatus {
+    return {
+      ...this.runtime,
+      repoLastReconciledAt: { ...this.runtime.repoLastReconciledAt },
+      repoLastReconcileErrors: { ...this.runtime.repoLastReconcileErrors },
+    };
+  }
+
   private setPendingReviews(repoId: string, pending: ReviewQuillPendingReview[]): void {
     this.pendingReviewsByRepo.set(repoId, pending);
   }
@@ -219,29 +228,49 @@ export class ReviewQuillService {
     this.runtime.lastReconcileStartedAt = new Date().toISOString();
     this.runtime.lastReconcileOutcome = "running";
     this.runtime.lastReconcileError = null;
-    try {
-      // Discover all repos in parallel. Discovery is read-only and cheap —
-      // GitHub list + DB lookups + carry-forward identity math. Heavy work
-      // (Codex turn) is dispatched as a fire-and-forget worker that runs
-      // outside the discovery pass, gated by `acquireReviewSlot()`.
-      await Promise.all(
-        this.config.repositories.map((repo) =>
-          this.discoverRepo(repo).catch((error: unknown) => {
-            this.logger.error({
-              repo: repo.repoFullName,
-              err: error instanceof Error ? error.message : String(error),
-            }, "discoverRepo failed");
-          }),
-        ),
-      );
-      this.prunePendingReviews(this.config.repositories.map((repo) => repo.repoId));
-      this.runtime.lastReconcileCompletedAt = new Date().toISOString();
+    // Discover all repos in parallel. Discovery is read-only and cheap —
+    // GitHub list + DB lookups + carry-forward identity math. Heavy work
+    // (Codex turn) is dispatched as a fire-and-forget worker that runs
+    // outside the discovery pass, gated by `acquireReviewSlot()`.
+    const results = await Promise.all(
+      this.config.repositories.map(async (repo) => {
+        try {
+          await this.discoverRepo(repo);
+          delete this.runtime.repoLastReconcileErrors[repo.repoFullName];
+          return { repo, ok: true as const };
+        } catch (error: unknown) {
+          const message = error instanceof Error ? error.message : String(error);
+          this.runtime.repoLastReconcileErrors[repo.repoFullName] = message;
+          this.logger.error({
+            repo: repo.repoFullName,
+            err: message,
+          }, "discoverRepo failed");
+          return {
+            repo,
+            ok: false as const,
+            error: message,
+          };
+        }
+      }),
+    );
+    this.prunePendingReviews(this.config.repositories.map((repo) => repo.repoId));
+    this.runtime.lastReconcileCompletedAt = new Date().toISOString();
+
+    const failures = results.filter((result) => !result.ok);
+    if (failures.length === 0) {
       this.runtime.lastReconcileOutcome = "succeeded";
-    } catch (error) {
-      this.runtime.lastReconcileCompletedAt = new Date().toISOString();
+      this.runtime.lastReconcileError = null;
+      return;
+    }
+
+    const summary = failures
+      .map((failure) => `${failure.repo.repoFullName}: ${failure.error}`)
+      .join("; ");
+    this.runtime.lastReconcileError = summary;
+    if (failures.length === results.length) {
       this.runtime.lastReconcileOutcome = "failed";
-      this.runtime.lastReconcileError = error instanceof Error ? error.message : String(error);
-      throw error;
+    } else {
+      this.runtime.lastReconcileOutcome = "degraded";
     }
   }
 
@@ -369,6 +398,7 @@ export class ReviewQuillService {
 
     this.setPendingReviews(repo.repoId, pendingForRepo);
     this.runtime.repoLastReconciledAt[repo.repoFullName] = new Date().toISOString();
+    delete this.runtime.repoLastReconcileErrors[repo.repoFullName];
   }
 
   private decorateAttempt(attempt: ReviewAttemptRecord): ReviewAttemptRecord {

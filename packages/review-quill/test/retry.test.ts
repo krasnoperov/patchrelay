@@ -15,13 +15,15 @@ interface PlannedResponse {
 }
 
 class FetchStub {
-  public calls: Array<{ url: string; method: string }> = [];
+  public calls: Array<{ url: string; method: string; authorization?: string }> = [];
   constructor(private readonly plan: PlannedResponse[]) {}
 
   handler = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const method = (init?.method ?? "GET").toUpperCase();
-    this.calls.push({ url, method });
+    const headers = new Headers(init?.headers);
+    const authorization = headers.get("authorization") ?? undefined;
+    this.calls.push({ url, method, ...(authorization ? { authorization } : {}) });
     const next = this.plan.shift();
     if (!next) {
       throw new Error(`FetchStub ran out of planned responses at call #${this.calls.length} (${method} ${url})`);
@@ -48,8 +50,8 @@ async function withFetchStub<T>(stub: FetchStub, fn: () => Promise<T>): Promise<
   }
 }
 
-function makeClient(): GitHubClient {
-  return new GitHubClient({ currentTokenForRepo: () => "fake-token" });
+function makeClient(auth?: ConstructorParameters<typeof GitHubClient>[0]): GitHubClient {
+  return new GitHubClient(auth ?? { currentTokenForRepo: () => "fake-token" });
 }
 
 // ---- HTTP retry layer tests --------------------------------------------
@@ -67,6 +69,85 @@ test("GitHubClient retries a GET on 503 and succeeds on the second attempt", asy
     assert.equal(stub.calls[0]?.method, "GET");
     assert.equal(stub.calls[1]?.method, "GET");
   });
+});
+
+test("GitHubClient refreshes the repo token and retries once after a 401", async () => {
+  const stub = new FetchStub([
+    { kind: "error", status: 401, body: JSON.stringify({ message: "Bad credentials" }) },
+    { kind: "ok", status: 200, body: "[]" },
+  ]);
+  let token = "stale-token";
+  const refreshes: string[] = [];
+  const authFailures: string[] = [];
+  await withFetchStub(stub, async () => {
+    const client = makeClient({
+      currentTokenForRepo: () => token,
+      refreshTokenForRepo: async (_repoFullName, reason) => {
+        refreshes.push(reason);
+        token = "fresh-token";
+      },
+      recordAuthFailure: (_repoFullName, message) => authFailures.push(message),
+    });
+    const result = await client.listOpenPullRequests("owner/repo");
+    assert.deepEqual(result, []);
+  });
+
+  assert.deepEqual(refreshes, ["github_401"]);
+  assert.equal(stub.calls.length, 2);
+  assert.equal(stub.calls[0]?.authorization, "Bearer stale-token");
+  assert.equal(stub.calls[1]?.authorization, "Bearer fresh-token");
+  assert.equal(authFailures.length, 1);
+  assert.match(authFailures[0] ?? "", /Bad credentials/);
+});
+
+test("GitHubClient refreshes before use when no usable token is cached", async () => {
+  const stub = new FetchStub([
+    { kind: "ok", status: 200, body: "[]" },
+  ]);
+  let token: string | undefined;
+  const refreshes: string[] = [];
+  await withFetchStub(stub, async () => {
+    const client = makeClient({
+      currentTokenForRepo: () => token,
+      refreshTokenForRepo: async (_repoFullName, reason) => {
+        refreshes.push(reason);
+        token = "fresh-token";
+      },
+    });
+    const result = await client.listOpenPullRequests("owner/repo");
+    assert.deepEqual(result, []);
+  });
+
+  assert.deepEqual(refreshes, ["before_use"]);
+  assert.equal(stub.calls.length, 1);
+  assert.equal(stub.calls[0]?.authorization, "Bearer fresh-token");
+});
+
+test("GitHubClient does not loop forever when the retry after 401 also fails", async () => {
+  const stub = new FetchStub([
+    { kind: "error", status: 401, body: JSON.stringify({ message: "Bad credentials" }) },
+    { kind: "error", status: 401, body: JSON.stringify({ message: "Bad credentials" }) },
+  ]);
+  let token = "stale-token";
+  let refreshCount = 0;
+  await withFetchStub(stub, async () => {
+    const client = makeClient({
+      currentTokenForRepo: () => token,
+      refreshTokenForRepo: async () => {
+        refreshCount += 1;
+        token = "still-bad-token";
+      },
+    });
+    await assert.rejects(
+      client.listOpenPullRequests("owner/repo"),
+      /GitHub API 401.*Bad credentials/,
+    );
+  });
+
+  assert.equal(refreshCount, 1);
+  assert.equal(stub.calls.length, 2);
+  assert.equal(stub.calls[0]?.authorization, "Bearer stale-token");
+  assert.equal(stub.calls[1]?.authorization, "Bearer still-bad-token");
 });
 
 test("GitHubClient retries a GET up to 5 attempts and throws the last error", async () => {
