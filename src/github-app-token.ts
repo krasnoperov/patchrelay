@@ -191,6 +191,12 @@ export function createGitHubAppTokenManager(
 
       const { token, expiresAt } = await fetchInstallationToken(jwt, resolvedInstallationId);
       await writeGhHostsToken(ghConfigDir, token, resolvedBotIdentity.name);
+      // Keep the daemon's own env token fresh for in-process consumers that read it
+      // directly (webhook API helpers). This is the daemon's process env only — never a
+      // repo/global git config — and is stripped from the long-lived Codex child, which
+      // reads the rotated hosts.yml via GH_CONFIG_DIR instead.
+      process.env.GH_TOKEN = token;
+      process.env.GITHUB_TOKEN = token;
       cachedToken = token;
       expiresAtMs = expiresAt ? Date.parse(expiresAt) : undefined;
       lastRefreshAt = new Date().toISOString();

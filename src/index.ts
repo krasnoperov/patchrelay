@@ -12,6 +12,7 @@ async function main(): Promise<void> {
 
   const [
     { CodexAppServerClient },
+    { buildAgentChildEnv },
     { getAdjacentEnvFilePaths, loadConfig },
     { PatchRelayDatabase },
     { enforceRuntimeFilePermissions, enforceServiceEnvPermissions },
@@ -23,6 +24,7 @@ async function main(): Promise<void> {
     { ensureDir },
   ] = await Promise.all([
     import("./codex-app-server.ts"),
+    import("./github-cli-auth.ts"),
     import("./config.ts"),
     import("./db.ts"),
     import("./file-permissions.ts"),
@@ -56,7 +58,10 @@ async function main(): Promise<void> {
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
   db.runMigrations();
 
-  const codex = new CodexAppServerClient(config.runner.codex, logger);
+  // The Codex app-server is long-lived: give it an env without GH_TOKEN/GITHUB_TOKEN so the
+  // agent's git/gh resolve credentials via the inherited GH_CONFIG_DIR (rotated hosts.yml)
+  // rather than a token frozen at spawn.
+  const codex = new CodexAppServerClient(config.runner.codex, logger, undefined, () => buildAgentChildEnv());
   const linearProvider = new DatabaseBackedLinearClientProvider(config, db, logger);
   const service = new PatchRelayService(config, db, codex, linearProvider, logger, configPath);
   await service.start();

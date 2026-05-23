@@ -65,16 +65,18 @@ export async function writeGhHostsToken(
  *   helper first clears any inherited/global helper, then ours is appended).
  * - `GIT_AUTHOR_*`/`GIT_COMMITTER_*` attribute commits to the bot without writing
  *   `user.name` into any repo config.
- * - `GH_TOKEN`/`GITHUB_TOKEN` are returned as `undefined` (to be deleted): they take
- *   precedence over `GH_CONFIG_DIR` and would freeze a stale token on a long-lived
- *   process.
+ *
+ * Note on token env vars: the daemon keeps `GH_TOKEN`/`GITHUB_TOKEN` fresh (rotated each
+ * cycle) for in-process consumers that read them directly. They are stripped only when
+ * spawning a long-lived child (see {@link buildAgentChildEnv}) — there they would take
+ * precedence over `GH_CONFIG_DIR` and freeze a stale token captured at spawn.
  */
 export function buildGitHubCliAuthEnv(opts: {
   ghConfigDir: string;
   ghBin: string;
   identity?: GitHubBotIdentity;
-}): Record<string, string | undefined> {
-  const env: Record<string, string | undefined> = {
+}): Record<string, string> {
+  const env: Record<string, string> = {
     GH_CONFIG_DIR: opts.ghConfigDir,
     GIT_TERMINAL_PROMPT: "0",
     GIT_CONFIG_COUNT: "2",
@@ -82,8 +84,6 @@ export function buildGitHubCliAuthEnv(opts: {
     GIT_CONFIG_VALUE_0: "",
     GIT_CONFIG_KEY_1: `credential.https://${GITHUB_HOST}.helper`,
     GIT_CONFIG_VALUE_1: `!${opts.ghBin} auth git-credential`,
-    GH_TOKEN: undefined,
-    GITHUB_TOKEN: undefined,
   };
   if (opts.identity) {
     env.GIT_AUTHOR_NAME = opts.identity.name;
@@ -94,19 +94,23 @@ export function buildGitHubCliAuthEnv(opts: {
   return env;
 }
 
-/**
- * Apply {@link buildGitHubCliAuthEnv} onto a process env object in place, deleting the
- * overriding `GH_TOKEN`/`GITHUB_TOKEN` so the rotated config dir is authoritative.
- */
+/** Apply {@link buildGitHubCliAuthEnv} onto a process env object in place. */
 export function applyGitHubCliAuthEnv(
   target: NodeJS.ProcessEnv,
   opts: { ghConfigDir: string; ghBin: string; identity?: GitHubBotIdentity },
 ): void {
-  for (const [key, value] of Object.entries(buildGitHubCliAuthEnv(opts))) {
-    if (value === undefined) {
-      delete target[key];
-    } else {
-      target[key] = value;
-    }
-  }
+  Object.assign(target, buildGitHubCliAuthEnv(opts));
+}
+
+/**
+ * Build the environment for a long-lived child process (e.g. the Codex app-server).
+ * `GH_TOKEN`/`GITHUB_TOKEN` are stripped so the child resolves credentials through the
+ * inherited `GH_CONFIG_DIR` (re-read fresh on each call) instead of a token frozen at
+ * spawn. The child still inherits the `gh` credential helper and bot identity.
+ */
+export function buildAgentChildEnv(parentEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env = { ...parentEnv };
+  delete env.GH_TOKEN;
+  delete env.GITHUB_TOKEN;
+  return env;
 }

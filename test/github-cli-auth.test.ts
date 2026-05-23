@@ -6,6 +6,7 @@ import path from "node:path";
 import { test } from "node:test";
 import {
   applyGitHubCliAuthEnv,
+  buildAgentChildEnv,
   buildGitHubCliAuthEnv,
   getGhConfigDir,
   resolveGhBin,
@@ -28,7 +29,7 @@ function runGitCredentialFill(env: NodeJS.ProcessEnv, input: string): Promise<st
   });
 }
 
-test("buildGitHubCliAuthEnv points gh at the config dir and routes git through gh, clearing token vars", () => {
+test("buildGitHubCliAuthEnv points gh at the config dir and routes git through gh", () => {
   const env = buildGitHubCliAuthEnv({ ghConfigDir: "/data/gh-bot", ghBin: "/usr/bin/gh", identity: { name: "patchrelay[bot]", email: "1+patchrelay[bot]@users.noreply.github.com" } });
   assert.equal(env.GH_CONFIG_DIR, "/data/gh-bot");
   assert.equal(env.GIT_TERMINAL_PROMPT, "0");
@@ -37,20 +38,20 @@ test("buildGitHubCliAuthEnv points gh at the config dir and routes git through g
   assert.equal(env.GIT_CONFIG_VALUE_0, "");
   assert.equal(env.GIT_CONFIG_KEY_1, "credential.https://github.com.helper");
   assert.equal(env.GIT_CONFIG_VALUE_1, "!/usr/bin/gh auth git-credential");
-  // a stale env token would override GH_CONFIG_DIR, so it must be cleared
-  assert.equal(env.GH_TOKEN, undefined);
-  assert.equal(env.GITHUB_TOKEN, undefined);
   assert.equal(env.GIT_AUTHOR_NAME, "patchrelay[bot]");
   assert.equal(env.GIT_COMMITTER_EMAIL, "1+patchrelay[bot]@users.noreply.github.com");
 });
 
-test("applyGitHubCliAuthEnv deletes overriding GH_TOKEN/GITHUB_TOKEN from the target env", () => {
-  const target: NodeJS.ProcessEnv = { GH_TOKEN: "stale", GITHUB_TOKEN: "stale", PATH: "/usr/bin" };
-  applyGitHubCliAuthEnv(target, { ghConfigDir: "/data/gh-bot", ghBin: "gh" });
-  assert.equal(target.GH_TOKEN, undefined);
-  assert.equal(target.GITHUB_TOKEN, undefined);
-  assert.equal(target.GH_CONFIG_DIR, "/data/gh-bot");
-  assert.equal(target.PATH, "/usr/bin");
+test("buildAgentChildEnv strips GH_TOKEN/GITHUB_TOKEN so the long-lived child uses GH_CONFIG_DIR", () => {
+  const parent: NodeJS.ProcessEnv = { GH_TOKEN: "stale", GITHUB_TOKEN: "stale", GH_CONFIG_DIR: "/data/gh-bot", PATH: "/usr/bin" };
+  const child = buildAgentChildEnv(parent);
+  assert.equal(child.GH_TOKEN, undefined);
+  assert.equal(child.GITHUB_TOKEN, undefined);
+  // the rotated config dir and the rest of the env are preserved
+  assert.equal(child.GH_CONFIG_DIR, "/data/gh-bot");
+  assert.equal(child.PATH, "/usr/bin");
+  // does not mutate the parent (daemon keeps its fresh token)
+  assert.equal(parent.GH_TOKEN, "stale");
 });
 
 test("writeGhHostsToken writes a 0600 hosts.yml gh can read", async () => {
@@ -79,11 +80,12 @@ test("git reads the rotated token from gh via the injected credential helper", {
   try {
     const ghConfigDir = getGhConfigDir(dir);
     await writeGhHostsToken(ghConfigDir, "ghs_rotatedtoken123", "patchrelay[bot]");
-    const env: NodeJS.ProcessEnv = { ...process.env, HOME: dir };
-    delete env.GH_TOKEN;
-    delete env.GITHUB_TOKEN;
-    applyGitHubCliAuthEnv(env, { ghConfigDir, ghBin });
-    const stdout = await runGitCredentialFill(env, "protocol=https\nhost=github.com\n\n");
+    const daemonEnv: NodeJS.ProcessEnv = { ...process.env, HOME: dir };
+    applyGitHubCliAuthEnv(daemonEnv, { ghConfigDir, ghBin });
+    // The agent runs with the child env (token vars stripped) and must still resolve the
+    // rotated token via GH_CONFIG_DIR.
+    const childEnv = buildAgentChildEnv(daemonEnv);
+    const stdout = await runGitCredentialFill(childEnv, "protocol=https\nhost=github.com\n\n");
     assert.match(stdout, /username=patchrelay\[bot\]/);
     assert.match(stdout, /password=ghs_rotatedtoken123/);
   } finally {
