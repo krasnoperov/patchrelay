@@ -95,7 +95,6 @@ Cluster-health (`patchrelay cluster-health`) and the queue-health monitor surfac
 Other "PR is in this Linear state — but why isn't progression happening right now?" conditions are surfaced today on the merge-steward dashboard rather than as cluster-health alerts:
 
 - **In Deploy · retry-gated** — integration conflict; the steward is waiting for `main` to advance before retrying. See `merge-steward queue show --pr <num>`.
-- **In Deploy · queue paused (main unhealthy)** — `main`'s own CI is failing; the queue holds. See `merge-steward queue status --repo <id>`.
 - **In Deploy · queue paused (operator hold)** — explicit pause on the project, queue, or single PR.
 - **In Deploy · dequeued** — operator pulled the issue from the queue mid-flight.
 

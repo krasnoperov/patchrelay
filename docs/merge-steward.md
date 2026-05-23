@@ -180,7 +180,7 @@ The head entry's spec is `main + A`. The second entry's spec is `main + A + B`, 
 
 ### Step 1 — build the speculative branch
 
-When an entry becomes the head and `main` is healthy (required checks green, no retry gate), the steward builds its speculative branch in an **isolated worktree** so it never touches the main clone's working tree.
+When an entry becomes the head (no retry gate), the steward builds its speculative branch in an **isolated worktree** so it never touches the main clone's working tree. `main`'s own CI status is **not** a gate: the queue advances solely on the speculative SHA's checks. A red `main` neither pauses the queue nor delays the next landing — `main` CI is information-only (an out-of-band breakage canary), because the speculative SHA the steward validates *is* the exact tree that becomes `main`.
 
 ```bash
 # 1. Refresh remote refs
