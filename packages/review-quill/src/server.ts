@@ -6,11 +6,59 @@ import { loadConfig } from "./config.ts";
 import { getDefaultConfigPath, getReviewQuillPathLayout } from "./runtime-paths.ts";
 import { ensureDir } from "./utils.ts";
 import { SqliteStore } from "./db/sqlite-store.ts";
-import { resolveGitHubAuthConfig, createGitHubAppTokenManager, resolveAppSlug } from "./github-auth.ts";
+import { resolveGitHubAuthConfig, createGitHubAppTokenManager, resolveAppSlug, type GitHubAuthRuntimeStatus } from "./github-auth.ts";
 import { GitHubClient } from "./github-client.ts";
 import { ReviewRunner } from "./review-runner.ts";
 import { ReviewQuillService } from "./service.ts";
+import type { ReviewQuillRuntimeStatus } from "./types.ts";
 import { normalizeWebhook, shouldReconcileWebhook, verifySignature } from "./webhook-handler.ts";
+
+export interface ReviewQuillHealth {
+  ok: boolean;
+  status: "ok" | "degraded" | "failed";
+  service: "review-quill";
+  repos: string[];
+  auth: {
+    ready: boolean;
+    lastRefreshAt: string | null;
+    lastRefreshError: string | null;
+    recentAuthFailureCount: number;
+    lastAuthFailureAt: string | null;
+  };
+  runtime: {
+    lastReconcileOutcome: ReviewQuillRuntimeStatus["lastReconcileOutcome"];
+    lastReconcileError: string | null;
+  };
+}
+
+export function buildReviewQuillHealth(params: {
+  repos: string[];
+  authStatus: GitHubAuthRuntimeStatus;
+  runtime: ReviewQuillRuntimeStatus;
+}): ReviewQuillHealth {
+  const status = !params.authStatus.ready || params.runtime.lastReconcileOutcome === "failed"
+    ? "failed"
+    : params.runtime.lastReconcileOutcome === "degraded"
+      ? "degraded"
+      : "ok";
+  return {
+    ok: status === "ok",
+    status,
+    service: "review-quill",
+    repos: params.repos,
+    auth: {
+      ready: params.authStatus.ready,
+      lastRefreshAt: params.authStatus.lastRefreshAt,
+      lastRefreshError: params.authStatus.lastRefreshError,
+      recentAuthFailureCount: params.authStatus.recentAuthFailureCount,
+      lastAuthFailureAt: params.authStatus.lastAuthFailureAt,
+    },
+    runtime: {
+      lastReconcileOutcome: params.runtime.lastReconcileOutcome,
+      lastReconcileError: params.runtime.lastReconcileError,
+    },
+  };
+}
 
 export async function startServer(configPath = process.env.REVIEW_QUILL_CONFIG ?? getDefaultConfigPath()): Promise<void> {
   const layout = getReviewQuillPathLayout();
@@ -46,30 +94,11 @@ export async function startServer(configPath = process.env.REVIEW_QUILL_CONFIG ?
   await app.register(rawBody, { runFirst: true });
 
   app.get("/health", async () => {
-    const authStatus = tokenManager.authStatus();
-    const runtime = service.getRuntimeStatus();
-    const status = !authStatus.ready || runtime.lastReconcileOutcome === "failed"
-      ? "failed"
-      : runtime.lastReconcileOutcome === "degraded" || authStatus.lastRefreshError || authStatus.recentAuthFailureCount > 0
-        ? "degraded"
-        : "ok";
-    return {
-      ok: status === "ok",
-      status,
-      service: "review-quill",
+    return buildReviewQuillHealth({
       repos: config.repositories.map((repo) => repo.repoFullName),
-      auth: {
-        ready: authStatus.ready,
-        lastRefreshAt: authStatus.lastRefreshAt,
-        lastRefreshError: authStatus.lastRefreshError,
-        recentAuthFailureCount: authStatus.recentAuthFailureCount,
-        lastAuthFailureAt: authStatus.lastAuthFailureAt,
-      },
-      runtime: {
-        lastReconcileOutcome: runtime.lastReconcileOutcome,
-        lastReconcileError: runtime.lastReconcileError,
-      },
-    };
+      authStatus: tokenManager.authStatus(),
+      runtime: service.getRuntimeStatus(),
+    });
   });
 
   app.get("/admin/runtime/auth", async () => ({
