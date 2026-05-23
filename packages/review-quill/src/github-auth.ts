@@ -214,12 +214,29 @@ export function createGitHubAppTokenManager(
     return installationId;
   }
 
-  async function refreshInstallation(installationId: string, jwt: string): Promise<void> {
-    recordRefreshSuccess(installationId, await fetchInstallationToken(jwt, installationId));
+  async function refreshInstallation(installationId: string, jwt: string, reason: GitHubAuthRefreshReason): Promise<void> {
+    const token = await fetchInstallationToken(jwt, installationId);
+    recordRefreshSuccess(installationId, token);
+    // Transparency: every rotation is logged so operators can watch gh/git auth stay fresh.
+    logger.info(
+      { installationId, expiresAt: token.expiresAt ?? null, reason },
+      "Rotated GitHub App installation token",
+    );
   }
 
-  async function refresh(options?: { throwOnError?: boolean }): Promise<void> {
+  function escalateIfDegraded(): void {
+    const status = authStatus();
+    if (!status.ready) {
+      logger.error(
+        { lastRefreshError: status.lastRefreshError, installations: status.installations },
+        "GitHub App auth is degraded — git/gh operations will fail until a fresh token is minted",
+      );
+    }
+  }
+
+  async function refresh(options?: { throwOnError?: boolean; reason?: GitHubAuthRefreshReason }): Promise<void> {
     const throwOnError = options?.throwOnError ?? false;
+    const reason = options?.reason ?? "scheduled";
     try {
       const jwt = generateJwt(credentials.appId, credentials.privateKey);
       const installationIds = new Set<string>();
@@ -233,7 +250,7 @@ export function createGitHubAppTokenManager(
 
       for (const installationId of unique(installationIds)) {
         try {
-          await refreshInstallation(installationId, jwt);
+          await refreshInstallation(installationId, jwt, reason);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           recordRefreshFailure(installationId, message);
@@ -246,6 +263,8 @@ export function createGitHubAppTokenManager(
       recordRefreshFailure(undefined, message);
       if (throwOnError) throw new Error(`Failed to initialize GitHub App auth: ${message}`);
       logger.warn({ error: message }, "Failed to refresh GitHub App installation token");
+    } finally {
+      escalateIfDegraded();
     }
   }
 
@@ -254,8 +273,7 @@ export function createGitHubAppTokenManager(
     let installationId: string | undefined;
     try {
       installationId = await resolveInstallationForRepo(jwt, repoFullName);
-      await refreshInstallation(installationId, jwt);
-      logger.info({ repoFullName, installationId, reason }, "Refreshed GitHub App installation token");
+      await refreshInstallation(installationId, jwt, reason);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       recordRefreshFailure(installationId, message);
@@ -294,9 +312,45 @@ export function createGitHubAppTokenManager(
     return isTokenFresh(token) ? token.token : undefined;
   }
 
+  function authStatus(): GitHubAuthRuntimeStatus {
+    const installationIds = unique([
+      ...installationTokens.keys(),
+      ...installationRefreshErrors.keys(),
+      ...(credentials.installationId ? [credentials.installationId] : []),
+      ...repoFullNames.flatMap((repoFullName) => {
+        const installationId = repoInstallationIds.get(repoFullName);
+        return installationId ? [installationId] : [];
+      }),
+    ]);
+    const installations = installationIds.map((installationId) => {
+      const token = installationTokens.get(installationId);
+      const refreshError = token?.lastRefreshError ?? installationRefreshErrors.get(installationId) ?? null;
+      return {
+        installationId,
+        repoFullNames: reposForInstallation(installationId),
+        hasToken: Boolean(token),
+        expiresAt: token?.expiresAt ?? null,
+        lastRefreshAt: token?.lastRefreshAt ?? null,
+        lastRefreshError: refreshError,
+        fresh: isTokenFresh(token) && !refreshError,
+      };
+    });
+    const failures = recentAuthFailures();
+    const missingRepoToken = repoFullNames.some((repoFullName) => !currentTokenForRepo(repoFullName));
+    const tokenRefreshFailing = installations.some((installation) => installation.lastRefreshError !== null && !installation.fresh);
+    return {
+      ready: !missingRepoToken && !tokenRefreshFailing,
+      lastRefreshAt,
+      lastRefreshError,
+      recentAuthFailureCount: failures.length,
+      lastAuthFailureAt: failures.at(-1)?.at ?? null,
+      installations,
+    };
+  }
+
   return {
     async start() {
-      await refresh({ throwOnError: true });
+      await refresh({ throwOnError: true, reason: "startup" });
       schedule();
     },
     stop() {
@@ -313,40 +367,6 @@ export function createGitHubAppTokenManager(
         authFailures.splice(0, authFailures.length - MAX_AUTH_FAILURES_TO_KEEP);
       }
     },
-    authStatus() {
-      const installationIds = unique([
-        ...installationTokens.keys(),
-        ...installationRefreshErrors.keys(),
-        ...(credentials.installationId ? [credentials.installationId] : []),
-        ...repoFullNames.flatMap((repoFullName) => {
-          const installationId = repoInstallationIds.get(repoFullName);
-          return installationId ? [installationId] : [];
-        }),
-      ]);
-      const installations = installationIds.map((installationId) => {
-        const token = installationTokens.get(installationId);
-        const refreshError = token?.lastRefreshError ?? installationRefreshErrors.get(installationId) ?? null;
-        return {
-          installationId,
-          repoFullNames: reposForInstallation(installationId),
-          hasToken: Boolean(token),
-          expiresAt: token?.expiresAt ?? null,
-          lastRefreshAt: token?.lastRefreshAt ?? null,
-          lastRefreshError: refreshError,
-          fresh: isTokenFresh(token) && !refreshError,
-        };
-      });
-      const failures = recentAuthFailures();
-      const missingRepoToken = repoFullNames.some((repoFullName) => !currentTokenForRepo(repoFullName));
-      const tokenRefreshFailing = installations.some((installation) => installation.lastRefreshError !== null && !installation.fresh);
-      return {
-        ready: !missingRepoToken && !tokenRefreshFailing,
-        lastRefreshAt,
-        lastRefreshError,
-        recentAuthFailureCount: failures.length,
-        lastAuthFailureAt: failures.at(-1)?.at ?? null,
-        installations,
-      };
-    },
+    authStatus,
   };
 }

@@ -135,6 +135,8 @@ export class CodexAppServerClient extends EventEmitter {
     private config: CodexAppServerConfig,
     private readonly logger: Logger,
     private readonly spawnProcess: typeof spawn = spawn,
+    /** Optional override for the child process env (used to strip frozen token vars). */
+    private readonly childEnvProvider?: () => NodeJS.ProcessEnv,
   ) {
     super();
   }
@@ -439,6 +441,7 @@ export class CodexAppServerClient extends EventEmitter {
     this.logger.info({ command: launch.command, args: launch.args }, "Starting Codex app-server");
     this.child = this.spawnProcess(launch.command, launch.args, {
       stdio: ["pipe", "pipe", "pipe"],
+      ...(this.childEnvProvider ? { env: this.childEnvProvider() } : {}),
     }) as ChildProcessWithoutNullStreams;
 
     this.child.stdin.on("error", (error) => {

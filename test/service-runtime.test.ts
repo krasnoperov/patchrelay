@@ -72,7 +72,7 @@ test("service runtime starts codex, seeds ready issues, triggers reconcile in th
     },
   );
 
-  assert.deepEqual(runtime.getReadiness(), { ready: false, codexStarted: false, linearConnected: false });
+  assert.deepEqual(runtime.getReadiness(), { ready: false, codexStarted: false, linearConnected: false, githubAppAuthHealthy: true });
 
   runtime.setLinearConnected(true);
   await runtime.start();
@@ -84,7 +84,7 @@ test("service runtime starts codex, seeds ready issues, triggers reconcile in th
     { projectId: "app", issueId: "issue-1" },
     { projectId: "app", issueId: "issue-2" },
   ]);
-  assert.deepEqual(runtime.getReadiness(), { ready: true, codexStarted: true, linearConnected: true });
+  assert.deepEqual(runtime.getReadiness(), { ready: true, codexStarted: true, linearConnected: true, githubAppAuthHealthy: true });
   runtime.stop();
 });
 
@@ -149,13 +149,13 @@ test("service runtime clears ready state on stop and preserves codex status in r
 
   runtime.setLinearConnected(true);
   await runtime.start();
-  assert.deepEqual(runtime.getReadiness(), { ready: true, codexStarted: true, linearConnected: true });
+  assert.deepEqual(runtime.getReadiness(), { ready: true, codexStarted: true, linearConnected: true, githubAppAuthHealthy: true });
 
   runtime.stop();
   await flushQueue();
 
   assert.equal(codex.stopCalls, 1);
-  assert.deepEqual(runtime.getReadiness(), { ready: false, codexStarted: false, linearConnected: true });
+  assert.deepEqual(runtime.getReadiness(), { ready: false, codexStarted: false, linearConnected: true, githubAppAuthHealthy: true });
 });
 
 test("service runtime records startup error when codex start fails", async () => {
@@ -179,6 +179,7 @@ test("service runtime records startup error when codex start fails", async () =>
     ready: false,
     codexStarted: false,
     linearConnected: false,
+    githubAppAuthHealthy: true,
     startupError: "codex offline",
   });
 });
@@ -206,6 +207,7 @@ test("service runtime does not fail startup when background reconciliation fails
     ready: false,
     codexStarted: true,
     linearConnected: false,
+    githubAppAuthHealthy: true,
   });
 });
 

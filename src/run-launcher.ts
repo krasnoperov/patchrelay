@@ -16,7 +16,6 @@ import {
 } from "./prompting/patchrelay.ts";
 import type { PendingRunWake } from "./run-wake-planner.ts";
 import type { AppConfig, LinearAgentActivityContent } from "./types.ts";
-import { configureGitHubBotAuthForWorktree } from "./github-worktree-auth.ts";
 import type { WorktreeManager } from "./worktree-manager.ts";
 import { sanitizeDiagnosticText } from "./utils.ts";
 
@@ -239,14 +238,10 @@ export class RunLauncher {
         { allowExistingOutsideRoot: params.issue.branchName !== undefined },
       );
 
-      if (params.botIdentity) {
-        await configureGitHubBotAuthForWorktree({
-          gitBin: this.config.runner.gitBin,
-          worktreePath: params.worktreePath,
-          botIdentity: params.botIdentity,
-        });
-      }
-
+      // GitHub auth (gh + git) and bot commit identity reach the agent via the inherited
+      // process env (GH_CONFIG_DIR + gh credential helper + GIT_AUTHOR/COMMITTER). Nothing
+      // is written into the worktree git config, so credentials never leak into interactive
+      // shell sessions on the shared clone.
       await this.worktreeManager.resetWorktreeToTrackedBranch(params.worktreePath, params.branchName, params.issue, this.logger);
       if (shouldFreshenWorktreeBeforeLaunch({
         runType: params.runType,

@@ -4,9 +4,11 @@ import type { PatchRelayDatabase } from "./db.ts";
 import {
   resolveGitHubAppCredentials,
   createGitHubAppTokenManager,
-  ensureGhWrapper,
+  getGitHubAppPaths,
   type GitHubAppTokenManager,
 } from "./github-app-token.ts";
+import { applyGitHubCliAuthEnv, resolveGhBin } from "./github-cli-auth.ts";
+import { remediateLeakedBotAuth } from "./github-auth-remediation.ts";
 import { GitHubWebhookHandler } from "./github-webhook-handler.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
 import { DatabaseBackedLinearClientProvider } from "./linear-client.ts";
@@ -145,7 +147,11 @@ export class PatchRelayService {
     const ghAppCredentials = resolveGitHubAppCredentials();
     if (ghAppCredentials) {
       Object.assign(config.secretSources, ghAppCredentials.secretSources);
-      this.githubAppTokenManager = createGitHubAppTokenManager(ghAppCredentials, logger);
+      this.githubAppTokenManager = createGitHubAppTokenManager(ghAppCredentials, logger, (status) => {
+        // Surface auth health on every rotation so `patchrelay` status reflects it and
+        // a broken token escalates instead of silently failing later git/gh operations.
+        this.runtime.setGithubAppAuthHealthy(status.healthy, status.lastRefreshError ?? undefined);
+      });
     }
 
     this.codex.on("notification", (notification: CodexNotification) => {
@@ -206,12 +212,33 @@ export class PatchRelayService {
     }
 
     if (this.githubAppTokenManager) {
-      await ensureGhWrapper(this.logger);
+      const { ghConfigDir } = getGitHubAppPaths();
+      const ghBin = resolveGhBin();
+      // Point gh + git at the bot config dir before the first rotation and before the
+      // Codex app-server spawns (it inherits this process env). GH_TOKEN/GITHUB_TOKEN are
+      // cleared so the rotated hosts.yml is the single source of truth.
+      applyGitHubCliAuthEnv(process.env, { ghConfigDir, ghBin });
       await this.githubAppTokenManager.start();
       const identity = this.githubAppTokenManager.botIdentity();
       if (identity) {
         this.orchestrator.botIdentity = identity;
+        // Re-apply with identity so bot commit attribution flows to git via env.
+        applyGitHubCliAuthEnv(process.env, { ghConfigDir, ghBin, identity });
       }
+      const ghAuthStatus = this.githubAppTokenManager.authStatus();
+      this.runtime.setGithubAppAuthHealthy(ghAuthStatus.healthy, ghAuthStatus.lastRefreshError ?? undefined);
+      if (!ghAuthStatus.healthy) {
+        this.logger.error({ ghAuthStatus }, "GitHub App auth is NOT healthy at startup — git/gh operations will fail until a token is minted");
+      } else {
+        this.logger.info({ installationId: ghAuthStatus.installationId, expiresAt: ghAuthStatus.expiresAt }, "GitHub App auth ready — gh + git authenticate as the bot");
+      }
+      // Clean up credentials older versions persisted into managed repo configs.
+      await remediateLeakedBotAuth({
+        gitBin: this.config.runner.gitBin,
+        repoPaths: this.config.repositories.map((repository) => repository.localPath),
+        ...(identity ? { botName: identity.name } : {}),
+        logger: this.logger,
+      });
     }
     await this.runtime.start();
     void this.startupRecovery.recoverDelegatedIssueStateFromLinear().catch((error) => {
