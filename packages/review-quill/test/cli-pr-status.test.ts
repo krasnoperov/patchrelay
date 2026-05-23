@@ -12,6 +12,15 @@ import {
 } from "../src/cli/pr-status.ts";
 import type { ReviewAttemptRecord } from "../src/types.ts";
 
+type RunCliOptions = NonNullable<Parameters<typeof runCli>[1]>;
+
+function runPrStatusCli(args: string[], options: RunCliOptions = {}): Promise<number> {
+  return runCli(args, {
+    resolveCurrentHeadSha: async () => undefined,
+    ...options,
+  });
+}
+
 function createBufferStream() {
   let buffer = "";
   return {
@@ -193,7 +202,7 @@ test("review-quill pr status exits 0 when latest attempt is approved", async () 
     },
     async () => {
       const stdout = createBufferStream();
-      const code = await runCli(
+      const code = await runPrStatusCli(
         ["pr", "status", "--repo", "app", "--pr", "42", "--json"],
         {
           stdout: stdout.stream,
@@ -228,7 +237,7 @@ test("review-quill pr status exits 2 when latest attempt requested changes", asy
     },
     async () => {
       const stdout = createBufferStream();
-      const code = await runCli(
+      const code = await runPrStatusCli(
         ["pr", "status", "--repo", "app", "--pr", "42", "--json"],
         {
           stdout: stdout.stream,
@@ -289,7 +298,7 @@ test("review-quill pr status text output includes requested changes and failed c
     },
     async () => {
       const stdout = createBufferStream();
-      const code = await runCli(
+      const code = await runPrStatusCli(
         ["pr", "status", "--repo", "app", "--pr", "42"],
         {
           stdout: stdout.stream,
@@ -348,7 +357,7 @@ test("review-quill pr status --silent omits verbose failure details in json", as
     },
     async () => {
       const stdout = createBufferStream();
-      const code = await runCli(
+      const code = await runPrStatusCli(
         ["pr", "status", "--repo", "app", "--pr", "42", "--silent", "--json"],
         {
           stdout: stdout.stream,
@@ -405,7 +414,7 @@ test("review-quill pr status --silent omits verbose failure details in text", as
     },
     async () => {
       const stdout = createBufferStream();
-      const code = await runCli(
+      const code = await runPrStatusCli(
         ["pr", "status", "--repo", "app", "--pr", "42", "--silent"],
         {
           stdout: stdout.stream,
@@ -447,7 +456,7 @@ test("review-quill pr status exits 3 when there is no attempt yet", async () => 
     (configPath, dbPath) => writeConfig(configPath, dbPath),
     async () => {
       const stdout = createBufferStream();
-      const code = await runCli(
+      const code = await runPrStatusCli(
         ["pr", "status", "--repo", "app", "--pr", "42", "--json"],
         {
           stdout: stdout.stream,
@@ -457,6 +466,44 @@ test("review-quill pr status exits 3 when there is no attempt yet", async () => 
       assert.equal(code, 3);
       const payload = JSON.parse(stdout.read());
       assert.equal(payload.kind, "no_attempt");
+    },
+  );
+});
+
+test("review-quill pr status ignores terminal attempts from stale PR heads", async () => {
+  await withConfig(
+    (configPath, dbPath) => {
+      writeConfig(configPath, dbPath);
+      const store = new SqliteStore(dbPath);
+      const attempt = store.createAttempt({
+        repoFullName: "owner/app",
+        prNumber: 42,
+        headSha: "old-head",
+        status: "running",
+      });
+      store.updateAttempt(attempt.id, {
+        status: "completed",
+        conclusion: "declined",
+        summary: "Found a regression on the previous head.",
+        completedAt: "2026-04-17T00:05:00Z",
+      });
+      store.close();
+    },
+    async () => {
+      const stdout = createBufferStream();
+      const code = await runPrStatusCli(
+        ["pr", "status", "--repo", "app", "--pr", "42", "--json"],
+        {
+          stdout: stdout.stream,
+          stderr: createBufferStream().stream,
+          resolveCurrentHeadSha: async () => "new-head",
+        },
+      );
+      assert.equal(code, 3);
+      const payload = JSON.parse(stdout.read());
+      assert.equal(payload.kind, "no_attempt");
+      assert.equal(payload.currentHeadSha, "new-head");
+      assert.equal(payload.attempt, undefined);
     },
   );
 });
@@ -480,7 +527,7 @@ test("review-quill pr status --wait loops until a terminal conclusion is recorde
       const stdout = createBufferStream();
       let sleeps = 0;
       let timeMs = 1_000;
-      const code = await runCli(
+      const code = await runPrStatusCli(
         ["pr", "status", "--repo", "app", "--pr", "42", "--wait", "--poll", "1", "--json"],
         {
           stdout: stdout.stream,
@@ -513,6 +560,77 @@ test("review-quill pr status --wait loops until a terminal conclusion is recorde
   );
 });
 
+test("review-quill pr status --wait keeps polling until the current head attempt finishes", async () => {
+  let sharedDbPath = "";
+  await withConfig(
+    (configPath, dbPath) => {
+      sharedDbPath = dbPath;
+      writeConfig(configPath, dbPath);
+      const store = new SqliteStore(dbPath);
+      const oldAttempt = store.createAttempt({
+        repoFullName: "owner/app",
+        prNumber: 42,
+        headSha: "old-head",
+        status: "running",
+      });
+      store.updateAttempt(oldAttempt.id, {
+        status: "completed",
+        conclusion: "declined",
+        summary: "Found a regression on the previous head.",
+        completedAt: "2026-04-17T00:05:00Z",
+      });
+      store.close();
+    },
+    async () => {
+      const stdout = createBufferStream();
+      let sleeps = 0;
+      let timeMs = 1_000;
+      const code = await runPrStatusCli(
+        ["pr", "status", "--repo", "app", "--pr", "42", "--wait", "--poll", "1", "--json"],
+        {
+          stdout: stdout.stream,
+          stderr: createBufferStream().stream,
+          resolveCurrentHeadSha: async () => "new-head",
+          now: () => timeMs,
+          sleep: async (ms: number) => {
+            sleeps += 1;
+            timeMs += ms;
+            const store = new SqliteStore(sharedDbPath);
+            try {
+              if (sleeps === 1) {
+                store.createAttempt({
+                  repoFullName: "owner/app",
+                  prNumber: 42,
+                  headSha: "new-head",
+                  status: "running",
+                });
+              } else if (sleeps === 2) {
+                const current = store.getAttempt("owner/app", 42, "new-head");
+                if (current) {
+                  store.updateAttempt(current.id, {
+                    status: "completed",
+                    conclusion: "approved",
+                    summary: "LGTM on the current head.",
+                    completedAt: "2026-04-17T00:10:00Z",
+                  });
+                }
+              }
+            } finally {
+              store.close();
+            }
+          },
+        },
+      );
+      assert.equal(code, 0);
+      assert.equal(sleeps, 2);
+      const payload = JSON.parse(stdout.read());
+      assert.equal(payload.kind, "approved");
+      assert.equal(payload.currentHeadSha, "new-head");
+      assert.equal(payload.attempt.headSha, "new-head");
+    },
+  );
+});
+
 test("review-quill pr status --wait times out with exit 4", async () => {
   await withConfig(
     (configPath, dbPath) => {
@@ -529,7 +647,7 @@ test("review-quill pr status --wait times out with exit 4", async () => {
     async () => {
       const stdout = createBufferStream();
       let timeMs = 1_000;
-      const code = await runCli(
+      const code = await runPrStatusCli(
         ["pr", "status", "--repo", "app", "--pr", "42", "--wait", "--timeout", "2", "--poll", "1", "--json"],
         {
           stdout: stdout.stream,
@@ -575,7 +693,7 @@ test("review-quill pr status picks the non-superseded attempt over a superseded 
     },
     async () => {
       const stdout = createBufferStream();
-      const code = await runCli(
+      const code = await runPrStatusCli(
         ["pr", "status", "--repo", "app", "--pr", "42", "--json"],
         {
           stdout: stdout.stream,

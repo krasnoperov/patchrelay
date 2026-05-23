@@ -15,7 +15,7 @@ import type {
 import type { Output } from "./shared.ts";
 import { formatJson, writeOutput } from "./shared.ts";
 import { type ParsedArgs } from "./args.ts";
-import { resolvePrNumber, resolveRepo, type ResolveCommandRunner } from "./resolve.ts";
+import { defaultResolveRunner, resolvePrNumber, resolveRepo, type ResolveCommandRunner } from "./resolve.ts";
 import { parseIntegerFlag } from "./args.ts";
 
 export type PrReviewKind =
@@ -35,6 +35,7 @@ export interface PrReviewReport {
   kind: PrReviewKind;
   terminal: boolean;
   exitCode: number;
+  currentHeadSha?: string;
   attempt?: ReviewAttemptRecord & { stale?: boolean; staleReason?: string };
   summaryFirstLine?: string;
   checkedAt: string;
@@ -128,6 +129,7 @@ export interface BuildReviewReportOptions {
   repoId: string;
   repoFullName: string;
   prNumber: number;
+  currentHeadSha?: string | undefined;
   attempt?: (ReviewAttemptRecord & { stale?: boolean; staleReason?: string }) | undefined;
   failureDetails?: PrReviewFailureDetails;
 }
@@ -143,6 +145,7 @@ export function buildPrReviewReport(options: BuildReviewReportOptions): PrReview
     kind,
     terminal: isTerminalKind(kind),
     exitCode: exitCodeForKind(kind),
+    ...(options.currentHeadSha ? { currentHeadSha: options.currentHeadSha } : {}),
     ...(options.attempt ? { attempt: options.attempt } : {}),
     ...(summaryLine ? { summaryFirstLine: summaryLine } : {}),
     ...(reason ? { reason } : {}),
@@ -178,6 +181,7 @@ function formatReportText(report: PrReviewReport): string {
     `State: ${report.kind}`,
     `Terminal: ${report.terminal ? "yes" : "no"}`,
   ];
+  if (report.currentHeadSha) lines.push(`Current head SHA: ${report.currentHeadSha}`);
   if (report.reason) lines.push(`Reason: ${report.reason}`);
   if (report.attempt) {
     lines.push(`Attempt: #${report.attempt.id}`);
@@ -218,6 +222,16 @@ function selectLatestAttempt(attempts: Array<ReviewAttemptRecord & { stale?: boo
   const pool = nonSuperseded.length > 0 ? nonSuperseded : attempts;
   pool.sort((left, right) => (right.updatedAt ?? "").localeCompare(left.updatedAt ?? ""));
   return pool[0];
+}
+
+function selectAttemptForCurrentHead(
+  attempts: Array<ReviewAttemptRecord & { stale?: boolean; staleReason?: string }>,
+  currentHeadSha: string | undefined,
+): (ReviewAttemptRecord & { stale?: boolean; staleReason?: string }) | undefined {
+  const eligibleAttempts = currentHeadSha
+    ? attempts.filter((attempt) => attempt.headSha === currentHeadSha)
+    : attempts;
+  return selectLatestAttempt(eligibleAttempts);
 }
 
 function isCheckSuccessful(check: CheckRunRecord): boolean {
@@ -315,6 +329,49 @@ async function loadFailureDetailsFromGitHub(params: {
   }
 }
 
+async function loadCurrentHeadShaFromGitHub(params: {
+  repoFullName: string;
+  prNumber: number;
+  runCommand?: ResolveCommandRunner | undefined;
+}): Promise<string | undefined> {
+  const auth = resolveGitHubAuthConfig(getHomeEnv());
+  if (auth.mode === "app") {
+    const logger = pino({ enabled: false });
+    const tokenManager = createGitHubAppTokenManager(auth.credentials, [params.repoFullName], logger);
+    try {
+      await tokenManager.start();
+      const github = new GitHubClient({
+        currentTokenForRepo: (repoFullName?: string) => tokenManager.currentTokenForRepo(repoFullName),
+      });
+      const pr = await github.getPullRequest(params.repoFullName, params.prNumber);
+      const headSha = pr.headSha.trim();
+      if (headSha) return headSha;
+    } catch {
+      // Fall through to the operator's gh auth below. The status command is
+      // primarily a local CLI contract, so a broken service credential should
+      // not make stale local attempts authoritative.
+    } finally {
+      tokenManager.stop();
+    }
+  }
+
+  const runCommand = params.runCommand ?? defaultResolveRunner;
+  const result = await runCommand("gh", [
+    "pr",
+    "view",
+    String(params.prNumber),
+    "--repo",
+    params.repoFullName,
+    "--json",
+    "headRefOid",
+    "-q",
+    ".headRefOid",
+  ]);
+  if (result.exitCode !== 0) return undefined;
+  const headSha = result.stdout.trim();
+  return headSha ? headSha : undefined;
+}
+
 export interface HandlePrStatusOptions {
   parsed: ParsedArgs;
   stdout: Output;
@@ -326,6 +383,10 @@ export interface HandlePrStatusOptions {
     prNumber: number;
     headSha: string;
   }) => Promise<PrReviewFailureDetails | undefined>) | undefined;
+  resolveCurrentHeadSha?: ((params: {
+    repoFullName: string;
+    prNumber: number;
+  }) => Promise<string | undefined>) | undefined;
 }
 
 export interface WaitOptions {
@@ -397,6 +458,16 @@ export async function handlePrStatus(options: HandlePrStatusOptions): Promise<nu
   const { repo } = loadRepoConfigById(resolvedRepo.repoId);
 
   const buildReport = async (): Promise<PrReviewReport> => {
+    const currentHeadSha = await (options.resolveCurrentHeadSha
+      ? options.resolveCurrentHeadSha({
+        repoFullName: repo.repoFullName,
+        prNumber: resolvedPr.prNumber,
+      })
+      : loadCurrentHeadShaFromGitHub({
+        repoFullName: repo.repoFullName,
+        prNumber: resolvedPr.prNumber,
+        runCommand: resolveCommand,
+      })).catch(() => undefined);
     const store = new SqliteStore(config.database.path);
     try {
       const attempts = store.listAttemptsForPullRequest(repo.repoFullName, resolvedPr.prNumber, 50).map((attempt) =>
@@ -407,7 +478,7 @@ export async function handlePrStatus(options: HandlePrStatusOptions): Promise<nu
           },
         }),
       );
-      const selected = selectLatestAttempt(attempts);
+      const selected = selectAttemptForCurrentHead(attempts, currentHeadSha);
       const { kind } = classifyAttempt(selected);
       const failureDetails = selected && exitCodeForKind(kind) === 2
         ? await (options.inspectFailureDetails ?? loadFailureDetailsFromGitHub)({
@@ -420,6 +491,7 @@ export async function handlePrStatus(options: HandlePrStatusOptions): Promise<nu
         repoId: resolvedRepo.repoId,
         repoFullName: repo.repoFullName,
         prNumber: resolvedPr.prNumber,
+        currentHeadSha,
         attempt: selected,
         ...(failureDetails ? { failureDetails } : {}),
       });

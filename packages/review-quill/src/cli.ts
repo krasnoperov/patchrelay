@@ -41,6 +41,10 @@ interface RunCliOptions {
     prNumber: number;
     headSha: string;
   }) => Promise<PrReviewFailureDetails | undefined>;
+  resolveCurrentHeadSha?: (params: {
+    repoFullName: string;
+    prNumber: number;
+  }) => Promise<string | undefined>;
 }
 
 function writeHelp(stream: Output, topic: HelpTopic): void {
@@ -168,6 +172,7 @@ export async function runCli(args: string[], options?: RunCliOptions): Promise<n
           ...(options?.now ? { now: options.now } : {}),
           ...(options?.sleep ? { sleep: options.sleep } : {}),
           ...(options?.inspectFailureDetails ? { inspectFailureDetails: options.inspectFailureDetails } : {}),
+          ...(options?.resolveCurrentHeadSha ? { resolveCurrentHeadSha: options.resolveCurrentHeadSha } : {}),
         });
       }
       default:
