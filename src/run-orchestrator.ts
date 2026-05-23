@@ -262,7 +262,6 @@ export class RunOrchestrator {
       db,
       config,
       linearProvider,
-      this.wakeDispatcher,
       logger,
       feed,
     );
