@@ -196,6 +196,83 @@ test("service status --json reports systemd state and normalized local health", 
   }
 });
 
+test("service status --json surfaces degraded health from the local service", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "review-quill-cli-service-degraded-"));
+  const port = 18789;
+  const server = createServer((request, response) => {
+    if (request.url === "/health") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        ok: false,
+        status: "failed",
+        service: "review-quill",
+        repos: ["krasnoperov/mafia"],
+        auth: {
+          ready: false,
+          lastRefreshError: "GitHub API 401 for /app/installations/42/access_tokens: Bad credentials",
+          recentAuthFailureCount: 2,
+        },
+      }));
+      return;
+    }
+    response.writeHead(404).end();
+  });
+
+  try {
+    const configDir = path.join(baseDir, "config");
+    mkdirSync(configDir, { recursive: true });
+    const configPath = path.join(configDir, "review-quill.json");
+    writeFileSync(configPath, `${JSON.stringify({
+      server: { bind: "127.0.0.1", port, publicBaseUrl: "https://review-quill.example.com" },
+      database: { path: path.join(baseDir, "review-quill.sqlite"), wal: true },
+      codex: {
+        bin: "codex",
+        args: ["app-server"],
+        approvalPolicy: "never",
+        sandboxMode: "danger-full-access",
+      },
+      repositories: [],
+    }, null, 2)}\n`, "utf8");
+
+    await new Promise<void>((resolve, reject) => {
+      server.listen(port, "127.0.0.1", (error?: Error) => error ? reject(error) : resolve());
+    });
+
+    await withEnv(
+      {
+        REVIEW_QUILL_CONFIG: configPath,
+        REVIEW_QUILL_CONFIG_DIR: configDir,
+      },
+      async () => {
+        const stdout = createBufferStream();
+        const code = await runCli(["service", "status", "--json"], {
+          stdout: stdout.stream,
+          stderr: createBufferStream().stream,
+          runCommand: async () => ({
+            exitCode: 0,
+            stdout: [
+              "Id=review-quill.service",
+              "LoadState=loaded",
+              "UnitFileState=enabled",
+              "ActiveState=active",
+              "SubState=running",
+              "ExecMainPID=5150",
+            ].join("\n"),
+            stderr: "",
+          }),
+        });
+
+        assert.equal(code, 0);
+        const status = JSON.parse(stdout.read()) as Record<string, unknown>;
+        assert.deepEqual(status.health, { reachable: true, ok: false, status: 200 });
+      },
+    );
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("service restart --json emits the shared restart payload", async () => {
   const stdout = createBufferStream();
   const code = await runCli(["service", "restart", "--json"], {

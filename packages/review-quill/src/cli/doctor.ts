@@ -163,9 +163,15 @@ export async function handleDoctor(parsed: ParsedArgs, stdout: Output, runComman
   try {
     const health = await fetchServiceHealth();
     checks.push({
-      status: "pass",
+      status: health.ok ? "pass" : "fail",
       scope: "service-health",
-      message: `Local service is reachable with ${health.repos.length} repos`,
+      message: health.ok
+        ? `Local service is reachable with ${health.repos.length} repos`
+        : `Local service is reachable but unhealthy (${health.status ?? "unknown"}): ${
+            health.runtime?.lastReconcileError
+            ?? health.auth?.lastRefreshError
+            ?? "see /health for details"
+          }`,
     });
   } catch (error) {
     checks.push({
@@ -178,14 +184,23 @@ export async function handleDoctor(parsed: ParsedArgs, stdout: Output, runComman
   try {
     const auth = await fetchServiceAuthStatus();
     serviceAppSlug = auth.appSlug;
+    const authWarning = auth.recentAuthFailureCount && auth.recentAuthFailureCount > 0
+      ? `${auth.recentAuthFailureCount} recent GitHub auth failure(s)${
+          auth.lastAuthFailureAt ? ` since ${auth.lastAuthFailureAt}` : ""
+        }`
+      : auth.lastRefreshError
+        ? `last token refresh failed: ${auth.lastRefreshError}`
+      : undefined;
     checks.push({
-      status: auth.ready ? "pass" : "fail",
+      status: auth.ready ? (authWarning ? "warn" : "pass") : "fail",
       scope: "service-auth",
       message: auth.ready
-        ? auth.mode === "app" && auth.appId
-          ? `Service GitHub auth is ready from App ${auth.appId}`
-          : "Service GitHub auth is ready"
-        : "Service GitHub auth is not ready",
+        ? authWarning
+          ? `Service GitHub auth is ready but degraded: ${authWarning}`
+          : auth.mode === "app" && auth.appId
+            ? `Service GitHub auth is ready from App ${auth.appId}`
+            : "Service GitHub auth is ready"
+        : `Service GitHub auth is not ready${auth.lastRefreshError ? `: ${auth.lastRefreshError}` : ""}`,
     });
   } catch (error) {
     checks.push({

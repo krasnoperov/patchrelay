@@ -172,8 +172,23 @@ async function requestLocalJson<T>(relativePath: string, options?: { method?: st
   return JSON.parse(text) as T;
 }
 
-export async function fetchServiceHealth(): Promise<{ ok: boolean; service: string; repos: string[] }> {
-  return await requestLocalJson<{ ok: boolean; service: string; repos: string[] }>("/health");
+export async function fetchServiceHealth(): Promise<{
+  ok: boolean;
+  status?: string;
+  service: string;
+  repos: string[];
+  auth?: {
+    ready?: boolean;
+    lastRefreshError?: string | null;
+    recentAuthFailureCount?: number;
+    lastAuthFailureAt?: string | null;
+  };
+  runtime?: {
+    lastReconcileOutcome?: string;
+    lastReconcileError?: string | null;
+  };
+}> {
+  return await requestLocalJson("/health");
 }
 
 export async function fetchServiceHealthStatus(): Promise<
@@ -213,6 +228,19 @@ export async function fetchServiceAuthStatus(): Promise<{
   installationMode?: string;
   appSlug?: string;
   webhookSecretSource?: string;
+  lastRefreshAt?: string | null;
+  lastRefreshError?: string | null;
+  recentAuthFailureCount?: number;
+  lastAuthFailureAt?: string | null;
+  installations?: Array<{
+    installationId: string;
+    repoFullNames: string[];
+    hasToken: boolean;
+    expiresAt: string | null;
+    lastRefreshAt: string | null;
+    lastRefreshError: string | null;
+    fresh: boolean;
+  }>;
 }> {
   return await requestLocalJson("/admin/runtime/auth");
 }

@@ -4,6 +4,9 @@ import type { Logger } from "pino";
 import { resolveSecretWithSource, type SecretSource } from "./resolve-secret.ts";
 
 const TOKEN_REFRESH_MS = 30 * 60_000;
+const TOKEN_EXPIRY_MARGIN_MS = 5 * 60_000;
+const RECENT_AUTH_FAILURE_WINDOW_MS = 15 * 60_000;
+const MAX_AUTH_FAILURES_TO_KEEP = 50;
 
 export interface GitHubAppCredentials {
   appId: string;
@@ -19,13 +22,39 @@ export type GitHubAuthConfig =
   | { mode: "app"; credentials: ResolvedGitHubAppCredentials }
   | { mode: "none" };
 
+export type GitHubAuthRefreshReason = "startup" | "scheduled" | "before_use" | "github_401" | "manual";
+
+export interface GitHubInstallationAuthStatus {
+  installationId: string;
+  repoFullNames: string[];
+  hasToken: boolean;
+  expiresAt: string | null;
+  lastRefreshAt: string | null;
+  lastRefreshError: string | null;
+  fresh: boolean;
+}
+
+export interface GitHubAuthRuntimeStatus {
+  ready: boolean;
+  lastRefreshAt: string | null;
+  lastRefreshError: string | null;
+  recentAuthFailureCount: number;
+  lastAuthFailureAt: string | null;
+  installations: GitHubInstallationAuthStatus[];
+}
+
 export interface RuntimeGitHubAuthProvider {
   currentTokenForRepo(repoFullName?: string): string | undefined;
+  refreshTokenForRepo?(repoFullName: string, reason: GitHubAuthRefreshReason): Promise<void>;
+  recordAuthFailure?(repoFullName: string, message: string): void;
 }
 
 export interface GitHubAppTokenManager extends RuntimeGitHubAuthProvider {
   start(): Promise<void>;
   stop(): void;
+  refreshTokenForRepo(repoFullName: string, reason: GitHubAuthRefreshReason): Promise<void>;
+  recordAuthFailure(repoFullName: string, message: string): void;
+  authStatus(): GitHubAuthRuntimeStatus;
 }
 
 function generateJwt(appId: string, privateKey: string): string {
@@ -75,12 +104,15 @@ async function resolveInstallationIdForRepo(jwt: string, repoFullName: string): 
   return String(data.id);
 }
 
-async function fetchInstallationToken(jwt: string, installationId: string): Promise<string> {
-  const data = await fetchJson<{ token: string }>(
+async function fetchInstallationToken(jwt: string, installationId: string): Promise<{ token: string; expiresAt?: string }> {
+  const data = await fetchJson<{ token: string; expires_at?: string }>(
     `https://api.github.com/app/installations/${installationId}/access_tokens`,
     { method: "POST", headers: githubHeaders(jwt) },
   );
-  return data.token;
+  return {
+    token: data.token,
+    ...(typeof data.expires_at === "string" ? { expiresAt: data.expires_at } : {}),
+  };
 }
 
 export function resolveGitHubAppCredentials(
@@ -118,7 +150,73 @@ export function createGitHubAppTokenManager(
 ): GitHubAppTokenManager {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const repoInstallationIds = new Map<string, string>();
-  const installationTokens = new Map<string, string>();
+  const installationTokens = new Map<string, {
+    token: string;
+    expiresAt?: string;
+    lastRefreshAt: string;
+    lastRefreshError: string | null;
+  }>();
+  const installationRefreshErrors = new Map<string, string>();
+  const authFailures: Array<{ repoFullName: string; at: string; message: string }> = [];
+  let lastRefreshAt: string | null = null;
+  let lastRefreshError: string | null = null;
+
+  function rememberInstallationRepo(installationId: string, repoFullName: string): void {
+    repoInstallationIds.set(repoFullName, installationId);
+  }
+
+  function reposForInstallation(installationId: string): string[] {
+    return repoFullNames.filter((repoFullName) =>
+      (repoInstallationIds.get(repoFullName) ?? credentials.installationId) === installationId
+    );
+  }
+
+  function isTokenFresh(token: { expiresAt?: string } | undefined): boolean {
+    if (!token) return false;
+    if (!token.expiresAt) return true;
+    const expiresAtMs = Date.parse(token.expiresAt);
+    if (!Number.isFinite(expiresAtMs)) return false;
+    return expiresAtMs - Date.now() > TOKEN_EXPIRY_MARGIN_MS;
+  }
+
+  function recordRefreshSuccess(installationId: string, token: { token: string; expiresAt?: string }): void {
+    const refreshedAt = new Date().toISOString();
+    installationTokens.set(installationId, {
+      token: token.token,
+      ...(token.expiresAt ? { expiresAt: token.expiresAt } : {}),
+      lastRefreshAt: refreshedAt,
+      lastRefreshError: null,
+    });
+    installationRefreshErrors.delete(installationId);
+    lastRefreshAt = refreshedAt;
+    lastRefreshError = null;
+  }
+
+  function recordRefreshFailure(installationId: string | undefined, message: string): void {
+    lastRefreshError = message;
+    if (!installationId) return;
+    installationRefreshErrors.set(installationId, message);
+    const existing = installationTokens.get(installationId);
+    if (existing) {
+      installationTokens.set(installationId, { ...existing, lastRefreshError: message });
+    }
+  }
+
+  async function resolveInstallationForRepo(jwt: string, repoFullName: string): Promise<string> {
+    const existing = repoInstallationIds.get(repoFullName) ?? credentials.installationId;
+    if (existing) {
+      rememberInstallationRepo(existing, repoFullName);
+      return existing;
+    }
+    const installationId = await resolveInstallationIdForRepo(jwt, repoFullName);
+    rememberInstallationRepo(installationId, repoFullName);
+    logger.info({ repoFullName, installationId }, "Resolved GitHub App installation for repo");
+    return installationId;
+  }
+
+  async function refreshInstallation(installationId: string, jwt: string): Promise<void> {
+    recordRefreshSuccess(installationId, await fetchInstallationToken(jwt, installationId));
+  }
 
   async function refresh(options?: { throwOnError?: boolean }): Promise<void> {
     const throwOnError = options?.throwOnError ?? false;
@@ -129,22 +227,40 @@ export function createGitHubAppTokenManager(
       if (credentials.installationId) installationIds.add(credentials.installationId);
 
       for (const repoFullName of repoFullNames) {
-        let installationId = repoInstallationIds.get(repoFullName) ?? credentials.installationId;
-        if (!installationId) {
-          installationId = await resolveInstallationIdForRepo(jwt, repoFullName);
-          repoInstallationIds.set(repoFullName, installationId);
-          logger.info({ repoFullName, installationId }, "Resolved GitHub App installation for repo");
-        }
+        const installationId = await resolveInstallationForRepo(jwt, repoFullName);
         installationIds.add(installationId);
       }
 
       for (const installationId of unique(installationIds)) {
-        installationTokens.set(installationId, await fetchInstallationToken(jwt, installationId));
+        try {
+          await refreshInstallation(installationId, jwt);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          recordRefreshFailure(installationId, message);
+          if (throwOnError) throw error;
+          logger.warn({ installationId, error: message }, "Failed to refresh GitHub App installation token");
+        }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      recordRefreshFailure(undefined, message);
       if (throwOnError) throw new Error(`Failed to initialize GitHub App auth: ${message}`);
       logger.warn({ error: message }, "Failed to refresh GitHub App installation token");
+    }
+  }
+
+  async function refreshTokenForRepo(repoFullName: string, reason: GitHubAuthRefreshReason): Promise<void> {
+    const jwt = generateJwt(credentials.appId, credentials.privateKey);
+    let installationId: string | undefined;
+    try {
+      installationId = await resolveInstallationForRepo(jwt, repoFullName);
+      await refreshInstallation(installationId, jwt);
+      logger.info({ repoFullName, installationId, reason }, "Refreshed GitHub App installation token");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      recordRefreshFailure(installationId, message);
+      logger.warn({ repoFullName, installationId, reason, error: message }, "Failed to refresh GitHub App installation token");
+      throw error;
     }
   }
 
@@ -153,6 +269,29 @@ export function createGitHubAppTokenManager(
       void refresh().finally(schedule);
     }, TOKEN_REFRESH_MS);
     timer.unref?.();
+  }
+
+  function recentAuthFailures(): Array<{ repoFullName: string; at: string; message: string }> {
+    const cutoff = Date.now() - RECENT_AUTH_FAILURE_WINDOW_MS;
+    return authFailures.filter((entry) => Date.parse(entry.at) >= cutoff);
+  }
+
+  function currentTokenForRepo(repoFullName?: string): string | undefined {
+    if (repoFullName) {
+      const installationId = repoInstallationIds.get(repoFullName) ?? credentials.installationId;
+      if (installationId) {
+        const token = installationTokens.get(installationId);
+        return token && isTokenFresh(token) ? token.token : undefined;
+      }
+    }
+    if (credentials.installationId) {
+      const token = installationTokens.get(credentials.installationId);
+      return token && isTokenFresh(token) ? token.token : undefined;
+    }
+    const first = installationTokens.values().next();
+    if (first.done) return undefined;
+    const token = first.value;
+    return isTokenFresh(token) ? token.token : undefined;
   }
 
   return {
@@ -164,14 +303,50 @@ export function createGitHubAppTokenManager(
       if (timer) clearTimeout(timer);
       timer = undefined;
     },
-    currentTokenForRepo(repoFullName?: string) {
-      if (repoFullName) {
-        const installationId = repoInstallationIds.get(repoFullName) ?? credentials.installationId;
-        if (installationId) return installationTokens.get(installationId);
+    currentTokenForRepo,
+    async refreshTokenForRepo(repoFullName, reason) {
+      await refreshTokenForRepo(repoFullName, reason);
+    },
+    recordAuthFailure(repoFullName, message) {
+      authFailures.push({ repoFullName, message, at: new Date().toISOString() });
+      if (authFailures.length > MAX_AUTH_FAILURES_TO_KEEP) {
+        authFailures.splice(0, authFailures.length - MAX_AUTH_FAILURES_TO_KEEP);
       }
-      if (credentials.installationId) return installationTokens.get(credentials.installationId);
-      const first = installationTokens.values().next();
-      return first.done ? undefined : first.value;
+    },
+    authStatus() {
+      const installationIds = unique([
+        ...installationTokens.keys(),
+        ...installationRefreshErrors.keys(),
+        ...(credentials.installationId ? [credentials.installationId] : []),
+        ...repoFullNames.flatMap((repoFullName) => {
+          const installationId = repoInstallationIds.get(repoFullName);
+          return installationId ? [installationId] : [];
+        }),
+      ]);
+      const installations = installationIds.map((installationId) => {
+        const token = installationTokens.get(installationId);
+        const refreshError = token?.lastRefreshError ?? installationRefreshErrors.get(installationId) ?? null;
+        return {
+          installationId,
+          repoFullNames: reposForInstallation(installationId),
+          hasToken: Boolean(token),
+          expiresAt: token?.expiresAt ?? null,
+          lastRefreshAt: token?.lastRefreshAt ?? null,
+          lastRefreshError: refreshError,
+          fresh: isTokenFresh(token) && !refreshError,
+        };
+      });
+      const failures = recentAuthFailures();
+      const missingRepoToken = repoFullNames.some((repoFullName) => !currentTokenForRepo(repoFullName));
+      const tokenRefreshFailing = installations.some((installation) => installation.lastRefreshError !== null && !installation.fresh);
+      return {
+        ready: !missingRepoToken && !tokenRefreshFailing,
+        lastRefreshAt,
+        lastRefreshError,
+        recentAuthFailureCount: failures.length,
+        lastAuthFailureAt: failures.at(-1)?.at ?? null,
+        installations,
+      };
     },
   };
 }
