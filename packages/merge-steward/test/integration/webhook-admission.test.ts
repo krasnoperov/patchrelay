@@ -555,7 +555,7 @@ describe("webhook admission integration", () => {
     assert.strictEqual(detail.incidents.length, 0);
   });
 
-  it("surfaces queue-level main-broken status in watch snapshots", async () => {
+  it("never reports a main-broken queue block — main CI is ignored by the queue", async () => {
     const store = new MemoryStore();
     const githubSim = new GitHubSim();
     const logger = pino({ level: "silent" });
@@ -567,6 +567,7 @@ describe("webhook admission integration", () => {
 
     const branchSha = await git.headSha("feat-main-broken");
     githubSim.addPR({ number: 8, branch: "feat-main-broken", headSha: branchSha, reviewApproved: true, labels: ["queue"] });
+    // main is red — must not gate the queue.
     githubSim.setRefChecks("main", [
       { name: "Tests", conclusion: "failure" },
       { name: "Deploy stage", conclusion: "failure" },
@@ -613,25 +614,14 @@ describe("webhook admission integration", () => {
     assert.strictEqual(reconcile2.started, true);
 
     const watch = await (await fetch(`${address}/repos/test-repo/queue/watch`)).json() as {
-      summary: { headPrNumber: number | null; preparingHead: number };
-      queueBlock: {
-        reason: string;
-        headPrNumber: number | null;
-        baseBranch: string;
-        failingChecks: Array<{ name: string; conclusion: string }>;
-        pendingChecks: Array<{ name: string; conclusion: string }>;
-        missingRequiredChecks: string[];
-      } | null;
+      summary: { headPrNumber: number | null };
+      queueBlock: unknown | null;
     };
 
     assert.strictEqual(watch.summary.headPrNumber, 8);
-    assert.strictEqual(watch.summary.preparingHead, 1);
-    assert.ok(watch.queueBlock);
-    assert.strictEqual(watch.queueBlock?.reason, "main_broken");
-    assert.strictEqual(watch.queueBlock?.baseBranch, "main");
-    assert.deepStrictEqual(watch.queueBlock?.missingRequiredChecks, []);
-    assert.deepStrictEqual(watch.queueBlock?.failingChecks.map((check) => check.name), ["Tests", "Deploy stage"]);
-    assert.deepStrictEqual(watch.queueBlock?.pendingChecks.map((check) => check.name), ["Claude"]);
+    // The queue is never paused by a red main: no queue block is surfaced, and the
+    // entry advances on its own spec CI (pending here) rather than being held on main.
+    assert.strictEqual(watch.queueBlock, null);
   });
 
   it("entry detail returns the most recent events when eventLimit is applied", async () => {

@@ -14,7 +14,7 @@ PRs delivered through the queue are tested against `main` as it was at admission
 2. The steward notices through webhook wakeups or startup reconcile scans, and admits the PR to the queue.
 3. It builds a speculative branch — `main + PR` at the head, cumulative downstream (`main + A + B`, `main + A + B + C`).
 4. CI runs on that speculative SHA.
-5. If the head's speculative SHA is still a fast-forward from current `main`, the steward pushes that SHA to `main`; otherwise it retries.
+5. Once the speculative SHA's checks are green and it is still a fast-forward from current `main`, the steward pushes that SHA to `main` immediately. It does **not** wait for `main`'s own CI to settle, and **never** pauses the queue because `main` is red — the green speculative SHA *is* the next `main`.
 6. On CI failure: retry (gated on base SHA change), then evict with a durable incident record and GitHub check run.
 7. PatchRelay, the `ship-pr` skill, or any agent sees the check run failure and fixes the branch; when CI passes again the PR can be re-admitted.
 
@@ -78,6 +78,8 @@ The real gate is:
 - the steward's speculative integrated branch also passes CI
 
 `review-quill/verdict` only matters if you include it in the repo's required checks. Branch protection is useful as defense in depth, but the steward merges by fast-forwarding `main` to the already-tested speculative SHA — not by pressing GitHub's merge button. Successful merges therefore depend on the steward App being allowed to push to the protected branch. See [docs/merge-steward.md](../../docs/merge-steward.md) for the full App permission set.
+
+**`main`'s own CI is information-only.** The speculative SHA the steward tests *is* the exact tree that becomes `main`, so re-testing `main` after the push adds no signal — it only catches flakiness or out-of-band changes (direct pushes, hotfixes). The queue therefore **ignores `main`'s CI entirely** for advancement: it does not gate landing on `main` being green, does not wait for `main` CI before the next landing, and is never "paused" by a red `main`. A red `main` with a green speculative SHA simply means the red was flaky or is fixed by landing — so the steward lands. Use `main`'s CI as a project-health canary, not a queue control.
 
 ## Interaction with PatchRelay
 

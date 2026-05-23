@@ -3,7 +3,6 @@ import type { ReconcileContext } from "./reconciler-core.ts";
 import { CLEAN_CI, CLEAN_SPEC, emit, isBudgetExhausted, ref } from "./reconciler-core.ts";
 import { cleanupSpec, evictEntry, invalidateDownstream } from "./reconciler-evict.ts";
 import { verifyPostMergeStatus } from "./reconciler-post-merge.ts";
-import { getEffectiveMainStatus } from "./reconciler-main-status.ts";
 
 const DEFAULT_PR_MERGED_POLL_ATTEMPTS = 6;
 const DEFAULT_PR_MERGED_POLL_DELAY_MS = 2_000;
@@ -230,42 +229,12 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
     // Can't verify — proceed and let push fail if needed.
   }
 
-  if (ctx.ci.getMainStatus && entry.priority <= 0) {
-    const mainStatus = currentBase
-      ? await getEffectiveMainStatus(ctx, currentBase)
-      : { status: await ctx.ci.getMainStatus(ctx.baseBranch) };
-    if (mainStatus.trustedMergedEntryId) {
-      emit(ctx, entry, "main_pending_bypassed", {
-        detail: `main checks pending for already-validated merge of PR #${mainStatus.trustedMergedPrNumber}`,
-      });
-    }
-    if (mainStatus.status === "pending") {
-      // Main is still verifying itself (typically post-merge CI from the
-      // previous entry).  The spec was built on top of main-as-it-was
-      // (isFF check above guarantees main hasn't diverged) and already
-      // passed CI, so keep the spec + CI state and retry next tick.
-      // Throwing the spec away here would force a rebuild + re-run of
-      // CI that produces the same tree — wasting the speculation.
-      emit(ctx, entry, "merge_waiting_main", { detail: "main checks still pending, holding merge" });
-      ctx.store.transition(entry.id, "merging", { waitDetail: "main checks still pending, holding merge" }, "main checks still pending, holding merge");
-      return;
-    }
-    if (mainStatus.status === "fail") {
-      try {
-        const refresh = await ctx.policy.refreshOnIssue("main_unhealthy_at_merge");
-        if (refresh.attempted && refresh.changed) {
-          emit(ctx, entry, "policy_changed", {
-            detail: `GitHub required checks changed from [${refresh.previousRequiredChecks.join(", ") || "(none)"}] to [${refresh.requiredChecks.join(", ") || "(none)"}]`,
-          });
-        }
-      } catch {
-        // Keep using cached GitHub policy and pause the queue conservatively.
-      }
-      emit(ctx, entry, "main_broken", { detail: "main unhealthy at merge time, re-preparing" });
-      ctx.store.transition(entry.id, "preparing_head", { ...CLEAN_CI, ...CLEAN_SPEC }, "main unhealthy at merge time");
-      return;
-    }
-  }
+  // The queue gates only on its own spec CI. main's CI status is irrelevant to
+  // landing: the spec was built on current main (the fast-forward check above
+  // guarantees main hasn't diverged) and its checks passed, so pushing it advances
+  // main to a green SHA. We never wait for main's own CI to settle, and never pause
+  // the queue because main is red — a red main is either flaky or fixed by landing
+  // this green spec. main CI is information-only (out-of-band breakage canary).
 
   try {
     await ctx.git.push(entry.specBranch, false, ctx.baseBranch);

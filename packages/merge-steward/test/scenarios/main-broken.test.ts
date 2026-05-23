@@ -6,133 +6,56 @@ import type { CIStatus } from "../../src/types.ts";
 const prA: SimPR = { number: 1, branch: "feat-a", files: [{ path: "a.ts", content: "a" }] };
 const prPriority: SimPR = { number: 2, branch: "feat-priority", files: [{ path: "priority.ts", content: "priority" }], priority: 1 };
 
-describe("main branch broken", () => {
-  it("pauses queue when main CI is red, resumes when green", async () => {
-    let mainStatus: CIStatus = "pass";
-
+// The queue gates only on its own speculative-SHA CI. main's own CI is information-only
+// and never controls queue advancement.
+describe("main CI is ignored by the queue", () => {
+  it("does not pause the queue when main CI is red — a green spec lands anyway", async () => {
     const h = await createHarness({ ciRule: () => "pass" });
-
-    // Inject getMainStatus into CI sim.
-    h.ciSim.getMainStatus = async () => mainStatus;
+    // main is red the whole time.
+    h.ciSim.getMainStatus = async () => "fail";
 
     await h.enqueue(prA);
-
-    // First tick promotes to preparing_head.
-    await h.tick();
-    assert.strictEqual(h.entries[0]!.status, "preparing_head");
-
-    // Main goes red.
-    mainStatus = "fail";
-
-    // Tick — should stay in preparing_head (not rebase against broken main).
-    await h.tick();
-    assert.strictEqual(h.entries[0]!.status, "preparing_head",
-      "Should stay in preparing_head when main is broken");
-
-    // Tick again — still waiting for main to recover.
-    await h.tick();
-    assert.strictEqual(h.entries[0]!.status, "preparing_head");
-
-    // Main goes green.
-    mainStatus = "pass";
-
-    // Now it should proceed.
-    await h.tick();
-    assert.strictEqual(h.entries[0]!.status, "validating",
-      "Should advance to validating once main is green");
-
     await h.runUntilStable();
-    assert.deepStrictEqual(h.merged, [1]);
 
-    // mainGreen was set to false by onMainBroken (informational), but
-    // the invariant is that no PR was merged while main was broken —
-    // reset for the final invariant check since main recovered before merge.
-    h.mainGreen = true;
+    assert.deepStrictEqual(h.merged, [1], "green spec should land even though main CI is red");
     h.assertInvariants();
   });
 
-  it("holds a ready-to-merge entry in merging when main is only pending, preserving spec + CI", async () => {
-    // When main is pending (its own post-merge CI still running), the gate
-    // must not throw away the green spec — the next entry has to stay in
-    // merging so that a single tick can land it as soon as main settles.
-    let mainStatus: CIStatus = "pass";
+  it("does not wait for main CI when it is pending — lands immediately", async () => {
     const h = await createHarness({ ciRule: () => "pass" });
-    h.ciSim.getMainStatus = async () => mainStatus;
+    // main never settles (its own post-merge CI keeps running).
+    h.ciSim.getMainStatus = async () => "pending";
 
     await h.enqueue(prA);
-    // Drive the entry up to merging with a fully green spec.
-    for (let i = 0; i < 20 && h.entries[0]?.status !== "merging"; i++) {
-      await h.tick();
-    }
-    const entry = h.entries[0]!;
-    assert.strictEqual(entry.status, "merging", "entry should reach merging");
-    const specBranchBefore = entry.specBranch;
-    const specShaBefore = entry.specSha;
-    const ciRunIdBefore = entry.ciRunId;
-    assert.ok(specBranchBefore, "spec branch should be set before the merge gate");
-    assert.ok(specShaBefore, "spec SHA should be set before the merge gate");
-
-    // Main turns pending (its own verification workflow is still running).
-    mainStatus = "pending";
-
-    await h.tick();
-    const held = h.entries[0]!;
-    assert.strictEqual(held.status, "merging", "pending main must not demote to preparing_head");
-    assert.strictEqual(held.specBranch, specBranchBefore, "spec branch preserved");
-    assert.strictEqual(held.specSha, specShaBefore, "spec SHA preserved");
-    assert.strictEqual(held.ciRunId, ciRunIdBefore, "CI run ID preserved");
-
-    // Main resolves green; the next tick should land it without re-running CI.
-    mainStatus = "pass";
     await h.runUntilStable();
-    assert.deepStrictEqual(h.merged, [1]);
+
+    assert.deepStrictEqual(h.merged, [1], "should land without waiting for main CI to settle");
+    h.assertInvariants();
   });
 
-  it("does not wait for duplicate main CI when main is at an already-validated merge commit", async () => {
-    let mainStatus: CIStatus = "pass";
+  it("lands downstream entries back-to-back without waiting for main's post-merge CI", async () => {
     const h = await createHarness({ ciRule: () => "pass", speculativeDepth: 2 });
-    h.ciSim.getMainStatus = async () => mainStatus;
+    // main's own CI is perpetually pending; the queue must not wait for it between landings.
+    h.ciSim.getMainStatus = async () => "pending";
 
     await h.enqueue(prA);
     await h.enqueue({ number: 3, branch: "feat-b", files: [{ path: "b.ts", content: "b" }] });
+    await h.runUntilStable();
 
-    await h.tick(); // promote both
-    await h.tick(); // A starts validating
-    await h.tick(); // A ready to merge, B starts validating on top of A
-    const firstSpecSha = h.entries.find((entry) => entry.prNumber === 1)?.specSha;
-    assert.ok(firstSpecSha, "first entry should have a speculative SHA before merge");
-    h.githubSim.setRefChecks(firstSpecSha, [{ name: "Tests", conclusion: "success" }]);
-    await h.tick(); // A merges, B becomes ready to merge
-
-    assert.deepStrictEqual(h.merged, [1]);
-    assert.strictEqual(h.entries.find((entry) => entry.prNumber === 3)?.status, "merging");
-
-    mainStatus = "pending";
-    await h.tick();
-
-    assert.deepStrictEqual(h.merged, [1, 3]);
-    assert.ok(
-      h.reconcileEvents.some((event) => event.prNumber === 3 && event.action === "main_pending_bypassed"),
-      "should record that duplicate main CI was bypassed for the downstream merge",
-    );
+    assert.deepStrictEqual(h.merged, [1, 3], "both entries should land without main-CI gating between them");
+    h.assertInvariants();
   });
 
-  it("lets a priority entry bypass red main while normal entries stay blocked behind it", async () => {
-    let mainStatus: CIStatus = "fail";
+  it("keeps merge order while ignoring red main — priority lands first, both land", async () => {
+    const mainStatus: CIStatus = "fail";
     const h = await createHarness({ ciRule: () => "pass" });
     h.ciSim.getMainStatus = async () => mainStatus;
 
     await h.enqueue(prA);
     await h.enqueue(prPriority);
-
     await h.runUntilStable();
 
-    assert.deepStrictEqual(h.merged, [2], "priority entry should merge ahead of the normal queue");
-    assert.strictEqual(h.entryStatus(prA), "preparing_head", "normal entry should remain blocked on broken main");
-    assert.strictEqual(h.entryStatus(prPriority), "merged");
-
-    mainStatus = "pass";
-    await h.runUntilStable();
-    assert.deepStrictEqual(h.merged, [2, 1]);
+    assert.deepStrictEqual(h.merged, [2, 1], "priority merges first; both land despite red main");
+    h.assertInvariants();
   });
 });
