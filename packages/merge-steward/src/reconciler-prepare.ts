@@ -2,45 +2,6 @@ import type { MergeResult, QueueEntry } from "./types.ts";
 import type { ReconcileContext } from "./reconciler-core.ts";
 import { CLEAN_CI, CLEAN_SPEC, emit, isBudgetExhausted, isRetryGated, ref, specBranchName } from "./reconciler-core.ts";
 import { evictEntry } from "./reconciler-evict.ts";
-import { getEffectiveMainStatus } from "./reconciler-main-status.ts";
-
-function summarizeCheckNames(checks: Array<{ name: string }>, limit = 3): string {
-  const names = [...new Set(checks.map((check) => check.name))];
-  if (names.length <= limit) {
-    return names.join(", ");
-  }
-  return `${names.slice(0, limit).join(", ")} +${names.length - limit} more`;
-}
-
-function normalizeCheckName(name: string): string {
-  return name.trim().toLowerCase();
-}
-
-function getMissingRequiredChecks(requiredChecks: string[], checks: Array<{ name: string }>): string[] {
-  if (requiredChecks.length === 0) {
-    return [];
-  }
-  const available = new Set(checks.map((check) => normalizeCheckName(check.name)).filter(Boolean));
-  return requiredChecks.filter((check) => !available.has(normalizeCheckName(check)));
-}
-
-function describeMainBroken(
-  failingChecks: Array<{ name: string }>,
-  pendingChecks: Array<{ name: string }>,
-  missingRequiredChecks: string[],
-): string {
-  const parts: string[] = [];
-  if (missingRequiredChecks.length > 0) {
-    parts.push(`missing required ${missingRequiredChecks.join(", ")}`);
-  }
-  if (failingChecks.length > 0) {
-    parts.push(`failing ${summarizeCheckNames(failingChecks)}`);
-  }
-  if (pendingChecks.length > 0) {
-    parts.push(`pending ${summarizeCheckNames(pendingChecks)}`);
-  }
-  return parts.length > 0 ? `main checks unhealthy: ${parts.join("; ")}` : "main checks unhealthy";
-}
 
 export async function prepareEntry(
   ctx: ReconcileContext,
@@ -77,51 +38,8 @@ export async function prepareEntry(
   }
 
   if (isHead) {
-    const bypassMainBlock = entry.priority > 0;
-    if (ctx.ci.getMainStatus && !bypassMainBlock) {
-      const mainStatus = await getEffectiveMainStatus(ctx, baseSha);
-      if (mainStatus.trustedMergedEntryId) {
-        emit(ctx, entry, "main_pending_bypassed", {
-          baseSha,
-          detail: `main checks pending for already-validated merge of PR #${mainStatus.trustedMergedPrNumber}`,
-        });
-      }
-      if (mainStatus.status !== "pass") {
-        let mainChecks: Array<{ name: string; conclusion: "success" | "failure" | "pending"; url?: string | undefined }> = [];
-        try {
-          mainChecks = await ctx.github.listChecksForRef(ref(ctx, ctx.baseBranch));
-        } catch {
-          mainChecks = [];
-        }
-        const failingChecks = mainChecks.filter((check) => check.conclusion === "failure");
-        const pendingChecks = mainChecks.filter((check) => check.conclusion === "pending");
-        let missingRequiredChecks = getMissingRequiredChecks(ctx.policy.getRequiredChecks(), mainChecks);
-        if (missingRequiredChecks.length > 0) {
-          try {
-            const refresh = await ctx.policy.refreshOnIssue("main_missing_required_checks");
-            if (refresh.attempted && refresh.changed) {
-              missingRequiredChecks = getMissingRequiredChecks(ctx.policy.getRequiredChecks(), mainChecks);
-              emit(ctx, entry, "policy_changed", {
-                detail: `GitHub required checks changed from [${refresh.previousRequiredChecks.join(", ") || "(none)"}] to [${refresh.requiredChecks.join(", ") || "(none)"}]`,
-              });
-              if (missingRequiredChecks.length === 0 && failingChecks.length === 0 && pendingChecks.length === 0) {
-                return;
-              }
-            }
-          } catch {
-            // Keep using the last known GitHub policy and surface the current block.
-          }
-        }
-        emit(ctx, entry, "main_broken", {
-          baseSha,
-          failingChecks,
-          pendingChecks,
-          missingRequiredChecks,
-          detail: describeMainBroken(failingChecks, pendingChecks, missingRequiredChecks),
-        });
-        return;
-      }
-    }
+    // Preparing/validating the head never waits on main's CI: the spec is built on
+    // current main and gated solely on its own checks. main's health is information-only.
 
     if (isBudgetExhausted(entry) && entry.lastFailedBaseSha !== null) {
       emit(ctx, entry, "budget_exhausted", { baseSha });

@@ -269,12 +269,12 @@ test("merge-steward observations explain when merge is blocked on approval", () 
   assert.match(observations[1]?.text ?? "", /blocked until GitHub approval returns/i);
 });
 
-test("merge-steward observations explain when merge is waiting on main verification", () => {
+test("merge-steward observations describe a CI-green entry as landing, never waiting on main", () => {
   const detail = makeDetail({
     entry: {
       ...makeDetail().entry,
       status: "merging",
-      waitDetail: "main checks still pending, holding merge",
+      waitDetail: null,
     },
   });
 
@@ -286,5 +286,7 @@ test("merge-steward observations explain when merge is waiting on main verificat
     queueBlock: null,
   });
 
-  assert.match(observations[1]?.text ?? "", /waiting for main verification before landing/i);
+  const text = observations.map((observation) => observation.text).join(" ");
+  assert.match(text, /landing on main/i);
+  assert.doesNotMatch(text, /waiting for main verification/i);
 });

@@ -1,7 +1,7 @@
 import type { Logger } from "pino";
 import type { GitOperations, CIRunner, GitHubPRApi, EvictionReporter, SpeculativeBranchBuilder } from "./interfaces.ts";
 import type { QueueStore } from "./store.ts";
-import type { CheckResult, QueueBlockState, QueueReconcileResult, QueueRuntimeStatus, ReconcileEvent, ReconcileEventSummary } from "./types.ts";
+import type { QueueBlockState, QueueReconcileResult, QueueRuntimeStatus, ReconcileEvent, ReconcileEventSummary } from "./types.ts";
 import type { StewardConfig } from "./config.ts";
 import type { GitHubPolicyCache } from "./github-policy.ts";
 import { reconcile } from "./reconciler.ts";
@@ -15,13 +15,8 @@ export class MergeStewardRuntime {
   private lastTickOutcome: QueueRuntimeStatus["lastTickOutcome"] = "idle";
   private lastTickError: string | null = null;
   private lastReconcileEvent: ReconcileEventSummary | null = null;
+  // The queue never blocks on main CI, so this stays null; kept for status-shape stability.
   private currentQueueBlock: QueueBlockState | null = null;
-  // Per-entry timestamp of the last info-level `merge_waiting_main` log.
-  // The event fires every tick while the gate waits, so subsequent ticks
-  // log at debug to avoid spamming; a re-emission of info every ~5 min keeps
-  // long waits visible in `service logs` without drowning it out.
-  private readonly waitingMainInfoAt = new Map<string, number>();
-  private static readonly WAITING_MAIN_INFO_INTERVAL_MS = 5 * 60 * 1000;
 
   constructor(
     private readonly config: StewardConfig,
@@ -138,7 +133,6 @@ export class MergeStewardRuntime {
     this.scheduleStaleTickWarning(this.lastTickStartedAt);
     try {
       await this.beforeTick?.();
-      let tickQueueBlockEvent: ReconcileEvent | null = null;
       await reconcile({
         store: this.store,
         repoId: this.config.repoId,
@@ -159,29 +153,12 @@ export class MergeStewardRuntime {
             || event.action === "merge_rejected" || event.action === "budget_exhausted";
           const isDebug = event.action === "ci_pending" || event.action === "retry_gated"
             || event.action === "fetch_started";
-          let level: "warn" | "debug" | "info" = isWarn ? "warn" : isDebug ? "debug" : "info";
-          if (event.action === "merge_waiting_main") {
-            // The event fires every ~tick while the gate waits on main's own
-            // CI.  Log at info the first time (so an operator can see *why*
-            // the head entry is parked in merging) and once every interval
-            // after, debug on the intermediate ticks to avoid spamming.
-            const last = this.waitingMainInfoAt.get(event.entryId);
-            const now = Date.now();
-            if (last === undefined || now - last >= MergeStewardRuntime.WAITING_MAIN_INFO_INTERVAL_MS) {
-              level = "info";
-              this.waitingMainInfoAt.set(event.entryId, now);
-            } else {
-              level = "debug";
-            }
-          }
+          const level: "warn" | "debug" | "info" = isWarn ? "warn" : isDebug ? "debug" : "info";
           this.logger[level]({ ...event }, `Queue: ${event.action} PR #${event.prNumber}`);
-
-          if (event.action === "main_broken" && tickQueueBlockEvent === null) {
-            tickQueueBlockEvent = event;
-          }
         },
       });
-      this.currentQueueBlock = tickQueueBlockEvent ? await this.describeMainBroken(tickQueueBlockEvent) : null;
+      // The queue never blocks on main CI — main health is information-only.
+      this.currentQueueBlock = null;
       this.lastTickOutcome = "succeeded";
     } catch (error) {
       this.lastTickOutcome = "failed";
@@ -200,49 +177,6 @@ export class MergeStewardRuntime {
       this.scheduleNextTick();
     }
     return true;
-  }
-
-  private async describeMainBroken(event: ReconcileEvent): Promise<QueueBlockState> {
-    const baseRef = `origin/${this.config.baseBranch}`;
-    let baseSha: string | null = null;
-    try {
-      baseSha = await this.git.headSha(baseRef);
-    } catch {
-      try {
-        baseSha = await this.git.headSha(this.config.baseBranch);
-      } catch {
-        baseSha = event.baseSha ?? null;
-      }
-    }
-
-    const checkRef = event.baseSha ?? baseSha ?? baseRef;
-    let checks: CheckResult[] = [];
-    try {
-      checks = await this.github.listChecksForRef(checkRef);
-    } catch {
-      checks = [];
-    }
-
-    return {
-      reason: "main_broken",
-      entryId: event.entryId,
-      headPrNumber: event.prNumber,
-      baseBranch: this.config.baseBranch,
-      baseSha,
-      observedAt: event.at,
-      failingChecks: event.failingChecks ?? checks.filter((check) => check.conclusion === "failure"),
-      pendingChecks: event.pendingChecks ?? checks.filter((check) => check.conclusion === "pending"),
-      missingRequiredChecks: event.missingRequiredChecks ?? this.getMissingRequiredChecks(checks),
-    };
-  }
-
-  private getMissingRequiredChecks(checks: CheckResult[]): string[] {
-    const requiredChecks = this.policy.getRequiredChecks();
-    if (requiredChecks.length === 0) {
-      return [];
-    }
-    const available = new Set(checks.map((check) => check.name.trim().toLowerCase()).filter(Boolean));
-    return requiredChecks.filter((check) => !available.has(check.trim().toLowerCase()));
   }
 }
 
