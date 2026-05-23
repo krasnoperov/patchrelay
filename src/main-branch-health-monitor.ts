@@ -3,18 +3,13 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { AppConfig, LinearClientProvider } from "./types.ts";
-import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
 import { resolvePreferredCompletedLinearState } from "./linear-workflow.ts";
 import {
   buildMainRepairBranchName,
-  buildMainRepairDescription,
-  buildMainRepairPromptContext,
-  buildMainRepairTitle,
   isMainRepairIssue,
   type MainRepairCheckSummary,
 } from "./main-repair.ts";
 import { execCommand } from "./utils.ts";
-import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
 const MAIN_BRANCH_HEALTH_GRACE_MS = 120_000;
 
@@ -34,11 +29,13 @@ function isUnhealthyMainConclusion(conclusion: string | null | undefined): boole
 }
 
 export class MainBranchHealthMonitor {
+  /** Per-project throttle for the information-only "main is red" log. */
+  private readonly lastUnhealthyReportAt = new Map<string, number>();
+
   constructor(
     private readonly db: PatchRelayDatabase,
     private readonly config: AppConfig,
     private readonly linearProvider: LinearClientProvider,
-    private readonly wakeDispatcher: WakeDispatcher,
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
   ) {}
@@ -66,69 +63,36 @@ export class MainBranchHealthMonitor {
       return;
     }
 
-    const protocol = resolveMergeQueueProtocol(project);
-    if (existing) {
-      const age = Date.now() - Date.parse(existing.updatedAt);
-      if (age < MAIN_BRANCH_HEALTH_GRACE_MS) {
-        return;
-      }
-    }
-    if (existing) {
-      this.queueExistingMainRepair(existing, summary, protocol.priorityLabel);
+    // main CI is red. The merge queue (merge-steward) gates only on its own
+    // speculative-SHA checks and ignores main entirely, so a red main no longer
+    // warrants an automated repair job — main CI is information-only. Report it
+    // (throttled) and post nothing. Any pre-existing repair issue is left to close
+    // via resolveRecoveredMainRepair once main recovers.
+    this.reportUnhealthyMain(projectId, project.github.repoFullName, baseBranch, summary);
+  }
+
+  private reportUnhealthyMain(
+    projectId: string,
+    repoFullName: string,
+    baseBranch: string,
+    summary: MainRepairCheckSummary,
+  ): void {
+    const now = Date.now();
+    const lastReportedAt = this.lastUnhealthyReportAt.get(projectId);
+    if (lastReportedAt !== undefined && now - lastReportedAt < MAIN_BRANCH_HEALTH_GRACE_MS) {
       return;
     }
-
-    const client = await this.linearProvider.forProject(projectId);
-    if (!client?.createIssue) {
-      this.logger.warn({ projectId, repoFullName: project.github.repoFullName }, "Cannot create main repair issue because Linear issue creation is unavailable");
-      return;
-    }
-
-    const created = await client.createIssue({
-      teamId: project.linearTeamIds[0]!,
-      title: buildMainRepairTitle(project),
-      description: buildMainRepairDescription(project, summary, protocol.priorityLabel),
-    });
-
-    const issue = this.db.upsertIssue({
-      projectId,
-      linearIssueId: created.id,
-      delegatedToPatchRelay: true,
-      ...(created.identifier ? { issueKey: created.identifier } : {}),
-      ...(created.title ? { title: created.title } : {}),
-      ...(created.description ? { description: created.description } : {}),
-      ...(created.url ? { url: created.url } : {}),
-      ...(created.priority != null ? { priority: created.priority } : {}),
-      ...(created.estimate != null ? { estimate: created.estimate } : {}),
-      ...(created.stateName ? { currentLinearState: created.stateName } : {}),
-      ...(created.stateType ? { currentLinearStateType: created.stateType } : {}),
-      branchName,
-      factoryState: "delegated",
-    });
-
-    this.wakeDispatcher.recordEventAndDispatch(projectId, issue.linearIssueId, {
-      eventType: "delegated",
-      eventJson: JSON.stringify({
-        runType: "main_repair",
+    this.lastUnhealthyReportAt.set(projectId, now);
+    this.logger.warn(
+      {
+        projectId,
+        repoFullName,
+        baseBranch,
         baseSha: summary.baseSha,
-        failingChecks: summary.failingChecks,
-        pendingChecks: summary.pendingChecks,
-        priorityLabel: protocol.priorityLabel,
-        promptContext: buildMainRepairPromptContext(project, summary, protocol.priorityLabel),
-      }),
-      dedupeKey: `main_repair:${projectId}:${summary.baseSha}:${summary.failingChecks.map((check) => check.name).join("|")}`,
-    });
-
-    this.feed?.publish({
-      level: "warn",
-      kind: "github",
-      issueKey: issue.issueKey,
-      projectId,
-      stage: "delegated",
-      status: "main_repair_queued",
-      summary: `Queued main_repair for ${project.github.repoFullName}@${baseBranch}`,
-      detail: summary.failingChecks.map((check) => check.name).join(", "),
-    });
+        failingChecks: summary.failingChecks.map((check) => check.name),
+      },
+      "main branch CI is red — information only; no repair job posted (merge queue gates on its own spec CI)",
+    );
   }
 
   private findExistingMainRepair(projectId: string, branchName: string): IssueRecord | undefined {
@@ -156,39 +120,6 @@ export class MainBranchHealthMonitor {
     if (issue.factoryState === "delegated" || issue.factoryState === "implementing") return 2;
     if (issue.factoryState === "failed" || issue.factoryState === "escalated") return 3;
     return 4;
-  }
-
-  private queueExistingMainRepair(issue: IssueRecord, summary: MainRepairCheckSummary, priorityLabel: string): void {
-    if (issue.activeRunId !== undefined) return;
-    if (this.db.issueSessions.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId)) return;
-    if (issue.prState === "open" || issue.factoryState === "awaiting_queue" || issue.factoryState === "pr_open") return;
-
-    this.db.upsertIssue({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      delegatedToPatchRelay: true,
-      factoryState: "delegated",
-      pendingRunType: null,
-      pendingRunContextJson: null,
-      activeRunId: null,
-    });
-
-    this.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
-      eventType: "delegated",
-      eventJson: JSON.stringify({
-        runType: "main_repair",
-        baseSha: summary.baseSha,
-        failingChecks: summary.failingChecks,
-        pendingChecks: summary.pendingChecks,
-        priorityLabel,
-        promptContext: buildMainRepairPromptContext(
-          this.config.projects.find((project) => project.id === issue.projectId) ?? { id: issue.projectId },
-          summary,
-          priorityLabel,
-        ),
-      }),
-      dedupeKey: `main_repair:${issue.projectId}:${summary.baseSha}:${summary.failingChecks.map((check) => check.name).join("|")}`,
-    });
   }
 
   private async resolveRecoveredMainRepair(issue: IssueRecord): Promise<void> {
