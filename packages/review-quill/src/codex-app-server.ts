@@ -29,6 +29,11 @@ export interface StartTurnOptions {
   cwd: string;
 }
 
+export interface InterruptTurnOptions {
+  threadId: string;
+  turnId: string;
+}
+
 export function resolveCodexAppServerLaunch(config: CodexAppServerConfig): { command: string; args: string[] } {
   if (!config.sourceBashrc) {
     return { command: config.bin, args: config.args };
@@ -116,6 +121,13 @@ export class CodexAppServerClient extends EventEmitter {
       turnId: String(response.turn.id),
       status: String(response.turn.status),
     };
+  }
+
+  async interruptTurn(options: InterruptTurnOptions): Promise<void> {
+    await this.sendRequest("turn/interrupt", {
+      threadId: options.threadId,
+      expectedTurnId: options.turnId,
+    });
   }
 
   async readThread(threadId: string): Promise<CodexThreadSummary> {

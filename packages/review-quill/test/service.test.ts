@@ -285,6 +285,126 @@ test("triggerReconcile retires active attempts for merged pull requests", async 
   assert.equal(updates.length, 1);
 });
 
+test("executeReview skips stale heads before starting Codex review work", async () => {
+  let storedAttempt: Record<string, unknown> | undefined;
+  const updates: Array<Record<string, unknown>> = [];
+  let runnerCalled = false;
+
+  const service = new ReviewQuillService(
+    {
+      server: { bind: "127.0.0.1", port: 8788 },
+      database: { path: ":memory:", wal: true },
+      logging: { level: "info" },
+      reconciliation: {
+        pollIntervalMs: 1_000,
+        heartbeatIntervalMs: 1_000,
+        staleQueuedAfterMs: 60_000,
+        staleRunningAfterMs: 60_000,
+      },
+      codex: {
+        bin: "codex",
+        args: [],
+        approvalPolicy: "never",
+        sandboxMode: "danger-full-access",
+      },
+      prompting: { replaceSections: {} },
+      repositories: [
+        {
+          repoId: "subtitles",
+          repoFullName: "krasnoperov/subtitles",
+          baseBranch: "main",
+          requiredChecks: [],
+          excludeBranches: [],
+          reviewDocs: [],
+          diffIgnore: [],
+          diffSummarizeOnly: [],
+          patchBodyBudgetTokens: 5_000,
+        },
+      ],
+      secretSources: {},
+    } as never,
+    {
+      createAttempt: (params: Record<string, unknown>) => {
+        storedAttempt = {
+          id: 99,
+          ...params,
+          createdAt: "2026-05-25T00:00:00.000Z",
+          updatedAt: "2026-05-25T00:00:00.000Z",
+        };
+        return storedAttempt;
+      },
+      updateAttempt: (_id: number, params: Record<string, unknown>) => {
+        updates.push(params);
+        storedAttempt = {
+          ...storedAttempt,
+          ...params,
+        };
+        return storedAttempt;
+      },
+      setAttemptTitle: () => undefined,
+    } as never,
+    {
+      getPullRequest: async () => ({
+        number: 1220,
+        title: "Translate S01E26 Modelo treinta to EN+RU",
+        url: "https://github.com/krasnoperov/subtitles/pull/1220",
+        state: "OPEN",
+        isDraft: false,
+        headSha: "new-head",
+        headRefName: "feature/podcast-translate-s01e26",
+        baseRefName: "main",
+        labels: [],
+      }),
+    } as never,
+    {
+      review: async () => {
+        runnerCalled = true;
+        throw new Error("runner should not be called for stale heads");
+      },
+    } as never,
+    { info() {}, warn() {}, error() {}, child() { return this; } } as never,
+  );
+
+  await (service as unknown as {
+    executeReview: (
+      repo: unknown,
+      pr: unknown,
+      existing?: unknown,
+      identity?: unknown,
+    ) => Promise<void>;
+  }).executeReview(
+    {
+      repoId: "subtitles",
+      repoFullName: "krasnoperov/subtitles",
+      baseBranch: "main",
+      requiredChecks: [],
+      excludeBranches: [],
+      reviewDocs: [],
+      diffIgnore: [],
+      diffSummarizeOnly: [],
+      patchBodyBudgetTokens: 5_000,
+    },
+    {
+      number: 1220,
+      title: "Translate S01E26 Modelo treinta to EN+RU",
+      url: "https://github.com/krasnoperov/subtitles/pull/1220",
+      state: "OPEN",
+      isDraft: false,
+      headSha: "old-head",
+      headRefName: "feature/podcast-translate-s01e26",
+      baseRefName: "main",
+      labels: [],
+    },
+  );
+
+  assert.equal(runnerCalled, false);
+  assert.equal(storedAttempt?.status, "superseded");
+  assert.equal(storedAttempt?.conclusion, "skipped");
+  assert.match(String(storedAttempt?.summary), /Superseded by newer head new-head/);
+  assert.ok(updates.some((update) => update.status === "running"));
+  assert.ok(updates.some((update) => update.status === "superseded"));
+});
+
 function buildParallelTestService(
   options: {
     repos?: Array<{ repoId: string; repoFullName: string }>;
@@ -430,6 +550,52 @@ test("dispatchReview deduplicates the same (repo, pr, head) — only one executi
   release();
   await Promise.all([a, b, c]);
   assert.equal(executionCount, 1);
+});
+
+test("dispatchReview aborts older in-flight workers for the same pull request", async () => {
+  const service = buildParallelTestService();
+  const signals = new Map<string, AbortSignal | undefined>();
+  const release: Array<() => void> = [];
+
+  (service as unknown as {
+    executeReview: (
+      repo: unknown,
+      pr: { headSha: string },
+      existing?: unknown,
+      identity?: unknown,
+      signal?: AbortSignal,
+    ) => Promise<void>;
+  }).executeReview = async (_repo, pr, _existing, _identity, signal) => {
+    signals.set(pr.headSha, signal);
+    await new Promise<void>((resolve) => release.push(resolve));
+  };
+
+  const dispatch = (service as unknown as {
+    dispatchReview: (
+      repo: unknown,
+      pr: unknown,
+      existing?: unknown,
+      identity?: unknown,
+    ) => Promise<void>;
+  }).dispatchReview.bind(service);
+
+  const repo = { repoFullName: "krasnoperov/alpha", repoId: "alpha" } as never;
+  const oldWork = dispatch(repo, { number: 1, headSha: "old-head" } as never);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(signals.get("old-head")?.aborted, false);
+
+  const newWork = dispatch(repo, { number: 1, headSha: "new-head" } as never);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(signals.get("old-head")?.aborted, true);
+  assert.match(String(signals.get("old-head")?.reason), /Superseded by newer head new-head/);
+  assert.equal(signals.get("new-head")?.aborted, false);
+
+  while (release.length > 0) {
+    release.shift()!();
+  }
+  await Promise.all([oldWork, newWork]);
 });
 
 test("review semaphore caps in-flight executions at maxConcurrentReviews", async () => {

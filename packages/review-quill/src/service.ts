@@ -12,7 +12,7 @@ import type {
 } from "./types.ts";
 import type { SqliteStore } from "./db/sqlite-store.ts";
 import type { GitHubClient } from "./github-client.ts";
-import type { ReviewRunner } from "./review-runner.ts";
+import { ReviewRunInterruptedError, type ReviewRunner } from "./review-runner.ts";
 import { AttemptReconciler } from "./attempt-reconciler.ts";
 import { decorateAttempt } from "./attempt-state.ts";
 import { getLatestAttemptsByPullRequest } from "./attempt-summary.ts";
@@ -44,6 +44,13 @@ import { ReviewSemaphore } from "./review-semaphore.ts";
  *  local Codex, disk, and GitHub API behavior under bursty review load. */
 const DEFAULT_MAX_CONCURRENT_REVIEWS = 4;
 
+class ReviewExecutionSupersededError extends Error {
+  constructor(readonly summary: string) {
+    super(summary);
+    this.name = "ReviewExecutionSupersededError";
+  }
+}
+
 export class ReviewQuillService {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private readonly startedAt = new Date().toISOString();
@@ -56,6 +63,7 @@ export class ReviewQuillService {
    * head_sha)` constraint on `review_attempts`.
    */
   private readonly inFlightReviews = new Map<string, Promise<void>>();
+  private readonly inFlightReviewSignals = new Map<string, AbortController>();
   private readonly semaphore: ReviewSemaphore;
   private readonly reconciler: AttemptReconciler;
   private readonly runtime: ReviewQuillRuntimeStatus = {
@@ -294,11 +302,23 @@ export class ReviewQuillService {
     const inFlight = this.inFlightReviews.get(key);
     if (inFlight) return inFlight;
 
+    this.supersedeInFlightReviewsForPullRequest(repo, pr.number, pr.headSha);
+    const controller = new AbortController();
+    this.inFlightReviewSignals.set(key, controller);
     const work = (async () => {
       const release = await this.semaphore.acquire();
       try {
-        await this.executeReview(repo, pr, existing, identity);
+        await this.executeReview(repo, pr, existing, identity, controller.signal);
       } catch (error) {
+        if (error instanceof ReviewExecutionSupersededError) {
+          this.logger.info({
+            repo: repo.repoFullName,
+            prNumber: pr.number,
+            headSha: pr.headSha,
+            summary: error.summary,
+          }, "Skipped superseded review worker before attempt creation");
+          return;
+        }
         this.logger.error({
           repo: repo.repoFullName,
           prNumber: pr.number,
@@ -308,11 +328,40 @@ export class ReviewQuillService {
       } finally {
         release();
         this.inFlightReviews.delete(key);
+        this.inFlightReviewSignals.delete(key);
       }
     })();
 
     this.inFlightReviews.set(key, work);
     return work;
+  }
+
+  private supersedeInFlightReviewsForPullRequest(
+    repo: ReviewQuillRepositoryConfig,
+    prNumber: number,
+    currentHeadSha: string,
+  ): void {
+    const prefix = `${repo.repoFullName}::${prNumber}::`;
+    for (const [key, controller] of this.inFlightReviewSignals.entries()) {
+      if (!key.startsWith(prefix) || key === `${prefix}${currentHeadSha}` || controller.signal.aborted) {
+        continue;
+      }
+      controller.abort(`Superseded by newer head ${currentHeadSha.slice(0, 12)} before review started.`);
+      this.logger.info({
+        repo: repo.repoFullName,
+        prNumber,
+        currentHeadSha,
+        supersededKey: key,
+      }, "Superseded older in-flight review worker for pull request");
+    }
+  }
+
+  private throwIfReviewSuperseded(signal: AbortSignal | undefined): void {
+    if (!signal?.aborted) return;
+    const reason = typeof signal.reason === "string" && signal.reason.trim()
+      ? signal.reason.trim()
+      : "Superseded by newer head before review started.";
+    throw new ReviewExecutionSupersededError(reason);
   }
 
   /**
@@ -330,6 +379,7 @@ export class ReviewQuillService {
     await this.reconciler.reconcileClosedPullRequestAttempts(repo, prs);
     for (const pr of prs) {
       await this.reconciler.reconcileActiveAttemptsForPullRequest(repo, pr);
+      this.supersedeInFlightReviewsForPullRequest(repo, pr.number, pr.headSha);
       const currentReviews = await this.github.listPullRequestReviews(repo.repoFullName, pr.number);
       const existing = this.store.getAttempt(repo.repoFullName, pr.number, pr.headSha);
       const eligibility = await this.evaluateEligibility(repo, pr.number, pr.headSha, pr.isDraft, pr.headRefName);
@@ -430,7 +480,9 @@ export class ReviewQuillService {
     pr: Awaited<ReturnType<GitHubClient["listOpenPullRequests"]>>[number],
     existingAttempt?: ReturnType<SqliteStore["getAttempt"]>,
     identity?: ChangeIdentity,
+    signal?: AbortSignal,
   ): Promise<void> {
+    this.throwIfReviewSuperseded(signal);
     // Plan §3.6: the publication policy below (inline-vs-body-only)
     // must match whatever materializeReviewWorkspaceWithMode actually
     // produced. buildReviewContext resolves surface mode straight from
@@ -476,6 +528,30 @@ export class ReviewQuillService {
         status: "running",
         externalCheckRunId: null,
       });
+      this.throwIfReviewSuperseded(signal);
+
+      const preflightPr = await this.github.getPullRequest(repo.repoFullName, pr.number);
+      const preflightDisposition = classifyPublicationDisposition(preflightPr, pr.headSha);
+      if (preflightDisposition.action !== "publish") {
+        const superseded = preflightDisposition.action === "supersede";
+        this.store.updateAttempt(attempt.id, {
+          status: superseded ? "superseded" : "cancelled",
+          conclusion: "skipped",
+          summary: preflightDisposition.summary,
+          externalCheckRunId: null,
+          completedAt: new Date().toISOString(),
+        });
+        this.logger.info({
+          repo: repo.repoFullName,
+          prNumber: pr.number,
+          reviewedHeadSha: pr.headSha,
+          currentHeadSha: preflightPr.headSha,
+          action: preflightDisposition.action,
+        }, "Skipping stale review before Codex execution");
+        return;
+      }
+      this.throwIfReviewSuperseded(signal);
+
       heartbeat = setInterval(() => {
         this.store.updateAttempt(attempt.id, {});
       }, this.config.reconciliation.heartbeatIntervalMs);
@@ -512,30 +588,32 @@ export class ReviewQuillService {
         }
         throw error;
       }
-      // Log diff packer stats so production reviews show the same
-      // numbers the `review-quill diff --json` CLI exposes locally.
-      // Useful for spotting drift in budget pressure / hallucinated paths
-      // / pure-deletion files across many PRs without re-running the CLI.
-      const reasons = prepared.context.diff.suppressed.reduce<Record<string, number>>((acc, entry) => {
-        acc[entry.reason] = (acc[entry.reason] ?? 0) + 1;
-        return acc;
-      }, {});
-      this.logger.info({
-        repo: repo.repoFullName,
-        prNumber: pr.number,
-        headSha: pr.headSha,
-        inventoryCount: prepared.context.diff.inventory.length,
-        patchCount: prepared.context.diff.patches.length,
-        suppressedCount: prepared.context.diff.suppressed.length,
-        suppressedReasons: reasons,
-        patchBodyBudgetTokens: repo.patchBodyBudgetTokens,
-      }, "Diff packer stats");
       let result: Awaited<ReturnType<ReviewRunner["review"]>>;
       try {
-        result = await this.runner.review(prepared.context);
+        this.throwIfReviewSuperseded(signal);
+        // Log diff packer stats so production reviews show the same
+        // numbers the `review-quill diff --json` CLI exposes locally.
+        // Useful for spotting drift in budget pressure / hallucinated paths
+        // / pure-deletion files across many PRs without re-running the CLI.
+        const reasons = prepared.context.diff.suppressed.reduce<Record<string, number>>((acc, entry) => {
+          acc[entry.reason] = (acc[entry.reason] ?? 0) + 1;
+          return acc;
+        }, {});
+        this.logger.info({
+          repo: repo.repoFullName,
+          prNumber: pr.number,
+          headSha: pr.headSha,
+          inventoryCount: prepared.context.diff.inventory.length,
+          patchCount: prepared.context.diff.patches.length,
+          suppressedCount: prepared.context.diff.suppressed.length,
+          suppressedReasons: reasons,
+          patchBodyBudgetTokens: repo.patchBodyBudgetTokens,
+        }, "Diff packer stats");
+        result = await this.runner.review(prepared.context, signal ? { signal } : {});
       } finally {
         await prepared.dispose();
       }
+      this.throwIfReviewSuperseded(signal);
       const { reviewBody, inlineComments, filteredFindings, event, dropStats } = renderReviewArtifacts({
         verdict: result.verdict,
         inventoryPaths: prepared.context.diff.inventory.map((entry) => entry.path),
@@ -623,6 +701,44 @@ export class ReviewQuillService {
         publicationMode: "body_only",
       });
     } catch (error) {
+      if (error instanceof ReviewExecutionSupersededError) {
+        this.store.updateAttempt(attempt.id, {
+          status: "superseded",
+          conclusion: "skipped",
+          summary: error.summary,
+          externalCheckRunId: null,
+          completedAt: new Date().toISOString(),
+        });
+        this.logger.info({
+          repo: repo.repoFullName,
+          prNumber: pr.number,
+          headSha: pr.headSha,
+          attemptId: attempt.id,
+          summary: error.summary,
+        }, "Review attempt superseded before Codex execution");
+        return;
+      }
+      if (error instanceof ReviewRunInterruptedError) {
+        this.store.updateAttempt(attempt.id, {
+          status: "superseded",
+          conclusion: "skipped",
+          summary: error.message,
+          threadId: error.threadId ?? null,
+          turnId: error.turnId ?? null,
+          externalCheckRunId: null,
+          completedAt: new Date().toISOString(),
+        });
+        this.logger.info({
+          repo: repo.repoFullName,
+          prNumber: pr.number,
+          headSha: pr.headSha,
+          attemptId: attempt.id,
+          threadId: error.threadId,
+          turnId: error.turnId,
+          summary: error.message,
+        }, "Review attempt interrupted after being superseded");
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn({ repo: repo.repoFullName, prNumber: pr.number, error: message }, "Review attempt failed");
       const latest = this.store.updateAttempt(attempt.id, {

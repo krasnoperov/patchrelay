@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ReviewRunner } from "../src/review-runner.ts";
+import { ReviewRunInterruptedError, ReviewRunner } from "../src/review-runner.ts";
 import type { ReviewQuillConfig } from "../src/types.ts";
 
 function minimalConfig(): ReviewQuillConfig {
@@ -191,4 +191,63 @@ test("ReviewRunner retries Codex turn start when rollout jsonl is empty", async 
   assert.equal(result.turnId, "turn-1");
   assert.equal(startTurnCalls, 2);
   assert.deepEqual(sleeps, [750]);
+});
+
+test("ReviewRunner interrupts a running Codex turn when the review signal aborts", async () => {
+  const controller = new AbortController();
+  let readCalls = 0;
+  let interruptCalls = 0;
+  const sleeps: number[] = [];
+  const fakeCodex = {
+    start: async () => {},
+    stop: async () => {},
+    startThread: async () => ({ id: "thread-1", turns: [] }),
+    startTurn: async () => ({ turnId: "turn-1", status: "running" }),
+    interruptTurn: async (options: { threadId: string; turnId: string }) => {
+      interruptCalls += 1;
+      assert.deepEqual(options, { threadId: "thread-1", turnId: "turn-1" });
+    },
+    readThread: async () => {
+      readCalls += 1;
+      if (readCalls === 1) {
+        controller.abort("Superseded by newer head new-head before review completed.");
+      }
+      return {
+        id: "thread-1",
+        turns: [
+          {
+            id: "turn-1",
+            status: interruptCalls > 0 ? "interrupted" : "inProgress",
+            items: [],
+          },
+        ],
+      };
+    },
+  };
+  const runner = new ReviewRunner(
+    minimalConfig(),
+    { warn: () => {}, child: () => ({}) } as never,
+    fakeCodex as never,
+    async (ms) => {
+      sleeps.push(ms);
+    },
+  );
+
+  await assert.rejects(
+    () => runner.review({
+      prompt: "Review this PR.",
+      workspace: { worktreePath: "/tmp/review-quill-test" },
+    } as never, { signal: controller.signal }),
+    (error: unknown) => {
+      assert.ok(error instanceof ReviewRunInterruptedError);
+      assert.equal(error.threadId, "thread-1");
+      assert.equal(error.turnId, "turn-1");
+      assert.match(error.message, /Superseded by newer head new-head/);
+      return true;
+    },
+  );
+
+  assert.equal(interruptCalls, 1);
+  assert.equal(readCalls, 1);
+  assert.deepEqual(sleeps, []);
 });

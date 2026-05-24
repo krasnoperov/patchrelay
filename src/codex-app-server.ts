@@ -51,6 +51,11 @@ export interface SteerTurnOptions {
   input: string;
 }
 
+export interface InterruptTurnOptions {
+  threadId: string;
+  turnId: string;
+}
+
 export interface SetThreadGoalOptions {
   threadId: string;
   objective: string;
@@ -355,6 +360,13 @@ export class CodexAppServerClient extends EventEmitter {
           text_elements: [],
         },
       ],
+    });
+  }
+
+  async interruptTurn(options: InterruptTurnOptions): Promise<void> {
+    await this.sendRequest("turn/interrupt", {
+      threadId: options.threadId,
+      expectedTurnId: options.turnId,
     });
   }
 
