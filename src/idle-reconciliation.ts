@@ -148,6 +148,10 @@ export class IdleIssueReconciler {
     if (issue.prNumber === undefined) return false;
     if (issue.activeRunId !== undefined) return false;
     if (issue.pendingRunType !== undefined) return false;
+    // A merged PR cannot be un-merged: never re-probe it back toward the
+    // queue. This matters for deploy-failed issues (escalated while
+    // prState === "merged") — recovery-to-awaiting_queue would be wrong.
+    if (issue.prState === "merged") return false;
     return issue.factoryState === "escalated" || issue.factoryState === "failed";
   }
 
