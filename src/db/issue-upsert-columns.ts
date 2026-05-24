@@ -96,6 +96,7 @@ export const ISSUE_COLUMN_DEFS: Record<IssueColumnKey, IssueColumnDef> = {
   zombieRecoveryAttempts: { column: "zombie_recovery_attempts", insertDefault: 0 },
   lastZombieRecoveryAt: { column: "last_zombie_recovery_at" },
   orchestrationSettleUntil: { column: "orchestration_settle_until" },
+  deployStartedAt: { column: "deploy_started_at" },
 };
 
 export const ISSUE_COLUMN_KEYS = Object.keys(ISSUE_COLUMN_DEFS) as IssueColumnKey[];

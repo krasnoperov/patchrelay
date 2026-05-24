@@ -5,6 +5,7 @@ import type { LinearClientProvider } from "./types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
 import { resolveClosedPrDisposition, resolveClosedPrFactoryState } from "./pr-state.ts";
+import { resolvePostMergeFactoryState } from "./post-merge-deploy.ts";
 import { resolvePreferredCompletedLinearState } from "./linear-workflow.ts";
 import { syncGitHubLinearSession } from "./github-linear-session-sync.ts";
 import type { AppConfig } from "./types.ts";
@@ -24,6 +25,11 @@ export async function handleGitHubTerminalPrEvent(params: {
 }): Promise<void> {
   const { db, linearProvider, wakeDispatcher, logger, codex, issue, event, config } = params;
   const eventType = event.triggerEvent === "pr_merged" ? "pr_merged" : "pr_closed";
+  // PR3: when the project configures a deploy workflow, a merge enters the
+  // `deploying` watch state instead of completing immediately. Linear
+  // completion is deferred until the deploy succeeds (idle reconciler).
+  const project = config.projects.find((candidate) => candidate.id === issue.projectId);
+  const postMergeState = resolvePostMergeFactoryState(project);
   db.issueSessions.appendIssueSessionEvent({
     projectId: issue.projectId,
     linearIssueId: issue.linearIssueId,
@@ -57,13 +63,14 @@ export async function handleGitHubTerminalPrEvent(params: {
       });
     }
     const terminalFactoryState = event.triggerEvent === "pr_merged"
-      ? "done"
+      ? postMergeState
       : resolveClosedPrFactoryState(issue);
     db.issues.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       activeRunId: null,
       factoryState: terminalFactoryState,
+      ...(terminalFactoryState === "deploying" ? { deployStartedAt: new Date().toISOString() } : {}),
     });
   };
   const activeLease = db.issueSessions.getActiveIssueSessionLease(issue.projectId, issue.linearIssueId);
@@ -87,7 +94,12 @@ export async function handleGitHubTerminalPrEvent(params: {
       eventType: "child_delivered",
       wakeDispatcher,
     });
-    await completeLinearIssueAfterMerge(params, updatedIssue);
+    // Only complete Linear now when there's no deploy to watch. While
+    // `deploying`, the issue stays in the Deploying state and the idle
+    // reconciler completes it once the deploy workflow succeeds.
+    if (postMergeState === "done") {
+      await completeLinearIssueAfterMerge(params, updatedIssue);
+    }
   }
   void syncGitHubLinearSession({
     config,

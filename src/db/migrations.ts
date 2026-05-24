@@ -375,6 +375,10 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   removeRetiredIssueColumnsIfPresent(connection);
   addColumnIfMissing(connection, "issues", "issue_triage_hash", "TEXT");
   addColumnIfMissing(connection, "issues", "issue_triage_result_json", "TEXT");
+  // PR3: post-merge deploy tracking. Timestamp the issue entered the
+  // `deploying` state, so the deploy watcher only considers deploy runs
+  // created at/after the merge (and can time out a never-arriving deploy).
+  addColumnIfMissing(connection, "issues", "deploy_started_at", "TEXT");
 }
 
 function addColumnIfMissing(connection: DatabaseConnection, table: string, column: string, definition: string): void {

@@ -223,10 +223,9 @@ function resolveDesiredActiveWorkflowState(
   }
 
   // 4. Post-merge: the change is on main, deploy running → Deploying.
-  //    Durable signal: the PR is merged. (Until PR3 makes merge a
-  //    non-terminal phase this only fires in the merged-not-yet-done
-  //    window; branch 2 already caught factoryState==="done".)
-  if (normalize(issue.prState) === "merged") {
+  //    Durable signals: factoryState === "deploying" (post-merge deploy
+  //    watch in progress) or the PR is merged but not yet done.
+  if (issue.factoryState === "deploying" || normalize(issue.prState) === "merged") {
     return resolvePreferredDeployingLinearState(liveIssue);
   }
 

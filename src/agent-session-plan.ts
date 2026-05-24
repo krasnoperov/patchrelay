@@ -208,6 +208,13 @@ export function buildAgentSessionPlan(params: {
       ], ["completed", "completed", "completed", "inProgress"]);
     case "repairing_queue":
       return setStatuses(queueRepairPlan(params.queueRepairAttempts ?? 1), ["completed", "completed", "completed", "inProgress"]);
+    case "deploying":
+      return setStatuses([
+        { content: "Prepare workspace", status: "completed" },
+        { content: "Verification passed", status: "completed" },
+        { content: "Merged", status: "completed" },
+        { content: "Deploying", status: "inProgress" },
+      ], ["completed", "completed", "completed", "inProgress"]);
     case "awaiting_input":
       return awaitingInputPlan();
     case "escalated":

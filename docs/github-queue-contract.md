@@ -185,8 +185,11 @@ github: {
   specBranchPattern?: string;       // default: "mq-spec-*"
   noCacheLabel?: string;            // default: "review:no-cache"
   queuedForDeployLabel?: string;    // default: "queued-for-deploy"
+  deployWorkflowName?: string;      // opt-in: GH Actions workflow that deploys main post-merge
 }
 ```
+
+When `deployWorkflowName` is set, a merged issue enters the `deploying` state and patchrelay watches that workflow's runs on the base branch: success → Done, failure → escalated (operator attention), and a 20-minute timeout backstops a deploy that never arrives (the change is already on `main`). When unset, a merge advances straight to Done.
 
 Resolved through `resolveMergeQueueProtocol()` (`src/merge-queue-protocol.ts`); internal code reads the resolver, never `project.github.*` directly.
 

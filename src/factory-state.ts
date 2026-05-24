@@ -11,6 +11,7 @@ export type FactoryState =
   | "repairing_ci"
   | "awaiting_queue"
   | "repairing_queue"
+  | "deploying"
   | "awaiting_input"
   | "escalated"
   | "done"

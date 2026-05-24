@@ -22,6 +22,8 @@ export interface MergeQueueProtocolConfig {
   specBranchPattern: string;
   noCacheLabel: string;
   queuedForDeployLabel: string;
+  /** Deploy workflow to watch post-merge; undefined disables tracking. */
+  deployWorkflowName?: string | undefined;
 }
 
 export function resolveMergeQueueProtocol(project?: ProjectConfig): MergeQueueProtocolConfig {
@@ -35,5 +37,6 @@ export function resolveMergeQueueProtocol(project?: ProjectConfig): MergeQueuePr
     specBranchPattern: project?.github?.specBranchPattern ?? DEFAULT_SPEC_BRANCH_PATTERN,
     noCacheLabel: project?.github?.noCacheLabel ?? DEFAULT_NO_CACHE_LABEL,
     queuedForDeployLabel: project?.github?.queuedForDeployLabel ?? DEFAULT_QUEUED_FOR_DEPLOY_LABEL,
+    deployWorkflowName: project?.github?.deployWorkflowName,
   };
 }
