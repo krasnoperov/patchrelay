@@ -27,6 +27,31 @@ export type PrStatusKind =
 
 export type PrStatusSource = "queue" | "github";
 
+const TERMINAL_QUEUE_STATUSES = new Set(["merged", "evicted", "dequeued"]);
+
+/**
+ * Live position of an entry among the entries actually still in the queue,
+ * ordered the way the reconciler processes them (priority DESC, position
+ * ASC). This is what an operator means by "where am I in line" — unlike the
+ * raw `position`, which is a lifetime admission counter that only ever
+ * grows (every PR ever queued bumps it), so a value like 290 reads as "289
+ * ahead" when in reality only a couple of entries are active.
+ */
+export interface QueueActiveRank {
+  rank: number;
+  activeTotal: number;
+}
+
+export function computeActiveRank(entries: QueueEntry[], target: QueueEntry): QueueActiveRank | undefined {
+  if (TERMINAL_QUEUE_STATUSES.has(target.status)) return undefined;
+  const active = entries
+    .filter((entry) => !TERMINAL_QUEUE_STATUSES.has(entry.status))
+    .sort((a, b) => (b.priority - a.priority) || (a.position - b.position));
+  const index = active.findIndex((entry) => entry.id === target.id);
+  if (index < 0) return undefined;
+  return { rank: index + 1, activeTotal: active.length };
+}
+
 export interface PrStatusReport {
   repoId: string;
   repoFullName: string;
@@ -38,6 +63,7 @@ export interface PrStatusReport {
   reason?: string;
   queueEntry?: QueueEntry;
   queueSource?: "service" | "database";
+  queueActiveRank?: QueueActiveRank;
   queueRuntime?: QueueRuntimeStatus;
   queueLatestEvent?: QueueEventSummary;
   github?: PrGitHubOverview;
@@ -121,7 +147,7 @@ function findEntryForPr(snapshot: QueueWatchSnapshot, prNumber: number): QueueEn
 }
 
 async function loadQueueEntry(config: StewardConfig, prNumber: number): Promise<
-  | { kind: "found"; entry: QueueEntry; source: "service" | "database"; runtime?: QueueRuntimeStatus; latestEvent?: QueueEventSummary }
+  | { kind: "found"; entry: QueueEntry; source: "service" | "database"; activeRank?: QueueActiveRank; runtime?: QueueRuntimeStatus; latestEvent?: QueueEventSummary }
   | { kind: "not_found" }
   | { kind: "unavailable" }
 > {
@@ -130,11 +156,13 @@ async function loadQueueEntry(config: StewardConfig, prNumber: number): Promise<
     const entry = findEntryForPr(snapshot, prNumber);
     if (!entry) return { kind: "not_found" };
     const latestEvent = latestEventForPr(snapshot, prNumber);
+    const activeRank = computeActiveRank(snapshot.entries, entry);
     return {
       kind: "found",
       entry,
       source: "service",
       runtime: snapshot.runtime,
+      ...(activeRank ? { activeRank } : {}),
       ...(latestEvent ? { latestEvent } : {}),
     };
   } catch (error) {
@@ -143,7 +171,8 @@ async function loadQueueEntry(config: StewardConfig, prNumber: number): Promise<
     }
     const store = new SqliteStore(config.database.path);
     try {
-      const entries = store.listAll(config.repoId).filter((entry) => entry.prNumber === prNumber);
+      const all = store.listAll(config.repoId);
+      const entries = all.filter((entry) => entry.prNumber === prNumber);
       if (entries.length === 0) return { kind: "not_found" };
       entries.sort((left, right) => {
         const leftTerminal = ["merged", "evicted", "dequeued"].includes(left.status) ? 1 : 0;
@@ -151,7 +180,9 @@ async function loadQueueEntry(config: StewardConfig, prNumber: number): Promise<
         if (leftTerminal !== rightTerminal) return leftTerminal - rightTerminal;
         return right.position - left.position;
       });
-      return { kind: "found", entry: entries[0]!, source: "database" };
+      const entry = entries[0]!;
+      const activeRank = computeActiveRank(all, entry);
+      return { kind: "found", entry, source: "database", ...(activeRank ? { activeRank } : {}) };
     } finally {
       store.close();
     }
@@ -172,6 +203,7 @@ export interface BuildReportOptions {
   prNumber: number;
   queueEntry?: QueueEntry | undefined;
   queueSource?: "service" | "database" | undefined;
+  queueActiveRank?: QueueActiveRank | undefined;
   queueRuntime?: QueueRuntimeStatus | undefined;
   queueLatestEvent?: QueueEventSummary | undefined;
   github?: PrGitHubOverview | undefined;
@@ -191,6 +223,7 @@ export function buildPrStatusReport(options: BuildReportOptions): PrStatusReport
       exitCode: exitCodeForKind(kind),
       queueEntry: options.queueEntry,
       ...(options.queueSource ? { queueSource: options.queueSource } : {}),
+      ...(options.queueActiveRank ? { queueActiveRank: options.queueActiveRank } : {}),
       ...(options.queueRuntime ? { queueRuntime: options.queueRuntime } : {}),
       ...(options.queueLatestEvent ? { queueLatestEvent: options.queueLatestEvent } : {}),
       checkedAt,
@@ -225,7 +258,12 @@ export function formatReportText(report: PrStatusReport): string {
   if (report.reason) lines.push(`Reason: ${report.reason}`);
   if (report.queueEntry) {
     const entry = report.queueEntry;
-    lines.push(`Queue position: ${entry.position}`);
+    // Show live rank among active entries — NOT the raw `position`, which is
+    // a lifetime admission counter and reads as a huge phantom backlog.
+    if (report.queueActiveRank) {
+      const { rank, activeTotal } = report.queueActiveRank;
+      lines.push(`Queue position: ${rank} of ${activeTotal} active`);
+    }
     lines.push(`Branch: ${entry.branch}`);
     lines.push(`Head SHA: ${entry.headSha}`);
     if (entry.waitDetail) lines.push(`Wait detail: ${entry.waitDetail}`);
@@ -348,6 +386,7 @@ export async function handlePrStatus(options: HandlePrStatusOptions): Promise<nu
         prNumber: resolvedPr.prNumber,
         queueEntry: queueResult.entry,
         queueSource: queueResult.source,
+        ...(queueResult.activeRank ? { queueActiveRank: queueResult.activeRank } : {}),
         ...(queueResult.runtime ? { queueRuntime: queueResult.runtime } : {}),
         ...(queueResult.latestEvent ? { queueLatestEvent: queueResult.latestEvent } : {}),
       });
