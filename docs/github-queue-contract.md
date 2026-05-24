@@ -16,7 +16,7 @@ This document is the contract for that boundary. For the mental model behind it 
 
 ## Shared Control Artifacts
 
-The bus carries five named artifacts. All five default to merge-steward / review-quill / patchrelay conventions but are configurable per project so any role can be replaced by a generic alternative without breaking the others.
+The bus carries seven named artifacts. All default to merge-steward / review-quill / patchrelay conventions but are configurable per project so any role can be replaced by a generic alternative without breaking the others.
 
 | Artifact | Default name | Writer | Readers |
 |-|-|-|-|
@@ -25,6 +25,8 @@ The bus carries five named artifacts. All five default to merge-steward / review
 | Spec branch ref | `mq-spec-<entry-id>` | Lander | Reviewer, operators |
 | No-cache PR label | `review:no-cache` | Author / human | Reviewer |
 | Queued-for-deploy Linear sub-label | `queued-for-deploy` | Author | Operators |
+| Queue-testing PR label | `queue:testing` | Lander | Author, operators |
+| Queue-merging PR label | `queue:merging` | Lander | Author, operators |
 
 Defaults preserve current behaviour bit-for-bit. Each service exposes its own configuration field for overriding the names — see [Configurable names per service](#configurable-names-per-service) below.
 
@@ -51,6 +53,17 @@ A PR carrying this label opts out of carry-forward — review-quill always runs 
 ### Queued-for-deploy Linear sub-label (Author → operators)
 
 When a project's Linear workflow does not include an In Deploy state, PatchRelay leaves the issue in In Review and adds this label so operators can distinguish *"in review, awaiting verdict"* from *"in review, queued for landing."* Removed when the issue leaves the deploy fallback (Done, eviction back to In Progress, or moves to a real In Deploy state).
+
+### Queue sub-state PR labels (Lander → Author, operators)
+
+Merge Steward keeps these two labels in sync with a PR's live position in the queue, so the queue phase is visible on the GitHub PR itself and readable by PatchRelay for its Linear "In Merge Queue" status. They are mutually exclusive and edge-triggered (applied/cleared only on phase change), and cleared once the entry leaves the active queue (merged, evicted, or dequeued).
+
+| Label | Set when | Meaning |
+|-|-|-|
+| `queue:testing` | entry is `validating` | Spec CI is running / awaiting its turn |
+| `queue:merging` | entry is `merging` | Head of queue, merge in progress |
+
+The Lander never touches any other label, so the admission label (`queue`), priority label (`queue:priority`), and human-applied labels are left intact.
 
 ## Ownership
 
@@ -194,6 +207,8 @@ review-quill does not need the eviction name or queued-for-deploy label.
 evictionCheckName?: string;       // default: "merge-steward/queue"
 specReadyCheckName?: string;      // default: "merge-steward/spec-ready"
 specBranchPrefix?: string;        // default: "mq-spec-" (the prefix; pattern form is "mq-spec-*")
+queueTestingLabel?: string;       // default: "queue:testing"
+queueMergingLabel?: string;       // default: "queue:merging"
 ```
 
 ### What this unlocks

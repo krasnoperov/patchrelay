@@ -181,6 +181,15 @@ export class GitHubPRClient implements GitHubPRApi {
       return [];
     }
   }
+
+  async setLabels(prNumber: number, opts: { add?: string[]; remove?: string[] }): Promise<void> {
+    const args = ["pr", "edit", String(prNumber), "--repo", this.repoFullName];
+    for (const label of opts.add ?? []) args.push("--add-label", label);
+    for (const label of opts.remove ?? []) args.push("--remove-label", label);
+    // Nothing to change beyond the base args — skip the call.
+    if (args.length === 5) return;
+    await exec("gh", args, { allowNonZero: true, githubRepoFullName: this.repoFullName });
+  }
 }
 
 /** Map GitHub REST API check-run status/conclusion to our union. */

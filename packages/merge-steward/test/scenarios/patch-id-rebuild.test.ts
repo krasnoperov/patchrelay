@@ -108,6 +108,7 @@ function stubGitHub(): GitHubPRApi {
     async listChecks() { return []; },
     async listChecksForRef() { return []; },
     async listLabels() { return []; },
+    async setLabels() {},
     async listOpenPRs() { return []; },
     async findPRByBranch() { return null; },
     async deleteBranch() { /* no-op */ },

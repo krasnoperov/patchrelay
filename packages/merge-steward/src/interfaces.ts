@@ -58,6 +58,8 @@ export interface GitHubPRApi {
   listChecks(prNumber: number): Promise<CheckResult[]>;
   listChecksForRef(ref: string): Promise<CheckResult[]>;
   listLabels(prNumber: number): Promise<string[]>;
+  /** Add and/or remove labels on a PR in a single edit. */
+  setLabels(prNumber: number, opts: { add?: string[]; remove?: string[] }): Promise<void>;
   /** List open PRs for restart-time eligibility scans. */
   listOpenPRs(): Promise<Array<{ number: number; branch: string; headSha: string }>>;
   /** Find the open PR number for a branch, or null if none exists. */

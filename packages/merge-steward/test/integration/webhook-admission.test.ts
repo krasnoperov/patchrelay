@@ -395,6 +395,9 @@ describe("webhook admission integration", () => {
       async listLabels(prNumber) {
         return await githubSim.listLabels(prNumber);
       },
+      async setLabels(prNumber, opts) {
+        await githubSim.setLabels(prNumber, opts);
+      },
       async listOpenPRs() {
         return await githubSim.listOpenPRs();
       },

@@ -16,6 +16,10 @@ export interface ReconcileContext {
   speculativeDepth: number;
   flakyRetries: number;
   policy: GitHubPolicyCache;
+  /** Queue sub-state label names. When set, the reconciler keeps the
+   * `testing`/`merging` labels on each PR in sync with its phase so the
+   * queue position is visible on GitHub. Omit to disable label sync. */
+  queueStateLabels?: { testing: string; merging: string };
   onEvent: (event: ReconcileEvent) => void;
 }
 

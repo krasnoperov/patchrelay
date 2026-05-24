@@ -150,6 +150,11 @@ export class GitHubSim implements GitHubPRApi {
     const pr = this.prs.get(prNumber);
     if (pr) pr.labels = pr.labels.filter((l) => l !== label);
   }
+
+  async setLabels(prNumber: number, opts: { add?: string[]; remove?: string[] }): Promise<void> {
+    for (const label of opts.remove ?? []) this.removeLabel(prNumber, label);
+    for (const label of opts.add ?? []) this.addLabel(prNumber, label);
+  }
 }
 
 /**
