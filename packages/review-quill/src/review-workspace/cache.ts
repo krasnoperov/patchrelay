@@ -3,6 +3,7 @@ import path from "node:path";
 import { getReviewQuillPathLayout } from "../runtime-paths.ts";
 import { ensureDir } from "../utils.ts";
 import { gitCloneBare } from "./git.ts";
+import { withRepoCacheMutation } from "./cache-mutex.ts";
 
 function cacheDirName(repoFullName: string): string {
   return `${repoFullName.replaceAll("/", "__")}.git`;
@@ -17,8 +18,10 @@ export async function ensureRepoCache(repoFullName: string, token: string): Prom
   const cacheRoot = path.join(layout.dataDir, "git-cache");
   await ensureDir(cacheRoot);
   const cachePath = path.join(cacheRoot, cacheDirName(repoFullName));
-  if (!existsSync(cachePath)) {
-    await gitCloneBare(repoUrl(repoFullName), cachePath, token);
-  }
+  await withRepoCacheMutation(cachePath, async () => {
+    if (!existsSync(cachePath)) {
+      await gitCloneBare(repoUrl(repoFullName), cachePath, token);
+    }
+  });
   return cachePath;
 }

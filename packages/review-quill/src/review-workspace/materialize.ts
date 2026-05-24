@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ensureRepoCache } from "./cache.ts";
+import { withRepoCacheMutation } from "./cache-mutex.ts";
 import {
   gitCheckoutDetached,
   gitCommitTree,
@@ -76,11 +77,13 @@ export async function materializeReviewWorkspaceWithMode(params: {
 }): Promise<MaterializeResult> {
   const surfaceMode = params.surfaceMode ?? "head";
   const cachePath = await ensureRepoCache(params.repoFullName, params.token);
-  await gitFetchReviewRefs(cachePath, params.baseBranch, params.pr.number, params.token);
   const worktreePath = await mkdtemp(path.join(tmpdir(), "review-quill-"));
   const headRef = `refs/remotes/pull/${params.pr.number}/head`;
   const baseRef = `refs/remotes/origin/${params.baseBranch}`;
-  await gitWorktreeAddDetached(cachePath, worktreePath, headRef);
+  await withRepoCacheMutation(cachePath, async () => {
+    await gitFetchReviewRefs(cachePath, params.baseBranch, params.pr.number, params.token);
+    await gitWorktreeAddDetached(cachePath, worktreePath, headRef);
+  });
   await gitCheckoutDetached(worktreePath, params.pr.headSha);
 
   let workspaceHeadSha = params.pr.headSha;
@@ -90,7 +93,7 @@ export async function materializeReviewWorkspaceWithMode(params: {
     const baseSha = await gitMergeBase(worktreePath, baseRef, params.pr.headSha);
     const merge = await gitMergeTree(worktreePath, baseSha, params.pr.headSha);
     if (merge.conflict) {
-      await gitWorktreeRemove(cachePath, worktreePath).catch(() => undefined);
+      await withRepoCacheMutation(cachePath, () => gitWorktreeRemove(cachePath, worktreePath)).catch(() => undefined);
       await rm(worktreePath, { recursive: true, force: true }).catch(() => undefined);
       return { kind: "cannot_integrate", headSha: params.pr.headSha, baseSha };
     }
@@ -115,7 +118,7 @@ export async function materializeReviewWorkspaceWithMode(params: {
   };
 
   const dispose = async () => {
-    await gitWorktreeRemove(cachePath, worktreePath).catch(() => undefined);
+    await withRepoCacheMutation(cachePath, () => gitWorktreeRemove(cachePath, worktreePath)).catch(() => undefined);
     await rm(worktreePath, { recursive: true, force: true }).catch(() => undefined);
   };
 

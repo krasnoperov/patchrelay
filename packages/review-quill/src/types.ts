@@ -70,9 +70,8 @@ export interface ReviewQuillConfig {
     staleRunningAfterMs: number;
     /**
      * Soft cap on parallel review executions. Each review materializes its
-     * own tmp worktree and runs on its own Codex thread, so they're fully
-     * independent — the cap only exists to bound CPU / memory / API usage
-     * when a burst of webhooks lands. Defaults to 20 if unset.
+     * own tmp worktree, but executions still share the Codex app-server and
+     * per-repo git cache. Defaults to 4 if unset.
      */
     maxConcurrentReviews?: number;
   };
@@ -357,7 +356,7 @@ export interface ReviewQuillRuntimeStatus {
   lastReconcileError: string | null;
   /**
    * Number of review executions currently in flight. Bounded by
-   * `reconciliation.maxConcurrentReviews` (default 20).
+   * `reconciliation.maxConcurrentReviews` (default 4).
    */
   inFlightReviews: number;
   /**

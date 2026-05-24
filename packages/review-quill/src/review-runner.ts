@@ -22,10 +22,14 @@ type ParseResult =
 // Maximum log preview length for the raw model output when a parse
 // fails. Avoids spamming the journal with a huge diff dump.
 const PARSE_FAILURE_PREVIEW_CHARS = 200;
+const CODEX_START_MAX_ATTEMPTS = 4;
+const CODEX_START_BACKOFF_MS = 750;
 
 function isThreadMaterializationRace(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return message.includes("not materialized yet") || message.includes("includeTurns is unavailable before first user message");
+  return message.includes("not materialized yet")
+    || message.includes("includeTurns is unavailable before first user message")
+    || (message.includes("rollout-") && message.includes(".jsonl") && message.includes("is empty"));
 }
 
 function isCodexAppServerRequestTimeout(error: unknown): boolean {
@@ -227,7 +231,7 @@ export class ReviewRunner {
 
   async review(context: ReviewContext): Promise<{ verdict: ReviewVerdict; threadId: string; turnId: string }> {
     const cwd = context.workspace.worktreePath;
-    const thread = await this.codex.startThread({ cwd });
+    const thread = await this.startThreadWithMaterializationRetry(cwd);
 
     // First attempt: full prompt, fresh turn.
     const firstTurn = await this.runTurn(thread.id, cwd, context.prompt);
@@ -272,13 +276,54 @@ export class ReviewRunner {
   // message. Separate from parseModelResponse so the same pair can be
   // called twice in review() for the corrective retry.
   private async runTurn(threadId: string, cwd: string, input: string): Promise<{ latestMessage: string; turnId: string }> {
-    const started = await this.codex.startTurn({ threadId, cwd, input });
+    const started = await this.startTurnWithMaterializationRetry(threadId, cwd, input);
     const completedThread = await this.waitForTurnCompletion(threadId, started.turnId);
     const latestMessage = collectAssistantMessages(completedThread).at(-1);
     if (!latestMessage) {
       throw new Error("Review run completed without an assistant message");
     }
     return { latestMessage, turnId: started.turnId };
+  }
+
+  private async startThreadWithMaterializationRetry(cwd: string): Promise<Awaited<ReturnType<CodexRunnerClient["startThread"]>>> {
+    for (let attempt = 1; attempt <= CODEX_START_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        return await this.codex.startThread({ cwd });
+      } catch (error) {
+        if (!isThreadMaterializationRace(error) || attempt === CODEX_START_MAX_ATTEMPTS) {
+          throw error;
+        }
+        this.logger.warn({
+          attempt,
+          nextAttemptInMs: CODEX_START_BACKOFF_MS,
+        }, "Codex thread start hit materialization race; retrying");
+        await this.sleep(CODEX_START_BACKOFF_MS);
+      }
+    }
+    throw new Error("unreachable");
+  }
+
+  private async startTurnWithMaterializationRetry(
+    threadId: string,
+    cwd: string,
+    input: string,
+  ): Promise<Awaited<ReturnType<CodexRunnerClient["startTurn"]>>> {
+    for (let attempt = 1; attempt <= CODEX_START_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        return await this.codex.startTurn({ threadId, cwd, input });
+      } catch (error) {
+        if (!isThreadMaterializationRace(error) || attempt === CODEX_START_MAX_ATTEMPTS) {
+          throw error;
+        }
+        this.logger.warn({
+          threadId,
+          attempt,
+          nextAttemptInMs: CODEX_START_BACKOFF_MS,
+        }, "Codex turn start hit materialization race; retrying");
+        await this.sleep(CODEX_START_BACKOFF_MS);
+      }
+    }
+    throw new Error("unreachable");
   }
 
   private async waitForTurnCompletion(threadId: string, turnId: string): Promise<Awaited<ReturnType<CodexAppServerClient["readThread"]>>> {

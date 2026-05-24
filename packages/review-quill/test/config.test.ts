@@ -89,3 +89,25 @@ test("loadConfig preserves review surface mode and no-cache label repository opt
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("loadConfig preserves maxConcurrentReviews reconciliation override", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "review-quill-config-concurrency-"));
+  const configDir = path.join(baseDir, "config");
+  const configPath = path.join(configDir, "review-quill.json");
+
+  try {
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(configPath, JSON.stringify({
+      database: { path: path.join(baseDir, "review-quill.sqlite"), wal: true },
+      reconciliation: {
+        pollIntervalMs: 120_000,
+        maxConcurrentReviews: 3,
+      },
+    }, null, 2));
+
+    const config = loadConfig(configPath);
+    assert.equal(config.reconciliation.maxConcurrentReviews, 3);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
