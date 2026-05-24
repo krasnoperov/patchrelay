@@ -7,6 +7,7 @@ import {
   buildPrStatusReport,
   classifyGitHubOverview,
   classifyQueueEntry,
+  computeActiveRank,
   formatReportText,
   handlePrStatus,
   latestEventForPr,
@@ -521,4 +522,47 @@ test("merge-steward pr status smoke: JSON output and exit code via runCli", asyn
     const payload = JSON.parse(stdout.read());
     assert.equal(payload.kind, "changes_requested");
   });
+});
+
+test("computeActiveRank: rank is among active entries only, ignoring lifetime position", () => {
+  // Mimics the real situation: a huge lifetime position but only 2 active.
+  const entries: QueueEntry[] = [
+    makeEntry("merged", { id: "old-1", position: 100 }),
+    makeEntry("evicted", { id: "old-2", position: 200 }),
+    makeEntry("validating", { id: "head", position: 290, prNumber: 1 }),
+    makeEntry("validating", { id: "tail", position: 292, prNumber: 2 }),
+  ];
+  const head = entries[2]!;
+  const tail = entries[3]!;
+  assert.deepEqual(computeActiveRank(entries, head), { rank: 1, activeTotal: 2 });
+  assert.deepEqual(computeActiveRank(entries, tail), { rank: 2, activeTotal: 2 });
+});
+
+test("computeActiveRank: priority lane ranks ahead of an older lower-priority entry", () => {
+  const entries: QueueEntry[] = [
+    makeEntry("validating", { id: "normal", position: 10, priority: 0 }),
+    makeEntry("preparing_head", { id: "priority", position: 50, priority: 1 }),
+  ];
+  // Higher priority sorts first despite the larger lifetime position.
+  assert.deepEqual(computeActiveRank(entries, entries[1]!), { rank: 1, activeTotal: 2 });
+  assert.deepEqual(computeActiveRank(entries, entries[0]!), { rank: 2, activeTotal: 2 });
+});
+
+test("computeActiveRank: terminal entries have no live rank", () => {
+  const entries: QueueEntry[] = [makeEntry("merged", { id: "done", position: 290 })];
+  assert.equal(computeActiveRank(entries, entries[0]!), undefined);
+});
+
+test("pr status text shows live rank, never the raw lifetime position", () => {
+  const report = buildPrStatusReport({
+    repoId: "app",
+    repoFullName: "owner/app",
+    prNumber: 42,
+    queueEntry: makeEntry("validating", { position: 290 }),
+    queueSource: "service",
+    queueActiveRank: { rank: 1, activeTotal: 2 },
+  });
+  const text = formatReportText(report);
+  assert.match(text, /Queue position: 1 of 2 active/);
+  assert.doesNotMatch(text, /Queue position: 290/);
 });
