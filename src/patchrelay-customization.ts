@@ -11,6 +11,7 @@ const promptLayerSchema = z.object({
 
 const promptByRunTypeSchema = z.object({
   implementation: promptLayerSchema.optional(),
+  // main_repair is a removed run type; key retained (optional) so pre-existing configs still validate.
   main_repair: promptLayerSchema.optional(),
   review_fix: promptLayerSchema.optional(),
   branch_upkeep: promptLayerSchema.optional(),

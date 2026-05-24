@@ -2,8 +2,6 @@ import type { Logger } from "pino";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
-import { isMainRepairIssue } from "./main-repair.ts";
-import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
 import type { AppConfig } from "./types.ts";
 import { execCommand } from "./utils.ts";
 
@@ -16,7 +14,7 @@ export class ImplementationOutcomePolicy {
   ) {}
 
   async verifyPublishedRunOutcome(run: RunRecord, issue: IssueRecord): Promise<string | undefined> {
-    if (run.runType !== "implementation" && run.runType !== "main_repair") {
+    if (run.runType !== "implementation") {
       return undefined;
     }
     const project = this.config.projects.find((entry) => entry.id === run.projectId);
@@ -31,7 +29,7 @@ export class ImplementationOutcomePolicy {
   }
 
   async detectRecoverableFailedImplementationOutcome(run: RunRecord, issue: IssueRecord): Promise<string | undefined> {
-    if (run.runType !== "implementation" && run.runType !== "main_repair") {
+    if (run.runType !== "implementation") {
       return undefined;
     }
     const project = this.config.projects.find((entry) => entry.id === run.projectId);
@@ -104,9 +102,6 @@ export class ImplementationOutcomePolicy {
         );
       } else {
         this.clearObservedPrIfLeaseHeld(issue, "published PR verification found only historical PRs for branch");
-      }
-      if (isOpenPrState(state) && isMainRepairIssue(issue)) {
-        await this.ensurePriorityQueueLabel(run.projectId, pr.number, repoFullName);
       }
       return isOpenPrState(state) ? "open" : "closed";
     } catch (error) {
@@ -201,47 +196,6 @@ export class ImplementationOutcomePolicy {
     return undefined;
   }
 
-  private async ensurePriorityQueueLabel(
-    projectId: string,
-    prNumber: number,
-    repoFullName: string | undefined,
-  ): Promise<void> {
-    const project = this.config.projects.find((entry) => entry.id === projectId);
-    if (!project || !repoFullName) return;
-    const priorityLabel = resolveMergeQueueProtocol(project).priorityLabel;
-
-    try {
-      const { stdout } = await execCommand("gh", [
-        "pr",
-        "view",
-        String(prNumber),
-        "--repo",
-        repoFullName,
-        "--json",
-        "labels",
-      ], { timeoutMs: 10_000 });
-      const labels = JSON.parse(stdout) as { labels?: Array<{ name?: string }> };
-      const hasLabel = (labels.labels ?? []).some((entry) => entry.name === priorityLabel);
-      if (hasLabel) return;
-
-      await execCommand("gh", [
-        "pr",
-        "edit",
-        String(prNumber),
-        "--repo",
-        repoFullName,
-        "--add-label",
-        priorityLabel,
-      ], { timeoutMs: 10_000 });
-    } catch (error) {
-      this.logger.warn({
-        projectId,
-        prNumber,
-        priorityLabel,
-        error: error instanceof Error ? error.message : String(error),
-      }, "Failed to enforce priority queue label on main repair PR");
-    }
-  }
 }
 
 function isOpenPrState(state: string | undefined): boolean {

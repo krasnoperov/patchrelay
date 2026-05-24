@@ -25,6 +25,7 @@ function formatDuration(startedAt: string, endedAt: string): string {
 
 const RUN_LABELS: Record<string, string> = {
   implementation: "implementation",
+  // main_repair is a removed run type; label retained to render historical runs.
   main_repair: "main repair",
   ci_repair: "ci repair",
   review_fix: "review fix",

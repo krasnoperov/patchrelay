@@ -132,7 +132,7 @@ test("releaseRunAndDispatch releases the lease and enqueues if a wake is pending
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
-      runType: "main_repair",
+      runType: "implementation",
     });
     db.upsertIssue({ projectId: "proj", linearIssueId: "issue-1", activeRunId: run.id });
     db.issueSessions.appendIssueSessionEventRespectingActiveLease("proj", "issue-1", {

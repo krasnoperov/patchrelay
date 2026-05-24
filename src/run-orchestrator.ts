@@ -19,7 +19,6 @@ import type {
   LinearClientProvider,
 } from "./types.ts";
 import { MergedLinearCompletionReconciler } from "./merged-linear-completion-reconciler.ts";
-import { MainBranchHealthMonitor } from "./main-branch-health-monitor.ts";
 import { QueueHealthMonitor } from "./queue-health-monitor.ts";
 import { IdleIssueReconciler } from "./idle-reconciliation.ts";
 import { LinearSessionSync } from "./linear-session-sync.ts";
@@ -88,7 +87,6 @@ interface RunRecoveryPorts {
 
 export class RunOrchestrator {
   private readonly worktreeManager: WorktreeManager;
-  private readonly mainBranchHealthMonitor: MainBranchHealthMonitor;
   /** Tracks last probe-failure feed event per issue to avoid spamming the operator feed. */
   private readonly queueHealthMonitor: QueueHealthMonitor;
   private readonly idleReconciler: IdleIssueReconciler;
@@ -258,13 +256,6 @@ export class RunOrchestrator {
     );
     this.runWakePlanner = new RunWakePlanner(db);
     this.idleReconciler = new IdleIssueReconciler(db, config, this.wakeDispatcher, logger, feed);
-    this.mainBranchHealthMonitor = new MainBranchHealthMonitor(
-      db,
-      config,
-      linearProvider,
-      logger,
-      feed,
-    );
     this.mergedLinearCompletionReconciler = new MergedLinearCompletionReconciler(db, linearProvider, logger);
     this.queueHealthMonitor = new QueueHealthMonitor(db, config, {
       advanceIdleIssue: (issue, newState, options) => this.idleReconciler.advanceIdleIssue(issue, newState, options),
@@ -684,7 +675,6 @@ export class RunOrchestrator {
     for (const run of this.db.runs.listRunningRuns()) {
       await this.reconcileRun(run);
     }
-    await this.mainBranchHealthMonitor.reconcile();
     // Preemptively detect stuck merge-queue PRs (conflicts visible on
     // GitHub) and dispatch queue_repair before the Steward evicts.
     await this.queueHealthMonitor.reconcile();

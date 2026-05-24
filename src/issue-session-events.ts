@@ -60,7 +60,10 @@ const NON_ACTIONABLE_SESSION_EVENTS = new Set<IssueSessionEventType>([
   "run_released_authority",
 ]);
 
-const RUN_TYPES = new Set<RunType>(["implementation", "main_repair", "review_fix", "branch_upkeep", "ci_repair", "queue_repair"]);
+// "main_repair" was removed as a run type; legacy session-event payloads carrying it
+// are not in this set, so parseRunType returns undefined and callers fall back to
+// "implementation" (see deriveSessionWakePlan below).
+const RUN_TYPES = new Set<RunType>(["implementation", "review_fix", "branch_upkeep", "ci_repair", "queue_repair"]);
 
 function parseRunType(value: unknown): RunType | undefined {
   return typeof value === "string" && RUN_TYPES.has(value as RunType) ? value as RunType : undefined;
@@ -107,9 +110,7 @@ export function deriveSessionWakePlan(
       case "delegated":
         if (!runType) {
           runType = parseRunType(payload?.runType) ?? "implementation";
-          wakeReason = runType === "main_repair"
-            ? "main_repair"
-            : issue.issueClass === "orchestration" ? "initial_delegate" : "delegated";
+          wakeReason = issue.issueClass === "orchestration" ? "initial_delegate" : "delegated";
         }
         Object.assign(context, payload ?? {});
         break;

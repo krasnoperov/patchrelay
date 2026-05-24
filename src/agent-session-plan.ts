@@ -70,15 +70,6 @@ function ciRepairPlan(attempt: number): AgentSessionPlanStep[] {
   ];
 }
 
-function mainRepairPlan(attempt: number): AgentSessionPlanStep[] {
-  return [
-    { content: "Inspect main failure", status: "pending" },
-    { content: `Repairing main (${attemptLabel(attempt)})`, status: "pending" },
-    { content: "Fresh head pushed", status: "pending" },
-    { content: "Priority merge", status: "pending" },
-  ];
-}
-
 function queueRepairPlan(attempt: number): AgentSessionPlanStep[] {
   return [
     { content: "Prepare workspace", status: "completed" },
@@ -194,9 +185,7 @@ export function buildAgentSessionPlan(params: {
       return setStatuses(planForRunType(runType, params), ["inProgress", "pending", "pending", "pending"]);
     case "implementing":
       return setStatuses(
-        params.activeRunType === "main_repair" || params.pendingRunType === "main_repair"
-          ? mainRepairPlan(params.ciRepairAttempts ?? 1)
-          : planForRunType("implementation", params),
+        planForRunType("implementation", params),
         ["completed", "inProgress", "pending", "pending"],
       );
     case "pr_open":
@@ -282,8 +271,6 @@ function planForRunType(
   },
 ): AgentSessionPlanStep[] {
   switch (runType) {
-    case "main_repair":
-      return mainRepairPlan(params.ciRepairAttempts ?? 1);
     case "review_fix":
       return reviewFixPlan();
     case "branch_upkeep":
