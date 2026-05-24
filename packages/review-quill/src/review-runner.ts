@@ -25,6 +25,17 @@ const PARSE_FAILURE_PREVIEW_CHARS = 200;
 const CODEX_START_MAX_ATTEMPTS = 4;
 const CODEX_START_BACKOFF_MS = 750;
 
+export class ReviewRunInterruptedError extends Error {
+  constructor(
+    message: string,
+    readonly threadId?: string,
+    readonly turnId?: string,
+  ) {
+    super(message);
+    this.name = "ReviewRunInterruptedError";
+  }
+}
+
 function isThreadMaterializationRace(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes("not materialized yet")
@@ -38,6 +49,13 @@ function isCodexAppServerRequestTimeout(error: unknown): boolean {
 }
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+function abortedReviewMessage(signal: AbortSignal | undefined): string {
+  if (typeof signal?.reason === "string" && signal.reason.trim()) {
+    return signal.reason.trim();
+  }
+  return "Review run was interrupted before completion.";
+}
 
 function collectAssistantMessages(thread: { turns: Array<{ items: Array<{ type: string; text?: string }> }> }): string[] {
   const messages: string[] = [];
@@ -205,14 +223,15 @@ export function normalizeVerdict(raw: Record<string, unknown>): ReviewVerdict {
 }
 
 type CodexRunnerClient = Pick<CodexAppServerClient, "start" | "stop" | "startThread" | "startTurn" | "readThread">;
+type InterruptibleCodexRunnerClient = CodexRunnerClient & Partial<Pick<CodexAppServerClient, "interruptTurn">>;
 
 export class ReviewRunner {
-  private readonly codex: CodexRunnerClient;
+  private readonly codex: InterruptibleCodexRunnerClient;
 
   constructor(
     private readonly config: ReviewQuillConfig,
     private readonly logger: Logger,
-    codex?: CodexRunnerClient,
+    codex?: InterruptibleCodexRunnerClient,
     private readonly sleep: (ms: number) => Promise<void> = delay,
   ) {
     // The Codex review agent is long-lived: give it an env without GH_TOKEN/GITHUB_TOKEN
@@ -229,12 +248,14 @@ export class ReviewRunner {
     await this.codex.stop();
   }
 
-  async review(context: ReviewContext): Promise<{ verdict: ReviewVerdict; threadId: string; turnId: string }> {
+  async review(context: ReviewContext, options: { signal?: AbortSignal } = {}): Promise<{ verdict: ReviewVerdict; threadId: string; turnId: string }> {
     const cwd = context.workspace.worktreePath;
+    this.throwIfReviewRunInterrupted(options.signal);
     const thread = await this.startThreadWithMaterializationRetry(cwd);
+    this.throwIfReviewRunInterrupted(options.signal, thread.id);
 
     // First attempt: full prompt, fresh turn.
-    const firstTurn = await this.runTurn(thread.id, cwd, context.prompt);
+    const firstTurn = await this.runTurn(thread.id, cwd, context.prompt, options.signal);
     const firstParse = parseModelResponse(firstTurn.latestMessage);
     if (firstParse.ok) {
       return { verdict: firstParse.verdict, threadId: thread.id, turnId: firstTurn.turnId };
@@ -253,7 +274,7 @@ export class ReviewRunner {
     }, "Review parse failed, retrying with corrective prompt");
 
     const correctivePrompt = renderCorrectivePrompt(firstParse.reason);
-    const secondTurn = await this.runTurn(thread.id, cwd, correctivePrompt);
+    const secondTurn = await this.runTurn(thread.id, cwd, correctivePrompt, options.signal);
     const secondParse = parseModelResponse(secondTurn.latestMessage);
     if (secondParse.ok) {
       this.logger.info({
@@ -275,9 +296,10 @@ export class ReviewRunner {
   // Start a turn, wait for completion, and extract the latest assistant
   // message. Separate from parseModelResponse so the same pair can be
   // called twice in review() for the corrective retry.
-  private async runTurn(threadId: string, cwd: string, input: string): Promise<{ latestMessage: string; turnId: string }> {
+  private async runTurn(threadId: string, cwd: string, input: string, signal?: AbortSignal): Promise<{ latestMessage: string; turnId: string }> {
+    this.throwIfReviewRunInterrupted(signal, threadId);
     const started = await this.startTurnWithMaterializationRetry(threadId, cwd, input);
-    const completedThread = await this.waitForTurnCompletion(threadId, started.turnId);
+    const completedThread = await this.waitForTurnCompletion(threadId, started.turnId, signal);
     const latestMessage = collectAssistantMessages(completedThread).at(-1);
     if (!latestMessage) {
       throw new Error("Review run completed without an assistant message");
@@ -326,35 +348,88 @@ export class ReviewRunner {
     throw new Error("unreachable");
   }
 
-  private async waitForTurnCompletion(threadId: string, turnId: string): Promise<Awaited<ReturnType<CodexAppServerClient["readThread"]>>> {
+  private async waitForTurnCompletion(
+    threadId: string,
+    turnId: string,
+    signal?: AbortSignal,
+  ): Promise<Awaited<ReturnType<CodexAppServerClient["readThread"]>>> {
     const deadline = Date.now() + 15 * 60_000;
-    while (Date.now() < deadline) {
-      let thread: Awaited<ReturnType<CodexAppServerClient["readThread"]>>;
+    let interruptSubmitted = false;
+    const submitInterrupt = async (): Promise<void> => {
+      if (interruptSubmitted || !signal?.aborted) return;
+      interruptSubmitted = true;
+      if (!this.codex.interruptTurn) return;
       try {
-        thread = await this.codex.readThread(threadId);
+        await this.codex.interruptTurn({ threadId, turnId });
       } catch (error) {
-        if (isThreadMaterializationRace(error)) {
-          await this.sleep(750);
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn({ threadId, turnId, error: message }, "Codex turn interrupt failed while cancelling review");
+      }
+    };
+    const abortListener = (): void => {
+      void submitInterrupt();
+    };
+    signal?.addEventListener("abort", abortListener, { once: true });
+    try {
+      while (Date.now() < deadline) {
+        await submitInterrupt();
+        let thread: Awaited<ReturnType<CodexAppServerClient["readThread"]>>;
+        try {
+          thread = await this.codex.readThread(threadId);
+        } catch (error) {
+          if (isThreadMaterializationRace(error)) {
+            await this.sleepUntilNextPoll(750, signal);
+            continue;
+          }
+          if (isCodexAppServerRequestTimeout(error)) {
+            this.logger.warn({ threadId, turnId }, "Codex thread read timed out while waiting for review turn; continuing wait");
+            await this.sleepUntilNextPoll(1_500, signal);
+            continue;
+          }
+          throw error;
+        }
+        const turn = thread.turns.find((entry) => entry.id === turnId);
+        if (!turn) {
+          await this.sleepUntilNextPoll(1_000, signal);
           continue;
         }
-        if (isCodexAppServerRequestTimeout(error)) {
-          this.logger.warn({ threadId, turnId }, "Codex thread read timed out while waiting for review turn; continuing wait");
-          await this.sleep(1_500);
-          continue;
+        if (signal?.aborted && (turn.status === "completed" || turn.status === "interrupted" || turn.status === "cancelled")) {
+          throw new ReviewRunInterruptedError(abortedReviewMessage(signal), threadId, turnId);
         }
-        throw error;
+        if (turn.status === "completed") return thread;
+        if (turn.status === "failed" || turn.status === "interrupted" || turn.status === "cancelled") {
+          throw new Error(`Review turn ended with status ${turn.status}`);
+        }
+        await this.sleepUntilNextPoll(1_500, signal);
       }
-      const turn = thread.turns.find((entry) => entry.id === turnId);
-      if (!turn) {
-        await this.sleep(1_000);
-        continue;
-      }
-      if (turn.status === "completed") return thread;
-      if (turn.status === "failed" || turn.status === "interrupted" || turn.status === "cancelled") {
-        throw new Error(`Review turn ended with status ${turn.status}`);
-      }
-      await this.sleep(1_500);
+    } finally {
+      signal?.removeEventListener("abort", abortListener);
     }
     throw new Error("Timed out waiting for review turn completion");
+  }
+
+  private async sleepUntilNextPoll(ms: number, signal?: AbortSignal): Promise<void> {
+    if (!signal) {
+      await this.sleep(ms);
+      return;
+    }
+    if (signal.aborted) return;
+    let abortListener: (() => void) | undefined;
+    try {
+      await Promise.race([
+        this.sleep(ms),
+        new Promise<void>((resolve) => {
+          abortListener = () => resolve();
+          signal.addEventListener("abort", abortListener, { once: true });
+        }),
+      ]);
+    } finally {
+      if (abortListener) signal.removeEventListener("abort", abortListener);
+    }
+  }
+
+  private throwIfReviewRunInterrupted(signal: AbortSignal | undefined, threadId?: string, turnId?: string): void {
+    if (!signal?.aborted) return;
+    throw new ReviewRunInterruptedError(abortedReviewMessage(signal), threadId, turnId);
   }
 }

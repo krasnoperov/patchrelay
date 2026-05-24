@@ -12,6 +12,7 @@ class FakeChildProcess extends EventEmitter {
   readonly approvalResponses: Array<{ id: string; decision: string }> = [];
   readonly threadStartParams: Array<Record<string, unknown>> = [];
   readonly threadGoalSetParams: Array<Record<string, unknown>> = [];
+  readonly turnInterruptParams: Array<Record<string, unknown>> = [];
 
   constructor(private readonly scenario: string) {
     super();
@@ -174,6 +175,18 @@ class FakeChildProcess extends EventEmitter {
     }
 
     if (message.method === "turn/steer") {
+      this.sendStdout({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          ok: true,
+        },
+      });
+      return;
+    }
+
+    if (message.method === "turn/interrupt") {
+      this.turnInterruptParams.push(((message.params as Record<string, unknown>) ?? {}));
       this.sendStdout({
         jsonrpc: "2.0",
         id: message.id,
@@ -378,6 +391,17 @@ test("CodexAppServerClient handles initialize, approval requests, notifications,
       turnId: "turn-2",
       input: "Please incorporate a new Linear comment.",
     });
+
+    await client.interruptTurn({
+      threadId: "thread-1",
+      turnId: "turn-2",
+    });
+    assert.deepEqual(child.turnInterruptParams, [
+      {
+        threadId: "thread-1",
+        expectedTurnId: "turn-2",
+      },
+    ]);
 
     const thread = await client.readThread("thread-1");
     assert.equal(thread.id, "thread-1");

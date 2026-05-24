@@ -1,6 +1,6 @@
 # review-quill
 
-Self-hosted GitHub PR review bot. For each new PR head, it materializes a throwaway checkout at the exact SHA, runs a read-only Codex review pass with your repo's review docs, and publishes a normal PR review under its GitHub App identity.
+Self-hosted GitHub PR review bot. For each new PR head, it materializes a throwaway checkout at the exact SHA, runs a Codex review pass with your repo's review docs, and publishes a normal PR review under its GitHub App identity.
 
 Independent of PatchRelay. Pairs with `merge-steward`; neither requires the other.
 
@@ -12,11 +12,14 @@ For each eligible PR head:
 2. Materializes an ephemeral local checkout at that exact SHA.
 3. Builds a curated diff against the PR base branch.
 4. Loads repo review guidance plus universal `AGENTS.md` (`REVIEW_WORKFLOW.md`, `AGENTS.md` by default), plus local Markdown docs explicitly referenced by the PR title/body.
-5. Runs a review pass through `codex app-server`.
-6. Publishes an ordinary GitHub `APPROVE` or `REQUEST_CHANGES` review.
-7. Cancels stale in-flight attempts when a newer PR head lands first.
+5. Carries forward a prior approved verdict when the patch identity is unchanged.
+6. Runs a review pass through `codex app-server` when a fresh review is needed.
+7. Publishes an ordinary GitHub `APPROVE` or `REQUEST_CHANGES` review.
+8. Supersedes stale attempts and interrupts running review turns when a newer PR head lands first.
 
 The review runs against the real working tree at that SHA, not the GitHub files API.
+
+The default Codex sandbox mode is `danger-full-access` because many systemd hosts cannot run Codex's bubblewrap networking inside `read-only` / `workspace-write` modes. The reviewer still works in a throwaway checkout and review-quill publishes only through the GitHub App; it does not commit or push.
 
 By default, a PR becomes eligible for review as soon as its branch head updates. Set `waitForGreenChecks: true` per-repo to gate on configured checks first.
 
@@ -38,13 +41,14 @@ The skill wraps `review-quill pr status --wait` and `merge-steward pr status --w
 ```bash
 pnpm add -g review-quill
 review-quill init https://patchrelay.example.com/review
+# Fill service.env and install the webhook secret + GitHub App private key.
 review-quill repo attach owner/repo
 review-quill doctor --repo repo
 review-quill service status
 review-quill dashboard
 ```
 
-`init` writes config files, a systemd unit, and the generated webhook secret. `repo attach` is idempotent: it auto-discovers the default branch and required checks, stores repo-local review doc paths, and reloads the service.
+`init` writes config files and a systemd unit, then prints the webhook URL to configure in GitHub. You still need to install `review-quill-webhook-secret` and `review-quill-github-app-pem` via systemd credentials, or provide the documented environment/file fallbacks. `repo attach` is idempotent: it auto-discovers the default branch and required checks, stores repo-local review doc paths, and reloads the service.
 
 If you want machine review to count toward merge admission, include `review-quill/verdict` in the repository's required checks.
 
@@ -79,7 +83,7 @@ Three services, distinct ownership, GitHub as the shared bus:
 
 ## Reference
 
-- [docs/review-quill.md](../../docs/review-quill.md) — operator reference: GitHub App permissions, public ingress, review context pipeline, full CLI surface, troubleshooting
-- [docs/prompting.md](../../docs/prompting.md) — how the review prompt is composed
-- [docs/design-docs/review-quill.md](../../docs/design-docs/review-quill.md) — design rationale
-- [../../README.md](../../README.md) — the three-service stack overview
+- [docs/review-quill.md](https://github.com/krasnoperov/patchrelay/blob/main/docs/review-quill.md) — operator reference: GitHub App permissions, public ingress, review context pipeline, full CLI surface, troubleshooting
+- [docs/prompting.md](https://github.com/krasnoperov/patchrelay/blob/main/docs/prompting.md) — how the review prompt is composed
+- [docs/design-docs/review-quill.md](https://github.com/krasnoperov/patchrelay/blob/main/docs/design-docs/review-quill.md) — design rationale
+- [README.md](https://github.com/krasnoperov/patchrelay/blob/main/README.md) — the three-service stack overview
