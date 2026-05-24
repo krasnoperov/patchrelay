@@ -2,8 +2,15 @@ import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
+import { TERMINAL_STATES } from "./factory-state.ts";
 import type { AppConfig } from "./types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
+import {
+  DEPLOY_WATCH_TIMEOUT_MS,
+  evaluateDeploy,
+  isDeployTrackingEnabled,
+  type DeployEvaluator,
+} from "./post-merge-deploy.ts";
 import {
   buildBranchUpkeepContext,
   buildFailureContext,
@@ -33,6 +40,8 @@ export class IdleIssueReconciler {
     private readonly wakeDispatcher: WakeDispatcher,
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
+    // Injectable for tests; production uses the real `gh`-backed watcher.
+    private readonly deployEvaluator: DeployEvaluator = evaluateDeploy,
   ) {}
 
   async reconcile(): Promise<void> {
@@ -49,7 +58,7 @@ export class IdleIssueReconciler {
   private async reconcileBody(): Promise<void> {
     for (const issue of this.db.issues.listIdleNonTerminalIssues()) {
       if (issue.prState === "merged") {
-        this.advanceIdleIssue(issue, "done", { clearFailureProvenance: true });
+        await this.handleMergedIssue(issue);
         continue;
       }
 
@@ -140,6 +149,98 @@ export class IdleIssueReconciler {
     if (issue.activeRunId !== undefined) return false;
     if (issue.pendingRunType !== undefined) return false;
     return issue.factoryState === "escalated" || issue.factoryState === "failed";
+  }
+
+  // PR3: route a merged PR either into post-merge deploy tracking or
+  // straight to done. Called from both the idle pass and the GitHub
+  // reconcile path, so the deploying-vs-done decision lives in one place.
+  private async handleMergedIssue(issue: IssueRecord): Promise<void> {
+    if (issue.factoryState === "deploying") {
+      await this.watchDeploy(issue);
+      return;
+    }
+    // Already finalized (done/escalated/failed) — never re-open it.
+    if (TERMINAL_STATES.has(issue.factoryState)) return;
+    const project = this.config.projects.find((candidate) => candidate.id === issue.projectId);
+    if (isDeployTrackingEnabled(project)) {
+      this.advanceIdleIssue(issue, "deploying", { clearFailureProvenance: true });
+      this.db.issues.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        deployStartedAt: new Date().toISOString(),
+      });
+    } else {
+      this.advanceIdleIssue(issue, "done", { clearFailureProvenance: true });
+    }
+  }
+
+  // Poll the project's deploy workflow for a merged issue sitting in
+  // `deploying`: success → done, failure → escalate, still running → wait
+  // (with a timeout backstop so a never-arriving deploy can't strand it).
+  private async watchDeploy(issue: IssueRecord): Promise<void> {
+    const project = this.config.projects.find((candidate) => candidate.id === issue.projectId);
+    const protocol = resolveMergeQueueProtocol(project);
+    const workflowName = protocol.deployWorkflowName;
+    const repoFullName = protocol.repoFullName;
+    if (!workflowName || !repoFullName) {
+      // Misconfigured / tracking disabled after entering — don't strand it.
+      this.finishDeploy(issue, "done");
+      return;
+    }
+    const since = issue.deployStartedAt ?? issue.updatedAt;
+    const outcome = await this.deployEvaluator({
+      repoFullName,
+      workflowName,
+      baseBranch: protocol.baseBranch ?? "main",
+      sinceIso: since,
+      logger: this.logger,
+    });
+    if (outcome === "succeeded") {
+      this.logger.info({ issueKey: issue.issueKey, prNumber: issue.prNumber }, "Deploy succeeded; completing issue");
+      this.finishDeploy(issue, "done");
+      this.feed?.publish({
+        level: "info",
+        kind: "stage",
+        issueKey: issue.issueKey,
+        projectId: issue.projectId,
+        stage: "done",
+        status: "deployed",
+        summary: `Deploy succeeded for PR #${issue.prNumber}`,
+      });
+      return;
+    }
+    if (outcome === "failed") {
+      this.logger.warn({ issueKey: issue.issueKey, prNumber: issue.prNumber }, "Deploy failed; escalating for operator attention");
+      this.finishDeploy(issue, "escalated");
+      this.feed?.publish({
+        level: "error",
+        kind: "workflow",
+        issueKey: issue.issueKey,
+        projectId: issue.projectId,
+        stage: "deploying",
+        status: "deploy_failed",
+        summary: `Deploy failed for PR #${issue.prNumber}; needs operator attention`,
+      });
+      return;
+    }
+    // Still pending — apply the timeout backstop.
+    const sinceMs = Date.parse(since);
+    if (Number.isFinite(sinceMs) && Date.now() - sinceMs > DEPLOY_WATCH_TIMEOUT_MS) {
+      this.logger.warn(
+        { issueKey: issue.issueKey, prNumber: issue.prNumber },
+        "Deploy not observed within timeout; completing issue (change is already on main)",
+      );
+      this.finishDeploy(issue, "done");
+    }
+  }
+
+  private finishDeploy(issue: IssueRecord, state: "done" | "escalated"): void {
+    this.advanceIdleIssue(issue, state, state === "done" ? { clearFailureProvenance: true } : undefined);
+    this.db.issues.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      deployStartedAt: null,
+    });
   }
 
   advanceIdleIssue(
@@ -421,7 +522,8 @@ export class IdleIssueReconciler {
       });
       if (pr.state === "MERGED") {
         this.db.issues.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "merged" });
-        this.advanceIdleIssue(issue, "done", { clearFailureProvenance: true });
+        const merged = this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? { ...issue, prState: "merged" };
+        await this.handleMergedIssue(merged);
         return;
       }
       if (pr.state === "CLOSED") {

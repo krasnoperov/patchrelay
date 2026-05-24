@@ -246,6 +246,8 @@ function statusHeadline(
       return "Handed off downstream for merge";
     case "repairing_queue":
       return "Repairing merge handoff";
+    case "deploying":
+      return issue.prNumber !== undefined ? `Deploying merged PR #${issue.prNumber}` : "Deploying after merge";
     case "awaiting_input":
       return "Waiting for more input";
     case "failed":

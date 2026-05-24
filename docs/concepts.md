@@ -121,6 +121,8 @@ Every state is decided from durable signals — `factoryState`, `prState`, the r
 
 If a project's Linear workflow omits a state, the issue collapses to the nearest earlier phase and PatchRelay never invents a state that doesn't exist: without **In Merge Queue** the issue stays in Reviewing with a `queued-for-deploy` sub-label (configurable; see [github-queue-contract.md](./github-queue-contract.md)); without **Deploying** a merged issue advances straight to Done.
 
+Deploying is **opt-in** per project: set `github.deployWorkflowName` to the GitHub Actions workflow that deploys `main`. PatchRelay then holds the merged issue in Deploying and watches that workflow's runs on the base branch — success advances to Done, failure escalates to Human Needed, and a 20-minute timeout completes the issue if no deploy ever runs (the change is already on `main`). With no `deployWorkflowName`, a merge completes immediately.
+
 The factory's internal `factoryState` codes (`pr_open`, `awaiting_queue`, `repairing_queue`, …) map onto these five — see [architecture.md](./architecture.md#factory-state-machine).
 
 ## The author rule — don't originate redundant pushes

@@ -104,6 +104,10 @@ export interface IssueRecord {
   zombieRecoveryAttempts: number;
   lastZombieRecoveryAt?: string | undefined;
   orchestrationSettleUntil?: string | undefined;
+  /** When the issue entered the post-merge `deploying` state (ISO). Used
+   * by the deploy watcher to scope which deploy runs are relevant and to
+   * time out a deploy that never arrives. */
+  deployStartedAt?: string | undefined;
   updatedAt: string;
 }
 

@@ -34,13 +34,14 @@ const STATE_LABELS: Record<string, string> = {
   repairing_ci: "repairing_ci",
   awaiting_queue: "awaiting_queue",
   repairing_queue: "repairing_queue",
+  deploying: "deploying",
   awaiting_input: "awaiting_input",
   escalated: "escalated",
   done: "done",
   failed: "failed",
 };
 
-const MAIN_STATES = ["delegated", "implementing", "pr_open", "awaiting_queue", "done"] as const;
+const MAIN_STATES = ["delegated", "implementing", "pr_open", "awaiting_queue", "deploying", "done"] as const;
 const PR_LOOP_STATES = ["changes_requested", "repairing_ci"] as const;
 const QUEUE_LOOP_STATES = ["repairing_queue"] as const;
 const EXIT_STATES = ["awaiting_input", "escalated", "failed"] as const;
@@ -187,6 +188,12 @@ export function buildPatchRelayQueueObservations(
         text: issue.activeRunType === "queue_repair"
           ? "PatchRelay is actively repairing a queue eviction."
           : "PatchRelay is preparing or waiting to resume queue repair.",
+      });
+      break;
+    case "deploying":
+      observations.push({
+        tone: "info",
+        text: "PatchRelay merged the PR and is watching the deploy workflow on main.",
       });
       break;
     case "done":

@@ -74,6 +74,7 @@ export interface UpsertIssueParams {
   zombieRecoveryAttempts?: number;
   lastZombieRecoveryAt?: string | null;
   orchestrationSettleUntil?: string | null;
+  deployStartedAt?: string | null;
 }
 
 const CANCELED_OR_DUPLICATE_CHILD_PREDICATE = `
@@ -638,6 +639,9 @@ export function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.last_zombie_recovery_at !== null && row.last_zombie_recovery_at !== undefined ? { lastZombieRecoveryAt: String(row.last_zombie_recovery_at) } : {}),
     ...(row.orchestration_settle_until !== null && row.orchestration_settle_until !== undefined
       ? { orchestrationSettleUntil: String(row.orchestration_settle_until) }
+      : {}),
+    ...(row.deploy_started_at !== null && row.deploy_started_at !== undefined
+      ? { deployStartedAt: String(row.deploy_started_at) }
       : {}),
   };
 }
