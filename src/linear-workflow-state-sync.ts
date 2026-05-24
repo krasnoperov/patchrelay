@@ -5,10 +5,9 @@ import {
   resolvePreferredQueuedLinearState,
   resolvePreferredCompletedLinearState,
   resolvePreferredDeployingLinearState,
-  resolvePreferredDeployLinearState,
   resolvePreferredHumanNeededLinearState,
   resolvePreferredImplementingLinearState,
-  resolvePreferredReviewLinearState,
+  resolvePreferredMergeQueueLinearState,
   resolvePreferredReviewingLinearState,
 } from "./linear-workflow.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
@@ -102,25 +101,22 @@ async function syncQueuedForDeployLabel(params: {
   }
 }
 
-// True only when (a) the issue is In Deploy AND (b) the project's
-// Linear workflow has no In Deploy-equivalent state — detected by the
-// preferred-deploying state collapsing to the same name as the
-// preferred-review state. When the project does have a real In Deploy
-// state, `setIssueState` flows the issue there and the label is
-// unnecessary.
+// True only when (a) the issue is in the merge queue (`awaiting_queue`)
+// AND (b) the project's Linear workflow has no dedicated In Merge Queue
+// state — detected by the preferred merge-queue state collapsing to the
+// same name as the reviewing state. When the project has a real In Merge
+// Queue (or Deploying) state, `setIssueState` flows the issue there and
+// the label is unnecessary.
 function isQueuedForDeployFallback(
   issue: Pick<IssueRecord, "factoryState">,
   liveIssue: { workflowStates: Array<{ name: string; type?: string }> },
 ): boolean {
   if (issue.factoryState !== "awaiting_queue") return false;
-  const deploying = resolvePreferredDeployingLinearState(liveIssue);
-  const review = resolvePreferredReviewLinearState(liveIssue);
-  const deployUnstarted = resolvePreferredDeployLinearState(liveIssue);
-  if (!deploying || !review) return false;
-  // No "deploying"/"deploy" state in the workflow → both resolve to
-  // a review state. That's the fallback condition.
-  return deploying.trim().toLowerCase() === review.trim().toLowerCase()
-    && (deployUnstarted ?? "").trim().toLowerCase() === review.trim().toLowerCase();
+  const mergeQueue = resolvePreferredMergeQueueLinearState(liveIssue);
+  const reviewing = resolvePreferredReviewingLinearState(liveIssue);
+  if (!mergeQueue || !reviewing) return false;
+  // No dedicated merge-queue state → it collapses to the reviewing state.
+  return mergeQueue.trim().toLowerCase() === reviewing.trim().toLowerCase();
 }
 
 async function syncCompletedLinearState(params: {
@@ -181,65 +177,144 @@ function shouldAutoAdvanceLinearState(issue: {
   return normalizedName !== "done" && normalizedName !== "completed" && normalizedName !== "complete";
 }
 
+type WorkflowStateIssue = Pick<IssueRecord,
+  | "factoryState" | "prNumber" | "prUrl" | "prState" | "prIsDraft" | "prReviewState"
+  | "prCheckStatus" | "lastGitHubCiSnapshotJson" | "delegatedToPatchRelay">;
+type WorkflowTracked = Pick<TrackedIssueRecord, "sessionState" | "blockedByCount" | "readyForExecution">;
+
+// ─── Unified PR-lifecycle → Linear-state mapping ─────────────────────
+//
+// Five phases, in lifecycle order:
+//   Implementing → Reviewing → In Merge Queue → Deploying → Done
+//
+// Every phase is decided from DURABLE signals (factoryState, prState,
+// prReviewState) — never the ephemeral activeRunId / sessionState / run
+// type. That is what kills the Implementing↔Reviewing flap: the state
+// only moves on a real lifecycle handoff (a review verdict, an approval,
+// a merge), not on whichever transient webhook happens to recompute it
+// while a run briefly holds a lease.
+//
+// Branches are ordered "furthest along the lifecycle wins" so a stale
+// earlier signal can never pull a more-advanced issue backwards.
 function resolveDesiredActiveWorkflowState(
-  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prUrl" | "prReviewState" | "prCheckStatus" | "activeRunId" | "lastGitHubCiSnapshotJson" | "delegatedToPatchRelay">,
-  trackedIssue: Pick<TrackedIssueRecord, "sessionState" | "blockedByCount" | "readyForExecution"> | undefined,
-  options: { activeRunType?: RunType } | undefined,
+  issue: WorkflowStateIssue,
+  trackedIssue: WorkflowTracked | undefined,
+  _options: { activeRunType?: RunType } | undefined,
   liveIssue: {
     workflowStates: Array<{ name: string; type?: string }>;
   },
 ): string | undefined {
-  if (issue.factoryState === "awaiting_input" || issue.factoryState === "failed" || issue.factoryState === "escalated"
-    || trackedIssue?.sessionState === "waiting_input" || trackedIssue?.sessionState === "failed") {
+  // 1. Operator must act — overrides everything.
+  if (needsHumanAttention(issue, trackedIssue)) {
     return resolvePreferredHumanNeededLinearState(liveIssue);
   }
 
+  // 2. Completed → Done. Covers today's merge→done path (the factory has
+  //    no post-merge state yet), so a done issue never reads as Deploying.
+  if (issue.factoryState === "done") {
+    return resolvePreferredCompletedLinearState(liveIssue);
+  }
+
+  // 3. Paused with no PR and nothing for us to do → backlog.
   const blocked = (trackedIssue?.blockedByCount ?? 0) > 0;
-  const pausedNoPrWork = issue.prNumber === undefined && (!issue.delegatedToPatchRelay || blocked);
-  if (pausedNoPrWork) {
+  const noPr = issue.prNumber === undefined && !issue.prUrl;
+  if (noPr && (issue.delegatedToPatchRelay === false || blocked)) {
     return resolvePreferredQueuedLinearState(liveIssue);
   }
 
-  const activelyWorking = issue.delegatedToPatchRelay !== false && (
-    issue.activeRunId !== undefined
-    || options?.activeRunType !== undefined
-    || trackedIssue?.sessionState === "running"
-    || (issue.factoryState === "delegated" && !blocked && trackedIssue?.readyForExecution !== false)
-    || issue.factoryState === "implementing"
-    || issue.factoryState === "changes_requested"
-    || issue.factoryState === "repairing_ci"
-    || issue.factoryState === "repairing_queue"
-  );
-  if (activelyWorking) {
-    return resolvePreferredImplementingLinearState(liveIssue);
-  }
-
-  if (issue.factoryState === "awaiting_queue"
-    || issue.prReviewState === "approved"
-    || isApprovedAndGreen(issue.prReviewState, issue.prCheckStatus)) {
+  // 4. Post-merge: the change is on main, deploy running → Deploying.
+  //    Durable signal: the PR is merged. (Until PR3 makes merge a
+  //    non-terminal phase this only fires in the merged-not-yet-done
+  //    window; branch 2 already caught factoryState==="done".)
+  if (normalize(issue.prState) === "merged") {
     return resolvePreferredDeployingLinearState(liveIssue);
   }
 
-  if (hasPendingReviewQuillVerdict(issue.lastGitHubCiSnapshotJson)) {
-    return resolvePreferredReviewingLinearState(liveIssue);
+  // 5. Patchrelay is actively addressing review/CI/queue feedback →
+  //    Implementing. These factory states persist for the run's whole
+  //    duration, so this is stable, not flappy — and it is exactly the
+  //    "show when patchrelay handles feedback" behavior we want.
+  if (isAddressingFeedback(issue)) {
+    return resolvePreferredImplementingLinearState(liveIssue);
   }
 
-  const reviewBound = issue.prNumber !== undefined
-    || Boolean(issue.prUrl)
-    || issue.factoryState === "pr_open"
-    || issue.prReviewState !== undefined
-    || issue.prCheckStatus !== undefined;
-  if (reviewBound) {
-    return resolvePreferredReviewLinearState(liveIssue);
+  // 6. Approved / admitted to the merge queue → In Merge Queue.
+  if (isInMergeQueue(issue)) {
+    return resolvePreferredMergeQueueLinearState(liveIssue);
+  }
+
+  // 7. Pre-review-feedback implementation work (incl. a draft PR) →
+  //    Implementing.
+  if (isImplementing(issue, trackedIssue)) {
+    return resolvePreferredImplementingLinearState(liveIssue);
+  }
+
+  // 8. PR exists and is under review → Reviewing.
+  if (isReviewBound(issue)) {
+    return resolvePreferredReviewingLinearState(liveIssue);
   }
 
   return undefined;
 }
 
-function isApprovedAndGreen(prReviewState: string | undefined, prCheckStatus: string | undefined): boolean {
-  const normalizedReview = prReviewState?.trim().toLowerCase();
-  const normalizedChecks = prCheckStatus?.trim().toLowerCase();
-  return normalizedReview === "approved" && (normalizedChecks === "success" || normalizedChecks === "passed");
+function normalize(value: string | undefined): string | undefined {
+  const trimmed = value?.trim().toLowerCase();
+  return trimmed ? trimmed : undefined;
+}
+
+function needsHumanAttention(
+  issue: Pick<WorkflowStateIssue, "factoryState">,
+  trackedIssue: Pick<WorkflowTracked, "sessionState"> | undefined,
+): boolean {
+  return issue.factoryState === "awaiting_input"
+    || issue.factoryState === "failed"
+    || issue.factoryState === "escalated"
+    || trackedIssue?.sessionState === "waiting_input"
+    || trackedIssue?.sessionState === "failed";
+}
+
+// Active code work to address feedback. Durable factory states +
+// changes-requested review verdict — no run-id involvement. Gated on
+// delegation: an undelegated PR (operator paused us) is not being worked
+// by patchrelay, so it must not read as Implementing.
+function isAddressingFeedback(issue: Pick<WorkflowStateIssue, "factoryState" | "prReviewState" | "delegatedToPatchRelay">): boolean {
+  if (issue.delegatedToPatchRelay === false) return false;
+  return issue.factoryState === "changes_requested"
+    || issue.factoryState === "repairing_ci"
+    || issue.factoryState === "repairing_queue"
+    || normalize(issue.prReviewState) === "changes_requested";
+}
+
+// Approved and heading to / sitting in the merge queue. Not yet merged
+// (branch 4 catches merged first).
+function isInMergeQueue(issue: Pick<WorkflowStateIssue, "factoryState" | "prReviewState">): boolean {
+  return issue.factoryState === "awaiting_queue"
+    || normalize(issue.prReviewState) === "approved";
+}
+
+// Initial implementation, before review starts. A draft PR still counts
+// as implementing. Gated on delegation so we never claim Implementing
+// for work that isn't ours.
+function isImplementing(
+  issue: Pick<WorkflowStateIssue, "factoryState" | "prIsDraft" | "delegatedToPatchRelay">,
+  trackedIssue: Pick<WorkflowTracked, "blockedByCount" | "readyForExecution"> | undefined,
+): boolean {
+  if (issue.delegatedToPatchRelay === false) return false;
+  if (issue.factoryState === "implementing") return true;
+  if (issue.factoryState === "delegated") {
+    const blocked = (trackedIssue?.blockedByCount ?? 0) > 0;
+    return !blocked && trackedIssue?.readyForExecution !== false;
+  }
+  return issue.prIsDraft === true;
+}
+
+function isReviewBound(issue: Pick<WorkflowStateIssue, "factoryState" | "prNumber" | "prUrl" | "prReviewState" | "prCheckStatus" | "lastGitHubCiSnapshotJson">): boolean {
+  return issue.prNumber !== undefined
+    || Boolean(issue.prUrl)
+    || issue.factoryState === "pr_open"
+    || issue.prReviewState !== undefined
+    || issue.prCheckStatus !== undefined
+    || hasPendingReviewQuillVerdict(issue.lastGitHubCiSnapshotJson);
 }
 
 function hasPendingReviewQuillVerdict(snapshotJson: string | undefined): boolean {

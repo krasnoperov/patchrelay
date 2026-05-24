@@ -50,7 +50,7 @@ A PR carrying this label opts out of carry-forward — review-quill always runs 
 
 ### Queued-for-deploy Linear sub-label (Author → operators)
 
-When a project's Linear workflow does not include an In Deploy state, PatchRelay leaves the issue in In Review and adds this label so operators can distinguish *"in review, awaiting verdict"* from *"in review, queued for landing."* Removed when the issue leaves the deploy fallback (Done, eviction back to In Progress, or moves to a real In Deploy state).
+When a project's Linear workflow does not include an In Merge Queue state, PatchRelay leaves the issue in Reviewing and adds this label so operators can distinguish *"reviewing, awaiting verdict"* from *"reviewing, queued for landing."* Removed when the issue leaves the merge-queue fallback (Done, eviction back to Implementing, or moves to a real In Merge Queue / Deploying state).
 
 ## Ownership
 
