@@ -60,6 +60,9 @@ const NON_ACTIONABLE_SESSION_EVENTS = new Set<IssueSessionEventType>([
   "run_released_authority",
 ]);
 
+// "main_repair" was removed as a run type; legacy session-event payloads carrying it
+// are not in this set, so parseRunType returns undefined and callers fall back to
+// "implementation" (see deriveSessionWakePlan below).
 const RUN_TYPES = new Set<RunType>(["implementation", "review_fix", "branch_upkeep", "ci_repair", "queue_repair"]);
 
 function parseRunType(value: unknown): RunType | undefined {
