@@ -116,6 +116,9 @@ test("renderReviewPrompt includes explicit guidance docs and suppressed summarie
   assert.match(prompt, /Linked issue keys: TST-28/);
   assert.match(prompt, /## Review rules/);
   assert.match(prompt, /Flag only high-signal issues/);
+  assert.match(prompt, /Repository guidance is authoritative project policy/);
+  assert.match(prompt, /project-specific guidance, glossaries, samples, and PR-linked docs as the product spec/);
+  assert.match(prompt, /These documents are project-specific policy/);
   assert.match(prompt, /previous blocking review concerns are now resolved, still blocking, or no longer relevant/);
   assert.match(prompt, /Include still-blocking prior concerns and newly discovered independent blockers in the same review, up to the blocker cap/);
   assert.match(prompt, /Only raise a new blocker when it is clearly independent from the previous blockers/);

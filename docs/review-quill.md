@@ -115,7 +115,7 @@ Default context path for each reviewable PR:
 
 1. Ephemeral local checkout at the exact PR head SHA (or, in `integration_tree` mode, a synthetic merge commit — see [Review surface modes](#review-surface-modes) below).
 2. Local `git diff <base>...HEAD` inventory and curated patch set.
-3. Repo guidance: configured review docs plus universal `AGENTS.md` (`REVIEW_WORKFLOW.md`, `AGENTS.md` by default).
+3. Repo guidance: configured review docs plus universal `AGENTS.md` (`REVIEW_WORKFLOW.md`, `AGENTS.md` by default), plus local Markdown docs explicitly referenced by the PR title/body.
 4. Prior formal PR reviews from GitHub.
 5. Optional Linear issue context when issue keys appear in the PR metadata.
 
@@ -126,6 +126,8 @@ Diff context is intentionally filtered:
 - noisy/generated paths can be ignored or summarized
 - oversized patches are summarized instead of dumped whole
 - repo config tunes ignore/summarize patterns and patch budgets
+
+Review execution concurrency defaults to 4. The cap is configurable with `reconciliation.maxConcurrentReviews`; keep it conservative on hosts where many reviews share one Codex app-server and the same per-repo git cache.
 
 ## Carry-forward
 

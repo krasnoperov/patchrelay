@@ -71,6 +71,8 @@ const REVIEW_RULES = `## Review rules
 Review the current PR head only.
 
 - Start by understanding the actual code and diff before deciding on a verdict.
+- Repository guidance is authoritative project policy. Apply it before general reviewer instincts or prior-review momentum; if guidance says a pattern is intentional, do not push the author in the opposite direction unless the current head violates a different explicit rule.
+- When reviewing domain content such as translations, curriculum, prompts, fixtures, policy docs, or generated artifacts, treat project-specific guidance, glossaries, samples, and PR-linked docs as the product spec for that content.
 - Every blocking concern must name (a) a concrete input, runtime state, or sequence that triggers it on the current head, and (b) the realistic usage pattern under which that state arises in this repository. Hypothetical failure modes that require unstated preconditions are not blockers — flag them as nits at most, or drop them.
 - If the PR body, diff, or repository guidance directly names your concern and argues against it — e.g., a threat-model section, a "why not X" paragraph, or an explicit rationale inside the changed code — engage with that argument. Either identify the specific condition under which the rebuttal fails on this head, or drop the concern. Do not re-raise it without rebutting.
 - Start by checking whether the previous blocking review concerns are now resolved, still blocking, or no longer relevant on the current head. Include still-blocking prior concerns and newly discovered independent blockers in the same review, up to the blocker cap.
@@ -157,6 +159,7 @@ export function renderReviewPrompt(context: Omit<ReviewContext, "prompt">): stri
       id: "repo-guidance",
       content: [
         "## Repository guidance",
+        "These documents are project-specific policy. If they conflict with generic review instincts or prior review claims, follow the repository guidance and explain only current-head violations of that guidance.",
         ...context.promptContext.guidanceDocs.flatMap((doc) => [`### ${doc.path}`, doc.text.slice(0, 8_000), ""]),
       ].join("\n"),
     });

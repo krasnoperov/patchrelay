@@ -38,13 +38,11 @@ import { submitReviewWithFallback } from "./submit-review-with-fallback.ts";
 import { evaluateReviewEligibility } from "./review-eligibility.ts";
 import { ReviewSemaphore } from "./review-semaphore.ts";
 
-/** Default cap on parallel review executions. ~20 is comfortable on a
- *  single host: each review materializes its own tmp worktree (small)
- *  and runs on a Codex thread (heavyweight but bounded by the model
- *  side, not by us). The cap exists to bound CPU / disk / API spikes,
- *  not as an architectural ceiling — patchrelay runs ~the same
- *  shape and number of independent agents. */
-const DEFAULT_MAX_CONCURRENT_REVIEWS = 20;
+/** Default cap on parallel review executions. Review Quill shares one
+ *  Codex app-server and one git cache per repository, so the default
+ *  is intentionally conservative; operators can raise it after watching
+ *  local Codex, disk, and GitHub API behavior under bursty review load. */
+const DEFAULT_MAX_CONCURRENT_REVIEWS = 4;
 
 export class ReviewQuillService {
   private timer: ReturnType<typeof setTimeout> | undefined;

@@ -48,6 +48,7 @@ const configSchema = z.object({
     heartbeatIntervalMs: z.number().int().min(5_000).default(30_000),
     staleQueuedAfterMs: z.number().int().min(30_000).default(5 * 60_000),
     staleRunningAfterMs: z.number().int().min(60_000).default(20 * 60_000),
+    maxConcurrentReviews: z.number().int().min(1).optional(),
   }).default({
     pollIntervalMs: 120_000,
     heartbeatIntervalMs: 30_000,
@@ -179,10 +180,20 @@ export function loadConfig(configPath: string): ReviewQuillConfig {
     approvalPolicy: parsed.codex.approvalPolicy,
     sandboxMode: parsed.codex.sandboxMode,
   };
+  const reconciliation = {
+    pollIntervalMs: parsed.reconciliation.pollIntervalMs,
+    heartbeatIntervalMs: parsed.reconciliation.heartbeatIntervalMs,
+    staleQueuedAfterMs: parsed.reconciliation.staleQueuedAfterMs,
+    staleRunningAfterMs: parsed.reconciliation.staleRunningAfterMs,
+    ...(parsed.reconciliation.maxConcurrentReviews !== undefined
+      ? { maxConcurrentReviews: parsed.reconciliation.maxConcurrentReviews }
+      : {}),
+  };
 
   return {
     ...parsed,
     server,
+    reconciliation,
     codex,
     prompting: loadPromptLayer(configDir, parsed.prompting),
     secretSources: {

@@ -11,7 +11,7 @@ For each eligible PR head:
 1. Detects that a new reviewable PR head exists.
 2. Materializes an ephemeral local checkout at that exact SHA.
 3. Builds a curated diff against the PR base branch.
-4. Loads repo review guidance plus universal `AGENTS.md` (`REVIEW_WORKFLOW.md`, `AGENTS.md` by default).
+4. Loads repo review guidance plus universal `AGENTS.md` (`REVIEW_WORKFLOW.md`, `AGENTS.md` by default), plus local Markdown docs explicitly referenced by the PR title/body.
 5. Runs a review pass through `codex app-server`.
 6. Publishes an ordinary GitHub `APPROVE` or `REQUEST_CHANGES` review.
 7. Cancels stale in-flight attempts when a newer PR head lands first.
@@ -19,6 +19,8 @@ For each eligible PR head:
 The review runs against the real working tree at that SHA, not the GitHub files API.
 
 By default, a PR becomes eligible for review as soon as its branch head updates. Set `waitForGreenChecks: true` per-repo to gate on configured checks first.
+
+Review execution concurrency defaults to 4 because reviews share one Codex app-server and one git cache per repo. Tune `reconciliation.maxConcurrentReviews` after watching local load.
 
 ## Use with your own agent
 

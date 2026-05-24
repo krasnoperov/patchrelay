@@ -11,7 +11,8 @@
     "level": "info"
   },
   "reconciliation": {
-    "pollIntervalMs": 120000
+    "pollIntervalMs": 120000,
+    "maxConcurrentReviews": 4
   },
   "codex": {
     "bin": "codex",
