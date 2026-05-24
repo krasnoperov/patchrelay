@@ -1100,7 +1100,7 @@ test("syncSession maps Usertold implementation work into Implementing instead of
   }
 });
 
-test("syncSession can move active lifecycle issues from Implementing to Review and Deploying", async () => {
+test("syncSession moves active lifecycle issues into Reviewing then In Merge Queue", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-usertold-lifecycle-"));
   try {
     const config = createConfig(baseDir);
@@ -1113,6 +1113,7 @@ test("syncSession can move active lifecycle issues from Implementing to Review a
       { id: "state-review", name: "Review", type: "unstarted" },
       { id: "state-deploy", name: "Deploy", type: "unstarted" },
       { id: "state-human", name: "Human Needed", type: "unstarted" },
+      { id: "state-merge-queue", name: "In Merge Queue", type: "started" },
       { id: "state-deploying", name: "Deploying", type: "started" },
       { id: "state-reviewing", name: "Reviewing", type: "started" },
       { id: "state-implementing", name: "Implementing", type: "started" },
@@ -1199,8 +1200,8 @@ test("syncSession can move active lifecycle issues from Implementing to Review a
     await sync.syncSession(db.getIssue(deployIssue.projectId, deployIssue.linearIssueId)!);
 
     assert.deepEqual(setIssueStateCalls, [
-      "issue-use-review:Review",
-      "issue-use-deploy:Deploying",
+      "issue-use-review:Reviewing",
+      "issue-use-deploy:In Merge Queue",
     ]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

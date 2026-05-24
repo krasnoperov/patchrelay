@@ -83,21 +83,45 @@ export function resolvePreferredReviewingLinearState(issue: {
   });
 }
 
+// The pre-merge "approved, awaiting/undergoing landing" phase. Covers a
+// PR that is queued, being tested in the speculative branch, or actively
+// merging — i.e. everything the merge queue owns up to (but not past)
+// the merge. NOT post-merge: that is `resolvePreferredDeployingLinearState`.
+// Without a dedicated queue state, collapses to the reviewing state (and
+// the `queued-for-deploy` label disambiguates — see state-sync).
+export function resolvePreferredMergeQueueLinearState(issue: {
+  workflowStates: Array<{ name: string; type?: string }>;
+}): string | undefined {
+  return resolvePreferredLinearState(issue, {
+    names: ["in merge queue", "merge queue", "in queue", "queued", "queue", "merging", "landing", "ready to merge"],
+    types: ["started"],
+    fallback: resolvePreferredLinearState(issue, {
+      names: ["in merge queue", "merge queue", "queued", "ready to merge", "ready to deploy", "ready for deploy", "to deploy", "merge"],
+      types: ["unstarted"],
+      fallback: resolvePreferredReviewingLinearState(issue),
+    }),
+  });
+}
+
+// Unstarted deploy column, used as a fallback by the started variant.
 export function resolvePreferredDeployLinearState(issue: {
   workflowStates: Array<{ name: string; type?: string }>;
 }): string | undefined {
   return resolvePreferredLinearState(issue, {
-    names: ["deploy", "ready to deploy", "ready for deploy", "merge"],
+    names: ["deploy", "to deploy", "ready to ship"],
     types: ["unstarted"],
-    fallback: resolvePreferredReviewLinearState(issue),
+    fallback: resolvePreferredMergeQueueLinearState(issue),
   });
 }
 
+// Strictly POST-merge: the change is on main and the deploy workflow is
+// running. "merging" lives in the merge-queue phase, not here. Without a
+// dedicated deploy state, collapses back to the merge-queue state.
 export function resolvePreferredDeployingLinearState(issue: {
   workflowStates: Array<{ name: string; type?: string }>;
 }): string | undefined {
   return resolvePreferredLinearState(issue, {
-    names: ["deploying", "merging", "shipping"],
+    names: ["deploying", "deployment", "in deploy", "shipping", "releasing", "rollout"],
     types: ["started"],
     fallback: resolvePreferredDeployLinearState(issue),
   });

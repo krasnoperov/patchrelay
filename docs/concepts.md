@@ -85,38 +85,43 @@ The merge work — building the integration tree, running CI on it — happens *
 
 > *Main is a tag. We move it through commits we trust.*
 
-## Four states
+## Five states
 
-The three roles map directly onto four workflow states already used in Linear. No new vocabulary — the same word the operator reads, the agent acts on, and the dashboard shows.
+The three roles map onto five workflow states in Linear, in lifecycle order. The phase is obvious from both Linear (the state) and GitHub (PR labels and checks) at any moment.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> InProgress: delegated
-    InProgress --> InReview: PR opened, ready for review
-    InReview --> InDeploy: approved + green
-    InDeploy --> Done: main fast-forwarded
-    InReview --> InProgress: changes requested
-    InDeploy --> InProgress: eviction (cannot integrate)
+    [*] --> Implementing: delegated
+    Implementing --> Reviewing: PR opened, ready for review
+    Reviewing --> InMergeQueue: approved
+    InMergeQueue --> Deploying: merged to main
+    Deploying --> Done: deploy succeeded
+    Reviewing --> Implementing: changes requested
+    InMergeQueue --> Implementing: eviction (cannot integrate)
     Done --> [*]
 
-    state InProgress
-    state InReview
-    state InDeploy
+    state Implementing
+    state Reviewing
+    state InMergeQueue
+    state Deploying
     state Done
 ```
 
 | State | Owner | What's happening |
 |-|-|-|
-| In Progress | Author | A patchrelay run (or human) is producing or revising the change. |
-| In Review | Reviewer + branch CI | review-quill verdict and configured required checks working until both green. |
-| In Deploy | Lander | merge-steward holds the issue: spec built, spec CI, fast-forward landing. |
-| Done | — | `main` fast-forwarded to the tested SHA. |
+| Implementing | Author | A patchrelay run (or human) is producing or revising the change — including addressing review/CI/queue feedback. |
+| Reviewing | Reviewer + branch CI | review-quill verdict and configured required checks working until both green. |
+| In Merge Queue | Lander | merge-steward holds the issue **pre-merge**: spec built, spec CI, awaiting its turn, then merging. Visible on GitHub via `queue:testing` / `queue:merging` labels. |
+| Deploying | Deploy | The change is **on main** and the deploy workflow is running. |
+| Done | — | The deploy succeeded. |
 
-Two ways back to In Progress: the reviewer asks for changes, or the lander can't integrate.
+Two ways back to Implementing: the reviewer asks for changes, or the lander can't integrate (eviction).
 
-If a project's Linear workflow does not include In Deploy, the issue stays in In Review with a `queued-for-deploy` sub-label. PatchRelay never invents a workflow state that doesn't exist. The label name is configurable; see [github-queue-contract.md](./github-queue-contract.md).
+Every state is decided from durable signals — `factoryState`, `prState`, the review verdict — never from whichever transient webhook happens to fire. The state moves only on a real lifecycle handoff, so it does not flap.
 
-The factory's internal `factoryState` codes (`pr_open`, `awaiting_queue`, `repairing_queue`, …) map onto these four — see [architecture.md](./architecture.md#factory-state-machine).
+If a project's Linear workflow omits a state, the issue collapses to the nearest earlier phase and PatchRelay never invents a state that doesn't exist: without **In Merge Queue** the issue stays in Reviewing with a `queued-for-deploy` sub-label (configurable; see [github-queue-contract.md](./github-queue-contract.md)); without **Deploying** a merged issue advances straight to Done.
+
+The factory's internal `factoryState` codes (`pr_open`, `awaiting_queue`, `repairing_queue`, …) map onto these five — see [architecture.md](./architecture.md#factory-state-machine).
 
 ## The author rule — don't originate redundant pushes
 
@@ -179,16 +184,16 @@ When two PRs are queued, the second's spec is built on top of the first's spec �
 
 Each rung of the train is a tested integration tree.
 
-## The eviction rule — the only signal that returns In Deploy to In Progress
+## The eviction rule — the only signal that returns In Merge Queue to Implementing
 
-Once an issue is **In Deploy**, branch CI on the PR head is *metadata*. The lander is testing a different SHA. The Author does not react to red branch CI in this window — it might be a flake the spec doesn't hit, or a real failure the spec also hits.
+Once an issue is **In Merge Queue**, branch CI on the PR head is *metadata*. The lander is testing a different SHA. The Author does not react to red branch CI in this window — it might be a flake the spec doesn't hit, or a real failure the spec also hits.
 
-The only signal that returns the issue to In Progress is the eviction `check_run` (default name `merge-steward/queue`):
+The only signal that returns the issue to Implementing is the eviction `check_run` (default name `merge-steward/queue`):
 
 | Window | Branch CI red on PR head | Author reaction |
 |-|-|-|
-| In Review | Required checks block admission | Re-run if flaky (`gh run rerun`); push a fix if real |
-| In Deploy | Metadata only | Wait. Either the spec hits it (eviction) or it was a flake (lands clean) |
+| Reviewing | Required checks block admission | Re-run if flaky (`gh run rerun`); push a fix if real |
+| In Merge Queue | Metadata only | Wait. Either the spec hits it (eviction) or it was a flake (lands clean) |
 
 This rule is enforced both at the state-machine table (`failureSource === "branch_ci" && state !== "awaiting_queue"`) and in the reactive enqueue path. See [architecture.md](./architecture.md#failure-taxonomy).
 
@@ -245,7 +250,7 @@ Five waste classes were directly observed in production transcripts (LSR-272 / L
 |-|-|
 | Re-review on rebase | Carry-forward by `patch_id` — same change, same verdict |
 | Chase-rebase loop on already-approved PRs | The Author rule: no patch-id-equivalent push originated by the agent |
-| `ci_repair` fired during In Deploy on flaky branch CI | The eviction rule: branch CI is metadata while In Deploy |
+| `ci_repair` fired during In Merge Queue on flaky branch CI | The eviction rule: branch CI is metadata while In Merge Queue |
 | Cosmetic re-push dismisses a fresh approval mid-run | Mid-run approval cancellation: when an approval lands on the run's source SHA, the run is superseded and `shouldNotPublish` blocks the finalizer |
 | Lock-file conflicts caught only at integration time | Tier 1 (`blockedBy`) and Tier 2 (`sequence-check`) |
 

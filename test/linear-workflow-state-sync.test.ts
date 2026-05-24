@@ -52,16 +52,18 @@ test("syncActiveWorkflowState routes awaiting_input issues to a human-needed Lin
   }
 });
 
-test("syncActiveWorkflowState routes approved-and-green issues to deploying", async () => {
+test("syncActiveWorkflowState routes approved (pre-merge) issues to In Merge Queue, not Deploying", async () => {
   const { baseDir, db } = createDb();
   try {
     const issue = db.upsertIssue({
       projectId: "usertold",
-      linearIssueId: "issue-deploy",
-      issueKey: "USE-DEPLOY",
-      factoryState: "pr_open",
+      linearIssueId: "issue-queue",
+      issueKey: "USE-QUEUE",
+      factoryState: "awaiting_queue",
+      prNumber: 7,
       prReviewState: "approved",
       prCheckStatus: "success",
+      prState: "open",
       currentLinearState: "In Review",
     });
 
@@ -76,6 +78,7 @@ test("syncActiveWorkflowState routes approved-and-green issues to deploying", as
           stateType: "started",
           workflowStates: [
             { name: "In Review", type: "started" },
+            { name: "In Merge Queue", type: "started" },
             { name: "Deploying", type: "started" },
           ],
         }),
@@ -83,11 +86,156 @@ test("syncActiveWorkflowState routes approved-and-green issues to deploying", as
           requestedState = state;
           return { stateName: state, stateType: "started" };
         },
+        updateIssueLabels: async () => undefined,
+      } as never,
+    });
+
+    assert.equal(requestedState, "In Merge Queue");
+    assert.equal(db.issues.getIssue(issue.projectId, issue.linearIssueId)?.currentLinearState, "In Merge Queue");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("syncActiveWorkflowState routes a merged (post-merge) PR to Deploying", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-deploying",
+      issueKey: "USE-DEPLOYING",
+      // PR3 introduces a non-terminal post-merge factory state; until
+      // then the merged PR is detected purely from prState.
+      factoryState: "awaiting_queue",
+      prNumber: 8,
+      prReviewState: "approved",
+      prState: "merged",
+      currentLinearState: "In Merge Queue",
+    });
+
+    let requestedState: string | undefined;
+    await syncActiveWorkflowState({
+      db,
+      issue,
+      linear: {
+        getIssue: async () => ({
+          id: issue.linearIssueId,
+          stateName: "In Merge Queue",
+          stateType: "started",
+          workflowStates: [
+            { name: "In Review", type: "started" },
+            { name: "In Merge Queue", type: "started" },
+            { name: "Deploying", type: "started" },
+            { name: "Done", type: "completed" },
+          ],
+        }),
+        setIssueState: async (_issueId, state) => {
+          requestedState = state;
+          return { stateName: state, stateType: "started" };
+        },
+        updateIssueLabels: async () => undefined,
       } as never,
     });
 
     assert.equal(requestedState, "Deploying");
     assert.equal(db.issues.getIssue(issue.projectId, issue.linearIssueId)?.currentLinearState, "Deploying");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("syncActiveWorkflowState routes changes-requested work to Implementing", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-changes",
+      issueKey: "USE-CHANGES",
+      factoryState: "changes_requested",
+      prNumber: 9,
+      prReviewState: "changes_requested",
+      prState: "open",
+      currentLinearState: "Reviewing",
+    });
+
+    let requestedState: string | undefined;
+    await syncActiveWorkflowState({
+      db,
+      issue,
+      linear: {
+        getIssue: async () => ({
+          id: issue.linearIssueId,
+          stateName: "Reviewing",
+          stateType: "started",
+          workflowStates: [
+            { name: "Implementing", type: "started" },
+            { name: "Reviewing", type: "started" },
+            { name: "In Merge Queue", type: "started" },
+          ],
+        }),
+        setIssueState: async (_issueId, state) => {
+          requestedState = state;
+          return { stateName: state, stateType: "started" };
+        },
+        updateIssueLabels: async () => undefined,
+      } as never,
+    });
+
+    assert.equal(requestedState, "Implementing");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("syncActiveWorkflowState does NOT flap to Implementing while a run is active during review", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    // PR open, review verdict pending, and a run is in flight (activeRunId
+    // set). The old mapping flipped to Implementing on the active run;
+    // the durable mapping must stay on the review phase.
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-flap",
+      issueKey: "USE-FLAP",
+      factoryState: "pr_open",
+      prNumber: 11,
+      prState: "open",
+      currentLinearState: "Reviewing",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+    });
+    db.upsertIssue({ projectId: "usertold", linearIssueId: "issue-flap", activeRunId: run.id });
+
+    let requestedState: string | undefined;
+    await syncActiveWorkflowState({
+      db,
+      issue: db.getIssue("usertold", "issue-flap")!,
+      options: { activeRunType: "review_fix" },
+      linear: {
+        getIssue: async () => ({
+          id: issue.linearIssueId,
+          stateName: "Reviewing",
+          stateType: "started",
+          workflowStates: [
+            { name: "Implementing", type: "started" },
+            { name: "Reviewing", type: "started" },
+          ],
+        }),
+        setIssueState: async (_issueId, state) => {
+          requestedState = state;
+          return { stateName: state, stateType: "started" };
+        },
+        updateIssueLabels: async () => undefined,
+      } as never,
+    });
+
+    // Stays on Reviewing (already current) — no flip to Implementing.
+    assert.equal(requestedState, undefined);
+    assert.equal(db.issues.getIssue(issue.projectId, issue.linearIssueId)?.currentLinearState, "Reviewing");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
