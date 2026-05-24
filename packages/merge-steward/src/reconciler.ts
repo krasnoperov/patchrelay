@@ -8,6 +8,7 @@ import { mergeHead } from "./reconciler-merge.ts";
 import { cleanupSpec } from "./reconciler-evict.ts";
 import { INVALIDATION_PATCH } from "./invalidation.ts";
 import { verifyPostMergeStatus } from "./reconciler-post-merge.ts";
+import { syncQueueStateLabels } from "./reconciler-queue-labels.ts";
 
 export type { ReconcileContext } from "./reconciler-core.ts";
 
@@ -27,7 +28,13 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
     if (!entry || TERMINAL_STATUSES.includes(entry.status)) continue;
 
     // Truth guard: verify entry against GitHub before processing.
-    if (await sanitizeEntry(ctx, entry)) continue;
+    if (await sanitizeEntry(ctx, entry)) {
+      // Entry may have been terminalized (closed/duplicate) — clear any
+      // stale queue sub-state label it still carries.
+      const sanitized = ctx.store.getEntry(entry.id);
+      if (sanitized) await syncQueueStateLabels(ctx, sanitized);
+      continue;
+    }
 
     // Stale dependency guard: if this entry's spec was built on top of
     // another entry that was dequeued or evicted (without downstream
@@ -85,6 +92,12 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
       if (error instanceof Error && error.stack) wrapped.stack = error.stack;
       throw wrapped;
     }
+
+    // Sync the GitHub queue sub-state label to the (possibly just
+    // transitioned) phase: queue:testing while validating, queue:merging
+    // while merging, cleared once merged/preparing/terminal.
+    const post = ctx.store.getEntry(entry.id);
+    if (post) await syncQueueStateLabels(ctx, post);
   }
 
   await verifyMergedEntriesPostPush(ctx);

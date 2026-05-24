@@ -302,6 +302,7 @@ export type ReconcileAction =
   | "sanitized_duplicate" // older duplicate entry superseded
   | "post_merge_verification_started"
   | "post_merge_verification_completed"
+  | "queue_label_synced"  // GitHub queue sub-state label (queue:testing/queue:merging) updated
   | "branch_unreachable"; // branch gone or git operation failed unexpectedly
 
 export interface ReconcileEvent {

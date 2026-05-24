@@ -146,6 +146,10 @@ export class MergeStewardRuntime {
         eviction: this.eviction,
         flakyRetries: this.config.flakyRetries,
         policy: this.policy,
+        queueStateLabels: {
+          testing: this.config.queueTestingLabel,
+          merging: this.config.queueMergingLabel,
+        },
         onEvent: (event) => {
           this.lastReconcileEvent = summarizeReconcileEvent(event);
           const isWarn = event.action === "evicted" || event.action === "spec_build_conflict"

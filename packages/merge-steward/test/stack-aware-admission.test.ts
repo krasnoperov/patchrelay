@@ -31,6 +31,7 @@ function fakeGithub(prs: Map<number, PRStatus>): GitHubPRApi {
       return [{ name: "ci", conclusion: "success" }];
     },
     async listLabels() { return []; },
+    async setLabels() {},
     async listOpenPRs() { return []; },
     async findPRByBranch() { return null; },
     async deleteBranch() { /* no-op */ },
