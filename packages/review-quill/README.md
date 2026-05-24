@@ -4,6 +4,8 @@ Self-hosted GitHub PR review bot. For each new PR head, it materializes a throwa
 
 Independent of PatchRelay. Pairs with `merge-steward`; neither requires the other.
 
+For the background story and design trade-offs, read [review-quill: a strict reviewer for your coding agent](https://blog.krasnoperov.me/posts/review-quill).
+
 ## What it does
 
 For each eligible PR head:
@@ -83,6 +85,7 @@ Three services, distinct ownership, GitHub as the shared bus:
 
 ## Reference
 
+- [review-quill: a strict reviewer for your coding agent](https://blog.krasnoperov.me/posts/review-quill) — background essay and design trade-offs
 - [docs/review-quill.md](https://github.com/krasnoperov/patchrelay/blob/main/docs/review-quill.md) — operator reference: GitHub App permissions, public ingress, review context pipeline, full CLI surface, troubleshooting
 - [docs/prompting.md](https://github.com/krasnoperov/patchrelay/blob/main/docs/prompting.md) — how the review prompt is composed
 - [docs/design-docs/review-quill.md](https://github.com/krasnoperov/patchrelay/blob/main/docs/design-docs/review-quill.md) — design rationale

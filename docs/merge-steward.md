@@ -1,6 +1,6 @@
 # merge-steward operator reference
 
-Full setup, configuration, and troubleshooting reference for `merge-steward`. For the high-level pitch, see the [package README](../packages/merge-steward/README.md). For the two-service overview, see [merge-queue.md](./merge-queue.md). For design rationale, see [design-docs/merge-steward.md](./design-docs/merge-steward.md).
+Full setup, configuration, and troubleshooting reference for `merge-steward`. For the high-level pitch, see the [package README](../packages/merge-steward/README.md). For the background story, see [merge-steward: speculative integration, parallel validation, fast-forward landing](https://blog.krasnoperov.me/posts/merge-steward). For the two-service overview, see [merge-queue.md](./merge-queue.md). For design rationale, see [design-docs/merge-steward.md](./design-docs/merge-steward.md).
 
 ## Prerequisites
 
@@ -23,13 +23,15 @@ merge-steward init https://queue.example.com
 - `~/.config/merge-steward/repos/`
 - `/etc/systemd/system/merge-steward.service`
 
+`init` does not generate production secrets. Install `merge-steward-webhook-secret` and `merge-steward-github-app-pem` via systemd credentials, or provide the documented environment/file fallbacks.
+
 ## Attach a repository
 
 ```bash
-merge-steward attach owner/repo
+merge-steward repo attach owner/repo
 ```
 
-`attach` writes `~/.config/merge-steward/repos/<derived-id>.json`. The steward:
+`repo attach` writes `~/.config/merge-steward/repos/<derived-id>.json`. The steward:
 
 - derives the `repoId` from the GitHub repo name
 - discovers the default branch from GitHub
@@ -132,7 +134,7 @@ On startup, the steward reconciles GitHub branch protection for every attached r
 | Command | Purpose |
 |-|-|
 | `merge-steward init <public-base-url>` | Bootstrap the local home |
-| `merge-steward attach <owner/repo>` | Create or update a repo config, restart the service |
+| `merge-steward repo attach <owner/repo>` | Create or update a repo config, restart the service |
 | `merge-steward repo list` / `repo show <id>` | Inspect attached repos |
 | `merge-steward doctor --repo <id>` | Validate config, auth, branch rules, required checks |
 | `merge-steward service status` / `restart` / `logs` | Service controls |
@@ -223,14 +225,13 @@ After the push, the steward emits a `merge-steward/spec-ready` check_run on the 
 
 ### Step 3 — revalidate and fast-forward main
 
-When CI is green, the steward revalidates before merging:
+After the validating state has observed green spec CI, the steward revalidates before merging:
 
 1. GitHub PR is not already `merged` externally.
 2. The reviewer approval on the original PR head still holds.
 3. The spec SHA is still a fast-forward from current `main` (`git merge-base --is-ancestor`).
-4. `main`'s own required checks are still passing.
 
-If all four hold, the merge is a single command:
+If these checks hold, the merge is a single command:
 
 ```bash
 # Fast-forward main to the already-tested spec SHA
@@ -251,7 +252,7 @@ git push origin --delete mq-spec-<entry-id>
 # Done via GitHub API, not shell git
 ```
 
-A post-merge verification pass records the state of `main`'s CI on the new tip; if it goes red, the next entry's `preparing_head` will see `main_broken` and wait.
+A post-merge verification pass records the state of `main`'s CI on the new tip for operator visibility. That status is information-only and does not block the next speculative landing.
 
 ### Cascade invalidation
 
