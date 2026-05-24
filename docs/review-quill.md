@@ -1,6 +1,6 @@
 # review-quill operator reference
 
-Full setup, configuration, and troubleshooting reference for `review-quill`. For the high-level pitch, see the [package README](../packages/review-quill/README.md). For design rationale, see [design-docs/review-quill.md](./design-docs/review-quill.md).
+Full setup, configuration, and troubleshooting reference for `review-quill`. For the high-level pitch, see the [package README](../packages/review-quill/README.md). For the background story, see [review-quill: a strict reviewer for your coding agent](https://blog.krasnoperov.me/posts/review-quill). For design rationale, see [design-docs/review-quill.md](./design-docs/review-quill.md).
 
 ## Install and bootstrap
 

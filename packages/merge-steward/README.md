@@ -1,8 +1,10 @@
 # merge-steward
 
-Self-hosted serial merge queue for bot-managed and human-managed GitHub pull requests. Admits approved PRs whose required checks are green, builds speculative branches on top of the latest `main`, waits for CI on those integrated SHAs, and fast-forwards `main` to the tested result.
+Self-hosted serial speculative merge queue for bot-managed and human-managed GitHub pull requests. Admits approved PRs whose required checks are green, builds speculative branches on top of the latest `main`, waits for CI on those integrated SHAs, and fast-forwards `main` to the tested result.
 
 Independent of PatchRelay. Communicates through GitHub only — PRs, reviews, checks, labels, branches. Pairs with `review-quill`; neither requires the other.
+
+For the background story and design trade-offs, read [merge-steward: a self-hosted merge queue without the Enterprise gate](https://blog.krasnoperov.me/posts/merge-steward).
 
 ## Why this matters
 
@@ -36,17 +38,18 @@ Prerequisites: Node.js 24+, `gh` CLI in `PATH`, `git`.
 ```bash
 pnpm add -g merge-steward
 merge-steward init https://queue.example.com
-merge-steward attach owner/repo --base-branch main
+merge-steward repo attach owner/repo --base-branch main
 merge-steward doctor --repo repo
 merge-steward service status
 merge-steward queue status --repo repo
 ```
 
-- `init` writes config files, a systemd unit, and a generated webhook secret.
-- `attach` discovers the default branch from GitHub and stores a per-repo config.
+- `init` writes config files and a systemd unit, then prints the webhook URL to configure in GitHub.
+- You still need to install `merge-steward-webhook-secret` and `merge-steward-github-app-pem` via systemd credentials, or provide the documented environment/file fallbacks.
+- `repo attach` discovers the default branch from GitHub and stores a per-repo config.
 - Required checks are learned from GitHub branch protection at runtime — the steward does not keep a local copy.
 
-Full setup (GitHub App permissions, secrets, webhook events, systemd, HTTP API): [docs/merge-steward.md](../../docs/merge-steward.md).
+Full setup (GitHub App permissions, secrets, webhook events, systemd, HTTP API): [docs/merge-steward.md](https://github.com/krasnoperov/patchrelay/blob/main/docs/merge-steward.md).
 
 ## Everyday commands
 
@@ -77,7 +80,7 @@ The real gate is:
 - configured required checks are green
 - the steward's speculative integrated branch also passes CI
 
-`review-quill/verdict` only matters if you include it in the repo's required checks. Branch protection is useful as defense in depth, but the steward merges by fast-forwarding `main` to the already-tested speculative SHA — not by pressing GitHub's merge button. Successful merges therefore depend on the steward App being allowed to push to the protected branch. See [docs/merge-steward.md](../../docs/merge-steward.md) for the full App permission set.
+`review-quill/verdict` only matters if you include it in the repo's required checks. Branch protection is useful as defense in depth, but the steward merges by fast-forwarding `main` to the already-tested speculative SHA — not by pressing GitHub's merge button. Successful merges therefore depend on the steward App being allowed to push to the protected branch. See [docs/merge-steward.md](https://github.com/krasnoperov/patchrelay/blob/main/docs/merge-steward.md) for the full App permission set.
 
 **`main`'s own CI is information-only.** The speculative SHA the steward tests *is* the exact tree that becomes `main`, so re-testing `main` after the push adds no signal — it only catches flakiness or out-of-band changes (direct pushes, hotfixes). The queue therefore **ignores `main`'s CI entirely** for advancement: it does not gate landing on `main` being green, does not wait for `main` CI before the next landing, and is never "paused" by a red `main`. A red `main` with a green speculative SHA simply means the red was flaky or is fixed by landing — so the steward lands. Use `main`'s CI as a project-health canary, not a queue control.
 
@@ -94,8 +97,9 @@ Neither service calls the other's API.
 
 ## Reference
 
-- [docs/merge-steward.md](../../docs/merge-steward.md) — operator reference: GitHub App permissions, secrets, webhook, repo config, full CLI, HTTP API, queue state machine, systemd, troubleshooting
-- [docs/merge-queue.md](../../docs/merge-queue.md) — the two-service delivery story
-- [docs/github-queue-contract.md](../../docs/github-queue-contract.md) — shared GitHub artifacts
-- [docs/design-docs/merge-steward.md](../../docs/design-docs/merge-steward.md) — design rationale
-- [../../README.md](../../README.md) — the three-service stack overview
+- [merge-steward: a self-hosted merge queue without the Enterprise gate](https://blog.krasnoperov.me/posts/merge-steward) — background essay and design trade-offs
+- [docs/merge-steward.md](https://github.com/krasnoperov/patchrelay/blob/main/docs/merge-steward.md) — operator reference: GitHub App permissions, secrets, webhook, repo config, full CLI, HTTP API, queue state machine, systemd, troubleshooting
+- [docs/merge-queue.md](https://github.com/krasnoperov/patchrelay/blob/main/docs/merge-queue.md) — the two-service delivery story
+- [docs/github-queue-contract.md](https://github.com/krasnoperov/patchrelay/blob/main/docs/github-queue-contract.md) — shared GitHub artifacts
+- [docs/design-docs/merge-steward.md](https://github.com/krasnoperov/patchrelay/blob/main/docs/design-docs/merge-steward.md) — design rationale
+- [README.md](https://github.com/krasnoperov/patchrelay/blob/main/README.md) — the three-service stack overview

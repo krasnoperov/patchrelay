@@ -2,6 +2,8 @@
 
 Self-hosted toolkit for shipping code with agents: a Linear-driven harness that runs Codex sessions inside your real repos, plus two GitHub-native services that review PRs and deliver them through a merge queue. Each component works on its own, and they communicate only through GitHub.
 
+Background reading: [patchrelay: a Linear-driven harness for Codex](https://blog.krasnoperov.me/posts/patchrelay), [review-quill: a strict reviewer for your coding agent](https://blog.krasnoperov.me/posts/review-quill), and [merge-steward: speculative integration, parallel validation, fast-forward landing](https://blog.krasnoperov.me/posts/merge-steward).
+
 ## The stack
 
 This repository ships **three independent services**. Install one, two, or all three.
@@ -105,7 +107,7 @@ Serial merge queue with speculative integration. Builds a speculative merge bran
 
 ```bash
 merge-steward init https://queue.example.com
-merge-steward attach owner/repo --base-branch main
+merge-steward repo attach owner/repo --base-branch main
 merge-steward doctor --repo repo
 merge-steward service status
 ```
@@ -115,6 +117,7 @@ See the [merge-steward package README](./packages/merge-steward/README.md) for t
 ## Docs
 
 - [Concepts](./docs/concepts.md) — the shared mental model (three roles, four primitives, four states, carry-forward, eviction). Start here.
+- [Blog: patchrelay](https://blog.krasnoperov.me/posts/patchrelay) · [review-quill](https://blog.krasnoperov.me/posts/review-quill) · [merge-steward](https://blog.krasnoperov.me/posts/merge-steward)
 - [Self-hosting and deployment](./docs/self-hosting.md) — install, ingress, OAuth and GitHub App setup
 - [Architecture](./docs/architecture.md) — components, ownership, state machine, failure taxonomy
 - [Operator guide](./docs/operator-guide.md) — daily loop, CLI cheatsheet, troubleshooting
