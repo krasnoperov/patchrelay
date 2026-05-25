@@ -1,12 +1,14 @@
 # review-quill
 
-Self-hosted GitHub PR review bot. For each new PR head, it materializes a throwaway checkout at the exact SHA, runs a Codex review pass with your repo's review docs, and publishes a normal PR review under its GitHub App identity.
+Self-hosted strict reviewer for coding-agent PRs. Review Quill materializes the exact PR head in a throwaway checkout, lets Codex inspect the real repo instead of just diff text, and sends stale or misaligned work back as ordinary GitHub `REQUEST_CHANGES` reviews before it lands.
 
 Independent of PatchRelay. Pairs with `merge-steward`; neither requires the other.
 
 For the background story and design trade-offs, read [review-quill: a strict reviewer for your coding agent](https://blog.krasnoperov.me/posts/review-quill).
 
 ## What it does
+
+The point is repo alignment: when code changes but docs, tests, fixtures, or nearby assumptions drift, the reviewer forces that iteration to happen before merge. Each attempt is fresh and head-SHA-keyed, stale attempts are superseded when a new push arrives, and approvals carry forward only when the patch identity proves the change is not really new.
 
 For each eligible PR head:
 

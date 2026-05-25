@@ -11,7 +11,7 @@ This repository ships **three independent services**. Install one, two, or all t
 | Service | Package | Role |
 |-|-|-|
 | [`patchrelay`](./) | `pnpm add -g patchrelay` | Linear-driven harness that runs Codex sessions inside your real repos. Fully autonomous on webhooks: implementation, review fix, CI repair, queue repair. |
-| [`review-quill`](./packages/review-quill) | `pnpm add -g review-quill` | GitHub PR review bot. Reviews every merge-ready head from a real local checkout and posts a normal `APPROVE` / `REQUEST_CHANGES` review. |
+| [`review-quill`](./packages/review-quill) | `pnpm add -g review-quill` | Strict reviewer for coding-agent PRs. Reviews the exact head from a real checkout, sends misaligned work back through normal GitHub reviews, and carries approvals across unchanged patches. |
 | [`merge-steward`](./packages/merge-steward) | `pnpm add -g merge-steward` | Turns reviewed PRs into a tested landing train: CI on exact future `main` SHAs, parallel validation for several PRs, and fast-forward landing through the green sequence. |
 
 Common setups:
@@ -23,6 +23,7 @@ Common setups:
 ### What this buys you
 
 - **PRs ship tested against the latest `main`.** The queue re-validates on the integrated SHA at admission time, and retries if `main` moves during validation. No more "green yesterday, broken today."
+- **Review catches repo drift before merge.** The reviewer reads the actual checkout, not just the diff, so stale docs, fixtures, sibling tests, and broken local assumptions get sent back while the PR is still cheap to fix.
 - **Many PR failures have mechanical fixes an agent can handle.** Requested changes like a rename, a missing null check, a new test, refreshing against `main`, resolving a conflict surfaced by speculation, or rerunning a flaky job. Both services publish structured failure reasons (inline review comments, failing check names, queue incidents) an agent can act on directly.
 - **No prerequisites beyond GitHub.** A GitHub App, a webhook, and `pnpm add -g` per service.
 
@@ -91,7 +92,7 @@ Two separate services handle review and delivery. Both are independent, GitHub-n
 
 ### review-quill
 
-Watches PRs and posts ordinary GitHub reviews from a real local checkout of the PR head. By default reviews as soon as the head updates; can optionally wait for configured checks to go green first.
+Strict reviewer for coding-agent PRs. It reviews the exact head from a real local checkout, sends stale or misaligned work back through ordinary GitHub reviews, and carries approval forward when a rebase leaves the patch unchanged. By default it reviews as soon as the head updates; it can optionally wait for configured checks to go green first.
 
 ```bash
 review-quill init https://review.example.com
