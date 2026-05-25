@@ -12,7 +12,7 @@ This repository ships **three independent services**. Install one, two, or all t
 |-|-|-|
 | [`patchrelay`](./) | `pnpm add -g patchrelay` | Linear-driven harness that runs Codex sessions inside your real repos. Fully autonomous on webhooks: implementation, review fix, CI repair, queue repair. |
 | [`review-quill`](./packages/review-quill) | `pnpm add -g review-quill` | GitHub PR review bot. Reviews every merge-ready head from a real local checkout and posts a normal `APPROVE` / `REQUEST_CHANGES` review. |
-| [`merge-steward`](./packages/merge-steward) | `pnpm add -g merge-steward` | Serial merge queue. Speculatively integrates approved PRs on top of the latest `main`, runs CI on the integrated SHA, and fast-forwards `main` only when that tested result is green. |
+| [`merge-steward`](./packages/merge-steward) | `pnpm add -g merge-steward` | Turns reviewed PRs into a tested landing train: CI on exact future `main` SHAs, parallel validation for several PRs, and fast-forward landing through the green sequence. |
 
 Common setups:
 
@@ -103,7 +103,7 @@ See the [review-quill package README](./packages/review-quill/README.md) for the
 
 ### merge-steward
 
-Serial merge queue with speculative integration. Builds a speculative merge branch for each approved PR on top of the current queue base, runs CI on that integrated SHA, and fast-forwards `main` only when the tested result is still valid. Evictions produce a durable incident and a GitHub check run — the signal an agent uses to trigger a repair.
+Merge queue with speculative integration. It turns reviewed PRs into a tested landing train: CI runs on the exact future `main` SHAs, several PRs validate in parallel, and `main` fast-forwards through the green sequence as soon as it is safe. Evictions produce a durable incident and a GitHub check run — the signal an agent uses to trigger a repair.
 
 ```bash
 merge-steward init https://queue.example.com

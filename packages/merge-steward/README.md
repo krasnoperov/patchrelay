@@ -1,14 +1,14 @@
 # merge-steward
 
-Self-hosted serial speculative merge queue for bot-managed and human-managed GitHub pull requests. Admits approved PRs whose required checks are green, builds speculative branches on top of the latest `main`, waits for CI on those integrated SHAs, and fast-forwards `main` to the tested result.
+Self-hosted merge queue for bot-managed and human-managed GitHub pull requests. Merge Steward turns reviewed PRs into a tested landing train: it runs CI on the exact future `main` SHAs, validates several PRs in parallel, and fast-forwards through the green sequence as soon as it is safe.
 
 Independent of PatchRelay. Communicates through GitHub only — PRs, reviews, checks, labels, branches. Pairs with `review-quill`; neither requires the other.
 
-For the background story and design trade-offs, read [merge-steward: a self-hosted merge queue without the Enterprise gate](https://blog.krasnoperov.me/posts/merge-steward).
+For the background story and design trade-offs, read [merge-steward: speculative integration, parallel validation, fast-forward landing](https://blog.krasnoperov.me/posts/merge-steward).
 
 ## Why this matters
 
-PRs delivered through the queue are tested against `main` as it was at admission time, and re-validated if `main` advances during validation. No more "CI was green yesterday, breaks on merge today" — the queue catches the integration bug before `main` ever sees it.
+The queue keeps delivery fast without pretending branch CI is enough. Each speculative branch is the cumulative queue order on top of the latest base: `main + A`, then `main + A + B`, then `main + A + B + C`. No more "CI was green yesterday, breaks on merge today" — the integration bug is caught before `main` ever sees it.
 
 ## How it works
 
@@ -97,7 +97,7 @@ Neither service calls the other's API.
 
 ## Reference
 
-- [merge-steward: a self-hosted merge queue without the Enterprise gate](https://blog.krasnoperov.me/posts/merge-steward) — background essay and design trade-offs
+- [merge-steward: speculative integration, parallel validation, fast-forward landing](https://blog.krasnoperov.me/posts/merge-steward) — background essay and design trade-offs
 - [docs/merge-steward.md](https://github.com/krasnoperov/patchrelay/blob/main/docs/merge-steward.md) — operator reference: GitHub App permissions, secrets, webhook, repo config, full CLI, HTTP API, queue state machine, systemd, troubleshooting
 - [docs/merge-queue.md](https://github.com/krasnoperov/patchrelay/blob/main/docs/merge-queue.md) — the two-service delivery story
 - [docs/github-queue-contract.md](https://github.com/krasnoperov/patchrelay/blob/main/docs/github-queue-contract.md) — shared GitHub artifacts
