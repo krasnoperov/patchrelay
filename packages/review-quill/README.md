@@ -1,14 +1,14 @@
 # review-quill
 
-Self-hosted strict reviewer for coding-agent PRs. Review Quill materializes the exact PR head in a throwaway checkout, lets Codex inspect the real repo instead of just diff text, and sends stale or misaligned work back as ordinary GitHub `REQUEST_CHANGES` reviews before it lands.
+Self-hosted review gate for agent-written and human-written PRs. Review Quill pairs well with a coding agent because it runs both narrow and wide review passes: changed lines first, then the surrounding system contracts where misalignments often hide.
 
 Independent of PatchRelay. Pairs with `merge-steward`; neither requires the other.
 
-For the background story and design trade-offs, read [review-quill: a strict reviewer for your coding agent](https://blog.krasnoperov.me/posts/review-quill).
+For the background story and design trade-offs, read [review-quill: a strict reviewer for your coding agent](https://blog.krasnoperov.me/posts/review-quill). For the broader "gates over autonomy" framing, read [The gates, not the autonomy](https://blog.krasnoperov.me/posts/gates-not-autonomy).
 
 ## What it does
 
-The point is repo alignment: when code changes but docs, tests, fixtures, or nearby assumptions drift, the reviewer forces that iteration to happen before merge. Each attempt is fresh and head-SHA-keyed, stale attempts are superseded when a new push arrives, and approvals carry forward only when the patch identity proves the change is not really new.
+The point is invariant protection before merge. Coding agents are good at the requested change and weaker at noticing when two parts of the system now disagree: code no longer matches its documented contract, a new abstraction is bypassed by an untouched path, or a caller still relies on the old behavior. Review Quill is the second pass: it stays scoped to what the PR changed, reads the real repo for surrounding evidence, and sends concrete `REQUEST_CHANGES` feedback the agent can fix and resubmit. Each attempt is fresh and head-SHA-keyed, stale attempts are superseded when a new push arrives, and approvals carry forward only when the patch identity proves the change is not really new.
 
 For each eligible PR head:
 
@@ -88,6 +88,7 @@ Three services, distinct ownership, GitHub as the shared bus:
 ## Reference
 
 - [review-quill: a strict reviewer for your coding agent](https://blog.krasnoperov.me/posts/review-quill) — background essay and design trade-offs
+- [The gates, not the autonomy](https://blog.krasnoperov.me/posts/gates-not-autonomy) — why the reviewer and queue matter no matter who wrote the PR
 - [docs/review-quill.md](https://github.com/krasnoperov/patchrelay/blob/main/docs/review-quill.md) — operator reference: GitHub App permissions, public ingress, review context pipeline, full CLI surface, troubleshooting
 - [docs/prompting.md](https://github.com/krasnoperov/patchrelay/blob/main/docs/prompting.md) — how the review prompt is composed
 - [docs/design-docs/review-quill.md](https://github.com/krasnoperov/patchrelay/blob/main/docs/design-docs/review-quill.md) — design rationale
