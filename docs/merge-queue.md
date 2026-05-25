@@ -222,7 +222,7 @@ review-quill repo attach owner/repo
 
 # merge-steward (the queue)
 merge-steward init https://queue.example.com
-merge-steward attach owner/repo
+merge-steward repo attach owner/repo
 ```
 
 For service-specific configuration, see:

@@ -1,6 +1,6 @@
 # review-quill operator reference
 
-Full setup, configuration, and troubleshooting reference for `review-quill`. For the high-level pitch, see the [package README](../packages/review-quill/README.md). For the background story, see [review-quill: a strict reviewer for your coding agent](https://blog.krasnoperov.me/posts/review-quill). For design rationale, see [design-docs/review-quill.md](./design-docs/review-quill.md).
+Full setup, configuration, and troubleshooting reference for `review-quill`: the review gate that pairs with coding agents by checking both the narrow diff and wider system context for misalignments, sending fixes back through ordinary GitHub reviews, and carrying approval forward only when the patch identity is unchanged. For the high-level pitch, see the [package README](../packages/review-quill/README.md). For the background story, see [review-quill: a strict reviewer for your coding agent](https://blog.krasnoperov.me/posts/review-quill); for the broader gate framing, see [The gates, not the autonomy](https://blog.krasnoperov.me/posts/gates-not-autonomy). For design rationale, see [design-docs/review-quill.md](./design-docs/review-quill.md).
 
 ## Install and bootstrap
 

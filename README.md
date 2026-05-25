@@ -11,8 +11,8 @@ This repository ships **three independent services**. Install one, two, or all t
 | Service | Package | Role |
 |-|-|-|
 | [`patchrelay`](./) | `pnpm add -g patchrelay` | Linear-driven harness that runs Codex sessions inside your real repos. Fully autonomous on webhooks: implementation, review fix, CI repair, queue repair. |
-| [`review-quill`](./packages/review-quill) | `pnpm add -g review-quill` | GitHub PR review bot. Reviews every merge-ready head from a real local checkout and posts a normal `APPROVE` / `REQUEST_CHANGES` review. |
-| [`merge-steward`](./packages/merge-steward) | `pnpm add -g merge-steward` | Serial merge queue. Speculatively integrates approved PRs on top of the latest `main`, runs CI on the integrated SHA, and fast-forwards `main` only when that tested result is green. |
+| [`review-quill`](./packages/review-quill) | `pnpm add -g review-quill` | Review gate that pairs with coding agents. Runs narrow and wide review passes, catches system misalignments the first pass missed, and sends fixes back through normal GitHub reviews. |
+| [`merge-steward`](./packages/merge-steward) | `pnpm add -g merge-steward` | Turns reviewed PRs into a tested landing train: CI on exact future `main` SHAs, parallel validation for several PRs, and fast-forward landing through the green sequence. |
 
 Common setups:
 
@@ -23,6 +23,7 @@ Common setups:
 ### What this buys you
 
 - **PRs ship tested against the latest `main`.** The queue re-validates on the integrated SHA at admission time, and retries if `main` moves during validation. No more "green yesterday, broken today."
+- **Review catches real misalignments before merge.** The reviewer checks both the changed lines and the surrounding system contract, so conflicts between code, docs, tests, callers, and shared abstractions get sent back while the PR is still cheap for the agent to fix.
 - **Many PR failures have mechanical fixes an agent can handle.** Requested changes like a rename, a missing null check, a new test, refreshing against `main`, resolving a conflict surfaced by speculation, or rerunning a flaky job. Both services publish structured failure reasons (inline review comments, failing check names, queue incidents) an agent can act on directly.
 - **No prerequisites beyond GitHub.** A GitHub App, a webhook, and `pnpm add -g` per service.
 
@@ -91,7 +92,7 @@ Two separate services handle review and delivery. Both are independent, GitHub-n
 
 ### review-quill
 
-Watches PRs and posts ordinary GitHub reviews from a real local checkout of the PR head. By default reviews as soon as the head updates; can optionally wait for configured checks to go green first.
+Review gate that pairs with coding agents. It checks both the narrow diff and wider system context for misalignments, sends fixes back through ordinary GitHub reviews, and carries approval forward when a rebase leaves the patch unchanged. By default it reviews as soon as the head updates; it can optionally wait for configured checks to go green first.
 
 ```bash
 review-quill init https://review.example.com
@@ -103,7 +104,7 @@ See the [review-quill package README](./packages/review-quill/README.md) for the
 
 ### merge-steward
 
-Serial merge queue with speculative integration. Builds a speculative merge branch for each approved PR on top of the current queue base, runs CI on that integrated SHA, and fast-forwards `main` only when the tested result is still valid. Evictions produce a durable incident and a GitHub check run — the signal an agent uses to trigger a repair.
+Merge queue with speculative integration. It turns reviewed PRs into a tested landing train: CI runs on the exact future `main` SHAs, several PRs validate in parallel, and `main` fast-forwards through the green sequence as soon as it is safe. Evictions produce a durable incident and a GitHub check run — the signal an agent uses to trigger a repair.
 
 ```bash
 merge-steward init https://queue.example.com
@@ -117,7 +118,7 @@ See the [merge-steward package README](./packages/merge-steward/README.md) for t
 ## Docs
 
 - [Concepts](./docs/concepts.md) — the shared mental model (three roles, four primitives, four states, carry-forward, eviction). Start here.
-- [Blog: patchrelay](https://blog.krasnoperov.me/posts/patchrelay) · [review-quill](https://blog.krasnoperov.me/posts/review-quill) · [merge-steward](https://blog.krasnoperov.me/posts/merge-steward)
+- [Blog: patchrelay](https://blog.krasnoperov.me/posts/patchrelay) · [review-quill](https://blog.krasnoperov.me/posts/review-quill) · [merge-steward](https://blog.krasnoperov.me/posts/merge-steward) · [the gates, not the autonomy](https://blog.krasnoperov.me/posts/gates-not-autonomy)
 - [Self-hosting and deployment](./docs/self-hosting.md) — install, ingress, OAuth and GitHub App setup
 - [Architecture](./docs/architecture.md) — components, ownership, state machine, failure taxonomy
 - [Operator guide](./docs/operator-guide.md) — daily loop, CLI cheatsheet, troubleshooting
