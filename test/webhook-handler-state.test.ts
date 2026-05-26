@@ -324,6 +324,93 @@ test("delegated blocked issue is tracked but does not queue implementation until
   }
 });
 
+test("delegated issue with only completed blockers queues implementation immediately", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-completed-blocker-start-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const linearClient: Partial<LinearClient> = {
+      getIssue: async () => ({
+        id: "issue-maf-completed-blocker",
+        identifier: "MAF-41",
+        title: "Work after done provenance",
+        teamId: "team-maf",
+        teamKey: "MAF",
+        delegateId: "patchrelay-actor",
+        stateId: "state-start",
+        stateName: "Start",
+        stateType: "started",
+        workflowStates: [],
+        labelIds: [],
+        labels: [],
+        teamLabels: [],
+        blockedBy: [{
+          id: "issue-maf-done-source",
+          identifier: "MAF-10",
+          title: "Done source issue",
+          stateName: "Done",
+          stateType: "completed",
+        }],
+        blocks: [],
+      }),
+    };
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => linearClient as LinearClient } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { delegateId: null },
+      data: {
+        id: "issue-maf-completed-blocker",
+        identifier: "MAF-41",
+        title: "Work after done provenance",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-start", name: "Start", type: "started" },
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+      },
+    };
+
+    const event = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-maf-completed-blocker-start",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(event.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-completed-blocker");
+    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-completed-blocker");
+    assert.equal(issue?.factoryState, "delegated");
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(db.listIssueDependencies("krasnoperov/mafia", "issue-maf-completed-blocker").length, 1);
+    assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-completed-blocker"), 0);
+    assert.equal(wake?.runType, "implementation");
+    assert.deepEqual(db.listIssuesReadyForExecution(), [{ projectId: "krasnoperov/mafia", linearIssueId: "issue-maf-completed-blocker" }]);
+    assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-completed-blocker" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("delegated blocked agent session is acknowledged without queueing implementation", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-blocked-session-ack-"));
   try {
@@ -872,6 +959,118 @@ test("issue becoming blocked during implementation releases the active run and p
     assert.equal(finishedRun?.failureReason, "Issue became blocked during implementation");
     assert.equal(steerInputs.length, 1);
     assert.match(steerInputs[0] ?? "", /now blocked/i);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("completed blocker added during implementation does not release the active run", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-completed-blocker-active-run-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const issueRecord = db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-completed-blocked-active",
+      issueKey: "MAF-43",
+      title: "Sequencing provenance",
+      delegatedToPatchRelay: true,
+      factoryState: "implementing",
+    });
+    const run = db.runs.createRun({
+      issueId: issueRecord.id,
+      projectId: issueRecord.projectId,
+      linearIssueId: issueRecord.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-completed-blocker-active", turnId: "turn-completed-blocker-active" });
+    db.upsertIssue({
+      projectId: issueRecord.projectId,
+      linearIssueId: issueRecord.linearIssueId,
+      activeRunId: run.id,
+      branchName: "maf/43-sequencing-provenance",
+    });
+
+    const steerInputs: string[] = [];
+    const linearClient: Partial<LinearClient> = {
+      getIssue: async () => ({
+        id: "issue-maf-completed-blocked-active",
+        identifier: "MAF-43",
+        title: "Sequencing provenance",
+        teamId: "team-maf",
+        teamKey: "MAF",
+        delegateId: "patchrelay-actor",
+        stateId: "state-start",
+        stateName: "Start",
+        stateType: "started",
+        workflowStates: [],
+        labelIds: [],
+        labels: [],
+        teamLabels: [],
+        blockedBy: [{
+          id: "issue-maf-done-source",
+          identifier: "MAF-10",
+          title: "Done source issue",
+          stateName: "Done",
+          stateType: "completed",
+        }],
+        blocks: [],
+      }),
+    };
+
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => linearClient as LinearClient } as never,
+      {
+        steerTurn: async ({ input }) => {
+          steerInputs.push(input);
+        },
+      } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { stateId: "state-start" },
+      data: {
+        id: "issue-maf-completed-blocked-active",
+        identifier: "MAF-43",
+        title: "Sequencing provenance",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-start", name: "Start", type: "started" },
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+      },
+    };
+
+    const event = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-maf-completed-blocker-active",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(event.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-completed-blocked-active");
+    const activeRun = db.runs.getRunById(run.id);
+    assert.equal(issue?.factoryState, "implementing");
+    assert.equal(issue?.activeRunId, run.id);
+    assert.equal(db.listIssueDependencies("krasnoperov/mafia", "issue-maf-completed-blocked-active").length, 1);
+    assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-completed-blocked-active"), 0);
+    assert.equal(activeRun?.status, "running");
+    assert.deepEqual(steerInputs, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
