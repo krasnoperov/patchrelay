@@ -12,16 +12,14 @@ export interface LinkedPrAdoptionInput {
 }
 
 /**
- * On `delegateChanged` for a newly-delegated issue with no recorded PR yet,
- * try to adopt any pull request referenced in Linear attachments. Returns
- * the desired stage / pending-run shape, or `undefined` if no adoption
- * applies (wrong trigger, not delegated, PR already tracked, no candidate).
+ * For a delegated issue with no recorded PR yet, try to adopt any pull
+ * request referenced in Linear attachments. Delegation and status events can
+ * arrive in either order, so this cannot be tied to `delegateChanged` only.
  */
 export async function resolveLinkedPrAdoption(
   input: LinkedPrAdoptionInput,
 ) {
   if (!input.delegated) return undefined;
-  if (input.triggerEvent !== "delegateChanged") return undefined;
   if (input.existingIssue?.prNumber !== undefined) return undefined;
 
   const resolution = resolveLinkedPullRequest(input.issue.attachments, input.project.github?.repoFullName);

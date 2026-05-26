@@ -1795,6 +1795,98 @@ test("delegateChanged adopts a linked same-repo PR with requested changes", { co
   }
 });
 
+test("statusChanged adopts a linked same-repo PR before starting implementation", { concurrency: false }, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-linked-pr-status-"));
+  const restorePath = installFakeGh(
+    baseDir,
+    JSON.stringify({
+      url: "https://github.com/krasnoperov/mafia/pull/224",
+      headRefName: "fix/existing-review-repair",
+      headRefOid: "sha-linked-status-review",
+      isDraft: false,
+      isCrossRepository: false,
+      state: "OPEN",
+      author: { login: "external-dev" },
+      reviewDecision: "CHANGES_REQUESTED",
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "BLOCKED",
+      statusCheckRollup: [{ __typename: "CheckRun", name: "verify", status: "COMPLETED", conclusion: "SUCCESS" }],
+    }),
+  );
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const linearClient: Partial<LinearClient> = {
+      getIssue: async () => createHydratedIssueSnapshot({
+        id: "issue-maf-adopt-status",
+        identifier: "MAF-224",
+        title: "Repair existing linked PR",
+        delegateId: "patchrelay-actor",
+        attachments: [{
+          id: "attachment-224",
+          title: "GitHub PR #224",
+          url: "https://github.com/krasnoperov/mafia/pull/224",
+        }],
+      }),
+    };
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => linearClient as LinearClient } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { stateId: "state-backlog" },
+      data: {
+        id: "issue-maf-adopt-status",
+        identifier: "MAF-224",
+        title: "Repair existing linked PR",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-start", name: "In Progress", type: "started" },
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-adopt-status",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-adopt-status");
+    assert.equal(issue?.delegatedToPatchRelay, true);
+    assert.equal(issue?.factoryState, "changes_requested");
+    assert.equal(issue?.prNumber, 224);
+    assert.equal(issue?.branchName, "fix/existing-review-repair");
+    assert.equal(issue?.prHeadSha, "sha-linked-status-review");
+    assert.equal(issue?.prReviewState, "changes_requested");
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-adopt-status")?.runType, "review_fix");
+    assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-adopt-status" }]);
+  } finally {
+    restorePath();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("delegateChanged adopts a linked same-repo PR with failing CI", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-linked-pr-ci-"));
   const restorePath = installFakeGh(
