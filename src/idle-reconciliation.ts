@@ -42,6 +42,7 @@ export class IdleIssueReconciler {
     private readonly feed?: OperatorEventFeed,
     // Injectable for tests; production uses the real `gh`-backed watcher.
     private readonly deployEvaluator: DeployEvaluator = evaluateDeploy,
+    private readonly syncIssue?: (issue: IssueRecord) => void | Promise<void>,
   ) {}
 
   async reconcile(): Promise<void> {
@@ -289,6 +290,15 @@ export class IdleIssueReconciler {
           }
         : {}),
     });
+    const updatedIssue = this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+    if (this.syncIssue) {
+      void Promise.resolve(this.syncIssue(updatedIssue)).catch((error: unknown) => {
+        this.logger.warn(
+          { issueKey: issue.issueKey, error: error instanceof Error ? error.message : String(error) },
+          "Failed to sync Linear workflow state after idle reconciliation",
+        );
+      });
+    }
     if (options?.pendingRunType) {
       this.recordWakeEvent(issue, options.pendingRunType, options.pendingRunContext, "idle_reconciliation");
     }

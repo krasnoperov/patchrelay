@@ -9,6 +9,7 @@ import { IdleIssueReconciler } from "../src/idle-reconciliation.ts";
 import { WakeDispatcher } from "../src/wake-dispatcher.ts";
 import type { AppConfig } from "../src/config-types.ts";
 import type { DeployOutcome } from "../src/post-merge-deploy.ts";
+import type { IssueRecord } from "../src/db-types.ts";
 
 function createDb() {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-deploy-reconcile-"));
@@ -33,10 +34,15 @@ function makeConfig(deployWorkflowName?: string): AppConfig {
   } as unknown as AppConfig;
 }
 
-function build(db: PatchRelayDatabase, config: AppConfig, outcome: DeployOutcome) {
+function build(
+  db: PatchRelayDatabase,
+  config: AppConfig,
+  outcome: DeployOutcome,
+  syncIssue?: (issue: IssueRecord) => void | Promise<void>,
+) {
   const logger = pino({ enabled: false });
   const wake = new WakeDispatcher(db, () => undefined, () => undefined, logger);
-  const reconciler = new IdleIssueReconciler(db, config, wake, logger, undefined, async () => outcome);
+  const reconciler = new IdleIssueReconciler(db, config, wake, logger, undefined, async () => outcome, syncIssue);
   return reconciler;
 }
 
@@ -62,6 +68,31 @@ test("a merged PR with a deploy workflow enters the deploying watch state", asyn
     const issue = db.getIssue("usertold", "issue-1")!;
     assert.equal(issue.factoryState, "deploying");
     assert.ok(issue.deployStartedAt, "deployStartedAt is stamped");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("idle reconciliation syncs the updated issue to Linear after a state advance", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      issueKey: "USE-1",
+      delegatedToPatchRelay: true,
+      factoryState: "pr_open",
+      prNumber: 42,
+      prReviewState: "approved",
+    });
+    const synced: IssueRecord[] = [];
+    build(db, makeConfig(), "pending", (syncedIssue) => {
+      synced.push(syncedIssue);
+    }).advanceIdleIssue(issue, "awaiting_queue", { clearFailureProvenance: true });
+
+    assert.equal(synced.length, 1);
+    assert.equal(synced[0]!.factoryState, "awaiting_queue");
+    assert.equal(synced[0]!.linearIssueId, "issue-1");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

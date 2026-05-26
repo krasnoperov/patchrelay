@@ -255,7 +255,15 @@ export class RunOrchestrator {
       feed,
     );
     this.runWakePlanner = new RunWakePlanner(db);
-    this.idleReconciler = new IdleIssueReconciler(db, config, this.wakeDispatcher, logger, feed);
+    this.idleReconciler = new IdleIssueReconciler(
+      db,
+      config,
+      this.wakeDispatcher,
+      logger,
+      feed,
+      undefined,
+      (issue) => this.linearSync.syncSession(issue),
+    );
     this.mergedLinearCompletionReconciler = new MergedLinearCompletionReconciler(db, linearProvider, logger);
     this.queueHealthMonitor = new QueueHealthMonitor(db, config, {
       advanceIdleIssue: (issue, newState, options) => this.idleReconciler.advanceIdleIssue(issue, newState, options),
