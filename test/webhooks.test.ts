@@ -87,6 +87,42 @@ test("normalizeWebhook treats delegate object updates as delegateChanged", () =>
   assert.equal(normalized.issue?.delegateId, "app_user_1");
 });
 
+test("normalizeWebhook lets delegate changes win over simultaneous status changes", () => {
+  const payload: LinearWebhookPayload = {
+    action: "update",
+    type: "Issue",
+    createdAt: "2026-03-10T12:00:00.000Z",
+    webhookTimestamp: Date.now(),
+    updatedFrom: {
+      stateId: "state_started",
+      delegateId: "app_user_1",
+    },
+    data: {
+      id: "issue_undelegated",
+      identifier: "USE-123",
+      title: "Undelegate and move state",
+      delegate: null,
+      team: {
+        id: "team_1",
+        key: "USE",
+      },
+      state: {
+        id: "state_backlog",
+        name: "Backlog",
+        type: "backlog",
+      },
+    },
+  };
+
+  const normalized = normalizeWebhook({
+    webhookId: "delivery_delegate_and_status",
+    payload,
+  });
+
+  assert.equal(normalized.triggerEvent, "delegateChanged");
+  assert.equal(normalized.issue?.delegateId, undefined);
+});
+
 test("normalizeWebhook extracts nested issue metadata from comment webhooks and label nodes", () => {
   const payload: LinearWebhookPayload = {
     action: "create",

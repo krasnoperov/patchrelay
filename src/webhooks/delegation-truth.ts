@@ -38,13 +38,16 @@ export function resolveDelegationTruth(input: DelegationTruthInput): { delegated
   const observedDelegated = isDelegatedToPatchRelay(input.db, input.project, input.hydratedIssue);
   const explicitDelegateSignal = input.triggerEvent === "delegateChanged";
   const hasObservedDelegate = input.hydratedIssue.delegateId !== undefined;
+  const authoritativeDelegateObservation = hasObservedDelegate || explicitDelegateSignal || input.hydration === "live_linear";
 
   let delegated = observedDelegated;
   let reason = hasObservedDelegate
     ? "delegate_id_present"
+    : input.hydration === "live_linear"
+      ? "live_linear_delegate_absent"
     : `missing_delegate_identity_after_${input.hydration}`;
 
-  if (!hasObservedDelegate && !explicitDelegateSignal && previousDelegated !== undefined) {
+  if (!authoritativeDelegateObservation && previousDelegated !== undefined) {
     delegated = previousDelegated;
     reason = `preserved_previous_delegation_after_${input.hydration}`;
   }

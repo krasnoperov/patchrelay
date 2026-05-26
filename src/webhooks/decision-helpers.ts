@@ -37,7 +37,7 @@ export function decideActiveRunRelease(p: {
 }): { release: boolean; reason?: string } {
   if (!p.hasActiveRun) return { release: false };
   if (p.terminal) return { release: true, reason: "Issue reached terminal state during active run" };
-  if (p.triggerEvent === "delegateChanged" && !p.delegated) return { release: true, reason: "Un-delegated from PatchRelay" };
+  if (!p.delegated) return { release: true, reason: "Un-delegated from PatchRelay" };
   return { release: false };
 }
 
@@ -47,7 +47,7 @@ export function decideUnDelegation(p: {
   currentState?: FactoryState | undefined;
   hasPr: boolean;
 }): { factoryState?: FactoryState | undefined; clearPending: boolean } {
-  if (p.triggerEvent !== "delegateChanged" || p.delegated) return { clearPending: false };
+  if (p.delegated) return { clearPending: false };
   if (!p.currentState) return { clearPending: false };
   if (TERMINAL_STATES.has(p.currentState)) return { clearPending: false };
   return { factoryState: p.currentState, clearPending: true };

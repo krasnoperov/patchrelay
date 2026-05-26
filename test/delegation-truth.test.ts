@@ -111,6 +111,25 @@ test("resolveDelegationTruth preserves the previous delegation when the webhook 
   }
 });
 
+test("resolveDelegationTruth treats live Linear missing delegate as authoritative undelegation", () => {
+  const { db, baseDir } = setupDb("project-1", "actor-1");
+  try {
+    const result = resolveDelegationTruth({
+      db,
+      project: makeProject("project-1"),
+      normalizedIssue: makeIssue(),
+      hydratedIssue: makeIssue({ delegateId: undefined }),
+      existingIssue: { delegatedToPatchRelay: true } as never,
+      triggerEvent: "statusChanged",
+      webhookId: "webhook-1",
+      hydration: "live_linear",
+    });
+    assert.equal(result.delegated, false);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("resolveDelegationTruth honors an explicit delegateChanged trigger that drops the delegate", () => {
   const { db, baseDir } = setupDb("project-1", "actor-1");
   try {

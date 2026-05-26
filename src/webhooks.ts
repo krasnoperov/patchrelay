@@ -101,14 +101,14 @@ function deriveTriggerEvent(payload: LinearWebhookPayload): TriggerEvent {
     }
 
     const updatedFields = new Set(Object.keys(payload.updatedFrom ?? {}));
+    if (updatedFields.has("delegateId") || updatedFields.has("delegate")) {
+      return "delegateChanged";
+    }
     if (updatedFields.has("labels")) {
       return "labelChanged";
     }
     if (updatedFields.has("stateId") || updatedFields.has("state")) {
       return "statusChanged";
-    }
-    if (updatedFields.has("delegateId") || updatedFields.has("delegate")) {
-      return "delegateChanged";
     }
     if (updatedFields.has("assigneeId") || updatedFields.has("assignee")) {
       return "assignmentChanged";

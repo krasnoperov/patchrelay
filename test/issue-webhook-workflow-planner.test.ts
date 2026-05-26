@@ -90,6 +90,27 @@ test("undelegation preserves current nonterminal state and clears pending", () =
   assert.equal(plan.resolvedIssueUpdate.pendingRunType, null);
 });
 
+test("undelegation stops active work even when discovered from a status webhook", () => {
+  const plan = planIssueWebhookWorkflow(baseInput({
+    delegated: false,
+    existingIssue: issue({ factoryState: "implementing", delegatedToPatchRelay: true }),
+    triggerEvent: "statusChanged",
+    triggerAllowed: true,
+    hasActiveRun: true,
+    activeRunType: "implementation",
+    hasPendingWake: true,
+  }));
+
+  assert.deepEqual(plan.effectiveRunRelease, {
+    release: true,
+    reason: "Un-delegated from PatchRelay",
+  });
+  assert.equal(plan.undelegation.factoryState, "implementing");
+  assert.equal(plan.clearPending, true);
+  assert.equal(plan.resolvedIssueUpdate.activeRunId, null);
+  assert.equal(plan.resolvedIssueUpdate.pendingRunType, null);
+});
+
 test("blocked active implementation releases the run and returns to delegated", () => {
   const plan = planIssueWebhookWorkflow(baseInput({
     unresolvedBlockers: 1,
