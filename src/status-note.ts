@@ -9,10 +9,16 @@ function clean(value: string | undefined): string | undefined {
 
 function eventStatusNote(event: IssueSessionEventRecord | undefined): string | undefined {
   if (!event) return undefined;
+  const payload = event.eventJson ? parseEventJson(event.eventJson) : undefined;
+  const dirtySummary = typeof payload?.summary === "string" && payload.dirtyWorktree === true
+    ? payload.summary
+    : undefined;
   switch (event.eventType) {
     case "stop_requested":
+      if (dirtySummary) return `Operator stopped the run with dirty worktree: ${dirtySummary}. Use retry or delegate again to resume.`;
       return "Operator stopped the run. Use retry or delegate again to resume.";
     case "undelegated":
+      if (dirtySummary) return `Issue was un-delegated from PatchRelay with dirty worktree: ${dirtySummary}`;
       return "Issue was un-delegated from PatchRelay. Delegate it again to resume.";
     case "issue_removed":
       return "Issue was removed from Linear.";
@@ -22,6 +28,15 @@ function eventStatusNote(event: IssueSessionEventRecord | undefined): string | u
       return "Pull request merged successfully.";
     default:
       return undefined;
+  }
+}
+
+function parseEventJson(value: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -61,25 +76,25 @@ export function deriveIssueStatusNote(params: {
   if (completionCheckActive) {
     note = "No PR found; checking next step";
   } else {
-  switch (params.issue.factoryState) {
-    case "awaiting_input":
-      note = completionCheckNote ?? latestRunNote ?? latestEventNote ?? sessionSummary;
-      break;
-    case "failed":
-    case "escalated":
-      note = latestEventNote ?? completionCheckNote ?? failureSummary ?? latestFailureReason ?? latestRunNote ?? sessionSummary;
-      break;
-    case "done":
-      note = completionCheckNote ?? sessionSummary ?? latestRunNote ?? failureSummary;
-      break;
-    case "repairing_ci":
-    case "repairing_queue":
-      note = failureSummary ?? sessionSummary ?? latestRunNote;
-      break;
-    default:
-      note = sessionSummary ?? latestRunNote ?? failureSummary;
-      break;
-  }
+    switch (params.issue.factoryState) {
+      case "awaiting_input":
+        note = completionCheckNote ?? latestRunNote ?? latestEventNote ?? sessionSummary;
+        break;
+      case "failed":
+      case "escalated":
+        note = latestEventNote ?? completionCheckNote ?? failureSummary ?? latestFailureReason ?? latestRunNote ?? sessionSummary;
+        break;
+      case "done":
+        note = completionCheckNote ?? sessionSummary ?? latestRunNote ?? failureSummary;
+        break;
+      case "repairing_ci":
+      case "repairing_queue":
+        note = failureSummary ?? sessionSummary ?? latestRunNote;
+        break;
+      default:
+        note = latestEventNote ?? sessionSummary ?? latestRunNote ?? failureSummary;
+        break;
+    }
   }
 
   if (!note) return undefined;

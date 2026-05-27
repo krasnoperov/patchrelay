@@ -14,6 +14,7 @@ import {
   buildDelegationThought,
   buildStopConfirmationActivity,
 } from "../linear-session-reporting.ts";
+import { dirtyWorktreeEventPayload, inspectGitWorktreeStatus } from "../git-worktree-status.ts";
 import type { OperatorEventFeed } from "../operator-feed.ts";
 import { resolveProject, triggerEventAllowed } from "../project-resolution.ts";
 import type {
@@ -210,6 +211,12 @@ export class AgentSessionHandler {
   }): Promise<void> {
     const issueId = params.normalized.issue!.id;
     const sessionId = params.normalized.agentSession!.id;
+    const storedIssue = this.db.issues.getIssue(params.project.id, issueId);
+    const worktreeStatus = storedIssue?.worktreePath
+      ? inspectGitWorktreeStatus(storedIssue.worktreePath)
+      : undefined;
+    const dirtyPayload = worktreeStatus ? dirtyWorktreeEventPayload(worktreeStatus) : undefined;
+    const dirtySummary = typeof dirtyPayload?.summary === "string" ? dirtyPayload.summary : undefined;
 
     if (params.activeRun?.threadId && params.activeRun.turnId) {
       try {
@@ -222,7 +229,12 @@ export class AgentSessionHandler {
         this.logger.warn({ issueKey: params.trackedIssue?.issueKey, error: error instanceof Error ? error.message : String(error) }, "Failed to steer Codex turn for stop signal");
       }
 
-      this.db.runs.finishRun(params.activeRun.id, { status: "released", threadId: params.activeRun.threadId, turnId: params.activeRun.turnId });
+      this.db.runs.finishRun(params.activeRun.id, {
+        status: "released",
+        threadId: params.activeRun.threadId,
+        turnId: params.activeRun.turnId,
+        failureReason: dirtySummary ? `Stop signal received; ${dirtySummary}` : "Stop signal received",
+      });
     }
 
     this.db.issueSessions.upsertIssueRespectingActiveLease(params.project.id, issueId, {
@@ -236,6 +248,7 @@ export class AgentSessionHandler {
       projectId: params.project.id,
       linearIssueId: issueId,
       eventType: "stop_requested",
+      ...(dirtyPayload ? { eventJson: JSON.stringify(dirtyPayload) } : {}),
       dedupeKey: `stop_requested:${issueId}`,
     });
     this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(params.project.id, issueId);
@@ -247,7 +260,7 @@ export class AgentSessionHandler {
       projectId: params.project.id,
       issueKey: params.trackedIssue?.issueKey,
       status: "stopped",
-      summary: "Stop signal received - work halted",
+      summary: dirtySummary ? `Stop signal received - work halted with dirty worktree: ${dirtySummary}` : "Stop signal received - work halted",
     });
 
     const updatedIssue = this.db.issues.getIssue(params.project.id, issueId);

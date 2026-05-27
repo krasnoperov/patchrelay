@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import test from "node:test";
 import pino from "pino";
 import { PatchRelayDatabase } from "../src/db.ts";
@@ -38,6 +39,7 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
   failedRecoveryError?: string | null;
   publicationRecapSummary?: string;
   onEnqueue?: (projectId: string, issueId: string) => void;
+  failRunAndClear?: (runId: number, message: string) => void;
 }) {
   const feedEvents: Array<Record<string, unknown>> = [];
   const activities: Array<Record<string, unknown>> = [];
@@ -76,7 +78,11 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
     (_projectId, _linearIssueId, fn) => fn(lease as never),
     release,
     () => true,
-    () => {
+    (run, message) => {
+      if (options?.failRunAndClear) {
+        options.failRunAndClear(run.id, message);
+        return;
+      }
       throw new Error("failRunAndClear should not be called in completion-check tests");
     },
     {
@@ -112,6 +118,86 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
   );
   return { finalizer, feedEvents, activities, enqueueCalls };
 }
+
+test("repair run finalizer escalates instead of completing with a dirty worktree", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    const worktreePath = path.join(baseDir, "repo");
+    execFileSync("git", ["init", worktreePath], { stdio: "ignore" });
+    execFileSync("git", ["-C", worktreePath, "config", "user.email", "test@example.com"]);
+    execFileSync("git", ["-C", worktreePath, "config", "user.name", "Test User"]);
+    writeFileSync(path.join(worktreePath, "tracked.txt"), "base\n");
+    execFileSync("git", ["-C", worktreePath, "add", "tracked.txt"]);
+    execFileSync("git", ["-C", worktreePath, "commit", "-m", "base"], { stdio: "ignore" });
+    writeFileSync(path.join(worktreePath, "tracked.txt"), "dirty\n");
+
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      issueKey: "USE-REPAIR",
+      title: "Repair dirty worktree",
+      factoryState: "changes_requested",
+      worktreePath,
+      prNumber: 123,
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "branch_upkeep",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-1", turnId: "turn-main" });
+
+    let failureMessage = "";
+    const { finalizer, feedEvents } = createFinalizer(
+      db,
+      { outcome: "done", summary: "done" },
+      {
+        publishedOutcomeError: null,
+        failRunAndClear: (runId, message) => {
+          failureMessage = message;
+          db.runs.finishRun(runId, { status: "failed", failureReason: message });
+          db.upsertIssue({
+            projectId: issue.projectId,
+            linearIssueId: issue.linearIssueId,
+            activeRunId: null,
+            factoryState: "escalated",
+          });
+        },
+      },
+    );
+
+    await finalizer.finalizeCompletedRun({
+      source: "notification",
+      run: db.runs.getRunById(run.id)!,
+      issue: db.getIssue(issue.projectId, issue.linearIssueId)!,
+      thread: {
+        id: "thread-1",
+        preview: "",
+        cwd: worktreePath,
+        status: "idle",
+        turns: [
+          {
+            id: "turn-main",
+            status: "completed",
+            items: [{ id: "msg-1", type: "agentMessage", text: "Pushed the repair." }],
+          },
+        ],
+      },
+      threadId: "thread-1",
+      completedTurnId: "turn-main",
+      resolveRecoverableRunState: () => undefined,
+    });
+
+    assert.match(failureMessage, /dirty worktree/);
+    assert.match(failureMessage, /tracked\.txt/);
+    assert.equal(db.getIssue(issue.projectId, issue.linearIssueId)?.factoryState, "escalated");
+    assert.equal(db.runs.getRunById(run.id)?.status, "failed");
+    assert.equal(feedEvents.at(-1)?.status, "dirty_repair_worktree");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
 
 test("run finalizer moves no-PR runs into awaiting_input when completion check needs input", async () => {
   const { baseDir, db } = createDb();

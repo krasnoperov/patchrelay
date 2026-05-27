@@ -124,6 +124,11 @@ test("repair prompts publish to the existing PR branch with concise self-review 
     assert.match(prompt, /Restore and publish on the existing PR branch: commit and push the same branch\./);
     assert.match(prompt, /Do not open a new PR/);
     assert.match(prompt, /A PR-less stop is not a successful outcome for a repair run unless a genuine external blocker prevents any correct push\./);
+    assert.match(prompt, /After pushing a new head, stop and report the pushed commit\./);
+    assert.match(prompt, /Do not poll or watch GitHub for CI, review, mergeability, review-quill, merge-steward, approval, or merge completion\./);
+    assert.match(prompt, /Do not run blocking wait commands such as `gh pr checks --watch`/);
+    assert.match(prompt, /PatchRelay receives GitHub webhooks for check, review, and base-branch changes/);
+    assert.match(prompt, /If the issue text asks you to watch CI, wait for approval, or merge after checks pass, treat that as PatchRelay service responsibility/);
     assert.match(prompt, /Before changing code or config, reproduce the failure on the exact failing head or identify the concrete log signature that justifies the fix\./);
     assert.match(prompt, /If the exact failing head does not reproduce locally and the logs do not support a scoped fix, prefer a rerun-only repair over speculative branch changes\./);
     assert.match(prompt, /## Final Self-Review Before Push/);

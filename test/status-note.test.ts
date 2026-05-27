@@ -36,6 +36,24 @@ test("deriveIssueStatusNote still prefers explicit operator events for escalated
   assert.equal(note, "Operator stopped the run. Use retry or delegate again to resume.");
 });
 
+test("deriveIssueStatusNote surfaces dirty worktree context for stopped runs", () => {
+  const note = deriveIssueStatusNote({
+    issue: { factoryState: "awaiting_input" },
+    latestEvent: {
+      eventType: "stop_requested",
+      eventJson: JSON.stringify({
+        dirtyWorktree: true,
+        summary: "Worktree has unresolved merge conflicts: src/shared/voice/tutor-voice.test.ts",
+      }),
+    } as never,
+  });
+
+  assert.equal(
+    note,
+    "Operator stopped the run with dirty worktree: Worktree has unresolved merge conflicts: src/shared/voice/tutor-voice.test.ts. Use retry or delegate again to resume.",
+  );
+});
+
 test("deriveIssueStatusNote unwraps shell-wrapped commands in assistant summaries", () => {
   const note = deriveIssueStatusNote({
     issue: { factoryState: "done" },
