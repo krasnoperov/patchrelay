@@ -17,6 +17,7 @@ import type { RunCompletionPolicy } from "./run-completion-policy.ts";
 import { resolveCompletedRunState } from "./run-completion-policy.ts";
 import { computeChangeIdentityFromWorktree } from "./change-identity.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
+import { inspectGitWorktreeStatus, isRepairRunType } from "./git-worktree-status.ts";
 
 type StageReport = ReturnType<typeof buildStageReport>;
 
@@ -366,6 +367,15 @@ export class RunFinalizer {
     this.clearProgressAndRelease(params.run);
   }
 
+  private verifyRepairWorktreeClean(run: RunRecord, issue: IssueRecord): string | undefined {
+    if (!isRepairRunType(run.runType) || !issue.worktreePath) return undefined;
+    const status = inspectGitWorktreeStatus(issue.worktreePath);
+    if (!status.dirty) return undefined;
+    return status.summary
+      ? `Repair run finished with a dirty worktree; ${status.summary}`
+      : "Repair run finished with a dirty worktree";
+  }
+
   async finalizeCompletedRun(params: {
     source: "notification" | "reconciliation";
     run: RunRecord;
@@ -400,6 +410,20 @@ export class RunFinalizer {
     );
 
     const freshIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
+    const dirtyRepairWorktreeError = this.verifyRepairWorktreeClean(run, freshIssue);
+    if (dirtyRepairWorktreeError) {
+      this.failRunAndClear(run, dirtyRepairWorktreeError, "escalated");
+      this.syncFailureOutcome({
+        run,
+        fallbackIssue: freshIssue,
+        message: dirtyRepairWorktreeError,
+        level: "error",
+        status: "dirty_repair_worktree",
+        summary: dirtyRepairWorktreeError,
+      });
+      return;
+    }
+
     const verifiedRepairError = await this.completionPolicy.verifyReactiveRunAdvancedBranch(run, freshIssue);
     if (verifiedRepairError) {
       const holdState = params.resolveRecoverableRunState(freshIssue) ?? "failed";

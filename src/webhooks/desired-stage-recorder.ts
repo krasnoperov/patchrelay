@@ -16,6 +16,7 @@ import type {
 import { buildOperatorRetryEvent } from "../operator-retry-event.ts";
 import { planIssueWebhookWorkflow } from "./issue-webhook-workflow-planner.ts";
 import type { WakeDispatcher } from "../wake-dispatcher.ts";
+import { dirtyWorktreeEventPayload, inspectGitWorktreeStatus } from "../git-worktree-status.ts";
 
 export class DesiredStageRecorder {
   constructor(
@@ -94,6 +95,15 @@ export class DesiredStageRecorder {
       incomingAgentSessionId,
       childIssueCount,
     });
+    const releaseWorktreeStatus = workflowPlan.effectiveRunRelease.release && activeRun && existingIssue?.worktreePath
+      ? inspectGitWorktreeStatus(existingIssue.worktreePath)
+      : undefined;
+    const releaseReason = workflowPlan.effectiveRunRelease.reason
+      ? releaseWorktreeStatus?.dirty && releaseWorktreeStatus.summary
+        ? `${workflowPlan.effectiveRunRelease.reason}; ${releaseWorktreeStatus.summary}`
+        : workflowPlan.effectiveRunRelease.reason
+      : undefined;
+    const dirtyWorktreePayload = releaseWorktreeStatus ? dirtyWorktreeEventPayload(releaseWorktreeStatus) : undefined;
 
     const commitIssueUpdate = () => {
       const record = this.db.issues.upsertIssue({
@@ -115,8 +125,8 @@ export class DesiredStageRecorder {
         delegatedToPatchRelay: delegated,
         ...workflowPlan.resolvedIssueUpdate,
       });
-      if (workflowPlan.effectiveRunRelease.release && activeRun && workflowPlan.effectiveRunRelease.reason) {
-        this.db.runs.finishRun(activeRun.id, { status: "released", failureReason: workflowPlan.effectiveRunRelease.reason });
+      if (workflowPlan.effectiveRunRelease.release && activeRun && releaseReason) {
+        this.db.runs.finishRun(activeRun.id, { status: "released", failureReason: releaseReason });
       }
       return record;
     };
@@ -143,6 +153,11 @@ export class DesiredStageRecorder {
         projectId: params.project.id,
         linearIssueId: normalizedIssue.id,
         eventType: "undelegated",
+        ...(dirtyWorktreePayload
+          ? {
+              eventJson: JSON.stringify(dirtyWorktreePayload),
+            }
+          : {}),
         dedupeKey: `undelegated:${normalizedIssue.id}`,
       });
       this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(params.project.id, normalizedIssue.id);
@@ -154,7 +169,9 @@ export class DesiredStageRecorder {
         projectId: params.project.id,
         stage: issue.factoryState,
         status: "un_delegated",
-        summary: issue.factoryState === "awaiting_input"
+        summary: releaseWorktreeStatus?.dirty && releaseWorktreeStatus.summary
+          ? `Issue un-delegated from PatchRelay with dirty worktree: ${releaseWorktreeStatus.summary}`
+          : issue.factoryState === "awaiting_input"
           ? "Issue un-delegated from PatchRelay"
           : `Issue un-delegated from PatchRelay; ${issue.factoryState} is now paused`,
       });

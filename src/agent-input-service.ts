@@ -15,6 +15,7 @@ import { deriveIssueStatusNote } from "./status-note.ts";
 import type { LinearAgentActivityContent, ProjectConfig } from "./types.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
 import { extractLatestAssistantSummary } from "./issue-session-events.ts";
+import { dirtyWorktreeEventPayload, inspectGitWorktreeStatus } from "./git-worktree-status.ts";
 
 export interface AgentInputDeliveryResult {
   status: "answered" | "ignored" | "queued" | "steered" | "delivery_failed" | "stopped";
@@ -303,6 +304,10 @@ export class AgentInputService {
     body: string,
     source: AgentInputSource,
   ): Promise<void> {
+    const worktreeStatus = issue.worktreePath ? inspectGitWorktreeStatus(issue.worktreePath) : undefined;
+    const dirtyPayload = worktreeStatus ? dirtyWorktreeEventPayload(worktreeStatus) : undefined;
+    const dirtySummary = typeof dirtyPayload?.summary === "string" ? dirtyPayload.summary : undefined;
+
     if (run.threadId && run.turnId) {
       try {
         await this.codex.steerTurn({
@@ -313,7 +318,12 @@ export class AgentInputService {
       } catch (error) {
         this.logger.warn({ issueKey: issue.issueKey, error: error instanceof Error ? error.message : String(error) }, "Failed to steer Codex turn for stop request");
       }
-      this.db.runs.finishRun(run.id, { status: "released", threadId: run.threadId, turnId: run.turnId });
+      this.db.runs.finishRun(run.id, {
+        status: "released",
+        threadId: run.threadId,
+        turnId: run.turnId,
+        failureReason: dirtySummary ? `Operator stopped run; ${dirtySummary}` : "Operator stopped run",
+      });
     }
 
     this.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
@@ -324,7 +334,7 @@ export class AgentInputService {
     });
     this.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
       eventType: "stop_requested",
-      eventJson: JSON.stringify({ body, source }),
+      eventJson: JSON.stringify({ body, source, ...dirtyPayload }),
     });
     this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
     this.db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(issue.projectId, issue.linearIssueId);

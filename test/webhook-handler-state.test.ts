@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -1415,6 +1416,14 @@ test("un-delegation during active run releases run and preserves implementing st
       scopesJson: "[]",
     });
     db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+    const worktreePath = path.join(baseDir, "repo");
+    execFileSync("git", ["init", worktreePath], { stdio: "ignore" });
+    execFileSync("git", ["-C", worktreePath, "config", "user.email", "test@example.com"]);
+    execFileSync("git", ["-C", worktreePath, "config", "user.name", "Test User"]);
+    writeFileSync(path.join(worktreePath, "file.txt"), "base\n");
+    execFileSync("git", ["-C", worktreePath, "add", "file.txt"]);
+    execFileSync("git", ["-C", worktreePath, "commit", "-m", "base"], { stdio: "ignore" });
+    writeFileSync(path.join(worktreePath, "file.txt"), "dirty\n");
 
     const issueRecord = db.upsertIssue({
       projectId: "krasnoperov/mafia",
@@ -1422,6 +1431,7 @@ test("un-delegation during active run releases run and preserves implementing st
       issueKey: "MAF-50",
       title: "Implement feature X",
       factoryState: "implementing",
+      worktreePath,
     });
     const run = db.runs.createRun({
       issueId: issueRecord.id,
@@ -1477,6 +1487,12 @@ test("un-delegation during active run releases run and preserves implementing st
     const finishedRun = db.runs.getRunById(run.id);
     assert.equal(finishedRun?.status, "released");
     assert.ok(finishedRun?.failureReason?.includes("Un-delegated"));
+    assert.ok(finishedRun?.failureReason?.includes("Worktree has"));
+    assert.ok(finishedRun?.failureReason?.includes("file.txt"));
+    const undelegatedEvent = db.issueSessions
+      .listIssueSessionEvents("krasnoperov/mafia", "issue-maf-50")
+      .find((event) => event.eventType === "undelegated");
+    assert.match(undelegatedEvent?.eventJson ?? "", /dirtyWorktree/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -4451,6 +4467,14 @@ test("agent signal stop requests halt the active run and emit a stop_requested s
       scopesJson: "[]",
     });
     db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+    const worktreePath = path.join(baseDir, "repo");
+    execFileSync("git", ["init", worktreePath], { stdio: "ignore" });
+    execFileSync("git", ["-C", worktreePath, "config", "user.email", "test@example.com"]);
+    execFileSync("git", ["-C", worktreePath, "config", "user.name", "Test User"]);
+    writeFileSync(path.join(worktreePath, "file.txt"), "base\n");
+    execFileSync("git", ["-C", worktreePath, "add", "file.txt"]);
+    execFileSync("git", ["-C", worktreePath, "commit", "-m", "base"], { stdio: "ignore" });
+    writeFileSync(path.join(worktreePath, "file.txt"), "dirty\n");
 
     const issueRecord = db.upsertIssue({
       projectId: "krasnoperov/mafia",
@@ -4459,6 +4483,7 @@ test("agent signal stop requests halt the active run and emit a stop_requested s
       title: "Stop requested issue",
       factoryState: "implementing",
       agentSessionId: "session-stop-1",
+      worktreePath,
     });
     const run = db.runs.createRun({
       issueId: issueRecord.id,
@@ -4538,7 +4563,10 @@ test("agent signal stop requests halt the active run and emit a stop_requested s
     assert.equal(issue?.factoryState, "awaiting_input");
     assert.equal(issue?.activeRunId, undefined);
     assert.equal(runAfter?.status, "released");
-    assert.ok(events.some((event) => event.eventType === "stop_requested"));
+    assert.match(runAfter?.failureReason ?? "", /Worktree has/);
+    assert.match(runAfter?.failureReason ?? "", /file\.txt/);
+    const stopEvent = events.find((event) => event.eventType === "stop_requested");
+    assert.match(stopEvent?.eventJson ?? "", /dirtyWorktree/);
     assert.equal(codexSteers.length, 1);
     assert.equal(codexSteers[0]?.threadId, "thread-stop-1");
     assert.equal(codexSteers[0]?.turnId, "turn-stop-1");

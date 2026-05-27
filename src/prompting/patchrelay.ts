@@ -698,6 +698,10 @@ function buildPublicationContract(
     "Restore and publish on the existing PR branch: commit and push the same branch.",
     "Do not open a new PR.",
     "A PR-less stop is not a successful outcome for a repair run unless a genuine external blocker prevents any correct push.",
+    "After pushing a new head, stop and report the pushed commit. Do not poll or watch GitHub for CI, review, mergeability, review-quill, merge-steward, approval, or merge completion.",
+    "Do not run blocking wait commands such as `gh pr checks --watch`, `gh pr view` polling loops, `review-quill pr status --wait`, `merge-steward pr status --wait`, or `gh pr merge` from the agent turn.",
+    "PatchRelay receives GitHub webhooks for check, review, and base-branch changes; those events will re-enter automation if more work is needed.",
+    "If the issue text asks you to watch CI, wait for approval, or merge after checks pass, treat that as PatchRelay service responsibility rather than agent-turn work.",
     "",
     ...(requiresFreshQueueHead
       ? [
