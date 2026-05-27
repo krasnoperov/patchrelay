@@ -38,6 +38,7 @@ function rootHelpText(): string {
   "                                                          Classify a single PR; by default includes review/check failure detail, 0 terminal ok, 2 terminal failure, 3 still in flight, 4 --wait timeout",
   "  doctor [--repo <id>] [--json]                          Validate config, secrets, binaries, and service reachability",
   "  service status [--json]                                Show systemd state and local health",
+  "  service codex-status [--json]                          Show Codex account and usage snapshot from this service",
   "  service logs [--lines <count>] [--json]                Show recent journal logs",
   "  dashboard [--config <path>]                            Open the review dashboard",
   "  status [--config <path>] [--json]                      Print a one-time dashboard snapshot",
@@ -121,10 +122,11 @@ function serviceHelpText(): string {
     "  review-quill service <command> [options]",
     "",
     "Commands:",
-    "  install [--force] [--json]    Reinstall the systemd unit",
-    "  restart [--json]              Reload-or-restart the service",
-    "  status [--json]               Show systemd state and local health",
-    "  logs [--lines <count>] [--json]",
+  "  install [--force] [--json]    Reinstall the systemd unit",
+  "  restart [--json]              Reload-or-restart the service",
+  "  status [--json]               Show systemd state and local health",
+  "  codex-status [--json]         Show Codex account and usage snapshot from this service",
+  "  logs [--lines <count>] [--json]",
     "                                Show recent journal logs",
   ].join("\n");
 }

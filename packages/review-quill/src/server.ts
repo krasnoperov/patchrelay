@@ -9,6 +9,7 @@ import { SqliteStore } from "./db/sqlite-store.ts";
 import { resolveGitHubAuthConfig, createGitHubAppTokenManager, resolveAppSlug, type GitHubAuthRuntimeStatus } from "./github-auth.ts";
 import { applyGitHubCliAuthEnv, getGhConfigDir, resolveGhBin } from "./github-cli-auth.ts";
 import { GitHubClient } from "./github-client.ts";
+import { getCodexStatusSnapshot } from "./codex-status.ts";
 import { ReviewRunner } from "./review-runner.ts";
 import { ReviewQuillService } from "./service.ts";
 import type { ReviewQuillRuntimeStatus } from "./types.ts";
@@ -129,6 +130,11 @@ export async function startServer(configPath = process.env.REVIEW_QUILL_CONFIG ?
     appSlug,
     webhookSecretSource: config.secretSources["review-quill-webhook-secret"],
   }));
+
+  const codexStatusRoute = async () => getCodexStatusSnapshot();
+
+  app.get("/status", codexStatusRoute);
+  app.get("/admin/codex/status", codexStatusRoute);
 
   app.get("/attempts", async () => ({
     attempts: service.listAttempts(),

@@ -16,6 +16,7 @@ WorkingDirectory=/home/your-user
 EnvironmentFile=-/home/your-user/.config/patchrelay/runtime.env
 EnvironmentFile=-/home/your-user/.config/patchrelay/service.env
 Environment=NODE_ENV=production
+Environment=CODEX_HOME=/home/alv/.codex-patchrelay
 Environment=PATCHRELAY_CONFIG=/home/your-user/.config/patchrelay/patchrelay.json
 Environment=PATH=/home/your-user/.local/share/patchrelay/bin:/home/your-user/.local/bin:/usr/local/bin:/usr/bin:/bin
 
@@ -43,7 +44,7 @@ PrivateTmp=true
 PrivateMounts=true
 ProtectSystem=strict
 ProtectHome=false
-ReadWritePaths=/home/your-user/.config/patchrelay /home/your-user/.local/state/patchrelay /home/your-user/.local/share/patchrelay
+ReadWritePaths=/home/your-user/.config/patchrelay /home/your-user/.local/state/patchrelay /home/your-user/.local/share/patchrelay /home/alv/.codex-patchrelay
 
 # PatchRelay runs as your real user so Codex inherits your existing git,
 # SSH, and local tool permissions.

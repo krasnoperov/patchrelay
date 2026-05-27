@@ -140,6 +140,9 @@ export function validateFlags(parsed: ParsedArgs): void {
         case "status":
           assertKnownFlags(parsed, "service", ["json"]);
           return;
+        case "codex-status":
+          assertKnownFlags(parsed, "service", ["json"]);
+          return;
         case "logs":
           assertKnownFlags(parsed, "service", ["lines", "json"]);
           return;

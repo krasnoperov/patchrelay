@@ -240,9 +240,19 @@ export async function fetchServiceAuthStatus(): Promise<{
     lastRefreshAt: string | null;
     lastRefreshError: string | null;
     fresh: boolean;
-  }>;
+  }>; 
 }> {
   return await requestLocalJson("/admin/runtime/auth");
+}
+
+export async function fetchServiceCodexStatus(): Promise<{
+  ok: boolean;
+  exitCode: number;
+  output: string;
+  account?: string;
+  error?: string;
+}> {
+  return await requestLocalJson("/status");
 }
 
 export async function fetchWatchSnapshot(): Promise<{

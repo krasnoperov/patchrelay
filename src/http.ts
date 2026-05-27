@@ -3,6 +3,7 @@ import fastify from "fastify";
 import rawBody from "fastify-raw-body";
 import type { Logger } from "pino";
 import { getBuildInfo } from "./build-info.ts";
+import { getCodexStatusSnapshot } from "./codex-status.ts";
 import type { PatchRelayService } from "./service.ts";
 import type { AppConfig } from "./types.ts";
 
@@ -282,6 +283,15 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
   }
 
   if (managementRoutesEnabled) {
+    app.get("/status", async (_request, reply) => {
+      const status = getCodexStatusSnapshot(config.runner.codex.bin);
+      return reply.code(status.ok ? 200 : 502).send(status);
+    });
+    app.get("/api/codex/status", async (_request, reply) => {
+      const status = getCodexStatusSnapshot(config.runner.codex.bin);
+      return reply.code(status.ok ? 200 : 502).send(status);
+    });
+
     app.get("/api/issues", async (_request, reply) => {
       return reply.send({ ok: true, issues: service.listTrackedIssues() });
     });
