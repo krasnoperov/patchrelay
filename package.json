@@ -46,16 +46,16 @@
   "dependencies": {
     "fastify": "^5.8.5",
     "fastify-raw-body": "^5.0.0",
-    "ink": "^7.0.1",
+    "ink": "^7.0.4",
     "pino": "^10.3.1",
     "pino-logfmt": "^1.1.4",
-    "react": "^19.2.5",
-    "zod": "^4.3.6"
+    "react": "^19.2.6",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/node": "^25.6.0",
-    "@types/react": "^19.2.14",
-    "@typescript/native-preview": "7.0.0-dev.20260427.1",
-    "oxlint": "^1.62.0"
+    "@types/node": "^25.9.1",
+    "@types/react": "^19.2.15",
+    "@typescript/native-preview": "7.0.0-dev.20260527.1",
+    "oxlint": "^1.67.0"
   }
 }
