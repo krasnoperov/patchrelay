@@ -14,6 +14,7 @@ WorkingDirectory=/home/your-user
 EnvironmentFile=-/home/your-user/.config/review-quill/runtime.env
 EnvironmentFile=-/home/your-user/.config/review-quill/service.env
 Environment=NODE_ENV=production
+Environment=CODEX_HOME=/home/alv/.codex-patchrelay
 Environment=PATH=/home/your-user/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 # Service-owned secrets live in encrypted systemd credentials.
@@ -29,7 +30,7 @@ PrivateTmp=true
 PrivateMounts=true
 ProtectSystem=strict
 ProtectHome=false
-ReadWritePaths=/home/your-user/.config/review-quill /home/your-user/.local/state/review-quill /home/your-user/.local/share/review-quill
+ReadWritePaths=/home/your-user/.config/review-quill /home/your-user/.local/state/review-quill /home/your-user/.local/share/review-quill /home/alv/.codex-patchrelay
 
 [Install]
 WantedBy=multi-user.target

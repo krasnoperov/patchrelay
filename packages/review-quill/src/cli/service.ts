@@ -1,5 +1,12 @@
 import { installServiceUnit } from "../install.ts";
-import { fetchServiceHealthStatus, formatCommandFailure, parseSystemctlShowOutput, runSystemctl, type CommandRunner } from "../cli-system.ts";
+import {
+  fetchServiceCodexStatus,
+  fetchServiceHealthStatus,
+  formatCommandFailure,
+  parseSystemctlShowOutput,
+  runSystemctl,
+  type CommandRunner,
+} from "../cli-system.ts";
 import type { Output } from "./shared.ts";
 import { formatJson, writeOutput } from "./shared.ts";
 import { parseIntegerFlag, UsageError } from "./args.ts";
@@ -94,6 +101,23 @@ export async function handleService(parsed: ParsedArgs, stdout: Output, runComma
       ].filter(Boolean).join("\n") + "\n",
     );
     return 0;
+  }
+
+  if (subcommand === "codex-status") {
+    const status = await fetchServiceCodexStatus();
+    if (parsed.flags.get("json") === true) {
+      writeOutput(stdout, formatJson(status));
+      return status.ok ? 0 : 1;
+    }
+    const output = status.output.trim();
+    writeOutput(
+      stdout,
+      [
+        "review-quill Codex status",
+        output ? output : "No codex status output received.",
+      ].join("\n") + "\n",
+    );
+    return status.ok ? 0 : 1;
   }
 
   if (subcommand === "logs") {

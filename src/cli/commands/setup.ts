@@ -20,6 +20,26 @@ interface SetupCommandParams {
   runCommand: CommandRunner;
 }
 
+interface PatchRelayCodexStatusResponse {
+  ok: boolean;
+  exitCode: number;
+  output: string;
+  account?: string;
+  error?: string;
+}
+
+interface PatchRelayCodexStatusResult {
+  reachable: true;
+  status: number;
+  payload: PatchRelayCodexStatusResponse;
+}
+
+interface PatchRelayCodexStatusFailure {
+  reachable: false;
+  status: number;
+  error: string;
+}
+
 export async function handleInitCommand(params: SetupCommandParams): Promise<number> {
   try {
     const requestedPublicBaseUrl =
@@ -214,6 +234,44 @@ async function readPatchRelayHealth(): Promise<
   }
 }
 
+function getPatchRelayServiceUrl(): { baseUrl: string; healthPath: string; codexStatusPath: string } {
+  const config = loadConfig(undefined, { profile: "doctor" });
+  const host = config.server.bind === "0.0.0.0" ? "127.0.0.1" : config.server.bind;
+  const baseUrl = `http://${host}:${config.server.port}`;
+  return {
+    baseUrl,
+    healthPath: `${baseUrl}${config.server.healthPath}`,
+    codexStatusPath: `${baseUrl}/status`,
+  };
+}
+
+async function readPatchRelayCodexStatus(): Promise<
+  PatchRelayCodexStatusResult | PatchRelayCodexStatusFailure
+> {
+  const { codexStatusPath } = getPatchRelayServiceUrl();
+  try {
+    const response = await fetch(codexStatusPath, { signal: AbortSignal.timeout(2_000) });
+    const payload = await response.json() as PatchRelayCodexStatusResponse;
+    return {
+      reachable: true,
+      status: response.status,
+      payload: {
+        ...payload,
+        output: typeof payload.output === "string" ? payload.output : "",
+        account: typeof payload.account === "string" ? payload.account : undefined,
+        exitCode: typeof payload.exitCode === "number" ? payload.exitCode : 1,
+        ok: payload.ok === true,
+      },
+    };
+  } catch (error) {
+    return {
+      reachable: false,
+      status: 0,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 export async function handleServiceCommand(params: SetupCommandParams): Promise<number> {
   if (params.commandArgs.length === 0) {
     throw new CliUsageError("patchrelay service requires a subcommand.", "service");
@@ -271,6 +329,24 @@ export async function handleServiceCommand(params: SetupCommandParams): Promise<
             .join("\n") + "\n",
     );
     return 0;
+  }
+  if (subcommand === "codex-status") {
+    const result = await readPatchRelayCodexStatus();
+    if (!result.reachable) {
+      throw new Error(`Unable to read PatchRelay Codex status. ${result.error}`);
+    }
+    const status = result.payload;
+    const output = status.output.trim();
+    if (params.json) {
+      writeOutput(params.stdout, formatJson(status));
+      return status.ok ? 0 : 1;
+    }
+    const lines = [
+      "PatchRelay Codex status",
+      output ? output : "No codex status output received.",
+    ].filter(Boolean);
+    writeOutput(params.stdout, `${lines.join("\n")}\n`);
+    return status.ok ? 0 : 1;
   }
   if (subcommand === "logs") {
     const lines = parsePositiveIntegerFlag(params.parsed.flags.get("lines"), "--lines") ?? 50;

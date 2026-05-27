@@ -148,6 +148,10 @@ function validateFlags(command: string, commandArgs: string[], parsed: ReturnTyp
         assertKnownFlags(parsed, "service", ["json"]);
         return;
       }
+      if (commandArgs[0] === "codex-status") {
+        assertKnownFlags(parsed, "service", ["json"]);
+        return;
+      }
       if (commandArgs[0] === "logs") {
         assertKnownFlags(parsed, "service", ["lines", "json"]);
         return;
