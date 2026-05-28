@@ -497,6 +497,48 @@ export class RunOrchestrator {
     const baseContext = isRequestedChangesRunType(runType)
       ? await this.runCompletionPolicy.resolveRequestedChangesWakeContext(issue, runType, context)
       : context;
+    const launchIssue = this.db.issues.getIssue(item.projectId, item.issueId) ?? issue;
+    const inactiveRequestedChangesWakeReason = this.resolveInactiveRequestedChangesWakeReason(launchIssue, runType, baseContext);
+    if (inactiveRequestedChangesWakeReason) {
+      const lease = { projectId: item.projectId, linearIssueId: item.issueId, leaseId };
+      const requestedChangesEventIds = this.db.issueSessions
+        .listIssueSessionEvents(item.projectId, item.issueId, { pendingOnly: true })
+        .filter((event) => wake.eventIds.includes(event.id) && event.eventType === "review_changes_requested")
+        .map((event) => event.id);
+      const dismissed = this.db.issueSessions.dismissIssueSessionEventsWithLease(lease, requestedChangesEventIds);
+      if (!dismissed) {
+        this.releaseIssueSessionLease(item.projectId, item.issueId);
+        this.logger.info(
+          { issueKey: issue.issueKey, projectId: item.projectId, reason: "lease_lost_dismissing_inactive_requested_changes_wake" },
+          "Skipped issue run: lost lease while dismissing inactive requested-changes wake",
+        );
+        return;
+      }
+      this.db.issueSessions.setIssueSessionLastWakeReasonWithLease(lease, wake.wakeReason ?? null);
+      this.feed?.publish({
+        level: "info",
+        kind: "stage",
+        issueKey: issue.issueKey,
+        projectId: item.projectId,
+        stage: runType,
+        status: "skipped",
+        summary: inactiveRequestedChangesWakeReason,
+      });
+      this.logger.info(
+        {
+          issueKey: issue.issueKey,
+          projectId: item.projectId,
+          runType,
+          reason: "inactive_requested_changes_wake",
+          prReviewState: launchIssue.prReviewState,
+          prState: launchIssue.prState,
+        },
+        "Skipped issue run: requested-changes wake is no longer active",
+      );
+      this.releaseIssueSessionLease(item.projectId, item.issueId);
+      this.wakeDispatcher.dispatchIfWakePending(item.projectId, item.issueId);
+      return;
+    }
     const recoveredLinearActivityContext = await recoverLinearAgentActivityContext({
       linearProvider: this.linearProvider,
       projectId: issue.projectId,
@@ -754,6 +796,23 @@ export class RunOrchestrator {
     context: Record<string, unknown> | undefined,
   ): Promise<Record<string, unknown> | undefined> {
     return await this.runCompletionPolicy.resolveRequestedChangesWakeContext(issue, runType, context);
+  }
+
+  private resolveInactiveRequestedChangesWakeReason(
+    issue: IssueRecord,
+    runType: RunType,
+    context: Record<string, unknown> | undefined,
+  ): string | undefined {
+    if (runType !== "review_fix" || context?.branchUpkeepRequired === true) {
+      return undefined;
+    }
+    if (issue.prState && issue.prState !== "open") {
+      return `Skipping requested-changes run because PR #${issue.prNumber ?? "unknown"} is ${issue.prState}`;
+    }
+    if (issue.prReviewState && issue.prReviewState !== "changes_requested") {
+      return `Skipping requested-changes run because PR #${issue.prNumber ?? "unknown"} review state is ${issue.prReviewState}`;
+    }
+    return undefined;
   }
 
   private async readThreadWithRetry(threadId: string, maxRetries = 3): Promise<CodexThreadSummary> {

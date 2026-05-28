@@ -39,6 +39,7 @@ export interface IssueSessionEventRecord {
 }
 
 export interface SessionWakePlan {
+  eventIds: number[];
   runType?: RunType | undefined;
   wakeReason?: string | undefined;
   resumeThread: boolean;
@@ -57,6 +58,7 @@ const TERMINAL_SESSION_EVENTS = new Set<IssueSessionEventType>([
 const NON_ACTIONABLE_SESSION_EVENTS = new Set<IssueSessionEventType>([
   "delegation_observed",
   "prompt_delivered",
+  "self_comment",
   "run_released_authority",
 ]);
 
@@ -81,6 +83,7 @@ export function deriveSessionWakePlan(
 
   const context: Record<string, unknown> = {};
   const followUps: Array<{ type: string; text: string; author?: string }> = [];
+  let eventIds: number[] = [];
   let wakeReason: string | undefined;
   let runType: RunType | undefined;
   let resumeThread = false;
@@ -91,12 +94,14 @@ export function deriveSessionWakePlan(
       case "merge_steward_incident":
         runType = "queue_repair";
         wakeReason = "merge_steward_incident";
+        eventIds = [event.id];
         Object.assign(context, payload ?? {});
         break;
       case "settled_red_ci":
         if (runType !== "queue_repair") {
           runType = "ci_repair";
           wakeReason = "settled_red_ci";
+          eventIds = [event.id];
           Object.assign(context, payload ?? {});
         }
         break;
@@ -104,6 +109,7 @@ export function deriveSessionWakePlan(
         if (runType !== "queue_repair" && runType !== "ci_repair") {
           runType = payload?.branchUpkeepRequired === true ? "branch_upkeep" : "review_fix";
           wakeReason = payload?.branchUpkeepRequired === true ? "branch_upkeep" : "review_changes_requested";
+          eventIds = [event.id];
           Object.assign(context, payload ?? {});
         }
         break;
@@ -111,6 +117,9 @@ export function deriveSessionWakePlan(
         if (!runType) {
           runType = parseRunType(payload?.runType) ?? "implementation";
           wakeReason = issue.issueClass === "orchestration" ? "initial_delegate" : "delegated";
+          eventIds = [event.id];
+        } else {
+          eventIds.push(event.id);
         }
         Object.assign(context, payload ?? {});
         break;
@@ -120,6 +129,9 @@ export function deriveSessionWakePlan(
         if (!runType) {
           runType = "implementation";
           wakeReason = event.eventType;
+          eventIds = [event.id];
+        } else {
+          eventIds.push(event.id);
         }
         Object.assign(context, payload ?? {});
         resumeThread = true;
@@ -128,6 +140,9 @@ export function deriveSessionWakePlan(
         if (!runType) {
           runType = issue.prReviewState === "changes_requested" ? "review_fix" : "implementation";
           wakeReason = "direct_reply";
+          eventIds = [event.id];
+        } else {
+          eventIds.push(event.id);
         }
         const text = typeof payload?.text === "string"
           ? payload.text
@@ -148,6 +163,9 @@ export function deriveSessionWakePlan(
           runType = parseRunType(payload?.runType)
             ?? (issue.prReviewState === "changes_requested" ? "review_fix" : "implementation");
           wakeReason = "completion_check_continue";
+          eventIds = [event.id];
+        } else {
+          eventIds.push(event.id);
         }
         if (typeof payload?.summary === "string" && payload.summary.trim()) {
           context.completionCheckSummary = payload.summary.trim();
@@ -162,6 +180,9 @@ export function deriveSessionWakePlan(
         if (!runType) {
           runType = issue.prReviewState === "changes_requested" ? "review_fix" : "implementation";
           wakeReason = issue.issueClass === "orchestration" ? "human_instruction" : event.eventType;
+          eventIds = [event.id];
+        } else {
+          eventIds.push(event.id);
         }
         const text = typeof payload?.text === "string"
           ? payload.text
@@ -204,7 +225,7 @@ export function deriveSessionWakePlan(
     context.wakeReason = wakeReason;
   }
 
-  return { runType, wakeReason, resumeThread, context };
+  return { eventIds, runType, wakeReason, resumeThread, context };
 }
 
 export function isActionableIssueSessionEventType(eventType: IssueSessionEventType): boolean {

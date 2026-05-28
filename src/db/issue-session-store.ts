@@ -3,6 +3,7 @@ import type { RunType } from "../factory-state.ts";
 import type { IssueStore, UpsertIssueParams } from "./issue-store.ts";
 import type { RunStore } from "./run-store.ts";
 import { deriveSessionWakePlan, isActionableIssueSessionEventType, type IssueSessionEventType } from "../issue-session-events.ts";
+import { mergeRequestedChangesEventJson, readRequestedChangesCoalesceKey } from "../reactive-wake-keys.ts";
 import { isoNow, type DatabaseConnection } from "./shared.ts";
 
 interface IssueSessionLease {
@@ -47,6 +48,8 @@ export class IssueSessionStore {
       `).get(params.projectId, params.linearIssueId, params.dedupeKey) as Record<string, unknown> | undefined;
       if (existing) return this.mapIssueSessionEventRow(existing);
     }
+    const coalesced = this.coalescePendingRequestedChangesEvent(params);
+    if (coalesced) return coalesced;
 
     const now = isoNow();
     const result = this.connection.prepare(`
@@ -62,6 +65,32 @@ export class IssueSessionStore {
       now,
     );
     return this.getIssueSessionEvent(Number(result.lastInsertRowid))!;
+  }
+
+  private coalescePendingRequestedChangesEvent(params: {
+    projectId: string;
+    linearIssueId: string;
+    eventType: IssueSessionEventType;
+    eventJson?: string | undefined;
+    dedupeKey?: string | undefined;
+  }): IssueSessionEventRecord | undefined {
+    if (params.eventType !== "review_changes_requested") return undefined;
+    const coalesceKey = readRequestedChangesCoalesceKey(params.eventJson);
+    if (!coalesceKey) return undefined;
+    const existing = this.listIssueSessionEvents(params.projectId, params.linearIssueId, { pendingOnly: true })
+      .filter((event) => event.eventType === "review_changes_requested")
+      .find((event) => readRequestedChangesCoalesceKey(event.eventJson) === coalesceKey);
+    if (!existing) return undefined;
+
+    const mergedJson = mergeRequestedChangesEventJson(existing.eventJson, params.eventJson);
+    if (mergedJson !== existing.eventJson) {
+      this.connection.prepare(`
+        UPDATE issue_session_events
+        SET event_json = ?
+        WHERE id = ? AND processed_at IS NULL
+      `).run(mergedJson ?? null, existing.id);
+    }
+    return this.getIssueSessionEvent(existing.id) ?? existing;
   }
 
   appendIssueSessionEventWithLease(
@@ -130,6 +159,16 @@ export class IssueSessionStore {
     `).run(now, runId, projectId, linearIssueId, ...eventIds);
   }
 
+  dismissIssueSessionEvents(projectId: string, linearIssueId: string, eventIds: number[]): void {
+    if (eventIds.length === 0) return;
+    const placeholders = eventIds.map(() => "?").join(", ");
+    this.connection.prepare(`
+      UPDATE issue_session_events
+      SET processed_at = ?, consumed_by_run_id = NULL
+      WHERE project_id = ? AND linear_issue_id = ? AND id IN (${placeholders}) AND processed_at IS NULL
+    `).run(isoNow(), projectId, linearIssueId, ...eventIds);
+  }
+
   clearPendingIssueSessionEvents(projectId: string, linearIssueId: string): void {
     this.connection.prepare(`
       UPDATE issue_session_events
@@ -156,7 +195,7 @@ export class IssueSessionStore {
     const plan = deriveSessionWakePlan(issue, events);
     if (plan?.runType) {
       return {
-        eventIds: events.map((event) => event.id),
+        eventIds: plan.eventIds,
         runType: plan.runType,
         context: plan.context,
         ...(plan.wakeReason ? { wakeReason: plan.wakeReason } : {}),
@@ -343,6 +382,13 @@ export class IssueSessionStore {
   consumeIssueSessionEventsWithLease(lease: IssueSessionLease, eventIds: number[], runId: number): boolean {
     return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
       this.consumeIssueSessionEvents(lease.projectId, lease.linearIssueId, eventIds, runId);
+      return true;
+    }) ?? false;
+  }
+
+  dismissIssueSessionEventsWithLease(lease: IssueSessionLease, eventIds: number[]): boolean {
+    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
+      this.dismissIssueSessionEvents(lease.projectId, lease.linearIssueId, eventIds);
       return true;
     }) ?? false;
   }

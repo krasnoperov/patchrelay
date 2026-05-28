@@ -258,7 +258,7 @@ async function readPatchRelayCodexStatus(): Promise<
       payload: {
         ...payload,
         output: typeof payload.output === "string" ? payload.output : "",
-        account: typeof payload.account === "string" ? payload.account : undefined,
+        ...(typeof payload.account === "string" ? { account: payload.account } : {}),
         exitCode: typeof payload.exitCode === "number" ? payload.exitCode : 1,
         ok: payload.ok === true,
       },

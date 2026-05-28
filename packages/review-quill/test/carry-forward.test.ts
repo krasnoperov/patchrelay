@@ -14,6 +14,7 @@ import type {
   PullRequestSummary,
   ReviewQuillRepositoryConfig,
 } from "../src/types.ts";
+import { buildPromptFingerprint } from "../src/prompt-fingerprint.ts";
 
 function makeRepo(overrides: Partial<ReviewQuillRepositoryConfig> = {}): ReviewQuillRepositoryConfig {
   return {
@@ -73,6 +74,7 @@ test("resolveNoCacheLabel honors a project override", () => {
 
 test("findApprovedAttemptByPatchId returns rows with stored body and event", () => {
   const store = new SqliteStore(":memory:");
+  const promptFingerprint = buildPromptFingerprint(makePr({ title: "Original prompt", body: "Original body" }));
   // Old-shape row with no body (rollout-safety: never serves carry-forward).
   store.createAttempt({
     repoFullName: "fixture/repo",
@@ -82,6 +84,7 @@ test("findApprovedAttemptByPatchId returns rows with stored body and event", () 
     conclusion: "approved",
     patchId: "patch-A",
     reviewSurfaceMode: "head",
+    promptFingerprint,
   });
   // New-shape row with a stored body — eligible for carry-forward.
   const cached = store.createAttempt({
@@ -92,27 +95,42 @@ test("findApprovedAttemptByPatchId returns rows with stored body and event", () 
     conclusion: "approved",
     patchId: "patch-A",
     reviewSurfaceMode: "head",
+    promptFingerprint,
     reviewBody: "Approved by review-quill",
     reviewEvent: "APPROVE",
     publicationMode: "body_only",
   });
 
-  const found = store.findApprovedAttemptByPatchId("fixture/repo", 7, "patch-A", "head");
+  const found = store.findApprovedAttemptByPatchId("fixture/repo", 7, "patch-A", "head", promptFingerprint);
   assert.ok(found);
   assert.equal(found?.id, cached.id);
   assert.equal(found?.reviewBody, "Approved by review-quill");
 
   // A different patch-id finds nothing.
-  assert.equal(store.findApprovedAttemptByPatchId("fixture/repo", 7, "patch-B", "head"), undefined);
+  assert.equal(store.findApprovedAttemptByPatchId("fixture/repo", 7, "patch-B", "head", promptFingerprint), undefined);
 
   // Mode mismatch is filtered out.
-  assert.equal(store.findApprovedAttemptByPatchId("fixture/repo", 7, "patch-A", "integration_tree"), undefined);
+  assert.equal(store.findApprovedAttemptByPatchId("fixture/repo", 7, "patch-A", "integration_tree", promptFingerprint), undefined);
+
+  // Prompt-input mismatch is filtered out. Same patch-id with changed title/body
+  // must be reviewed on the next pushed head instead of carried forward.
+  assert.equal(
+    store.findApprovedAttemptByPatchId(
+      "fixture/repo",
+      7,
+      "patch-A",
+      "head",
+      buildPromptFingerprint(makePr({ title: "Updated prompt", body: "Updated body" })),
+    ),
+    undefined,
+  );
 
   store.close();
 });
 
 test("findApprovedAttemptByPatchAndTree filters on both keys", () => {
   const store = new SqliteStore(":memory:");
+  const promptFingerprint = buildPromptFingerprint(makePr());
   store.createAttempt({
     repoFullName: "fixture/repo",
     prNumber: 7,
@@ -122,18 +140,20 @@ test("findApprovedAttemptByPatchAndTree filters on both keys", () => {
     patchId: "P",
     integrationTreeId: "T1",
     reviewSurfaceMode: "integration_tree",
+    promptFingerprint,
     reviewBody: "ok",
     reviewEvent: "APPROVE",
     publicationMode: "body_only",
   });
-  const exact = store.findApprovedAttemptByPatchAndTree("fixture/repo", 7, "P", "T1", "integration_tree");
+  const exact = store.findApprovedAttemptByPatchAndTree("fixture/repo", 7, "P", "T1", "integration_tree", promptFingerprint);
   assert.ok(exact);
-  assert.equal(store.findApprovedAttemptByPatchAndTree("fixture/repo", 7, "P", "T2", "integration_tree"), undefined);
+  assert.equal(store.findApprovedAttemptByPatchAndTree("fixture/repo", 7, "P", "T2", "integration_tree", promptFingerprint), undefined);
   store.close();
 });
 
 test("findApprovedAttemptByPatchId ignores declined and failed attempts", () => {
   const store = new SqliteStore(":memory:");
+  const promptFingerprint = buildPromptFingerprint(makePr());
   store.createAttempt({
     repoFullName: "fixture/repo",
     prNumber: 7,
@@ -142,6 +162,7 @@ test("findApprovedAttemptByPatchId ignores declined and failed attempts", () => 
     conclusion: "declined",
     patchId: "P",
     reviewSurfaceMode: "head",
+    promptFingerprint,
     reviewBody: "Changes requested",
     reviewEvent: "REQUEST_CHANGES",
     publicationMode: "body_only",
@@ -154,12 +175,13 @@ test("findApprovedAttemptByPatchId ignores declined and failed attempts", () => 
     conclusion: "error",
     patchId: "P",
     reviewSurfaceMode: "head",
+    promptFingerprint,
     reviewBody: "(should be ignored)",
     reviewEvent: "COMMENT",
     publicationMode: "body_only",
   });
 
-  assert.equal(store.findApprovedAttemptByPatchId("fixture/repo", 7, "P", "head"), undefined);
+  assert.equal(store.findApprovedAttemptByPatchId("fixture/repo", 7, "P", "head", promptFingerprint), undefined);
   store.close();
 });
 
@@ -186,6 +208,7 @@ test("tryCarryForward skips PRs with the no-cache label and never touches GitHub
 
 test("lookupCarryForwardCandidate dispatches by review surface mode", () => {
   const store = new SqliteStore(":memory:");
+  const promptFingerprint = buildPromptFingerprint(makePr());
   store.createAttempt({
     repoFullName: "fixture/repo",
     prNumber: 7,
@@ -194,6 +217,7 @@ test("lookupCarryForwardCandidate dispatches by review surface mode", () => {
     conclusion: "approved",
     patchId: "P",
     reviewSurfaceMode: "head",
+    promptFingerprint,
     reviewBody: "ok",
     reviewEvent: "APPROVE",
     publicationMode: "body_only",
@@ -203,6 +227,7 @@ test("lookupCarryForwardCandidate dispatches by review surface mode", () => {
     7,
     { patchId: "P", baseSha: "B", mode: "head" },
     store,
+    promptFingerprint,
   );
   assert.ok(head);
 
@@ -221,6 +246,7 @@ test("lookupCarryForwardCandidate dispatches by review surface mode", () => {
 
 test("republishCarryForward submits a fresh review and inserts a linked attempt", async () => {
   const store = new SqliteStore(":memory:");
+  const currentPr = makePr({ headSha: "new-head", title: "Current title", body: "Current body" });
   const prior = store.createAttempt({
     repoFullName: "fixture/repo",
     prNumber: 7,
@@ -229,6 +255,7 @@ test("republishCarryForward submits a fresh review and inserts a linked attempt"
     conclusion: "approved",
     patchId: "P",
     reviewSurfaceMode: "head",
+    promptFingerprint: buildPromptFingerprint(makePr({ title: "Old title", body: "Old body" })),
     baseSha: "B",
     reviewBody: "Approved by review-quill",
     reviewEvent: "APPROVE",
@@ -253,7 +280,7 @@ test("republishCarryForward submits a fresh review and inserts a linked attempt"
   };
   const inserted = await republishCarryForward(
     makeRepo(),
-    makePr({ headSha: "new-head" }),
+    currentPr,
     prior,
     identity,
     { store, github, logger: silentLogger },
@@ -273,6 +300,7 @@ test("republishCarryForward submits a fresh review and inserts a linked attempt"
   assert.equal(inserted.status, "completed");
   assert.equal(inserted.conclusion, "approved");
   assert.equal(inserted.patchId, "P");
+  assert.equal(inserted.promptFingerprint, buildPromptFingerprint(currentPr));
   assert.equal(inserted.reviewBody, "Approved by review-quill");
   assert.equal(inserted.reviewEvent, "APPROVE");
   assert.equal(inserted.reviewSurfaceMode, "head");
@@ -281,7 +309,7 @@ test("republishCarryForward submits a fresh review and inserts a linked attempt"
 
   // Subsequent lookups now find this row too — the cache populates
   // through carry-forward chains.
-  const found = store.findApprovedAttemptByPatchId("fixture/repo", 7, "P", "head");
+  const found = store.findApprovedAttemptByPatchId("fixture/repo", 7, "P", "head", buildPromptFingerprint(currentPr));
   assert.equal(found?.id, inserted.id);
   store.close();
 });

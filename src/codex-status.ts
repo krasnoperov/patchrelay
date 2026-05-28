@@ -34,11 +34,12 @@ export function getCodexStatusSnapshot(bin = "codex"): CodexStatusSnapshot {
       env: { ...process.env },
     });
     const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trimEnd();
+    const account = parseAccountLine(output);
     return {
       ok: result.status === 0,
       exitCode: result.status ?? 1,
       output,
-      account: parseAccountLine(output),
+      ...(account ? { account } : {}),
     };
   } catch (error) {
     return {
@@ -49,4 +50,3 @@ export function getCodexStatusSnapshot(bin = "codex"): CodexStatusSnapshot {
     };
   }
 }
-

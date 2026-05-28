@@ -30,6 +30,7 @@ import { getReviewFixBudget } from "./run-budgets.ts";
 import { queueSettledOrchestrationIssue } from "./orchestration-parent-wake.ts";
 import { fetchPullRequestSnapshot } from "./reconcile-pr-fetch.ts";
 import { buildPrStateUpdates } from "./reconcile-pr-state-updates.ts";
+import { buildRequestedChangesWakeIdentity } from "./reactive-wake-keys.ts";
 import { execCommand } from "./utils.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
@@ -332,14 +333,33 @@ export class IdleIssueReconciler {
       dedupeKey = `${dedupeScope}:ci_repair:${issue.linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown"}`;
     } else if (runType === "review_fix" || runType === "branch_upkeep") {
       eventType = "review_changes_requested";
-      dedupeKey = `${dedupeScope}:${runType}:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown"}`;
+      dedupeKey = buildRequestedChangesWakeIdentity({
+        linearIssueId: issue.linearIssueId,
+        runType,
+        headSha: issue.prHeadSha,
+      }).dedupeKey;
     } else {
       eventType = "delegated";
       dedupeKey = `${dedupeScope}:implementation:${issue.linearIssueId}`;
     }
+    const requestedChangesIdentity = eventType === "review_changes_requested"
+      ? buildRequestedChangesWakeIdentity({
+          linearIssueId: issue.linearIssueId,
+          runType: runType === "branch_upkeep" ? "branch_upkeep" : "review_fix",
+          headSha: issue.prHeadSha,
+        })
+      : undefined;
     this.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
       eventType,
-      ...(context ? { eventJson: JSON.stringify(context) } : {}),
+      ...(context || requestedChangesIdentity ? {
+        eventJson: JSON.stringify({
+          ...context,
+          ...(requestedChangesIdentity ? {
+            requestedChangesCoalesceKey: requestedChangesIdentity.coalesceKey,
+            ...(requestedChangesIdentity.headSha ? { requestedChangesHeadSha: requestedChangesIdentity.headSha } : {}),
+          } : {}),
+        }),
+      } : {}),
       dedupeKey,
     });
   }

@@ -1,4 +1,5 @@
 import type { IssueRecord } from "./db-types.ts";
+import { buildRequestedChangesWakeIdentity } from "./reactive-wake-keys.ts";
 
 function parseObjectJson(value: string | undefined): Record<string, unknown> | undefined {
   if (!value) return undefined;
@@ -45,16 +46,23 @@ export function buildOperatorRetryEvent(issue: IssueRecord, runType: string, sou
   }
 
   if (runType === "review_fix" || runType === "branch_upkeep") {
+    const identity = buildRequestedChangesWakeIdentity({
+      linearIssueId: issue.linearIssueId,
+      runType,
+      headSha: issue.prHeadSha,
+    });
     return {
       eventType: "review_changes_requested" as const,
       eventJson: JSON.stringify({
+        requestedChangesCoalesceKey: identity.coalesceKey,
+        ...(identity.headSha ? { requestedChangesHeadSha: identity.headSha } : {}),
         ...(runType === "branch_upkeep"
           ? { reviewBody: `${humanizeSource(source)} requested retry of branch upkeep after requested changes.` }
           : { promptContext: `${humanizeSource(source)} requested retry of review-fix work.` }),
         ...(runType === "branch_upkeep" ? { branchUpkeepRequired: true, wakeReason: "branch_upkeep" } : {}),
         source,
       }),
-      dedupeKey: `${source}:${runType}:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`,
+      dedupeKey: identity.dedupeKey,
     };
   }
 

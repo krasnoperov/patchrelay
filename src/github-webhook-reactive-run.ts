@@ -14,6 +14,7 @@ import {
   resolveGitHubCheckClass,
 } from "./github-webhook-failure-context.ts";
 import { isQueueEvictionFailure, isSettledBranchFailure } from "./github-webhook-policy.ts";
+import { buildRequestedChangesWakeIdentity } from "./reactive-wake-keys.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
 type FetchLike = typeof fetch;
@@ -227,9 +228,18 @@ async function handleRequestedChangesEvent(params: {
     );
     return undefined;
   });
+  const identity = buildRequestedChangesWakeIdentity({
+    linearIssueId: issue.linearIssueId,
+    headSha: issue.prHeadSha ?? event.headSha,
+    reviewCommitId: event.reviewCommitId,
+    reviewId: event.reviewId,
+    reviewerName: event.reviewerName,
+  });
   const queuedRunType = wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
     eventType: "review_changes_requested",
     eventJson: JSON.stringify({
+      requestedChangesCoalesceKey: identity.coalesceKey,
+      ...(identity.headSha ? { requestedChangesHeadSha: identity.headSha } : {}),
       reviewBody: event.reviewBody,
       reviewCommitId: event.reviewCommitId,
       reviewId: event.reviewId,
@@ -237,11 +247,7 @@ async function handleRequestedChangesEvent(params: {
       reviewerName: event.reviewerName,
       ...(reviewComments && reviewComments.length > 0 ? { reviewComments } : {}),
     }),
-    dedupeKey: [
-      "review_changes_requested",
-      issue.prHeadSha ?? event.headSha ?? "unknown-sha",
-      event.reviewerName ?? "unknown-reviewer",
-    ].join("::"),
+    dedupeKey: identity.dedupeKey,
   });
   logger.info(
     {

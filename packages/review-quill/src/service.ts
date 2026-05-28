@@ -37,6 +37,7 @@ import { renderReviewArtifacts } from "./review-artifact-renderer.ts";
 import { submitReviewWithFallback } from "./submit-review-with-fallback.ts";
 import { evaluateReviewEligibility } from "./review-eligibility.ts";
 import { ReviewSemaphore } from "./review-semaphore.ts";
+import { buildPromptFingerprint } from "./prompt-fingerprint.ts";
 
 /** Default cap on parallel review executions. Review Quill shares one
  *  Codex app-server and one git cache per repository, so the default
@@ -505,6 +506,7 @@ export class ReviewQuillService {
         ...(identity?.integrationTreeId !== undefined ? { integrationTreeId: identity.integrationTreeId } : {}),
         reviewSurfaceMode: surfaceMode,
         ...(identity?.baseSha !== undefined ? { baseSha: identity.baseSha } : {}),
+        promptFingerprint: buildPromptFingerprint(pr),
       }) ?? existingAttempt)
       : this.store.createAttempt({
         repoFullName: repo.repoFullName,
@@ -512,6 +514,7 @@ export class ReviewQuillService {
         headSha: pr.headSha,
         status: "queued",
         ...(pr.title ? { prTitle: pr.title } : {}),
+        promptFingerprint: buildPromptFingerprint(pr),
         ...(identity?.patchId !== undefined ? { patchId: identity.patchId } : {}),
         ...(identity?.integrationTreeId !== undefined ? { integrationTreeId: identity.integrationTreeId } : {}),
         reviewSurfaceMode: surfaceMode,
@@ -549,6 +552,13 @@ export class ReviewQuillService {
           action: preflightDisposition.action,
         }, "Skipping stale review before Codex execution");
         return;
+      }
+      this.store.updateAttempt(attempt.id, {
+        promptFingerprint: buildPromptFingerprint(preflightPr),
+      });
+      if (preflightPr.title && attempt.prTitle !== preflightPr.title) {
+        this.store.setAttemptTitle(attempt.id, preflightPr.title);
+        attempt.prTitle = preflightPr.title;
       }
       this.throwIfReviewSuperseded(signal);
 

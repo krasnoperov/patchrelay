@@ -251,3 +251,78 @@ test("ReviewRunner interrupts a running Codex turn when the review signal aborts
   assert.equal(readCalls, 1);
   assert.deepEqual(sleeps, []);
 });
+
+test("ReviewRunner fails fast when the Codex app-server reports a failed turn", async () => {
+  const sleeps: number[] = [];
+  const fakeCodex = {
+    start: async () => {},
+    stop: async () => {},
+    startThread: async () => ({ id: "thread-failed", turns: [] }),
+    startTurn: async () => ({ turnId: "turn-failed", status: "running" }),
+    readThread: async () => ({
+      id: "thread-failed",
+      turns: [
+        {
+          id: "turn-failed",
+          status: "failed",
+          items: [
+            {
+              type: "agentMessage",
+              text: "partial output before app-server failure",
+            },
+          ],
+        },
+      ],
+    }),
+  };
+  const runner = new ReviewRunner(
+    minimalConfig(),
+    { warn: () => {}, child: () => ({}) } as never,
+    fakeCodex as never,
+    async (ms) => {
+      sleeps.push(ms);
+    },
+  );
+
+  await assert.rejects(
+    () => runner.review({
+      prompt: "Review this PR.",
+      workspace: { worktreePath: "/tmp/review-quill-test" },
+    } as never),
+    /Review turn ended with status failed/,
+  );
+  assert.deepEqual(sleeps, []);
+});
+
+test("ReviewRunner does not retry non-materialization app-server start failures", async () => {
+  let startThreadCalls = 0;
+  const sleeps: number[] = [];
+  const fakeCodex = {
+    start: async () => {},
+    stop: async () => {},
+    startThread: async () => {
+      startThreadCalls += 1;
+      throw new Error("Codex app-server exited before accepting the review thread");
+    },
+    startTurn: async () => ({ turnId: "turn-never-started", status: "running" }),
+    readThread: async () => ({ id: "thread-never-started", turns: [] }),
+  };
+  const runner = new ReviewRunner(
+    minimalConfig(),
+    { warn: () => {}, child: () => ({}) } as never,
+    fakeCodex as never,
+    async (ms) => {
+      sleeps.push(ms);
+    },
+  );
+
+  await assert.rejects(
+    () => runner.review({
+      prompt: "Review this PR.",
+      workspace: { worktreePath: "/tmp/review-quill-test" },
+    } as never),
+    /exited before accepting/,
+  );
+  assert.equal(startThreadCalls, 1);
+  assert.deepEqual(sleeps, []);
+});

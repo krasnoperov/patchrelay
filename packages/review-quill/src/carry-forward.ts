@@ -9,6 +9,7 @@ import type {
 } from "./types.ts";
 import { gitMergeBase, gitMergeTree, gitPatchId } from "./review-workspace/git.ts";
 import { isStackedPullRequest, materializeReviewWorkspace } from "./review-workspace/materialize.ts";
+import { buildPromptFingerprint } from "./prompt-fingerprint.ts";
 
 // Default opt-out label. A PR carrying this label always re-runs the
 // reviewer instead of being served from the carry-forward cache —
@@ -160,9 +161,10 @@ export function lookupCarryForwardCandidate(
   prNumber: number,
   identity: ChangeIdentity,
   store: SqliteStore,
+  promptFingerprint?: string,
 ): ReviewAttemptRecord | undefined {
   if (identity.mode === "head") {
-    return store.findApprovedAttemptByPatchId(repo.repoFullName, prNumber, identity.patchId, "head");
+    return store.findApprovedAttemptByPatchId(repo.repoFullName, prNumber, identity.patchId, "head", promptFingerprint);
   }
   if (!identity.integrationTreeId) return undefined;
   return store.findApprovedAttemptByPatchAndTree(
@@ -171,6 +173,7 @@ export function lookupCarryForwardCandidate(
     identity.patchId,
     identity.integrationTreeId,
     "integration_tree",
+    promptFingerprint,
   );
 }
 
@@ -215,6 +218,7 @@ export async function republishCarryForward(
     status: "completed",
     conclusion: "approved",
     ...(pr.title ? { prTitle: pr.title } : {}),
+    promptFingerprint: buildPromptFingerprint(pr),
     patchId: identity.patchId,
     ...(identity.integrationTreeId ? { integrationTreeId: identity.integrationTreeId } : {}),
     reviewSurfaceMode: identity.mode,
@@ -254,7 +258,7 @@ export async function tryCarryForward(
 
   try {
     const { identity } = computed;
-    const candidate = lookupCarryForwardCandidate(repo, pr.number, identity, deps.store);
+    const candidate = lookupCarryForwardCandidate(repo, pr.number, identity, deps.store, buildPromptFingerprint(pr));
     if (!candidate || !candidate.reviewBody || !candidate.reviewEvent) {
       return { kind: "no_candidate", identity };
     }

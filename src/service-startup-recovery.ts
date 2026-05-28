@@ -5,6 +5,7 @@ import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
 import type { LinearClientProvider } from "./types.ts";
 import type { LinearSessionSync } from "./linear-session-sync.ts";
 import { isResumablePausedLocalWork } from "./paused-issue-state.ts";
+import { buildRequestedChangesWakeIdentity } from "./reactive-wake-keys.ts";
 
 export class ServiceStartupRecovery {
   constructor(
@@ -198,12 +199,29 @@ export class ServiceStartupRecovery {
       ? `startup_recovery:queue_repair:${linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown"}`
       : runType === "ci_repair"
         ? `startup_recovery:ci_repair:${linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown"}`
-        : `startup_recovery:${runType}:${linearIssueId}:${issue.prHeadSha ?? "unknown"}`;
+        : buildRequestedChangesWakeIdentity({
+            linearIssueId,
+            runType,
+            headSha: issue.prHeadSha,
+          }).dedupeKey;
+    const requestedChangesIdentity = eventType === "review_changes_requested"
+      ? buildRequestedChangesWakeIdentity({
+          linearIssueId,
+          runType: runType === "branch_upkeep" ? "branch_upkeep" : "review_fix",
+          headSha: issue.prHeadSha,
+        })
+      : undefined;
 
     this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(projectId, linearIssueId, {
       projectId,
       linearIssueId,
       eventType,
+      ...(requestedChangesIdentity ? {
+        eventJson: JSON.stringify({
+          requestedChangesCoalesceKey: requestedChangesIdentity.coalesceKey,
+          ...(requestedChangesIdentity.headSha ? { requestedChangesHeadSha: requestedChangesIdentity.headSha } : {}),
+        }),
+      } : {}),
       dedupeKey,
     });
   }

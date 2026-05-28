@@ -405,6 +405,206 @@ test("executeReview skips stale heads before starting Codex review work", async 
   assert.ok(updates.some((update) => update.status === "superseded"));
 });
 
+test("triggerReconcile does not re-review an unchanged head after PR metadata edits", async () => {
+  const reviewedAttempt = {
+    id: 301,
+    repoFullName: "krasnoperov/subtitles",
+    prNumber: 32,
+    headSha: "same-head",
+    status: "completed",
+    conclusion: "declined",
+    prTitle: "Original title",
+    promptFingerprint: "old-fingerprint",
+    createdAt: "2026-05-28T09:00:00.000Z",
+    updatedAt: "2026-05-28T09:01:00.000Z",
+    completedAt: "2026-05-28T09:01:00.000Z",
+  };
+  let executionCount = 0;
+
+  const service = new ReviewQuillService(
+    {
+      server: { bind: "127.0.0.1", port: 8788 },
+      database: { path: ":memory:", wal: true },
+      logging: { level: "info" },
+      reconciliation: {
+        pollIntervalMs: 1_000,
+        heartbeatIntervalMs: 1_000,
+        staleQueuedAfterMs: 60_000,
+        staleRunningAfterMs: 60_000,
+      },
+      codex: {
+        bin: "codex",
+        args: [],
+        approvalPolicy: "never",
+        sandboxMode: "danger-full-access",
+      },
+      prompting: { replaceSections: {} },
+      repositories: [
+        {
+          repoId: "subtitles",
+          repoFullName: "krasnoperov/subtitles",
+          baseBranch: "main",
+          requiredChecks: [],
+          excludeBranches: [],
+          reviewDocs: [],
+          diffIgnore: [],
+          diffSummarizeOnly: [],
+          patchBodyBudgetTokens: 5_000,
+        },
+      ],
+      secretSources: {},
+    } as never,
+    {
+      listAttempts: () => [],
+      listWebhooks: () => [],
+      listActiveAttemptsForRepo: () => [],
+      listAttemptsForPullRequest: () => [reviewedAttempt],
+      getAttempt: () => reviewedAttempt,
+      updateAttempt: () => reviewedAttempt,
+    } as never,
+    {
+      listOpenPullRequests: async () => [
+        {
+          number: 32,
+          title: "Updated title",
+          body: "Updated description",
+          url: "https://github.com/krasnoperov/subtitles/pull/32",
+          state: "OPEN",
+          isDraft: false,
+          headSha: "same-head",
+          headRefName: "feat/metadata-only",
+          baseRefName: "main",
+          labels: [],
+        },
+      ],
+      listPullRequestReviews: async () => [],
+      listCheckRuns: async () => [{ name: "verify", status: "completed", conclusion: "success" }],
+    } as never,
+    {} as never,
+    { info() {}, warn() {}, error() {}, debug() {}, child() { return this; } } as never,
+  );
+
+  (service as unknown as {
+    executeReview: () => Promise<void>;
+  }).executeReview = async () => {
+    executionCount += 1;
+  };
+
+  await service.triggerReconcile();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(executionCount, 0);
+});
+
+test("triggerReconcile recovers a running attempt left behind by service restart and queues a retry", async () => {
+  const staleAttempt = {
+    id: 300,
+    repoFullName: "krasnoperov/subtitles",
+    prNumber: 31,
+    headSha: "restart-head",
+    status: "running",
+    createdAt: "2026-05-28T09:00:00.000Z",
+    updatedAt: "2026-05-28T09:00:10.000Z",
+  };
+  let storedAttempt: Record<string, unknown> = { ...staleAttempt };
+  const updates: Array<Record<string, unknown>> = [];
+  let executionCount = 0;
+  let dispatchedPr: { number: number; headSha: string } | undefined;
+
+  const service = new ReviewQuillService(
+    {
+      server: { bind: "127.0.0.1", port: 8788 },
+      database: { path: ":memory:", wal: true },
+      logging: { level: "info" },
+      reconciliation: {
+        pollIntervalMs: 1_000,
+        heartbeatIntervalMs: 1_000,
+        staleQueuedAfterMs: 60_000,
+        staleRunningAfterMs: 60_000,
+      },
+      codex: {
+        bin: "codex",
+        args: [],
+        approvalPolicy: "never",
+        sandboxMode: "danger-full-access",
+      },
+      prompting: { replaceSections: {} },
+      repositories: [
+        {
+          repoId: "subtitles",
+          repoFullName: "krasnoperov/subtitles",
+          baseBranch: "main",
+          requiredChecks: [],
+          excludeBranches: [],
+          reviewDocs: [],
+          diffIgnore: [],
+          diffSummarizeOnly: [],
+          patchBodyBudgetTokens: 5_000,
+        },
+      ],
+      secretSources: {},
+    } as never,
+    {
+      listAttempts: () => [],
+      listWebhooks: () => [],
+      listActiveAttemptsForRepo: () => [storedAttempt],
+      listAttemptsForPullRequest: () => [storedAttempt],
+      getAttempt: () => storedAttempt,
+      findApprovedAttemptByPatchId: () => undefined,
+      findApprovedAttemptByPatchAndTree: () => undefined,
+      updateAttempt: (_id: number, params: Record<string, unknown>) => {
+        updates.push(params);
+        storedAttempt = { ...storedAttempt, ...params };
+        return storedAttempt;
+      },
+    } as never,
+    {
+      listOpenPullRequests: async () => [
+        {
+          number: 31,
+          title: "Retry after restart",
+          url: "https://github.com/krasnoperov/subtitles/pull/31",
+          state: "OPEN",
+          isDraft: false,
+          headSha: "restart-head",
+          headRefName: "feat/restart-head",
+          baseRefName: "main",
+          labels: ["review:no-cache"],
+        },
+      ],
+      listPullRequestReviews: async () => [],
+      listCheckRuns: async () => [{ name: "verify", status: "completed", conclusion: "success" }],
+    } as never,
+    {} as never,
+    { info() {}, warn() {}, error() {}, debug() {}, child() { return this; } } as never,
+  );
+
+  (service as unknown as {
+    executeReview: (
+      repo: unknown,
+      pr: { number: number; headSha: string },
+      existing?: unknown,
+      identity?: unknown,
+      signal?: AbortSignal,
+    ) => Promise<void>;
+  }).executeReview = async (_repo, pr) => {
+    executionCount += 1;
+    dispatchedPr = pr;
+  };
+
+  await service.triggerReconcile();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(storedAttempt.status, "failed");
+  assert.equal(storedAttempt.conclusion, "error");
+  assert.match(String(storedAttempt.summary), /left running across a review-quill restart/i);
+  assert.ok(updates.some((update) => update.status === "failed"));
+  assert.equal(executionCount, 1);
+  assert.equal(dispatchedPr?.number, 31);
+  assert.equal(dispatchedPr?.headSha, "restart-head");
+});
+
 function buildParallelTestService(
   options: {
     repos?: Array<{ repoId: string; repoFullName: string }>;

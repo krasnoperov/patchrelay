@@ -228,6 +228,10 @@ export interface ReviewAttemptRecord {
   conclusion?: ReviewAttemptConclusion;
   summary?: string;
   prTitle?: string;
+  // Fingerprint of mutable prompt inputs for this review attempt. A same-head
+  // attempt still dedupes by head SHA, but carry-forward requires this to match
+  // so title/body-only fixes get a fresh review on the next pushed head.
+  promptFingerprint?: string;
   threadId?: string;
   turnId?: string;
   externalCheckRunId?: number;
