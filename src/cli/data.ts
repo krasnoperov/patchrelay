@@ -245,6 +245,9 @@ export class CliDataAccess extends CliOperatorApiClient {
   ) {
     super(config);
     this.db = options?.db ?? new PatchRelayDatabase(config.database.path, config.database.wal);
+    if (!options?.db) {
+      this.db.assertSchemaReady();
+    }
     this.codex = options?.codex;
   }
 

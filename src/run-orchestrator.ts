@@ -216,6 +216,7 @@ export class RunOrchestrator {
       this.leasePorts.heartbeatLease,
       this.leasePorts.releaseLease,
       feed,
+      { interruptTurn: (options) => codex.interruptTurn(options) },
     );
     this.runRecovery = new RunRecoveryService(
       db,

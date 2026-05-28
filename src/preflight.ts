@@ -1,6 +1,7 @@
 import { accessSync, constants, existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { runPatchRelayMigrations } from "./db/migrations.ts";
+import { assertPatchRelaySchemaReady } from "./db/schema-guard.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
 import { SqliteConnection } from "./db/shared.ts";
 import type { AppConfig } from "./types.ts";
@@ -172,6 +173,7 @@ function checkDatabaseHealth(config: AppConfig): PreflightCheck[] {
     }
 
     runPatchRelayMigrations(connection);
+    assertPatchRelaySchemaReady(connection, config.database.path);
 
     const quickCheck = connection.prepare("PRAGMA quick_check").get();
     const quickCheckResult = quickCheck ? Object.values(quickCheck)[0] : undefined;

@@ -7,7 +7,7 @@ import {
   getGitHubAppPaths,
   type GitHubAppTokenManager,
 } from "./github-app-token.ts";
-import { applyGitHubCliAuthEnv, resolveGhBin } from "./github-cli-auth.ts";
+import { applyGitHubCliAuthEnv, resolveGhBin, verifyGitHubCliAuthEnv } from "./github-cli-auth.ts";
 import { remediateLeakedBotAuth } from "./github-auth-remediation.ts";
 import { GitHubWebhookHandler } from "./github-webhook-handler.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
@@ -229,7 +229,16 @@ export class PatchRelayService {
       this.runtime.setGithubAppAuthHealthy(ghAuthStatus.healthy, ghAuthStatus.lastRefreshError ?? undefined);
       if (!ghAuthStatus.healthy) {
         this.logger.error({ ghAuthStatus }, "GitHub App auth is NOT healthy at startup — git/gh operations will fail until a token is minted");
+        throw new Error(`GitHub App auth is not healthy at startup: ${ghAuthStatus.lastRefreshError ?? "no fresh installation token"}`);
       } else {
+        try {
+          await verifyGitHubCliAuthEnv(process.env);
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          this.runtime.setGithubAppAuthHealthy(false, msg);
+          this.logger.error({ error: msg, ghConfigDir }, "GitHub App auth smoke test failed — service will not accept work");
+          throw error;
+        }
         this.logger.info({ installationId: ghAuthStatus.installationId, expiresAt: ghAuthStatus.expiresAt }, "GitHub App auth ready — gh + git authenticate as the bot");
       }
       // Clean up credentials older versions persisted into managed repo configs.

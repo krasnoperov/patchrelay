@@ -101,7 +101,7 @@ export class ServiceRuntime {
 
   getReadiness() {
     return {
-      ready: this.ready && this.codex.isStarted() && this.linearConnected,
+      ready: this.ready && this.codex.isStarted() && this.linearConnected && this.githubAppAuthHealthy,
       codexStarted: this.codex.isStarted(),
       linearConnected: this.linearConnected,
       githubAppAuthHealthy: this.githubAppAuthHealthy,
