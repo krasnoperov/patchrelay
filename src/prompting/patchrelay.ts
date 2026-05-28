@@ -724,6 +724,8 @@ function buildPublicationContract(
     "Do not run blocking wait commands such as `gh pr checks --watch`, `gh pr view` polling loops, `review-quill pr status --wait`, `merge-steward pr status --wait`, or `gh pr merge` from the agent turn.",
     "PatchRelay receives GitHub webhooks for check, review, and base-branch changes; those events will re-enter automation if more work is needed.",
     "If the issue text asks you to watch CI, wait for approval, or merge after checks pass, treat that as PatchRelay service responsibility rather than agent-turn work.",
+    "Keep reactive repairs narrow: do not run TypeScript, lint, full test suites, Playwright, browser UI suites, or screenshot capture unless the human explicitly asks for that evidence, the reviewer specifically asks for a screenshot or visual proof, or the reactive failure is itself from that exact check.",
+    "Use code inspection and the smallest directly relevant command only when it materially reduces risk. If the repair is a tiny reviewer-requested edit, commit and push the fresh head without broad local verification.",
     "",
     ...(requiresFreshQueueHead
       ? [
