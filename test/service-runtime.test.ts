@@ -158,6 +158,30 @@ test("service runtime clears ready state on stop and preserves codex status in r
   assert.deepEqual(runtime.getReadiness(), { ready: false, codexStarted: false, linearConnected: true, githubAppAuthHealthy: true });
 });
 
+test("service runtime treats unhealthy GitHub App auth as not ready", async () => {
+  const codex = new FakeCodexClient();
+  const runtime = new ServiceRuntime(
+    codex as never,
+    pino({ enabled: false }),
+    { async reconcileActiveRuns() {} },
+    { listIssuesReadyForExecution: () => [] },
+    { async processWebhookEvent() {} },
+    { async processIssue() {} },
+  );
+
+  runtime.setLinearConnected(true);
+  runtime.setGithubAppAuthHealthy(false, "credential check failed");
+  await runtime.start();
+
+  assert.deepEqual(runtime.getReadiness(), {
+    ready: false,
+    codexStarted: true,
+    linearConnected: true,
+    githubAppAuthHealthy: false,
+    githubAppAuthError: "credential check failed",
+  });
+});
+
 test("service runtime records startup error when codex start fails", async () => {
   const codex = new FakeCodexClient();
   codex.failStartWith = new Error("codex offline");

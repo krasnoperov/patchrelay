@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import path from "node:path";
 
 /**
@@ -113,4 +114,48 @@ export function buildAgentChildEnv(parentEnv: NodeJS.ProcessEnv = process.env): 
   delete env.GH_TOKEN;
   delete env.GITHUB_TOKEN;
   return env;
+}
+
+export async function verifyGitHubCliAuthEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  options: { timeoutMs?: number } = {},
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? 10_000;
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("git", ["credential", "fill"], {
+      env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stderr = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill("SIGTERM");
+      reject(new Error(`GitHub git credential check timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    timer.unref?.();
+
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      const detail = stderr.trim();
+      reject(new Error(`GitHub git credential check failed${detail ? `: ${detail}` : ""}`));
+    });
+    child.stdin.end(`protocol=https\nhost=${GITHUB_HOST}\n\n`);
+  });
 }

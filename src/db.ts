@@ -19,6 +19,7 @@ import { RepositoryLinkStore } from "./db/repository-link-store.ts";
 import { RunStore } from "./db/run-store.ts";
 import { WebhookEventStore } from "./db/webhook-event-store.ts";
 import { runPatchRelayMigrations } from "./db/migrations.ts";
+import { assertPatchRelaySchemaReady } from "./db/schema-guard.ts";
 import { SqliteConnection, type DatabaseConnection } from "./db/shared.ts";
 import { syncIssueSessionFromIssue } from "./issue-session-projector.ts";
 import { TrackedIssueQuery } from "./tracked-issue-query.ts";
@@ -37,6 +38,7 @@ export class PatchRelayDatabase {
   readonly trackedIssues: TrackedIssueQuery;
 
   constructor(databasePath: string, wal: boolean) {
+    this.databasePath = databasePath;
     this.connection = new SqliteConnection(databasePath);
     this.connection.pragma("foreign_keys = ON");
     if (wal) {
@@ -74,8 +76,15 @@ export class PatchRelayDatabase {
     this.trackedIssues = new TrackedIssueQuery(this.issues, this.issueSessions, this.workflowWakes, this.runs);
   }
 
+  private readonly databasePath: string;
+
   runMigrations(): void {
     runPatchRelayMigrations(this.connection);
+    this.assertSchemaReady();
+  }
+
+  assertSchemaReady(): void {
+    assertPatchRelaySchemaReady(this.connection, this.databasePath);
   }
 
   transaction<T>(fn: () => T): T {
