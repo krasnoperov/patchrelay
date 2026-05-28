@@ -2871,7 +2871,7 @@ exit 1
     assert.deepEqual(reviewRoundActivities[0], {
       type: "action",
       action: "Review round",
-      parameter: "1 from @review-quill on head sha-roun; 1 inline comment captured",
+      parameter: "1 from @review-quill; 1 inline comment captured",
     });
   } finally {
     process.env.PATH = oldPath;

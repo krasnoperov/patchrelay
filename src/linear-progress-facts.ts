@@ -42,6 +42,10 @@ function deriveProgressFactFromCompletedItem(
   }
   const ephemeralBody = compactOperatorSentence(fullBody) ?? fullBody;
 
+  if (looksLikeOperationalChatter(fullBody)) {
+    return undefined;
+  }
+
   if (looksLikeVerification(fullBody)) {
     return {
       kind: "verification_started",
@@ -162,6 +166,17 @@ function looksLikePublishing(text: string): boolean {
     || normalized.includes("opening pr")
     || normalized.includes("opening the pr")
     || normalized.includes("opening pull request");
+}
+
+function looksLikeOperationalChatter(text: string): boolean {
+  const normalized = text.toLowerCase().replace(/\s+/g, " ").trim();
+  const firstPerson = /\b(i('|’)m|i am|i('|’)ll|i will|i need|i’m|i’ll)\b/.test(normalized);
+  const operational = /\b(waiting|watching|checking|running|rerunning|pushing|publishing|creating|opening|committing|preparing|verification|publish pass|push)\b/.test(normalized);
+  return (firstPerson && operational)
+    || /^(i('|’)m|i am|i('|’)ll|i will|i need|i’m|i’ll)\b/.test(normalized)
+    || /^(continuing|resuming) from\b/.test(normalized)
+    || /\b(i('|’)m|i am|i('|’)ll|i will|i need|i’m|i’ll)\s+(waiting|watching|checking|running|rerunning|pushing|publishing|creating|opening|committing)\b/.test(normalized)
+    || /\b(is|are)\s+(now\s+)?(running|still running|in progress)\b/.test(normalized);
 }
 
 function compactOperatorSentence(text: string, maxLength = 160): string | undefined {

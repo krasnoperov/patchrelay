@@ -78,7 +78,7 @@ test("deriveIssueStatusNote unwraps shell-wrapped commands in assistant summarie
   );
 });
 
-test("deriveIssueStatusNote prefers publication recap summaries over raw assistant output", () => {
+test("deriveIssueStatusNote prefers outcome summaries over raw assistant output", () => {
   const note = deriveIssueStatusNote({
     issue: { factoryState: "done" },
     latestRun: {
@@ -90,7 +90,7 @@ test("deriveIssueStatusNote prefers publication recap summaries over raw assista
       status: "completed",
       startedAt: "2026-04-07T22:30:00.000Z",
       summaryJson: JSON.stringify({
-        publicationRecapSummary: "Addressed the requested review feedback and updated PR #42.",
+        outcomeSummary: "Addressed the requested review feedback and updated PR #42.",
         latestAssistantMessage: "Updated the branch, reran checks, and tweaked several details.",
       }),
     } as never,

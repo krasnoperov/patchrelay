@@ -517,6 +517,28 @@ function buildFollowUpContextLines(issue: IssueRecord, runType: RunType, context
     lines.push(`Completion check summary: ${context.completionCheckSummary.trim()}`);
   }
 
+  if (context?.preserveDirtyWorktree === true) {
+    lines.push(
+      "",
+      "Unpublished local work:",
+      "PatchRelay detected that the previous repair turn ended with uncommitted changes in this worktree.",
+      "Do not reset, clean, stash-drop, or otherwise discard the current worktree. Inspect the existing local diff, keep the intended in-scope repair, then commit and push a fresh PR head.",
+    );
+    if (typeof context.dirtyWorktreeSummary === "string" && context.dirtyWorktreeSummary.trim()) {
+      lines.push(`Dirty worktree summary: ${context.dirtyWorktreeSummary.trim()}`);
+    }
+    const changedPaths = Array.isArray(context.dirtyWorktreeChangedPaths)
+      ? context.dirtyWorktreeChangedPaths.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+      : [];
+    if (changedPaths.length > 0) {
+      lines.push("Changed paths:");
+      changedPaths.slice(0, 12).forEach((entry) => lines.push(`- ${entry}`));
+      if (changedPaths.length > 12) {
+        lines.push(`- ...and ${changedPaths.length - 12} more`);
+      }
+    }
+  }
+
   if (followUpLines.length > 0) {
     lines.push("", "Recent updates:");
     followUpLines.forEach((line) => lines.push(`- ${line}`));

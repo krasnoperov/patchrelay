@@ -1,9 +1,8 @@
 import type { Logger } from "pino";
 import type { CompletionCheckExecution } from "./completion-check.ts";
-import type { PublicationRecapFacts, PublicationRecapResult } from "./publication-recap.ts";
 import type { CodexThreadSummary } from "./types.ts";
 import type { IssueRecord, IssueSessionEventRecord, RunRecord } from "./db-types.ts";
-import type { FactoryState, RunType } from "./factory-state.ts";
+import type { FactoryState } from "./factory-state.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { ReleaseIssueSessionLease, WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import type { LinearSessionSync } from "./linear-session-sync.ts";
@@ -17,7 +16,8 @@ import type { RunCompletionPolicy } from "./run-completion-policy.ts";
 import { resolveCompletedRunState } from "./run-completion-policy.ts";
 import { computeChangeIdentityFromWorktree } from "./change-identity.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
-import { inspectGitWorktreeStatus, isRepairRunType } from "./git-worktree-status.ts";
+import { inspectGitWorktreeStatus, isRepairRunType, type GitWorktreeStatus } from "./git-worktree-status.ts";
+import { buildRunOutcomeSummary, type RunOutcomeFacts } from "./run-outcome-summary.ts";
 
 type StageReport = ReturnType<typeof buildStageReport>;
 
@@ -31,10 +31,12 @@ function parseEventJson(eventJson?: string): Record<string, unknown> | undefined
   }
 }
 
-function buildRunSummaryJson(report: StageReport, publicationRecapSummary?: string): string {
+function buildRunSummaryJson(report: StageReport, outcomeSummary?: string): string {
   return JSON.stringify({
     latestAssistantMessage: report.assistantMessages.at(-1) ?? null,
-    publicationRecapSummary: publicationRecapSummary ?? null,
+    outcomeSummary: outcomeSummary ?? null,
+    // Backward compatibility for older CLI/status readers.
+    publicationRecapSummary: outcomeSummary ?? null,
   });
 }
 
@@ -57,14 +59,6 @@ function summarizePromptDeliveryEvents(
   return { delivered, failed };
 }
 
-function shouldGeneratePublicationRecap(runType: RunType): boolean {
-  return runType === "implementation"
-    || runType === "review_fix"
-    || runType === "branch_upkeep"
-    || runType === "ci_repair"
-    || runType === "queue_repair";
-}
-
 export class RunFinalizer {
   constructor(
     private readonly db: PatchRelayDatabase,
@@ -84,13 +78,6 @@ export class RunFinalizer {
         onStarted?: ((start: { threadId: string; turnId: string }) => void | Promise<void>) | undefined;
       }): Promise<CompletionCheckExecution>;
     },
-    private readonly publicationRecap?: {
-      run(params: {
-        issue: Pick<IssueRecord, "issueKey" | "linearIssueId" | "title" | "description">;
-        run: Pick<RunRecord, "id" | "threadId" | "runType" | "failureReason" | "summaryJson" | "reportJson">;
-        facts?: PublicationRecapFacts;
-      }): Promise<PublicationRecapResult>;
-    },
     private readonly feed?: OperatorEventFeed,
   ) {}
 
@@ -99,7 +86,7 @@ export class RunFinalizer {
       threadId: string;
       completedTurnId?: string | undefined;
       report: StageReport;
-      publicationRecapSummary?: string | undefined;
+      outcomeSummary?: string | undefined;
     },
   ): {
     status: "completed";
@@ -112,7 +99,7 @@ export class RunFinalizer {
       status: "completed",
       threadId: params.threadId,
       ...(params.completedTurnId ? { turnId: params.completedTurnId } : {}),
-      summaryJson: buildRunSummaryJson(params.report, params.publicationRecapSummary),
+      summaryJson: buildRunSummaryJson(params.report, params.outcomeSummary),
       reportJson: JSON.stringify(params.report),
     };
   }
@@ -124,14 +111,14 @@ export class RunFinalizer {
       .at(-1);
   }
 
-  private resolvePublicationRecapFacts(params: {
+  private resolveRunOutcomeFacts(params: {
     run: Pick<RunRecord, "id" | "projectId" | "linearIssueId">;
     issue: Pick<IssueRecord, "prNumber">;
     postRunState?: FactoryState | undefined;
     latestAssistantSummary?: string | undefined;
-  }): PublicationRecapFacts {
+  }): RunOutcomeFacts {
     const session = this.db.issueSessions.getIssueSession(params.run.projectId, params.run.linearIssueId);
-    const facts: PublicationRecapFacts = {
+    const facts: RunOutcomeFacts = {
       ...(session?.lastWakeReason ? { wakeReason: session.lastWakeReason } : {}),
       ...(params.postRunState ? { postRunState: params.postRunState } : {}),
       ...(params.issue.prNumber !== undefined ? { prNumber: params.issue.prNumber } : {}),
@@ -169,39 +156,21 @@ export class RunFinalizer {
     }
   }
 
-  private async generatePublicationRecap(params: {
-    run: Pick<RunRecord, "id" | "threadId" | "runType" | "failureReason" | "summaryJson" | "reportJson" | "projectId" | "linearIssueId">;
-    issue: Pick<IssueRecord, "issueKey" | "linearIssueId" | "title" | "description" | "prNumber">;
+  private buildOutcomeSummary(params: {
+    run: Pick<RunRecord, "id" | "runType" | "projectId" | "linearIssueId">;
+    issue: Pick<IssueRecord, "prNumber">;
     postRunState?: FactoryState | undefined;
     latestAssistantSummary?: string | undefined;
-  }): Promise<string | undefined> {
-    if (!this.publicationRecap || !shouldGeneratePublicationRecap(params.run.runType)) {
-      return undefined;
-    }
-
-    try {
-      const result = await this.publicationRecap.run({
-        issue: params.issue,
+  }): string {
+    return buildRunOutcomeSummary({
+      runType: params.run.runType,
+      facts: this.resolveRunOutcomeFacts({
         run: params.run,
-        facts: this.resolvePublicationRecapFacts({
-          run: params.run,
-          issue: params.issue,
-          postRunState: params.postRunState,
-          latestAssistantSummary: params.latestAssistantSummary,
-        }),
-      });
-      return result.summary;
-    } catch (error) {
-      this.logger.warn(
-        {
-          runId: params.run.id,
-          issueKey: params.issue.issueKey,
-          error: error instanceof Error ? error.message : String(error),
-        },
-        "Publication recap failed; falling back to the main run summary",
-      );
-      return undefined;
-    }
+        issue: params.issue,
+        postRunState: params.postRunState,
+        latestAssistantSummary: params.latestAssistantSummary,
+      }),
+    });
   }
 
   // Plan §4.2(c): record the identity of the head we just published
@@ -367,13 +336,85 @@ export class RunFinalizer {
     this.clearProgressAndRelease(params.run);
   }
 
-  private verifyRepairWorktreeClean(run: RunRecord, issue: IssueRecord): string | undefined {
+  private inspectDirtyRepairWorktree(run: RunRecord, issue: IssueRecord): GitWorktreeStatus | undefined {
     if (!isRepairRunType(run.runType) || !issue.worktreePath) return undefined;
     const status = inspectGitWorktreeStatus(issue.worktreePath);
     if (!status.dirty) return undefined;
-    return status.summary
-      ? `Repair run finished with a dirty worktree; ${status.summary}`
+    return status;
+  }
+
+  private continueDirtyRepairWorktree(params: {
+    run: RunRecord;
+    issue: IssueRecord;
+    status: GitWorktreeStatus;
+    threadId: string;
+    completedTurnId?: string | undefined;
+    report: StageReport;
+  }): void {
+    const message = params.status.summary
+      ? `Repair run finished with a dirty worktree; ${params.status.summary}`
       : "Repair run finished with a dirty worktree";
+    const outcomeSummary = "Repair left unpublished local changes; continuing automatically to publish them.";
+    const continued = this.withHeldLease(params.run.projectId, params.run.linearIssueId, (lease) => {
+      this.db.runs.finishRun(params.run.id, this.buildCompletedRunUpdate({
+        threadId: params.threadId,
+        ...(params.completedTurnId ? { completedTurnId: params.completedTurnId } : {}),
+        report: params.report,
+        outcomeSummary,
+      }));
+      this.db.issueSessions.upsertIssueWithLease(lease, {
+        projectId: params.run.projectId,
+        linearIssueId: params.run.linearIssueId,
+        activeRunId: null,
+        factoryState: "delegated",
+        pendingRunType: null,
+        pendingRunContextJson: null,
+        ...(params.run.runType === "ci_repair" && params.issue.ciRepairAttempts > 0
+          ? { ciRepairAttempts: params.issue.ciRepairAttempts - 1 }
+          : {}),
+        ...(params.run.runType === "queue_repair" && params.issue.queueRepairAttempts > 0
+          ? { queueRepairAttempts: params.issue.queueRepairAttempts - 1 }
+          : {}),
+        ...((params.run.runType === "review_fix" || params.run.runType === "branch_upkeep") && params.issue.reviewFixAttempts > 0
+          ? { reviewFixAttempts: params.issue.reviewFixAttempts - 1 }
+          : {}),
+      });
+      return Boolean(this.db.issueSessions.appendIssueSessionEventWithLease(lease, {
+        projectId: params.run.projectId,
+        linearIssueId: params.run.linearIssueId,
+        eventType: "completion_check_continue",
+        eventJson: JSON.stringify({
+          runType: params.run.runType,
+          summary: message,
+          preserveDirtyWorktree: true,
+          dirtyWorktreeSummary: params.status.summary,
+          dirtyWorktreeChangedPaths: params.status.changedPaths,
+          dirtyWorktreeMergeInProgress: params.status.mergeInProgress,
+        }),
+        dedupeKey: `dirty_repair_continue:${params.run.id}`,
+      }));
+    });
+
+    if (!continued) {
+      this.logger.warn({ runId: params.run.id, issueId: params.run.linearIssueId }, "Skipping dirty-repair continuation after losing issue-session lease");
+      this.clearProgressAndRelease(params.run);
+      return;
+    }
+
+    this.publishTurnEvent({
+      level: "warn",
+      run: params.run,
+      issueKey: params.issue.issueKey,
+      status: "dirty_repair_continue",
+      summary: "Repair left unpublished local changes; continuing automatically",
+      detail: message,
+    });
+    void this.linearSync.emitActivity(params.issue, {
+      type: "thought",
+      body: "PatchRelay found unpublished repair changes and is continuing automatically to commit and push them.",
+    }, { ephemeral: true });
+    void this.linearSync.syncSession(params.issue, { activeRunType: params.run.runType });
+    this.clearProgressAndRelease(params.run);
   }
 
   async finalizeCompletedRun(params: {
@@ -410,16 +451,15 @@ export class RunFinalizer {
     );
 
     const freshIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
-    const dirtyRepairWorktreeError = this.verifyRepairWorktreeClean(run, freshIssue);
-    if (dirtyRepairWorktreeError) {
-      this.failRunAndClear(run, dirtyRepairWorktreeError, "escalated");
-      this.syncFailureOutcome({
+    const dirtyRepairWorktree = this.inspectDirtyRepairWorktree(run, freshIssue);
+    if (dirtyRepairWorktree) {
+      this.continueDirtyRepairWorktree({
         run,
-        fallbackIssue: freshIssue,
-        message: dirtyRepairWorktreeError,
-        level: "error",
-        status: "dirty_repair_worktree",
-        summary: dirtyRepairWorktreeError,
+        issue: freshIssue,
+        status: dirtyRepairWorktree,
+        threadId,
+        ...(params.completedTurnId ? { completedTurnId: params.completedTurnId } : {}),
+        report,
       });
       return;
     }
@@ -501,7 +541,7 @@ export class RunFinalizer {
     this.maybeUpdateLastPublishedIdentity(run, refreshedIssue);
     const postRunFollowUp = await this.completionPolicy.resolvePostRunFollowUp(run, refreshedIssue);
     const postRunState = postRunFollowUp?.factoryState ?? resolveCompletedRunState(refreshedIssue, run);
-    const publicationRecapSummary = await this.generatePublicationRecap({
+    const outcomeSummary = this.buildOutcomeSummary({
       run,
       issue: refreshedIssue,
       postRunState,
@@ -513,7 +553,7 @@ export class RunFinalizer {
         threadId,
         ...(params.completedTurnId ? { completedTurnId: params.completedTurnId } : {}),
         report,
-        publicationRecapSummary,
+        outcomeSummary,
       }));
       this.db.issues.upsertIssue({
         projectId: run.projectId,
@@ -575,13 +615,11 @@ export class RunFinalizer {
       summary: params.source === "notification"
         ? `Turn completed for ${run.runType}`
         : `Reconciliation: ${run.runType} completed${postRunState ? ` -> ${postRunState}` : ""}`,
-      detail: publicationRecapSummary ?? report.assistantMessages.at(-1),
+      detail: outcomeSummary,
     });
 
     const updatedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? refreshedIssue;
-    const completionSummary = publicationRecapSummary
-      ?? report.assistantMessages.at(-1)?.slice(0, 300)
-      ?? `${run.runType} completed.`;
+    const completionSummary = outcomeSummary;
     const steeringSummary = summarizePromptDeliveryEvents(
       this.db.issueSessions.listIssueSessionEvents(run.projectId, run.linearIssueId),
       run,
@@ -592,7 +630,6 @@ export class RunFinalizer {
       postRunState: updatedIssue.factoryState,
       ...(updatedIssue.prNumber !== undefined ? { prNumber: updatedIssue.prNumber } : {}),
       ...(run.runType === "review_fix" ? { reviewRound: Math.max(1, updatedIssue.reviewFixAttempts) } : {}),
-      ...(run.runType === "review_fix" && updatedIssue.prHeadSha ? { resultHeadSha: updatedIssue.prHeadSha } : {}),
       ...(steeringSummary.delivered > 0 ? { steeringDeliveredCount: steeringSummary.delivered } : {}),
       ...(steeringSummary.failed > 0 ? { steeringFailedCount: steeringSummary.failed } : {}),
     });

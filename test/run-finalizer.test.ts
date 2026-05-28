@@ -37,7 +37,6 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
 }, options?: {
   publishedOutcomeError?: string | null;
   failedRecoveryError?: string | null;
-  publicationRecapSummary?: string;
   onEnqueue?: (projectId: string, issueId: string) => void;
   failRunAndClear?: (runId: number, message: string) => void;
 }) {
@@ -105,21 +104,12 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
         ...completionCheckResult,
       }),
     },
-    options?.publicationRecapSummary
-      ? {
-          run: async () => ({
-            threadId: "fork-publication-1",
-            turnId: "turn-publication-1",
-            summary: options.publicationRecapSummary!,
-          }),
-        }
-      : undefined,
     sharedFeed as never,
   );
   return { finalizer, feedEvents, activities, enqueueCalls };
 }
 
-test("repair run finalizer escalates instead of completing with a dirty worktree", async () => {
+test("repair run finalizer continues automatically with a preserved dirty worktree", async () => {
   const { baseDir, db } = createDb();
   try {
     const worktreePath = path.join(baseDir, "repo");
@@ -148,22 +138,11 @@ test("repair run finalizer escalates instead of completing with a dirty worktree
     });
     db.runs.updateRunThread(run.id, { threadId: "thread-1", turnId: "turn-main" });
 
-    let failureMessage = "";
-    const { finalizer, feedEvents } = createFinalizer(
+    const { finalizer, feedEvents, enqueueCalls, activities } = createFinalizer(
       db,
       { outcome: "done", summary: "done" },
       {
         publishedOutcomeError: null,
-        failRunAndClear: (runId, message) => {
-          failureMessage = message;
-          db.runs.finishRun(runId, { status: "failed", failureReason: message });
-          db.upsertIssue({
-            projectId: issue.projectId,
-            linearIssueId: issue.linearIssueId,
-            activeRunId: null,
-            factoryState: "escalated",
-          });
-        },
       },
     );
 
@@ -189,11 +168,18 @@ test("repair run finalizer escalates instead of completing with a dirty worktree
       resolveRecoverableRunState: () => undefined,
     });
 
-    assert.match(failureMessage, /dirty worktree/);
-    assert.match(failureMessage, /tracked\.txt/);
-    assert.equal(db.getIssue(issue.projectId, issue.linearIssueId)?.factoryState, "escalated");
-    assert.equal(db.runs.getRunById(run.id)?.status, "failed");
-    assert.equal(feedEvents.at(-1)?.status, "dirty_repair_worktree");
+    const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
+    const updatedRun = db.runs.getRunById(run.id)!;
+    const wake = db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    assert.equal(updatedIssue.factoryState, "delegated");
+    assert.equal(updatedRun.status, "completed");
+    assert.equal(wake?.runType, "branch_upkeep");
+    assert.equal(wake?.resumeThread, true);
+    assert.equal(wake?.context.preserveDirtyWorktree, true);
+    assert.match(String(wake?.context.dirtyWorktreeSummary ?? ""), /tracked\.txt/);
+    assert.deepEqual(enqueueCalls, [{ projectId: issue.projectId, issueId: issue.linearIssueId }]);
+    assert.equal(feedEvents.at(-1)?.status, "dirty_repair_continue");
+    assert.match(String(activities.at(-1)?.body ?? ""), /continuing automatically/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -693,7 +679,7 @@ test("run finalizer leaves failed implementation turns alone when no unpublished
   }
 });
 
-test("run finalizer prefers the separate publication recap for Linear-visible completion text", async () => {
+test("run finalizer builds Linear-visible completion text without an extra recap turn", async () => {
   const { baseDir, db } = createDb();
   try {
     const issue = db.upsertIssue({
@@ -730,7 +716,6 @@ test("run finalizer prefers the separate publication recap for Linear-visible co
       summary: "unused",
     }, {
       publishedOutcomeError: null,
-      publicationRecapSummary: "Addressed the requested publishing-summary feedback and updated PR #42.",
     });
 
     await finalizer.finalizeCompletedRun({
@@ -763,23 +748,27 @@ test("run finalizer prefers the separate publication recap for Linear-visible co
 
     const updatedRun = db.runs.getRunById(run.id)!;
     const parsedSummary = JSON.parse(updatedRun.summaryJson ?? "{}") as Record<string, unknown>;
-    assert.equal(parsedSummary.publicationRecapSummary, "Addressed the requested publishing-summary feedback and updated PR #42.");
+    assert.equal(
+      parsedSummary.outcomeSummary,
+      "Publishing summary tightened.",
+    );
+    assert.equal(
+      parsedSummary.publicationRecapSummary,
+      "Publishing summary tightened.",
+    );
     assert.equal(
       activities.at(-1)?.body,
       [
         "Review round 1 completed.",
         "",
         "Addressed:",
-        "- Addressed the requested publishing-summary feedback and updated PR #42.",
-        "",
-        "Deferred:",
-        "- None reported.",
-        "",
-        "Not applicable:",
-        "- None reported.",
+        "- Publishing summary tightened.",
       ].join("\n"),
     );
-    assert.equal(feedEvents.at(-1)?.detail, "Addressed the requested publishing-summary feedback and updated PR #42.");
+    assert.equal(
+      feedEvents.at(-1)?.detail,
+      "Publishing summary tightened.",
+    );
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

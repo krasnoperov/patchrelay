@@ -137,14 +137,13 @@ export function buildReviewRoundStartedActivity(params: {
   headSha?: string;
 }): LinearAgentActivityContent {
   const reviewer = params.reviewerName ? ` from @${params.reviewerName}` : "";
-  const head = params.headSha ? ` on head ${params.headSha.slice(0, 8)}` : "";
   const comments = params.commentCount !== undefined
     ? `; ${params.commentCount} inline comment${params.commentCount === 1 ? "" : "s"} captured`
     : "";
   return {
     type: "action",
     action: "Review round",
-    parameter: `${params.round}${reviewer}${head}${comments}`,
+    parameter: `${params.round}${reviewer}${comments}`,
   };
 }
 
@@ -158,19 +157,18 @@ export function buildRunCompletedActivity(params: {
   postRunState?: FactoryState;
   prNumber?: number;
   reviewRound?: number;
-  resultHeadSha?: string;
   steeringDeliveredCount?: number;
   steeringFailedCount?: number;
 }): LinearAgentActivityContent | undefined {
   const prLabel = params.prNumber ? `PR #${params.prNumber}` : "the pull request";
-  const summary = trimSummary(params.completionSummary);
+  const summary = cleanOutcomeSummary(trimSummary(params.completionSummary));
   const detail = summary ? ` ${summary}` : "";
   const steeringSummary = buildSteeringSummary(params.steeringDeliveredCount, params.steeringFailedCount);
 
   switch (params.runType) {
     case "implementation":
       if (params.postRunState === "pr_open") {
-        const body = `${prLabel} opened:${detail || " Published and ready for review."}`;
+        const body = `${prLabel} opened:${detail || " Ready for review."}`;
         return {
           type: "response",
           body: steeringSummary ? `${body}\n\n${steeringSummary}` : body,
@@ -181,14 +179,10 @@ export function buildRunCompletedActivity(params: {
       {
         const lines: string[] = [];
         lines.push(params.reviewRound ? `Review round ${params.reviewRound} completed.` : "Review fix completed.");
-        if (params.resultHeadSha) lines.push(`Resulting head: ${params.resultHeadSha.slice(0, 8)}.`);
         if (steeringSummary) lines.push(steeringSummary);
 
-        const resolution = buildReviewResolutionSections(summary);
-        lines.push("", "Addressed:", resolution.addressed, "", "Deferred:", resolution.deferred, "", "Not applicable:", resolution.notApplicable);
-        if (!summary && !params.resultHeadSha) {
-          lines[0] = `Updated ${prLabel} to address review feedback.`;
-        }
+        const addressed = summary ? `- ${summary}` : "- Review feedback addressed.";
+        lines.push("", "Addressed:", addressed);
         return {
           type: "response",
           body: lines.join("\n").trim(),
@@ -237,6 +231,15 @@ export function buildRunCompletedActivity(params: {
   }
 }
 
+function cleanOutcomeSummary(summary: string | undefined): string | undefined {
+  if (!summary) return undefined;
+  return summary
+    .replace(/\s*(?:,?\s*(?:and|then)\s+)?(?:force-)?pushed(?:\s+(?:a\s+)?(?:new\s+)?head|\s+the\s+branch|\s+changes|\s+an?\s+update|\s+the\s+repaired\s+branch)?\.?$/i, ".")
+    .replace(/\s*(?:,?\s*(?:and|then)\s+)?published(?:\s+(?:a\s+)?(?:new\s+)?head|\s+the\s+branch|\s+changes|\s+an?\s+update)?\.?$/i, ".")
+    .replace(/\.\.+$/, ".")
+    .trim();
+}
+
 function buildSteeringSummary(delivered = 0, failed = 0): string | undefined {
   if (delivered === 0 && failed === 0) return undefined;
   const parts: string[] = [];
@@ -247,25 +250,6 @@ function buildSteeringSummary(delivered = 0, failed = 0): string | undefined {
     parts.push(`${failed} follow-up delivery failure${failed === 1 ? "" : "s"}`);
   }
   return `Steering: ${parts.join("; ")}.`;
-}
-
-function buildReviewResolutionSections(summary: string | undefined): {
-  addressed: string;
-  deferred: string;
-  notApplicable: string;
-} {
-  if (!summary) {
-    return {
-      addressed: "- Review feedback addressed and published.",
-      deferred: "- None reported.",
-      notApplicable: "- None reported.",
-    };
-  }
-  return {
-    addressed: `- ${summary}`,
-    deferred: "- None reported.",
-    notApplicable: "- None reported.",
-  };
 }
 
 export function buildRunFailureActivity(runType: RunType, reason?: string): LinearAgentActivityContent {
