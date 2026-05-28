@@ -60,8 +60,9 @@ test("buildOperatorRetryEvent marks branch upkeep retries explicitly", () => {
   }), "branch_upkeep");
 
   assert.equal(event.eventType, "review_changes_requested");
-  assert.equal(event.dedupeKey, "operator_retry:branch_upkeep:issue-review:head-review");
+  assert.equal(event.dedupeKey, "review_changes_requested:branch_upkeep:issue:issue-review:head:head-review");
   const payload = JSON.parse(event.eventJson) as Record<string, unknown>;
+  assert.equal(payload.requestedChangesCoalesceKey, "review_changes_requested:branch_upkeep:issue:issue-review:head:head-review");
   assert.equal(payload.branchUpkeepRequired, true);
   assert.equal(payload.wakeReason, "branch_upkeep");
   assert.equal(payload.source, "operator_retry");
@@ -74,8 +75,9 @@ test("buildOperatorRetryEvent keeps review-fix retries generic so live review co
   }), "review_fix");
 
   assert.equal(event.eventType, "review_changes_requested");
-  assert.equal(event.dedupeKey, "operator_retry:review_fix:issue-review-fix:head-review-fix");
+  assert.equal(event.dedupeKey, "review_changes_requested:review_fix:issue:issue-review-fix:head:head-review-fix");
   const payload = JSON.parse(event.eventJson) as Record<string, unknown>;
+  assert.equal(payload.requestedChangesCoalesceKey, "review_changes_requested:review_fix:issue:issue-review-fix:head:head-review-fix");
   assert.equal(payload.promptContext, "operator retry requested retry of review-fix work.");
   assert.equal("reviewBody" in payload, false);
 });

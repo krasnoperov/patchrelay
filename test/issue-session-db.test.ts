@@ -7,6 +7,7 @@ import { PatchRelayDatabase } from "../src/db.ts";
 import { SqliteConnection } from "../src/db/shared.ts";
 import { runPatchRelayMigrations } from "../src/db/migrations.ts";
 import { deriveIssueSessionReactiveIntent, deriveIssueSessionWakeReason } from "../src/issue-session.ts";
+import { buildRequestedChangesWakeIdentity } from "../src/reactive-wake-keys.ts";
 
 test("migrations create issue_sessions and upgrade legacy issue schema", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-migration-"));
@@ -707,6 +708,92 @@ test("terminal session events suppress queued follow-up wakeups", () => {
 
     const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-terminal");
     assert.equal(wake, undefined);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("self comments are not treated as pending actionable wakes", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-self-comment-"));
+  try {
+    const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
+    db.runMigrations();
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-self-comment",
+      issueKey: "USE-SELF",
+      factoryState: "pr_open",
+      prNumber: 16,
+    });
+    db.issueSessions.appendIssueSessionEvent({
+      projectId: "usertold",
+      linearIssueId: "issue-self-comment",
+      eventType: "self_comment",
+      eventJson: JSON.stringify({ body: "Status update", author: "patchrelay" }),
+    });
+
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-self-comment"), undefined);
+    assert.equal(db.issueSessions.hasPendingIssueSessionEvents("usertold", "issue-self-comment"), false);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("same-head requested-changes events coalesce and keep the richer payload", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-review-coalesce-"));
+  try {
+    const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
+    db.runMigrations();
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-review-coalesce",
+      issueKey: "USE-REVIEW-COALESCE",
+      factoryState: "changes_requested",
+      prNumber: 17,
+      prHeadSha: "sha-reviewed",
+      prReviewState: "changes_requested",
+    });
+    const idleIdentity = buildRequestedChangesWakeIdentity({
+      linearIssueId: "issue-review-coalesce",
+      headSha: "sha-reviewed",
+    });
+    db.issueSessions.appendIssueSessionEvent({
+      projectId: "usertold",
+      linearIssueId: "issue-review-coalesce",
+      eventType: "review_changes_requested",
+      eventJson: JSON.stringify({
+        requestedChangesCoalesceKey: idleIdentity.coalesceKey,
+        requestedChangesHeadSha: idleIdentity.headSha,
+      }),
+      dedupeKey: idleIdentity.dedupeKey,
+    });
+
+    const webhookIdentity = buildRequestedChangesWakeIdentity({
+      linearIssueId: "issue-review-coalesce",
+      reviewId: 123,
+      reviewCommitId: "sha-reviewed",
+      reviewerName: "review-quill[bot]",
+    });
+    db.issueSessions.appendIssueSessionEvent({
+      projectId: "usertold",
+      linearIssueId: "issue-review-coalesce",
+      eventType: "review_changes_requested",
+      eventJson: JSON.stringify({
+        requestedChangesCoalesceKey: webhookIdentity.coalesceKey,
+        requestedChangesHeadSha: webhookIdentity.headSha,
+        reviewId: 123,
+        reviewerName: "review-quill[bot]",
+        reviewBody: "Fix the collapsed state.",
+      }),
+      dedupeKey: webhookIdentity.dedupeKey,
+    });
+
+    const events = db.issueSessions.listIssueSessionEvents("usertold", "issue-review-coalesce");
+    assert.equal(events.length, 1);
+    const payload = JSON.parse(events[0]!.eventJson ?? "{}") as Record<string, unknown>;
+    assert.equal(payload.reviewId, 123);
+    assert.equal(payload.reviewBody, "Fix the collapsed state.");
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-review-coalesce")?.eventIds.length, 1);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

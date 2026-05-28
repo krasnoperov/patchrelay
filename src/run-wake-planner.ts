@@ -8,6 +8,7 @@ import {
   getQueueRepairBudget,
   getReviewFixBudget,
 } from "./run-budgets.ts";
+import { buildRequestedChangesWakeIdentity } from "./reactive-wake-keys.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
 
 export interface PendingRunWake {
@@ -50,6 +51,7 @@ export class RunWakePlanner {
   ): boolean {
     let eventType: IssueSessionEventType;
     let dedupeKey: string;
+    let eventContext = context;
     if (runType === "queue_repair") {
       eventType = "merge_steward_incident";
       dedupeKey = `${dedupeScope ?? "wake"}:queue_repair:${issue.linearIssueId}:${issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown-sha"}`;
@@ -58,7 +60,17 @@ export class RunWakePlanner {
       dedupeKey = `${dedupeScope ?? "wake"}:ci_repair:${issue.linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? "unknown-sha"}`;
     } else if (runType === "review_fix" || runType === "branch_upkeep") {
       eventType = "review_changes_requested";
-      dedupeKey = `${dedupeScope ?? "wake"}:${runType}:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`;
+      const identity = buildRequestedChangesWakeIdentity({
+        linearIssueId: issue.linearIssueId,
+        runType,
+        headSha: issue.prHeadSha,
+      });
+      dedupeKey = identity.dedupeKey;
+      eventContext = {
+        ...context,
+        requestedChangesCoalesceKey: identity.coalesceKey,
+        ...(identity.headSha ? { requestedChangesHeadSha: identity.headSha } : {}),
+      };
     } else {
       eventType = "delegated";
       dedupeKey = `${dedupeScope ?? "wake"}:implementation:${issue.linearIssueId}`;
@@ -68,7 +80,7 @@ export class RunWakePlanner {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       eventType,
-      ...(context ? { eventJson: JSON.stringify(context) } : {}),
+      ...(eventContext ? { eventJson: JSON.stringify(eventContext) } : {}),
       dedupeKey,
     }));
   }

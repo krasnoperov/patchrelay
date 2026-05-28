@@ -18,6 +18,7 @@ function mapAttempt(row: Record<string, unknown>): ReviewAttemptRecord {
     ...(row.conclusion ? { conclusion: String(row.conclusion) as ReviewAttemptConclusion } : {}),
     ...(row.summary ? { summary: String(row.summary) } : {}),
     ...(row.pr_title ? { prTitle: String(row.pr_title) } : {}),
+    ...(row.prompt_fingerprint ? { promptFingerprint: String(row.prompt_fingerprint) } : {}),
     ...(row.thread_id ? { threadId: String(row.thread_id) } : {}),
     ...(row.turn_id ? { turnId: String(row.turn_id) } : {}),
     ...(row.external_check_run_id !== null && row.external_check_run_id !== undefined ? { externalCheckRunId: Number(row.external_check_run_id) } : {}),
@@ -55,6 +56,7 @@ export class SqliteStore {
     this.db.pragma("foreign_keys = ON");
     this.db.exec(SCHEMA_SQL);
     this.addColumnIfMissing("review_attempts", "pr_title", "TEXT");
+    this.addColumnIfMissing("review_attempts", "prompt_fingerprint", "TEXT");
     // Carry-forward identity columns. Existing rows backfill NULL and behave
     // as cache misses; new approved rows populate them so future heads can
     // re-emit the verdict without re-running the reviewer.
@@ -126,7 +128,9 @@ export class SqliteStore {
     prNumber: number,
     patchId: string,
     mode: ReviewSurfaceMode,
+    promptFingerprint?: string,
   ): ReviewAttemptRecord | undefined {
+    const promptFilter = promptFingerprint ? "AND prompt_fingerprint = ?" : "";
     const row = this.db.prepare(`
       SELECT *
       FROM review_attempts
@@ -138,9 +142,16 @@ export class SqliteStore {
         AND review_body IS NOT NULL
         AND review_event IS NOT NULL
         AND review_surface_mode = ?
+        ${promptFilter}
       ORDER BY id DESC
       LIMIT 1
-    `).get(repoFullName, prNumber, patchId, mode);
+    `).get(...[
+      repoFullName,
+      prNumber,
+      patchId,
+      mode,
+      ...(promptFingerprint ? [promptFingerprint] : []),
+    ]);
     return row ? mapAttempt(row) : undefined;
   }
 
@@ -155,7 +166,9 @@ export class SqliteStore {
     patchId: string,
     integrationTreeId: string,
     mode: ReviewSurfaceMode,
+    promptFingerprint?: string,
   ): ReviewAttemptRecord | undefined {
+    const promptFilter = promptFingerprint ? "AND prompt_fingerprint = ?" : "";
     const row = this.db.prepare(`
       SELECT *
       FROM review_attempts
@@ -168,9 +181,17 @@ export class SqliteStore {
         AND review_body IS NOT NULL
         AND review_event IS NOT NULL
         AND review_surface_mode = ?
+        ${promptFilter}
       ORDER BY id DESC
       LIMIT 1
-    `).get(repoFullName, prNumber, patchId, integrationTreeId, mode);
+    `).get(...[
+      repoFullName,
+      prNumber,
+      patchId,
+      integrationTreeId,
+      mode,
+      ...(promptFingerprint ? [promptFingerprint] : []),
+    ]);
     return row ? mapAttempt(row) : undefined;
   }
 
@@ -180,6 +201,7 @@ export class SqliteStore {
     headSha: string;
     status: ReviewAttemptStatus;
     prTitle?: string;
+    promptFingerprint?: string;
     patchId?: string;
     integrationTreeId?: string;
     reviewSurfaceMode?: ReviewSurfaceMode;
@@ -195,13 +217,13 @@ export class SqliteStore {
     const now = isoNow();
     const result = this.db.prepare(`
       INSERT INTO review_attempts (
-        repo_full_name, pr_number, head_sha, status, pr_title,
+        repo_full_name, pr_number, head_sha, status, pr_title, prompt_fingerprint,
         patch_id, integration_tree_id, review_surface_mode, base_sha,
         prior_attempt_id, review_body, review_event, publication_mode,
         conclusion, summary, completed_at,
         created_at, updated_at
       ) VALUES (
-        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?,
@@ -213,6 +235,7 @@ export class SqliteStore {
       params.headSha,
       params.status,
       params.prTitle ?? null,
+      params.promptFingerprint ?? null,
       params.patchId ?? null,
       params.integrationTreeId ?? null,
       params.reviewSurfaceMode ?? null,
@@ -242,6 +265,7 @@ export class SqliteStore {
     turnId?: string | null;
     externalCheckRunId?: number | null;
     completedAt?: string | null;
+    promptFingerprint?: string | null;
     patchId?: string | null;
     integrationTreeId?: string | null;
     reviewSurfaceMode?: ReviewSurfaceMode | null;
@@ -280,6 +304,10 @@ export class SqliteStore {
     if (params.completedAt !== undefined) {
       sets.push("completed_at = @completedAt");
       values.completedAt = params.completedAt;
+    }
+    if (params.promptFingerprint !== undefined) {
+      sets.push("prompt_fingerprint = @promptFingerprint");
+      values.promptFingerprint = params.promptFingerprint;
     }
     if (params.patchId !== undefined) {
       sets.push("patch_id = @patchId");

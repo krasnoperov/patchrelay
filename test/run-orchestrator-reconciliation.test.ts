@@ -325,6 +325,99 @@ test("idle reconciliation does not re-enqueue issues that already have an active
   }
 });
 
+test("run dismisses stale requested-changes wakes once the PR is no longer changes requested", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-stale-review-wake-"));
+  try {
+    const { db, orchestrator } = createOrchestrator(baseDir);
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-stale-review-wake",
+      issueKey: "USE-STALE-REVIEW",
+      title: "Dismiss stale review wake",
+      branchName: "feat-stale-review-wake",
+      prNumber: 202,
+      prState: "open",
+      prHeadSha: "sha-current-approved",
+      prAuthorLogin: "patchrelay[bot]",
+      factoryState: "awaiting_queue",
+      prReviewState: "approved",
+      prCheckStatus: "success",
+      delegatedToPatchRelay: true,
+      issueClass: "implementation",
+      issueClassSource: "explicit",
+    });
+    db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "review_changes_requested",
+      eventJson: JSON.stringify({
+        reviewerName: "review-quill[bot]",
+        reviewCommitId: "sha-old-reviewed",
+      }),
+      dedupeKey: "review_changes_requested::sha-old-reviewed::review-quill[bot]",
+    });
+
+    await orchestrator.run({ projectId: issue.projectId, issueId: issue.linearIssueId });
+
+    assert.equal(db.runs.listRunsForIssue(issue.projectId, issue.linearIssueId).length, 0);
+    assert.equal(db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId), undefined);
+    const [event] = db.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId);
+    assert.ok(event?.processedAt, "stale wake should be dismissed");
+    assert.equal(event?.consumedByRunId, undefined);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("run preserves other pending input when dismissing a stale requested-changes wake", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-stale-review-with-prompt-"));
+  try {
+    const { db, enqueueCalls, orchestrator } = createOrchestrator(baseDir);
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-stale-review-with-prompt",
+      issueKey: "USE-STALE-PROMPT",
+      title: "Keep operator prompt",
+      branchName: "feat-stale-review-with-prompt",
+      prNumber: 203,
+      prState: "open",
+      prHeadSha: "sha-current-approved",
+      prAuthorLogin: "patchrelay[bot]",
+      factoryState: "awaiting_queue",
+      prReviewState: "approved",
+      prCheckStatus: "success",
+      delegatedToPatchRelay: true,
+      issueClass: "implementation",
+      issueClassSource: "explicit",
+    });
+    db.issueSessions.appendIssueSessionEvent({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "review_changes_requested",
+      eventJson: JSON.stringify({ reviewerName: "review-quill[bot]", reviewCommitId: "sha-old-reviewed" }),
+      dedupeKey: "review_changes_requested::sha-old-reviewed::review-quill[bot]",
+    });
+    db.issueSessions.appendIssueSessionEvent({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "operator_prompt",
+      eventJson: JSON.stringify({ text: "Please adjust the release note before merge.", author: "operator" }),
+    });
+    enqueueCalls.length = 0;
+
+    await orchestrator.run({ projectId: issue.projectId, issueId: issue.linearIssueId });
+
+    assert.equal(db.runs.listRunsForIssue(issue.projectId, issue.linearIssueId).length, 0);
+    const events = db.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId);
+    assert.ok(events.find((event) => event.eventType === "review_changes_requested")?.processedAt);
+    assert.equal(events.find((event) => event.eventType === "operator_prompt")?.processedAt, undefined);
+    assert.equal(db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)?.runType, "implementation");
+    assert.deepEqual(enqueueCalls, [{ projectId: issue.projectId, issueId: issue.linearIssueId }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("reconcileIdleIssues advances approved idle issues to awaiting_queue", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-approved-"));
   try {
