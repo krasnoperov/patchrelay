@@ -205,14 +205,14 @@ test("GitHub state activities keep repair work active instead of erroring", () =
 test("run completion activity reports PR publication concisely", () => {
   const activity = buildRunCompletedActivity({
     runType: "implementation",
-    completionSummary: "Implemented the API endpoint and pushed the branch.",
+    completionSummary: "Ready for review.",
     postRunState: "pr_open",
     prNumber: 42,
   });
 
   assert.deepEqual(activity, {
     type: "response",
-    body: "PR #42 opened: Implemented the API endpoint and pushed the branch.",
+    body: "PR #42 opened: Ready for review.",
   });
 });
 
@@ -247,13 +247,7 @@ test("run completion activity strips repo-local absolute paths from publish comm
       "Review fix completed.",
       "",
       "Addressed:",
-      "- Updated `sessionSchema.ts` and `local path omitted`, then pushed a new head.",
-      "",
-      "Deferred:",
-      "- None reported.",
-      "",
-      "Not applicable:",
-      "- None reported.",
+      "- Updated `sessionSchema.ts` and `local path omitted`.",
     ].join("\n"),
   });
 });
@@ -282,13 +276,7 @@ test("run completion activity keeps repair comments concise and human-facing", (
       "Review fix completed.",
       "",
       "Addressed:",
-      "- Fixed the mobile header regression and pushed a new head.",
-      "",
-      "Deferred:",
-      "- None reported.",
-      "",
-      "Not applicable:",
-      "- None reported.",
+      "- Fixed the mobile header regression.",
     ].join("\n"),
   });
 
@@ -300,11 +288,11 @@ test("run completion activity keeps repair comments concise and human-facing", (
   });
   assert.deepEqual(queueRepair, {
     type: "response",
-    body: "Resolved the merge conflict and force-pushed the repaired branch.",
+    body: "Resolved the merge conflict.",
   });
 });
 
-test("review round activities summarize reviewer, head, and captured comments", () => {
+test("review round activities summarize reviewer and captured comments without commit hashes", () => {
   assert.deepEqual(
     buildReviewRoundStartedActivity({
       round: 2,
@@ -315,7 +303,7 @@ test("review round activities summarize reviewer, head, and captured comments", 
     {
       type: "action",
       action: "Review round",
-      parameter: "2 from @reviewer on head abcdef12; 3 inline comments captured",
+      parameter: "2 from @reviewer; 3 inline comments captured",
     },
   );
 
@@ -326,22 +314,14 @@ test("review round activities summarize reviewer, head, and captured comments", 
       postRunState: "pr_open",
       prNumber: 50,
       reviewRound: 2,
-      resultHeadSha: "fedcba987654",
     }),
     {
       type: "response",
       body: [
         "Review round 2 completed.",
-        "Resulting head: fedcba98.",
         "",
         "Addressed:",
-        "- Addressed the requested changes and pushed.",
-        "",
-        "Deferred:",
-        "- None reported.",
-        "",
-        "Not applicable:",
-        "- None reported.",
+        "- Addressed the requested changes.",
       ].join("\n"),
     },
   );

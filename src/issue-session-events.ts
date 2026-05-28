@@ -167,6 +167,7 @@ export function deriveSessionWakePlan(
         } else {
           eventIds.push(event.id);
         }
+        Object.assign(context, payload ?? {});
         if (typeof payload?.summary === "string" && payload.summary.trim()) {
           context.completionCheckSummary = payload.summary.trim();
         }
@@ -239,9 +240,13 @@ export function extractLatestAssistantSummary(
   if (run.summaryJson) {
     try {
       const parsed = JSON.parse(run.summaryJson) as {
+        outcomeSummary?: unknown;
         publicationRecapSummary?: unknown;
         latestAssistantMessage?: unknown;
       };
+      if (typeof parsed.outcomeSummary === "string" && parsed.outcomeSummary.trim()) {
+        return sanitizeOperatorFacingText(parsed.outcomeSummary);
+      }
       if (typeof parsed.publicationRecapSummary === "string" && parsed.publicationRecapSummary.trim()) {
         return sanitizeOperatorFacingText(parsed.publicationRecapSummary);
       }

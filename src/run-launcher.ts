@@ -70,6 +70,9 @@ export function shouldFreshenWorktreeBeforeLaunch(params: {
   runType: RunType;
   effectiveContext?: Record<string, unknown>;
 }): boolean {
+  if (shouldPreserveDirtyWorktreeBeforeLaunch(params)) {
+    return false;
+  }
   if (params.runType === "queue_repair") {
     return false;
   }
@@ -78,6 +81,19 @@ export function shouldFreshenWorktreeBeforeLaunch(params: {
       || params.effectiveContext?.reviewFixMode === "branch_upkeep";
   }
   return true;
+}
+
+export function shouldPreserveDirtyWorktreeBeforeLaunch(params: {
+  runType: RunType;
+  effectiveContext?: Record<string, unknown>;
+}): boolean {
+  return params.effectiveContext?.preserveDirtyWorktree === true
+    && (
+      params.runType === "review_fix"
+      || params.runType === "branch_upkeep"
+      || params.runType === "ci_repair"
+      || params.runType === "queue_repair"
+    );
 }
 
 export class RunLauncher {
@@ -241,7 +257,18 @@ export class RunLauncher {
       // process env (GH_CONFIG_DIR + gh credential helper + GIT_AUTHOR/COMMITTER). Nothing
       // is written into the worktree git config, so credentials never leak into interactive
       // shell sessions on the shared clone.
-      await this.worktreeManager.resetWorktreeToTrackedBranch(params.worktreePath, params.branchName, params.issue, this.logger);
+      const preserveDirtyWorktree = shouldPreserveDirtyWorktreeBeforeLaunch({
+        runType: params.runType,
+        ...(params.effectiveContext ? { effectiveContext: params.effectiveContext } : {}),
+      });
+      if (preserveDirtyWorktree) {
+        this.logger.warn(
+          { issueKey: params.issue.issueKey, runType: params.runType, worktreePath: params.worktreePath },
+          "Preserving dirty repair worktree for automatic publication continuation",
+        );
+      } else {
+        await this.worktreeManager.resetWorktreeToTrackedBranch(params.worktreePath, params.branchName, params.issue, this.logger);
+      }
       if (shouldFreshenWorktreeBeforeLaunch({
         runType: params.runType,
         ...(params.effectiveContext ? { effectiveContext: params.effectiveContext } : {}),

@@ -11,7 +11,6 @@ import {
   buildRunStartedActivity,
 } from "./linear-session-reporting.ts";
 import { CompletionCheckService } from "./completion-check.ts";
-import { PublicationRecapService } from "./publication-recap.ts";
 import { WorktreeManager } from "./worktree-manager.ts";
 import type {
   AppConfig,
@@ -103,7 +102,6 @@ export class RunOrchestrator {
   private readonly interruptedRunRecovery: InterruptedRunRecovery;
   private readonly runCompletionPolicy: RunCompletionPolicy;
   private readonly completionCheck: CompletionCheckService;
-  private readonly publicationRecap: PublicationRecapService;
   private readonly issueTriage: IssueTriageService;
   private readonly runNotificationHandler: RunNotificationHandler;
   private readonly runReconciler: RunReconciler;
@@ -188,7 +186,6 @@ export class RunOrchestrator {
       this.leasePorts.withHeldLease,
     );
     this.completionCheck = new CompletionCheckService(codex, logger);
-    this.publicationRecap = new PublicationRecapService(codex, logger);
     this.issueTriage = new IssueTriageService(codex, logger);
     this.runFinalizer = new RunFinalizer(
       db,
@@ -201,7 +198,6 @@ export class RunOrchestrator {
       this.recoveryPorts.failRunAndClear,
       this.runCompletionPolicy,
       this.completionCheck,
-      this.publicationRecap,
       feed,
     );
     this.runLauncher = new RunLauncher(config, db, codex, logger, this.worktreeManager);

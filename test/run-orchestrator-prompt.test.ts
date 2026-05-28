@@ -9,7 +9,7 @@ import {
   buildRunPrompt as buildLayeredRunPrompt,
   findDisallowedPatchRelayPromptSectionIds,
 } from "../src/prompting/patchrelay.ts";
-import { buildInitialImplementationGoal, shouldFreshenWorktreeBeforeLaunch, shouldReuseIssueThread } from "../src/run-launcher.ts";
+import { buildInitialImplementationGoal, shouldFreshenWorktreeBeforeLaunch, shouldPreserveDirtyWorktreeBeforeLaunch, shouldReuseIssueThread } from "../src/run-launcher.ts";
 import type { PromptCustomizationLayer } from "../src/types.ts";
 import type { IssueRecord } from "../src/db-types.ts";
 
@@ -133,6 +133,42 @@ test("repair prompts publish to the existing PR branch with concise self-review 
     assert.match(prompt, /If the exact failing head does not reproduce locally and the logs do not support a scoped fix, prefer a rerun-only repair over speculative branch changes\./);
     assert.match(prompt, /## Final Self-Review Before Push/);
     assert.match(prompt, /Before you push the existing PR branch, do one brief reviewer-minded pass on the current head\./);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("dirty repair continuation prompt preserves unpublished local work", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
+  try {
+    writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), "# Implementation Workflow\n");
+
+    const prompt = buildLayeredRunPrompt({
+      issue: {
+        ...createIssue(),
+        factoryState: "changes_requested",
+        prNumber: 311,
+        prHeadSha: "old-head",
+      },
+      runType: "review_fix",
+      repoPath: baseDir,
+      context: {
+        wakeReason: "completion_check_continue",
+        completionCheckSummary: "Repair run finished with a dirty worktree; Worktree has uncommitted changes: tests/integration/authenticated-ssr.spec.ts",
+        preserveDirtyWorktree: true,
+        dirtyWorktreeSummary: "Worktree has uncommitted changes: tests/integration/authenticated-ssr.spec.ts, tests/integration/ssr-hydration.spec.ts",
+        dirtyWorktreeChangedPaths: [
+          "tests/integration/authenticated-ssr.spec.ts",
+          "tests/integration/ssr-hydration.spec.ts",
+        ],
+      },
+    });
+
+    assert.match(prompt, /Unpublished local work:/);
+    assert.match(prompt, /Do not reset, clean, stash-drop, or otherwise discard the current worktree/);
+    assert.match(prompt, /commit and push a fresh PR head/);
+    assert.match(prompt, /tests\/integration\/authenticated-ssr\.spec\.ts/);
+    assert.match(prompt, /tests\/integration\/ssr-hydration\.spec\.ts/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -444,6 +480,18 @@ test("plain review-fix runs stay on the live PR head instead of rebasing onto ma
   }), true);
   assert.equal(shouldFreshenWorktreeBeforeLaunch({ runType: "branch_upkeep" }), true);
   assert.equal(shouldFreshenWorktreeBeforeLaunch({ runType: "queue_repair" }), false);
+  assert.equal(shouldPreserveDirtyWorktreeBeforeLaunch({
+    runType: "review_fix",
+    effectiveContext: { preserveDirtyWorktree: true },
+  }), true);
+  assert.equal(shouldFreshenWorktreeBeforeLaunch({
+    runType: "branch_upkeep",
+    effectiveContext: { preserveDirtyWorktree: true },
+  }), false);
+  assert.equal(shouldPreserveDirtyWorktreeBeforeLaunch({
+    runType: "implementation",
+    effectiveContext: { preserveDirtyWorktree: true },
+  }), false);
 });
 
 test("buildRunPrompt folds implementation follow-ups into current context", () => {

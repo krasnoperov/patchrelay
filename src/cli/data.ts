@@ -209,6 +209,9 @@ function summarizeRun(run: RunRecord): string | undefined {
   }
 
   const summary = parseObjectJson(run.summaryJson);
+  if (typeof summary?.outcomeSummary === "string" && summary.outcomeSummary.trim()) {
+    return summary.outcomeSummary.trim();
+  }
   if (typeof summary?.publicationRecapSummary === "string" && summary.publicationRecapSummary.trim()) {
     return summary.publicationRecapSummary.trim();
   }

@@ -296,7 +296,7 @@ If a completed issue with a published PR receives a new accepted prompt, PatchRe
 
 Requested-changes repair owns its GitHub review context directly. Before a `review_fix` run starts, PatchRelay always refreshes the live PR state and hydrates the wake context from GitHub with the latest requested-changes review id, review body, inline comments, review commit SHA, current PR head SHA, and reviewer login when available. Existing Linear issue text or agent-session history can add context, but it cannot suppress the GitHub refresh and is not the source of truth for review feedback. If GitHub review context cannot be fetched, the launch context is explicitly marked degraded so the worker re-reads the review before changing code.
 
-Each review-fix run emits a review-round start activity that identifies the round number, reviewer, reviewed head, and captured comment count when known. The final Linear response for the run includes the review round, resulting head SHA when available, and structured `Addressed`, `Deferred`, and `Not applicable` sections.
+Each review-fix run emits a review-round start activity that identifies the round number, reviewer, and captured comment count when known. The final Linear response for the run includes the review round and concise addressed outcome without commit hashes or empty boilerplate sections.
 
 ### No-op publish detection
 
