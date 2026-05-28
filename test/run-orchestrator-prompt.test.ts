@@ -129,6 +129,8 @@ test("repair prompts publish to the existing PR branch with concise self-review 
     assert.match(prompt, /Do not run blocking wait commands such as `gh pr checks --watch`/);
     assert.match(prompt, /PatchRelay receives GitHub webhooks for check, review, and base-branch changes/);
     assert.match(prompt, /If the issue text asks you to watch CI, wait for approval, or merge after checks pass, treat that as PatchRelay service responsibility/);
+    assert.match(prompt, /Keep reactive repairs narrow: do not run TypeScript, lint, full test suites, Playwright, browser UI suites, or screenshot capture/);
+    assert.match(prompt, /If the repair is a tiny reviewer-requested edit, commit and push the fresh head without broad local verification\./);
     assert.match(prompt, /Before changing code or config, reproduce the failure on the exact failing head or identify the concrete log signature that justifies the fix\./);
     assert.match(prompt, /If the exact failing head does not reproduce locally and the logs do not support a scoped fix, prefer a rerun-only repair over speculative branch changes\./);
     assert.match(prompt, /## Final Self-Review Before Push/);
