@@ -348,8 +348,7 @@ export class PatchRelayService {
     }
     this.db.transaction(() => {
       this.db.linearInstallations.unlinkInstallationProjects(installation.id);
-      this.db.connection.prepare("DELETE FROM linear_catalog_teams WHERE installation_id = ?").run(installation.id);
-      this.db.connection.prepare("DELETE FROM linear_catalog_projects WHERE installation_id = ?").run(installation.id);
+      this.db.linearInstallations.deleteCatalogForInstallation(installation.id);
       this.db.linearInstallations.deleteLinearInstallation(installation.id);
     });
     return {

@@ -513,6 +513,47 @@ export class IssueStore {
       return undefined;
     }
   }
+
+  /**
+   * Raw rows for the CLI issue-summary read model (one row per issue joined to
+   * its session and active/latest run), optionally scoped to a project. Row
+   * shaping lives in the CLI layer; this owns only the SQL.
+   */
+  listIssueSummaryRows(project?: string): Array<Record<string, unknown>> {
+    const whereClause = project ? "WHERE i.project_id = ?" : "";
+    const values = project ? [project] : [];
+    return this.connection
+      .prepare(
+        `
+        SELECT
+          i.project_id,
+          i.linear_issue_id,
+          i.issue_key,
+          i.title,
+          i.current_linear_state,
+          i.factory_state,
+          i.updated_at,
+          s.session_state,
+          s.waiting_reason,
+          active_run.run_type AS active_run_type,
+          latest_run.run_type AS latest_run_type,
+          latest_run.status AS latest_run_status
+        FROM issues i
+        LEFT JOIN issue_sessions s
+          ON s.project_id = i.project_id
+         AND s.linear_issue_id = i.linear_issue_id
+        LEFT JOIN runs active_run ON active_run.id = i.active_run_id
+        LEFT JOIN runs latest_run ON latest_run.id = (
+          SELECT r.id FROM runs r
+          WHERE r.project_id = i.project_id AND r.linear_issue_id = i.linear_issue_id
+          ORDER BY r.id DESC LIMIT 1
+        )
+        ${whereClause}
+        ORDER BY i.updated_at DESC, i.issue_key ASC
+        `,
+      )
+      .all(...values) as Array<Record<string, unknown>>;
+  }
 }
 
 export function mapIssueRow(row: Record<string, unknown>): IssueRecord {
