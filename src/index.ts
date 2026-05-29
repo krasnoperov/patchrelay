@@ -3,7 +3,25 @@
 import { dirname } from "node:path";
 import { runCli } from "./cli/index.ts";
 
+function suppressNodeSqliteExperimentalWarning(): void {
+  const originalEmitWarning = process.emitWarning as (...args: unknown[]) => void;
+  process.emitWarning = function emitWarningWithoutNodeSqliteNoise(
+    warning: string | Error,
+    optionsOrType?: string | NodeJS.EmitWarningOptions,
+    codeOrCtor?: string | Function,
+    ctor?: Function,
+  ): void {
+    const message = warning instanceof Error ? warning.message : warning;
+    const type = typeof optionsOrType === "string" ? optionsOrType : optionsOrType?.type;
+    if (type === "ExperimentalWarning" && message.includes("SQLite is an experimental feature")) {
+      return;
+    }
+    return originalEmitWarning.call(process, warning, optionsOrType, codeOrCtor, ctor);
+  } as typeof process.emitWarning;
+}
+
 async function main(): Promise<void> {
+  suppressNodeSqliteExperimentalWarning();
   const cliExitCode = await runCli(process.argv.slice(2));
   if (cliExitCode !== -1) {
     process.exitCode = cliExitCode;

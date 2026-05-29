@@ -201,6 +201,34 @@ test("runPreflight warns when app-mode projects omit agent-session triggers", as
   }
 });
 
+test("runPreflight treats Linear auth failures as reachable connectivity", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-preflight-linear-api-"));
+  const originalFetch = globalThis.fetch;
+
+  try {
+    const config = createConfig(baseDir);
+    config.linear.graphqlUrl = "https://api.linear.app/graphql";
+    mkdirSync(config.projects[0].repoPath, { recursive: true });
+    writeWorkflowFiles(config);
+    globalThis.fetch = (async () => new Response("Unauthorized", { status: 401 })) as typeof fetch;
+
+    const report = await runPreflight(config, { connectivity: true, skipServiceCheck: true });
+
+    assert.equal(report.ok, true);
+    assert.ok(
+      report.checks.some(
+        (check) =>
+          check.scope === "linear_api" &&
+          check.status === "pass" &&
+          check.message.includes("authentication required"),
+      ),
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("runPreflight fails when the configured database path cannot host a SQLite schema", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-preflight-db-schema-"));
 

@@ -131,6 +131,13 @@ export class SqliteStore {
     promptFingerprint?: string,
   ): ReviewAttemptRecord | undefined {
     const promptFilter = promptFingerprint ? "AND prompt_fingerprint = ?" : "";
+    const bindings = [
+      repoFullName,
+      prNumber,
+      patchId,
+      mode,
+      ...(promptFingerprint ? [promptFingerprint] : []),
+    ];
     const row = this.db.prepare(`
       SELECT *
       FROM review_attempts
@@ -145,13 +152,7 @@ export class SqliteStore {
         ${promptFilter}
       ORDER BY id DESC
       LIMIT 1
-    `).get(...[
-      repoFullName,
-      prNumber,
-      patchId,
-      mode,
-      ...(promptFingerprint ? [promptFingerprint] : []),
-    ]);
+    `).get(...bindings);
     return row ? mapAttempt(row) : undefined;
   }
 
@@ -169,6 +170,14 @@ export class SqliteStore {
     promptFingerprint?: string,
   ): ReviewAttemptRecord | undefined {
     const promptFilter = promptFingerprint ? "AND prompt_fingerprint = ?" : "";
+    const bindings = [
+      repoFullName,
+      prNumber,
+      patchId,
+      integrationTreeId,
+      mode,
+      ...(promptFingerprint ? [promptFingerprint] : []),
+    ];
     const row = this.db.prepare(`
       SELECT *
       FROM review_attempts
@@ -184,14 +193,7 @@ export class SqliteStore {
         ${promptFilter}
       ORDER BY id DESC
       LIMIT 1
-    `).get(...[
-      repoFullName,
-      prNumber,
-      patchId,
-      integrationTreeId,
-      mode,
-      ...(promptFingerprint ? [promptFingerprint] : []),
-    ]);
+    `).get(...bindings);
     return row ? mapAttempt(row) : undefined;
   }
 

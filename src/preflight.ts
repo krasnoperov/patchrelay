@@ -156,6 +156,9 @@ async function checkLinearApi(graphqlUrl: string): Promise<PreflightCheck> {
     if (response.ok) {
       return pass("linear_api", `Linear GraphQL API is reachable at ${graphqlUrl}`);
     }
+    if (response.status === 401 || response.status === 403) {
+      return pass("linear_api", `Linear GraphQL API is reachable at ${graphqlUrl} (authentication required)`);
+    }
     return warn("linear_api", `Linear GraphQL API returned ${response.status} — may be unreachable or rate-limited`);
   } catch (error) {
     return fail("linear_api", `Linear GraphQL API is unreachable at ${graphqlUrl}: ${formatError(error)}`);
