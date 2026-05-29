@@ -90,7 +90,7 @@ test("completeLinearOAuth rejects expired OAuth states and marks them failed", a
       redirectUri: config.linear.oauth!.redirectUri,
       actor: config.linear.oauth!.actor,
     });
-    db.connection
+    db.unsafeRawConnectionForTests()
       .prepare("UPDATE oauth_states SET created_at = ? WHERE id = ?")
       .run(new Date(Date.now() - 16 * 60 * 1000).toISOString(), oauthState.id);
 

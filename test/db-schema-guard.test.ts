@@ -14,7 +14,7 @@ test("PatchRelayDatabase reports wrong or uninitialized database paths clearly",
       /PatchRelay database is uninitialized or points at the wrong path: .*empty\.sqlite.*issues/,
     );
   } finally {
-    db.connection.close();
+    db.close();
     rmSync(baseDir, { recursive: true, force: true });
   }
 });

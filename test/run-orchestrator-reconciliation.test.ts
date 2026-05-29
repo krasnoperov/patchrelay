@@ -482,7 +482,7 @@ test("reconcileActiveRuns reattaches a detached running run before continuing re
       runType: "implementation",
     });
     db.runs.updateRunThread(run.id, { threadId: "thread-detached", turnId: "turn-detached" });
-    db.connection.prepare("UPDATE issue_sessions SET active_run_id = NULL, session_state = ? WHERE project_id = ? AND linear_issue_id = ?")
+    db.unsafeRawConnectionForTests().prepare("UPDATE issue_sessions SET active_run_id = NULL, session_state = ? WHERE project_id = ? AND linear_issue_id = ?")
       .run("idle", issue.projectId, issue.linearIssueId);
 
     await orchestrator.reconcileActiveRuns();
@@ -1385,7 +1385,7 @@ test("run defers recovered zombie retries until the backoff window expires", asy
       zombieRecoveryAttempts: 1,
       lastZombieRecoveryAt: new Date().toISOString(),
     });
-    db.connection.prepare(`
+    db.unsafeRawConnectionForTests().prepare(`
       UPDATE issue_sessions
       SET last_run_type = 'implementation'
       WHERE project_id = ? AND linear_issue_id = ?

@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { runCli } from "../src/cli/index.ts";
 import { PatchRelayDatabase } from "../src/db.ts";
+import { backdateAllRows } from "./helpers/db.ts";
 import type { AppConfig } from "../src/types.ts";
 
 function createConfig(baseDir: string, port: number): AppConfig {
@@ -166,8 +167,7 @@ test("cli cluster reports unmanaged blockers and lost dispatch", async () => {
       ],
     });
     const staleTime = new Date(Date.now() - 300_000).toISOString();
-    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
-    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+    backdateAllRows(db, staleTime);
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
@@ -213,8 +213,7 @@ test("cli cluster reports a same-head requested-changes stall", async () => {
       prCheckStatus: "success",
     });
     const staleTime = new Date(Date.now() - 300_000).toISOString();
-    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
-    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+    backdateAllRows(db, staleTime);
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
@@ -312,8 +311,7 @@ test("cli cluster treats active PR repair runs as PatchRelay-owned", async () =>
       factoryState: "repairing_ci",
     });
     const staleTime = new Date(Date.now() - 300_000).toISOString();
-    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
-    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+    backdateAllRows(db, staleTime);
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
@@ -394,8 +392,7 @@ test("cli cluster ignores reviewer requests when the same head is still blocked"
       prCheckStatus: "success",
     });
     const staleTime = new Date(Date.now() - 300_000).toISOString();
-    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
-    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+    backdateAllRows(db, staleTime);
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
@@ -477,8 +474,7 @@ test("cli cluster reports dirty requested-changes PRs as missing branch upkeep, 
       prCheckStatus: "success",
     });
     const staleTime = new Date(Date.now() - 300_000).toISOString();
-    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
-    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+    backdateAllRows(db, staleTime);
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
@@ -560,8 +556,7 @@ test("cli cluster treats a live review-quill attempt on the current head as an o
       prCheckStatus: "success",
     });
     const staleTime = new Date(Date.now() - 300_000).toISOString();
-    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
-    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+    backdateAllRows(db, staleTime);
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
@@ -657,8 +652,7 @@ test("cli cluster treats review-quill repo backlog as an owner for review-requir
       prReviewState: "review_required",
     });
     const staleTime = new Date(Date.now() - 300_000).toISOString();
-    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
-    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+    backdateAllRows(db, staleTime);
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
@@ -762,8 +756,7 @@ test("cli cluster treats review-quill repo backlog as an owner for newer request
       prReviewState: "changes_requested",
     });
     const staleTime = new Date(Date.now() - 300_000).toISOString();
-    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
-    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+    backdateAllRows(db, staleTime);
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
@@ -951,8 +944,7 @@ test("cli cluster treats closed PRs on terminal issues as historical, not active
       prCheckStatus: "success",
     });
     const staleTime = new Date(Date.now() - 300_000).toISOString();
-    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
-    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+    backdateAllRows(db, staleTime);
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
@@ -998,8 +990,7 @@ test("cli cluster treats in-progress CI as externally owned instead of orphaned"
       prReviewState: "commented",
     });
     const staleTime = new Date(Date.now() - 300_000).toISOString();
-    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
-    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+    backdateAllRows(db, staleTime);
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
@@ -1078,8 +1069,7 @@ test("cli cluster treats undelegated requested-changes PRs as paused instead of 
       prCheckStatus: "success",
     });
     const staleTime = new Date(Date.now() - 300_000).toISOString();
-    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
-    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+    backdateAllRows(db, staleTime);
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
@@ -1164,8 +1154,7 @@ test("cli cluster treats undelegated failing CI PRs as paused instead of missing
       prCheckStatus: "failed",
     });
     const staleTime = new Date(Date.now() - 300_000).toISOString();
-    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
-    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+    backdateAllRows(db, staleTime);
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
@@ -1241,8 +1230,7 @@ test("cli cluster treats undelegated paused no-pr work as paused instead of stuc
       delegatedToPatchRelay: false,
     });
     const staleTime = new Date(Date.now() - 300_000).toISOString();
-    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
-    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+    backdateAllRows(db, staleTime);
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
@@ -1301,8 +1289,7 @@ test("cli cluster ignores canceled blockers", async () => {
       ]),
     });
     const staleTime = new Date(Date.now() - 300_000).toISOString();
-    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
-    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+    backdateAllRows(db, staleTime);
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
@@ -1383,8 +1370,7 @@ test("cli cluster warns when active repo work overlaps on the same files", async
     });
 
     const staleTime = new Date(Date.now() - 300_000).toISOString();
-    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
-    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+    backdateAllRows(db, staleTime);
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();

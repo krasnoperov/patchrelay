@@ -128,7 +128,7 @@ async function handleRepoLink(params: RepoCommandParams): Promise<number> {
       db.runMigrations();
       db.linearInstallations.setProjectInstallation(githubRepo, installation.id);
     } finally {
-      db.connection.close();
+      db.close();
     }
 
     const serviceState = await tryManageService(params.runCommand, restartServiceCommands());
@@ -180,7 +180,7 @@ async function handleRepoUnlink(params: RepoCommandParams): Promise<number> {
     db.runMigrations();
     db.linearInstallations.unlinkProjectInstallation(githubRepo);
   } finally {
-    db.connection.close();
+    db.close();
   }
 
   const serviceState = await tryManageService(params.runCommand, restartServiceCommands());
