@@ -428,4 +428,85 @@ export class IssueSessionStore {
     const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
     this.releaseIssueSessionLease(projectId, linearIssueId, lease?.leaseId);
   }
+
+  /**
+   * Raw rows for the tracked-issue read model: one row per issue session joined
+   * to its issue, active/latest run, pending session-event count, and blocker
+   * rollup. Row shaping into the read model lives in the query layer; this owns
+   * only the SQL so schema knowledge stays in the persistence layer.
+   */
+  listTrackedIssueRows(): Array<Record<string, unknown>> {
+    return this.connection
+      .prepare(
+        `SELECT
+          s.project_id, s.linear_issue_id, s.issue_key, i.title,
+          i.current_linear_state, i.factory_state, i.delegated_to_patchrelay, s.session_state, s.waiting_reason, s.summary_text, s.display_updated_at,
+          i.pending_run_type,
+          i.orchestration_settle_until,
+          i.pr_number, i.pr_state, i.pr_head_sha, i.pr_review_state, i.pr_check_status, i.last_blocking_review_head_sha,
+          i.last_github_ci_snapshot_json,
+          i.last_github_failure_source,
+          i.last_github_failure_head_sha,
+          i.last_github_failure_check_name,
+          i.last_github_failure_context_json,
+          active_run.run_type AS active_run_type,
+          active_run.completion_check_thread_id AS active_completion_check_thread_id,
+          active_run.completion_check_outcome AS active_completion_check_outcome,
+          latest_run.run_type AS latest_run_type,
+          latest_run.status AS latest_run_status,
+          latest_run.summary_json AS latest_run_summary_json,
+          latest_run.report_json AS latest_run_report_json,
+          latest_run.completion_check_thread_id AS latest_run_completion_check_thread_id,
+          latest_run.completion_check_outcome AS latest_run_completion_check_outcome,
+          latest_run.completion_check_summary AS latest_run_completion_check_summary,
+          latest_run.completion_check_question AS latest_run_completion_check_question,
+          latest_run.completion_check_why AS latest_run_completion_check_why,
+          latest_run.completion_check_recommended_reply AS latest_run_completion_check_recommended_reply,
+          (
+            SELECT COUNT(*)
+            FROM issue_session_events e
+            WHERE e.project_id = s.project_id
+              AND e.linear_issue_id = s.linear_issue_id
+              AND e.processed_at IS NULL
+          ) AS pending_session_event_count,
+          (
+            SELECT COUNT(*)
+            FROM issue_dependencies d
+            LEFT JOIN issues blockers
+              ON blockers.project_id = d.project_id
+             AND blockers.linear_issue_id = d.blocker_linear_issue_id
+            WHERE d.project_id = s.project_id
+              AND d.linear_issue_id = s.linear_issue_id
+              AND (
+                COALESCE(blockers.current_linear_state_type, d.blocker_current_linear_state_type, '') != 'completed'
+                AND LOWER(TRIM(COALESCE(blockers.current_linear_state, d.blocker_current_linear_state, ''))) != 'done'
+              )
+          ) AS blocked_by_count,
+          (
+            SELECT json_group_array(COALESCE(blockers.issue_key, d.blocker_issue_key, d.blocker_linear_issue_id))
+            FROM issue_dependencies d
+            LEFT JOIN issues blockers
+              ON blockers.project_id = d.project_id
+             AND blockers.linear_issue_id = d.blocker_linear_issue_id
+            WHERE d.project_id = s.project_id
+              AND d.linear_issue_id = s.linear_issue_id
+              AND (
+                COALESCE(blockers.current_linear_state_type, d.blocker_current_linear_state_type, '') != 'completed'
+                AND LOWER(TRIM(COALESCE(blockers.current_linear_state, d.blocker_current_linear_state, ''))) != 'done'
+              )
+          ) AS blocked_by_keys_json
+        FROM issue_sessions s
+        LEFT JOIN issues i
+          ON i.project_id = s.project_id
+         AND i.linear_issue_id = s.linear_issue_id
+        LEFT JOIN runs active_run ON active_run.id = COALESCE(s.active_run_id, i.active_run_id)
+        LEFT JOIN runs latest_run ON latest_run.id = (
+          SELECT r.id FROM runs r
+          WHERE r.project_id = s.project_id AND r.linear_issue_id = s.linear_issue_id
+          ORDER BY r.id DESC LIMIT 1
+        )
+        ORDER BY s.display_updated_at DESC, s.issue_key ASC`,
+      )
+      .all() as Array<Record<string, unknown>>;
+  }
 }

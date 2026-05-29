@@ -290,6 +290,11 @@ export class LinearInstallationStore {
     this.connection.prepare("DELETE FROM linear_installations WHERE id = ?").run(installationId);
   }
 
+  deleteCatalogForInstallation(installationId: number): void {
+    this.connection.prepare("DELETE FROM linear_catalog_teams WHERE installation_id = ?").run(installationId);
+    this.connection.prepare("DELETE FROM linear_catalog_projects WHERE installation_id = ?").run(installationId);
+  }
+
   getLinearInstallationForProject(projectId: string): LinearInstallationRecord | undefined {
     const row = this.connection
       .prepare(

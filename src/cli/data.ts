@@ -587,46 +587,7 @@ export class CliDataAccess extends CliOperatorApiClient {
   }
 
   list(options?: { active?: boolean; failed?: boolean; project?: string }): ListResultItem[] {
-    const conditions: string[] = [];
-    const values: Array<string> = [];
-
-    if (options?.project) {
-      conditions.push("i.project_id = ?");
-      values.push(options.project);
-    }
-
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-    const rows = this.db.connection
-      .prepare(
-        `
-        SELECT
-          i.project_id,
-          i.linear_issue_id,
-          i.issue_key,
-          i.title,
-          i.current_linear_state,
-          i.factory_state,
-          i.updated_at,
-          s.session_state,
-          s.waiting_reason,
-          active_run.run_type AS active_run_type,
-          latest_run.run_type AS latest_run_type,
-          latest_run.status AS latest_run_status
-        FROM issues i
-        LEFT JOIN issue_sessions s
-          ON s.project_id = i.project_id
-         AND s.linear_issue_id = i.linear_issue_id
-        LEFT JOIN runs active_run ON active_run.id = i.active_run_id
-        LEFT JOIN runs latest_run ON latest_run.id = (
-          SELECT r.id FROM runs r
-          WHERE r.project_id = i.project_id AND r.linear_issue_id = i.linear_issue_id
-          ORDER BY r.id DESC LIMIT 1
-        )
-        ${whereClause}
-        ORDER BY i.updated_at DESC, i.issue_key ASC
-        `,
-      )
-      .all(...values) as Array<Record<string, unknown>>;
+    const rows = this.db.issues.listIssueSummaryRows(options?.project);
 
     const items: ListResultItem[] = rows.map((row) => {
       const detachedActiveRun = row.active_run_type === null
