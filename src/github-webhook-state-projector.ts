@@ -1,6 +1,7 @@
 import type { Logger } from "pino";
 import type { IssueRecord } from "./db-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
+import { CLEARED_FAILURE_PROVENANCE } from "./failure-provenance.ts";
 import { createGitHubCiSnapshotResolver, createGitHubFailureContextResolver, type GitHubCiSnapshotResolver, type GitHubFailureContextResolver } from "./github-failure-context.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
 import { buildClosedPrCleanupFields } from "./pr-state.ts";
@@ -406,17 +407,7 @@ async function updateGitHubFailureProvenance(
     deps.db.issues.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
-      lastGitHubFailureSource: null,
-      lastGitHubFailureHeadSha: null,
-      lastGitHubFailureSignature: null,
-      lastGitHubFailureCheckName: null,
-      lastGitHubFailureCheckUrl: null,
-      lastGitHubFailureContextJson: null,
-      lastGitHubFailureAt: null,
-      lastQueueIncidentJson: null,
-      lastAttemptedFailureHeadSha: null,
-      lastAttemptedFailureSignature: null,
-      lastAttemptedFailureAt: null,
+      ...CLEARED_FAILURE_PROVENANCE,
     });
   }
 }

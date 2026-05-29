@@ -83,3 +83,47 @@ function parseObject(raw: string | undefined): Record<string, unknown> | undefin
     return undefined;
   }
 }
+
+export type ReactiveWakeEventType =
+  | "delegated"
+  | "review_changes_requested"
+  | "settled_red_ci"
+  | "merge_steward_incident";
+
+/**
+ * Map a run type to the issue-session event type that wakes it. Shared by every
+ * reconciler that records a reactive wake (idle reconciliation, startup
+ * recovery, queue health) so the mapping stays in one place.
+ */
+export function reactiveWakeEventType(runType: RunType): ReactiveWakeEventType {
+  switch (runType) {
+    case "queue_repair":
+      return "merge_steward_incident";
+    case "ci_repair":
+      return "settled_red_ci";
+    case "review_fix":
+    case "branch_upkeep":
+      return "review_changes_requested";
+    default:
+      return "delegated";
+  }
+}
+
+/**
+ * Build the dedupe key for a CI/queue repair wake. The discriminator prefers the
+ * failure signature, then the PR head, then the recorded failure head, falling
+ * back to "unknown" — the same precedence every reconciler used independently
+ * before this was consolidated (a prior divergence here swallowed fresh repair
+ * incidents after the main branch advanced).
+ */
+export function buildRepairWakeDedupeKey(params: {
+  scope: string;
+  runType: "queue_repair" | "ci_repair";
+  linearIssueId: string;
+  signature?: string | undefined;
+  prHeadSha?: string | undefined;
+  failureHeadSha?: string | undefined;
+}): string {
+  const discriminator = params.signature ?? params.prHeadSha ?? params.failureHeadSha ?? "unknown";
+  return `${params.scope}:${params.runType}:${params.linearIssueId}:${discriminator}`;
+}

@@ -4,6 +4,7 @@ import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
+import { resolveFailureFactoryState } from "./reactive-pr-state.ts";
 import { buildHookEnv, runProjectHook } from "./hook-runner.ts";
 import { buildRunFailureActivity } from "./linear-session-reporting.ts";
 import { loadPatchRelayRepoPrompting } from "./patchrelay-customization.ts";
@@ -236,7 +237,6 @@ export class RunLauncher {
       syncSession: (issue: IssueRecord, options?: { activeRunType?: RunType }) => Promise<void> | void;
     };
     releaseLease: (projectId: string, issueId: string) => void;
-    isRequestedChangesRunType: (runType: RunType) => boolean;
     lowerCaseFirst: (value: string) => string;
   }): Promise<{ threadId: string; turnId: string; parentThreadId?: string }> {
     let threadId: string;
@@ -328,7 +328,7 @@ export class RunLauncher {
       const message = error instanceof Error ? error.message : String(error);
       const lostLease = error instanceof Error && error.name === "IssueSessionLeaseLostError";
       if (!lostLease) {
-        const nextState: FactoryState = params.isRequestedChangesRunType(params.runType) ? "escalated" : "failed";
+        const nextState: FactoryState = resolveFailureFactoryState(params.runType);
         this.db.issueSessions.finishRunWithLease({ projectId: params.project.id, linearIssueId: params.issue.linearIssueId, leaseId: params.leaseId }, params.run.id, {
           status: "failed",
           failureReason: message,

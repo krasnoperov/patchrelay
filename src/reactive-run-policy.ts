@@ -2,6 +2,7 @@ import type { Logger } from "pino";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { RunType } from "./factory-state.ts";
+import { CLEARED_FAILURE_PROVENANCE } from "./failure-provenance.ts";
 import type { WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import {
   buildReviewFixBranchUpkeepContext,
@@ -194,17 +195,7 @@ export class ReactiveRunPolicy {
           ...((headAdvanced || reviewFixHeadAdvanced)
             ? {
                 prCheckStatus: "pending",
-                lastGitHubFailureSource: null,
-                lastGitHubFailureHeadSha: null,
-                lastGitHubFailureSignature: null,
-                lastGitHubFailureCheckName: null,
-                lastGitHubFailureCheckUrl: null,
-                lastGitHubFailureContextJson: null,
-                lastGitHubFailureAt: null,
-                lastQueueIncidentJson: null,
-                lastAttemptedFailureHeadSha: null,
-                lastAttemptedFailureSignature: null,
-                lastAttemptedFailureAt: null,
+                ...CLEARED_FAILURE_PROVENANCE,
                 lastGitHubCiSnapshotHeadSha: snapshot.headSha ?? null,
                 lastGitHubCiSnapshotGateCheckName: snapshot.gateCheckName,
                 lastGitHubCiSnapshotGateCheckStatus: "pending",

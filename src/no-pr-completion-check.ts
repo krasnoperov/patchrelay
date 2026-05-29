@@ -3,6 +3,7 @@ import type { CompletionCheckExecution } from "./completion-check.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { FactoryState } from "./factory-state.ts";
+import { CLEARED_FAILURE_PROVENANCE } from "./failure-provenance.ts";
 import type { WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import { buildCompletionCheckActivity } from "./linear-session-reporting.ts";
 import { wakeOrchestrationParentsForChildEvent } from "./orchestration-parent-wake.ts";
@@ -251,17 +252,7 @@ export async function handleNoPrCompletionCheck(params: {
         pendingRunType: null,
         pendingRunContextJson: null,
         orchestrationSettleUntil: null,
-        lastGitHubFailureSource: null,
-        lastGitHubFailureHeadSha: null,
-        lastGitHubFailureSignature: null,
-        lastGitHubFailureCheckName: null,
-        lastGitHubFailureCheckUrl: null,
-        lastGitHubFailureContextJson: null,
-        lastGitHubFailureAt: null,
-        lastQueueIncidentJson: null,
-        lastAttemptedFailureHeadSha: null,
-        lastAttemptedFailureSignature: null,
-        lastAttemptedFailureAt: null,
+        ...CLEARED_FAILURE_PROVENANCE,
       });
       return true;
     });

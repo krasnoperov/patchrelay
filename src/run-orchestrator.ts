@@ -4,6 +4,7 @@ import type { CodexAppServerClient, CodexNotification } from "./codex-app-server
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
+import { isRequestedChangesRunType } from "./reactive-pr-state.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { summarizeCurrentThread } from "./run-reporting.ts";
 import {
@@ -40,10 +41,6 @@ import { CodexThreadMaterializingError, isThreadMaterializingError } from "./cod
 
 function lowerCaseFirst(value: string): string {
   return value ? `${value.slice(0, 1).toLowerCase()}${value.slice(1)}` : value;
-}
-
-function isRequestedChangesRunType(runType: RunType): boolean {
-  return runType === "review_fix" || runType === "branch_upkeep";
 }
 
 function shouldDelayZombieRecoveryLaunch(
@@ -629,7 +626,6 @@ export class RunOrchestrator {
       assertLaunchLease: (targetRun, phase) => this.assertLaunchLease(targetRun, phase),
       linearSync: this.linearSync,
       releaseLease: (projectId, issueId) => this.releaseIssueSessionLease(projectId, issueId),
-      isRequestedChangesRunType,
       lowerCaseFirst,
     });
 

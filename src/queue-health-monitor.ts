@@ -5,6 +5,7 @@ import type { FactoryState, RunType } from "./factory-state.ts";
 import type { AppConfig } from "./types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
+import { buildRepairWakeDedupeKey } from "./reactive-wake-keys.ts";
 import { execCommand } from "./utils.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
@@ -204,7 +205,12 @@ export class QueueHealthMonitor {
       this.advancer.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
         eventType: "merge_steward_incident",
         eventJson: JSON.stringify(pendingRunContext),
-        dedupeKey: `queue_health:queue_repair:${issue.linearIssueId}:${signature}`,
+        dedupeKey: buildRepairWakeDedupeKey({
+          scope: "queue_health",
+          runType: "queue_repair",
+          linearIssueId: issue.linearIssueId,
+          signature,
+        }),
       });
       this.advancer.advanceIdleIssue(issue, "repairing_queue");
       this.logger.info(
