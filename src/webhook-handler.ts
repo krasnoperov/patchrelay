@@ -20,6 +20,7 @@ import { extractLatestAssistantSummary } from "./issue-session-events.ts";
 import { WakeDispatcher } from "./wake-dispatcher.ts";
 import { CodexFollowupIntentClassifier, type FollowupIntentClassifier } from "./followup-intent.ts";
 import { AgentInputService } from "./agent-input-service.ts";
+import { noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
 
 export interface IssueQueueItem {
   projectId: string;
@@ -48,6 +49,7 @@ export class WebhookHandler {
     private readonly feed?: OperatorEventFeed,
     followupClassifier?: FollowupIntentClassifier,
     agentInput?: AgentInputService,
+    private readonly telemetry: PatchRelayTelemetry = noopTelemetry,
   ) {
     // Webhook handlers never release leases — the orchestrator's
     // run finalizer owns that. So when a test passes a bare
@@ -55,7 +57,7 @@ export class WebhookHandler {
     // releaseLease (any production caller passes a real dispatcher).
     this.wakeDispatcher = wakeDispatcherOrEnqueueIssue instanceof WakeDispatcher
       ? wakeDispatcherOrEnqueueIssue
-      : new WakeDispatcher(db, wakeDispatcherOrEnqueueIssue, () => undefined, logger, feed);
+      : new WakeDispatcher(db, wakeDispatcherOrEnqueueIssue, () => undefined, logger, feed, telemetry);
 
     this.installationHandler = new InstallationWebhookHandler(config, { linearInstallations: db.linearInstallations }, logger, feed);
     this.issueRemovalHandler = new IssueRemovalHandler(db, feed);
@@ -76,6 +78,7 @@ export class WebhookHandler {
       db,
       this.wakeDispatcher,
       (projectId, issueId) => this.peekPendingSessionWakeRunType(projectId, issueId),
+      telemetry,
     );
   }
 

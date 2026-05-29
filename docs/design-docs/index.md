@@ -11,6 +11,10 @@ Read order:
 5. [codex-session-source-forensics.md](./codex-session-source-forensics.md)
 6. [../architecture.md](../architecture.md)
 
+Known coupling (observation, no fix proposed):
+
+- [issue-session-projector-coupling.md](./issue-session-projector-coupling.md)
+
 Use this directory for:
 
 - architecture principles

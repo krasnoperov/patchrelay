@@ -21,12 +21,18 @@ import { WebhookEventStore } from "./db/webhook-event-store.ts";
 import { runPatchRelayMigrations } from "./db/migrations.ts";
 import { assertPatchRelaySchemaReady } from "./db/schema-guard.ts";
 import { SqliteConnection, type DatabaseConnection } from "./db/shared.ts";
+import { ImmediateIssueSessionProjectionInvalidator } from "./issue-session-projection-invalidator.ts";
 import { syncIssueSessionFromIssue } from "./issue-session-projector.ts";
+import { noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
 import { TrackedIssueQuery } from "./tracked-issue-query.ts";
 import { WorkflowWakeResolver } from "./workflow-wake-resolver.ts";
 
 export class PatchRelayDatabase {
   private readonly connection: DatabaseConnection;
+  private telemetry: PatchRelayTelemetry = noopTelemetry;
+  private readonly telemetryProxy: PatchRelayTelemetry = {
+    emit: (event) => this.telemetry.emit(event),
+  };
   readonly linearInstallations: LinearInstallationStore;
   readonly operatorFeed: OperatorFeedStore;
   readonly repositories: RepositoryLinkStore;
@@ -37,8 +43,11 @@ export class PatchRelayDatabase {
   readonly runs: RunStore;
   readonly trackedIssues: TrackedIssueQuery;
 
-  constructor(databasePath: string, wal: boolean) {
+  constructor(databasePath: string, wal: boolean, telemetry?: PatchRelayTelemetry) {
     this.databasePath = databasePath;
+    if (telemetry) {
+      this.telemetry = telemetry;
+    }
     this.connection = new SqliteConnection(databasePath);
     this.connection.pragma("foreign_keys = ON");
     if (wal) {
@@ -48,15 +57,12 @@ export class PatchRelayDatabase {
     this.operatorFeed = new OperatorFeedStore(this.connection);
     this.repositories = new RepositoryLinkStore(this.connection);
     this.webhookEvents = new WebhookEventStore(this.connection);
-    this.issues = new IssueStore(
-      this.connection,
-      (issue) => syncIssueSessionFromIssue({ connection: this.connection, issues: this.issues, issueSessions: this.issueSessions, runs: this.runs, issue }),
-    );
-    this.runs = new RunStore(
-      this.connection,
-      mapRunRow,
-      this.issues,
-      (issue, options) => syncIssueSessionFromIssue({
+    const issueSessionProjection = new ImmediateIssueSessionProjectionInvalidator({
+      getIssue: (projectId, linearIssueId) => this.issues.getIssue(projectId, linearIssueId),
+      listDependents: (projectId, blockerLinearIssueId) => this.issues.listDependents(projectId, blockerLinearIssueId),
+      countUnresolvedBlockers: (projectId, linearIssueId) => this.issues.countUnresolvedBlockers(projectId, linearIssueId),
+      getIssueSessionWaitingReason: (projectId, linearIssueId) => this.issueSessions.getIssueSession(projectId, linearIssueId)?.waitingReason,
+      projectIssue: (issue, options) => syncIssueSessionFromIssue({
         connection: this.connection,
         issues: this.issues,
         issueSessions: this.issueSessions,
@@ -64,6 +70,15 @@ export class PatchRelayDatabase {
         issue,
         ...(options ? { options } : {}),
       }),
+      telemetry: this.telemetryProxy,
+    });
+    this.issues = new IssueStore(this.connection, issueSessionProjection);
+    this.runs = new RunStore(
+      this.connection,
+      mapRunRow,
+      this.issues,
+      issueSessionProjection,
+      this.telemetryProxy,
     );
     this.issueSessions = new IssueSessionStore(
       this.connection,
@@ -71,12 +86,18 @@ export class PatchRelayDatabase {
       mapIssueSessionEventRow,
       this.issues,
       this.runs,
+      issueSessionProjection,
+      this.telemetryProxy,
     );
     this.workflowWakes = new WorkflowWakeResolver(this.issues, this.issueSessions);
     this.trackedIssues = new TrackedIssueQuery(this.issues, this.issueSessions, this.workflowWakes, this.runs);
   }
 
   private readonly databasePath: string;
+
+  setTelemetry(telemetry: PatchRelayTelemetry): void {
+    this.telemetry = telemetry;
+  }
 
   runMigrations(): void {
     runPatchRelayMigrations(this.connection);

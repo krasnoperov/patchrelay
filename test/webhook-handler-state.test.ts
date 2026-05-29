@@ -7,6 +7,7 @@ import pino from "pino";
 import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { WebhookHandler } from "../src/webhook-handler.ts";
+import { TrackedIssueListQuery } from "../src/tracked-issue-list-query.ts";
 import type { AppConfig, LinearWebhookPayload, LinearIssueSnapshot, LinearClient } from "../src/types.ts";
 import type { FollowupIntent, FollowupIntentClassifier } from "../src/followup-intent.ts";
 
@@ -914,6 +915,7 @@ test("issue becoming blocked during implementation releases the active run and p
       }),
     };
 
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
     const handler = new WebhookHandler(
       config,
       db,
@@ -923,7 +925,9 @@ test("issue becoming blocked during implementation releases the active run and p
           steerInputs.push(input);
         },
       } as never,
-      () => undefined,
+      (projectId, issueId) => {
+        enqueued.push({ projectId, issueId });
+      },
       pino({ enabled: false }),
     );
 
@@ -952,10 +956,16 @@ test("issue becoming blocked during implementation releases the active run and p
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-blocked-active");
     const finishedRun = db.runs.getRunById(run.id);
+    const session = db.issueSessions.getIssueSession("krasnoperov/mafia", "issue-maf-blocked-active");
+    const tracked = new TrackedIssueListQuery(db).listTrackedIssues().find((entry) => entry.issueKey === "MAF-42");
     assert.equal(issue?.factoryState, "delegated");
     assert.equal(issue?.activeRunId, undefined);
     assert.equal(issue?.delegatedToPatchRelay, true);
     assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-blocked-active"), 1);
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-blocked-active"), undefined);
+    assert.deepEqual(enqueued, []);
+    assert.equal(session?.waitingReason, "Blocked by MAF-10");
+    assert.equal(tracked?.waitingReason, "Blocked by MAF-10");
     assert.equal(finishedRun?.status, "released");
     assert.equal(finishedRun?.failureReason, "Issue became blocked during implementation");
     assert.equal(steerInputs.length, 1);
@@ -1028,6 +1038,7 @@ test("completed blocker added during implementation does not release the active 
       }),
     };
 
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
     const handler = new WebhookHandler(
       config,
       db,
@@ -1037,7 +1048,9 @@ test("completed blocker added during implementation does not release the active 
           steerInputs.push(input);
         },
       } as never,
-      () => undefined,
+      (projectId, issueId) => {
+        enqueued.push({ projectId, issueId });
+      },
       pino({ enabled: false }),
     );
 
@@ -1066,10 +1079,16 @@ test("completed blocker added during implementation does not release the active 
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-completed-blocked-active");
     const activeRun = db.runs.getRunById(run.id);
+    const tracked = new TrackedIssueListQuery(db).listTrackedIssues().find((entry) => entry.issueKey === "MAF-43");
     assert.equal(issue?.factoryState, "implementing");
     assert.equal(issue?.activeRunId, run.id);
     assert.equal(db.listIssueDependencies("krasnoperov/mafia", "issue-maf-completed-blocked-active").length, 1);
     assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-completed-blocked-active"), 0);
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-completed-blocked-active"), undefined);
+    assert.deepEqual(enqueued, []);
+    assert.equal(tracked?.blockedByCount, 0);
+    assert.deepEqual(tracked?.blockedByKeys, []);
+    assert.equal(tracked?.waitingReason, "PatchRelay is actively working");
     assert.equal(activeRun?.status, "running");
     assert.deepEqual(steerInputs, []);
   } finally {

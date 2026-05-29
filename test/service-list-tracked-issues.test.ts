@@ -508,6 +508,71 @@ test("service start recovers delegated blocked issues from paused local-work sta
   }
 });
 
+test("listTrackedIssues clears stale blocker text after blocker snapshot resolves", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-list-unblocked-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const service = new PatchRelayService(
+      config,
+      db,
+      {
+        on: () => undefined,
+        readThread: async () => ({ id: "thread-1", turns: [] }),
+      } as never,
+      undefined,
+      pino({ enabled: false }),
+    );
+
+    db.replaceIssueDependencies({
+      projectId: "usertold",
+      linearIssueId: "issue-3",
+      blockers: [{
+        blockerLinearIssueId: "issue-blocker",
+        blockerIssueKey: "USE-1",
+        blockerTitle: "Blocking issue",
+        blockerCurrentLinearState: "In Progress",
+        blockerCurrentLinearStateType: "started",
+      }],
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-3",
+      issueKey: "USE-3",
+      title: "Blocked delegated issue",
+      delegatedToPatchRelay: true,
+      factoryState: "delegated",
+      pendingRunType: "implementation",
+    });
+
+    const blocked = service.listTrackedIssues().find((entry) => entry.issueKey === "USE-3");
+    assert.ok(blocked);
+    assert.equal(blocked.blockedByCount, 1);
+    assert.deepEqual(blocked.blockedByKeys, ["USE-1"]);
+    assert.equal(blocked.waitingReason, "Blocked by USE-1");
+
+    db.issues.updateDependencyBlockerSnapshot({
+      projectId: "usertold",
+      blockerLinearIssueId: "issue-blocker",
+      blockerCurrentLinearState: "Done",
+      blockerCurrentLinearStateType: "completed",
+    });
+
+    const unblockedSession = db.issueSessions.getIssueSession("usertold", "issue-3");
+    const unblocked = service.listTrackedIssues().find((entry) => entry.issueKey === "USE-3");
+    assert.ok(unblocked);
+    assert.equal(db.countUnresolvedBlockers("usertold", "issue-3"), 0);
+    assert.equal(unblocked.blockedByCount, 0);
+    assert.deepEqual(unblocked.blockedByKeys, []);
+    assert.equal(unblocked.waitingReason, "Ready to run implementation");
+    assert.equal(unblocked.statusNote, "Ready to run implementation");
+    assert.equal(unblockedSession?.waitingReason, "Ready to run implementation");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("listTrackedIssues keeps undelegated local work paused instead of ready or active", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-list-paused-local-"));
   try {

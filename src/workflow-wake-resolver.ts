@@ -101,11 +101,13 @@ export class WorkflowWakeResolver {
   ) {}
 
   peekIssueWake(projectId: string, linearIssueId: string): WorkflowWake | undefined {
+    const issue = this.issues.getIssue(projectId, linearIssueId);
+    if (!issue) return undefined;
+    if (this.issues.countUnresolvedBlockers(projectId, linearIssueId) > 0) return undefined;
+
     const explicitWake = this.issueSessions.peekIssueSessionWake(projectId, linearIssueId);
     if (explicitWake) return explicitWake;
 
-    const issue = this.issues.getIssue(projectId, linearIssueId);
-    if (!issue) return undefined;
     const implicitWake = deriveImplicitReactiveWake(issue);
     if (!implicitWake) return undefined;
     return {

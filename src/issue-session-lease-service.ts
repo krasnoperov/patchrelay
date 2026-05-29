@@ -4,6 +4,7 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { CodexThreadSummary } from "./types.ts";
 import { getThreadTurns } from "./codex-thread-utils.ts";
+import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
 
 const ISSUE_SESSION_LEASE_MS = 10 * 60_000;
 
@@ -31,6 +32,7 @@ export class IssueSessionLeaseService {
     private readonly logger: Logger,
     private readonly workerId: string,
     private readonly readThreadWithRetry: (threadId: string, maxRetries?: number) => Promise<CodexThreadSummary>,
+    private readonly telemetry: PatchRelayTelemetry = noopTelemetry,
   ) {}
 
   hasLocalLease(projectId: string, linearIssueId: string): boolean {
@@ -63,8 +65,13 @@ export class IssueSessionLeaseService {
       workerId: this.workerId,
       leasedUntil,
     });
-    if (!acquired) return undefined;
+    if (!acquired) {
+      this.emitLease("lease.acquire_failed", projectId, linearIssueId);
+      this.emitStaleLeaseInvariantIfRunnable(projectId, linearIssueId);
+      return undefined;
+    }
     this.activeSessionLeases.set(this.issueSessionLeaseKey(projectId, linearIssueId), leaseId);
+    this.emitLease("lease.acquired", projectId, linearIssueId, leaseId);
     return leaseId;
   }
 
@@ -78,8 +85,12 @@ export class IssueSessionLeaseService {
       workerId: this.workerId,
       leasedUntil,
     });
-    if (!acquired) return undefined;
+    if (!acquired) {
+      this.emitLease("lease.acquire_failed", projectId, linearIssueId);
+      return undefined;
+    }
     this.activeSessionLeases.set(this.issueSessionLeaseKey(projectId, linearIssueId), leaseId);
+    this.emitLease("lease.acquired", projectId, linearIssueId, leaseId);
     return leaseId;
   }
 
@@ -92,7 +103,11 @@ export class IssueSessionLeaseService {
     if (!session) return "skip";
     const leasedUntilMs = session.leasedUntil ? Date.parse(session.leasedUntil) : undefined;
     if (leasedUntilMs !== undefined && Number.isFinite(leasedUntilMs) && leasedUntilMs > Date.now()) {
+      this.emitStaleLeaseInvariantIfRunnable(projectId, linearIssueId);
       return "skip";
+    }
+    if (session.leaseId) {
+      this.emitLease("lease.expired", projectId, linearIssueId, session.leaseId);
     }
     return this.acquire(projectId, linearIssueId) ? true : "skip";
   }
@@ -138,6 +153,16 @@ export class IssueSessionLeaseService {
       previousLeaseId: session.leaseId,
       reclaimedLeaseId: leaseId,
     }, "Reclaimed foreign issue-session lease for active-run recovery");
+    emitTelemetry(this.telemetry, {
+      type: "lease.reclaimed",
+      projectId: run.projectId,
+      linearIssueId: run.linearIssueId,
+      issueKey: issue.issueKey,
+      runId: run.id,
+      runType: run.runType,
+      leaseId,
+      workerId: this.workerId,
+    });
     return true;
   }
 
@@ -164,6 +189,7 @@ export class IssueSessionLeaseService {
     const leaseId = this.getValidatedLocalLeaseId(projectId, linearIssueId);
     this.db.issueSessions.releaseIssueSessionLease(projectId, linearIssueId, leaseId);
     this.activeSessionLeases.delete(key);
+    this.emitLease("lease.released", projectId, linearIssueId, leaseId);
   }
 
   private getValidatedLocalLeaseId(projectId: string, linearIssueId: string): string | undefined {
@@ -179,5 +205,40 @@ export class IssueSessionLeaseService {
 
   private issueSessionLeaseKey(projectId: string, linearIssueId: string): string {
     return `${projectId}:${linearIssueId}`;
+  }
+
+  private emitLease(
+    type: "lease.acquired" | "lease.acquire_failed" | "lease.released" | "lease.expired",
+    projectId: string,
+    linearIssueId: string,
+    leaseId?: string,
+  ): void {
+    const issue = this.db.issues.getIssue(projectId, linearIssueId);
+    emitTelemetry(this.telemetry, {
+      type,
+      projectId,
+      linearIssueId,
+      ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
+      ...(issue?.activeRunId ? { runId: issue.activeRunId } : {}),
+      ...(leaseId ? { leaseId } : {}),
+      workerId: this.workerId,
+    });
+  }
+
+  private emitStaleLeaseInvariantIfRunnable(projectId: string, linearIssueId: string): void {
+    const issue = this.db.issues.getIssue(projectId, linearIssueId);
+    const wake = this.db.workflowWakes.peekIssueWake(projectId, linearIssueId);
+    const runType = wake?.runType ?? issue?.pendingRunType;
+    if (!runType) return;
+    emitTelemetry(this.telemetry, {
+      type: "health.invariant",
+      invariant: "stale_lease_blocking_runnable_work",
+      status: "observed",
+      projectId,
+      linearIssueId,
+      ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
+      runType,
+      detail: "Runnable work could not acquire an issue-session lease",
+    });
   }
 }
