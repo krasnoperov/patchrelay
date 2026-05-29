@@ -261,7 +261,7 @@ test("reconciler skips stale historical completed issues outside the recent wind
       currentLinearState: "In Progress",
       currentLinearStateType: "started",
     });
-    db.connection.prepare(`
+    db.unsafeRawConnectionForTests().prepare(`
       UPDATE issues
       SET updated_at = ?
       WHERE project_id = ? AND linear_issue_id = ?

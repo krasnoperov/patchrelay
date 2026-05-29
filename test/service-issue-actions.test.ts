@@ -105,7 +105,7 @@ test("promptIssue queues operator input for the next run when no run is active",
     assert.equal(latestEvent?.eventType, "operator_prompt");
     assert.match(latestEvent?.eventJson ?? "", /Please retry carefully/);
   } finally {
-    db?.connection.close();
+    db?.close();
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
@@ -172,7 +172,7 @@ test("promptIssue steers active runs through the shared agent input path", async
     assert.equal(latestEvent?.eventType, "prompt_delivered");
     assert.match(latestEvent?.eventJson ?? "", /patchrelay_operator_prompt/);
   } finally {
-    db?.connection.close();
+    db?.close();
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
@@ -203,7 +203,7 @@ test("retryIssue preserves branch upkeep retries for requested-changes issues", 
       pendingRunType: "branch_upkeep",
       prHeadSha: "abc123",
     });
-    db.connection.prepare(`
+    db.unsafeRawConnectionForTests().prepare(`
       UPDATE issue_sessions
       SET session_state = ?, last_run_type = ?
       WHERE project_id = ? AND linear_issue_id = ?
@@ -221,7 +221,7 @@ test("retryIssue preserves branch upkeep retries for requested-changes issues", 
     assert.equal(latestEvent?.eventType, "review_changes_requested");
     assert.match(latestEvent?.eventJson ?? "", /branch upkeep/i);
   } finally {
-    db?.connection.close();
+    db?.close();
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
@@ -260,7 +260,7 @@ test("retryIssue treats closed PR issues as fresh implementation retries", async
     assert.ok(wake);
     assert.equal(wake.runType, "implementation");
   } finally {
-    db?.connection.close();
+    db?.close();
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
@@ -322,7 +322,7 @@ test("closeIssue releases active runs and clears pending work", async () => {
     assert.equal(events.some((event) => event.eventType === "operator_closed"), true);
     assert.equal(db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId), undefined);
   } finally {
-    db?.connection.close();
+    db?.close();
     rmSync(baseDir, { recursive: true, force: true });
   }
 });

@@ -27,7 +27,7 @@ test("issue overview prefers freshly derived waiting reason over stale cached se
       lastBlockingReviewHeadSha: "sha-old",
     });
 
-    db.connection.prepare(`
+    db.unsafeRawConnectionForTests().prepare(`
       UPDATE issue_sessions
       SET waiting_reason = ?
       WHERE project_id = ? AND linear_issue_id = ?

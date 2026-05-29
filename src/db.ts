@@ -26,7 +26,7 @@ import { TrackedIssueQuery } from "./tracked-issue-query.ts";
 import { WorkflowWakeResolver } from "./workflow-wake-resolver.ts";
 
 export class PatchRelayDatabase {
-  readonly connection: DatabaseConnection;
+  private readonly connection: DatabaseConnection;
   readonly linearInstallations: LinearInstallationStore;
   readonly operatorFeed: OperatorFeedStore;
   readonly repositories: RepositoryLinkStore;
@@ -89,6 +89,21 @@ export class PatchRelayDatabase {
 
   transaction<T>(fn: () => T): T {
     return this.connection.transaction(fn)();
+  }
+
+  close(): void {
+    this.connection.close();
+  }
+
+  /**
+   * Raw SQLite handle for tests ONLY. Production code must go through the
+   * stores; this exists so fixtures can backdate timestamps, force invalid
+   * edge states, and exercise the migration/schema-guard machinery — none of
+   * which the store API exposes, by design. The deliberately ugly name keeps
+   * it greppable so a production leak can't slip back in unnoticed.
+   */
+  unsafeRawConnectionForTests(): DatabaseConnection {
+    return this.connection;
   }
 
   upsertIssue(params: UpsertIssueParams): IssueRecord {

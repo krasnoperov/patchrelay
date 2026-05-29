@@ -116,7 +116,7 @@ test("listTrackedIssues suppresses stale interrupted notes while a run is active
       activeRunId: run.id,
       factoryState: "repairing_queue",
     });
-    db.connection.prepare(`
+    db.unsafeRawConnectionForTests().prepare(`
       UPDATE issue_sessions
       SET summary_text = ?, session_state = ?, active_run_id = ?
       WHERE project_id = ? AND linear_issue_id = ?
@@ -171,7 +171,7 @@ test("listTrackedIssues treats a detached running latest run as active work", as
       runType: "implementation",
     });
     db.runs.updateRunThread(run.id, { threadId: "thread-detached", turnId: "turn-detached" });
-    db.connection.prepare(`
+    db.unsafeRawConnectionForTests().prepare(`
       UPDATE issue_sessions
       SET summary_text = ?, session_state = ?, active_run_id = ?, waiting_reason = ?
       WHERE project_id = ? AND linear_issue_id = ?
@@ -232,7 +232,7 @@ test("listTrackedIssues suppresses stale zombie notes while a run is active", as
       activeRunId: run.id,
       factoryState: "implementing",
     });
-    db.connection.prepare(`
+    db.unsafeRawConnectionForTests().prepare(`
       UPDATE issue_sessions
       SET summary_text = ?, session_state = ?, active_run_id = ?
       WHERE project_id = ? AND linear_issue_id = ?
@@ -286,12 +286,12 @@ test("listTrackedIssues ordering ignores lease heartbeats", async () => {
       factoryState: "delegated",
     });
 
-    db.connection.prepare(`
+    db.unsafeRawConnectionForTests().prepare(`
       UPDATE issue_sessions
       SET display_updated_at = ?, updated_at = ?
       WHERE project_id = ? AND linear_issue_id = ?
     `).run("2026-04-01T09:00:00.000Z", "2026-04-01T09:00:00.000Z", "usertold", "issue-1");
-    db.connection.prepare(`
+    db.unsafeRawConnectionForTests().prepare(`
       UPDATE issue_sessions
       SET display_updated_at = ?, updated_at = ?
       WHERE project_id = ? AND linear_issue_id = ?
@@ -354,12 +354,12 @@ test("listTrackedIssues ordering follows visible session updates", async () => {
       factoryState: "delegated",
     });
 
-    db.connection.prepare(`
+    db.unsafeRawConnectionForTests().prepare(`
       UPDATE issue_sessions
       SET display_updated_at = ?, updated_at = ?
       WHERE project_id = ? AND linear_issue_id = ?
     `).run("2026-04-01T09:00:00.000Z", "2026-04-01T09:00:00.000Z", "usertold", "issue-1");
-    db.connection.prepare(`
+    db.unsafeRawConnectionForTests().prepare(`
       UPDATE issue_sessions
       SET display_updated_at = ?, updated_at = ?
       WHERE project_id = ? AND linear_issue_id = ?

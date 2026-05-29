@@ -121,7 +121,7 @@ test("notification handler keeps completion authoritative when Linear progress r
     assert.equal(warnings[0]?.method, "item/started");
     assert.equal(warnings[1]?.method, "turn/completed");
   } finally {
-    db.connection.close();
+    db.close();
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
@@ -204,7 +204,7 @@ test("notification handler interrupts a stuck git push command", async () => {
     assert.equal(warnings.length, 1);
     assert.equal(warnings[0]?.runId, run.id);
   } finally {
-    db.connection.close();
+    db.close();
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
@@ -292,7 +292,7 @@ test("notification handler clears git push watchdog when the command completes",
 
     assert.deepEqual(interrupts, []);
   } finally {
-    db.connection.close();
+    db.close();
     rmSync(baseDir, { recursive: true, force: true });
   }
 });

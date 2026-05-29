@@ -1312,7 +1312,7 @@ test("cli live falls back to the latest detached running run", async () => {
       runType: "implementation",
     });
     db.runs.updateRunThread(run.id, { threadId: "thread-58", turnId: "turn-58" });
-    db.connection.prepare(`
+    db.unsafeRawConnectionForTests().prepare(`
       UPDATE issue_sessions
       SET active_run_id = NULL, session_state = ?, waiting_reason = ?
       WHERE project_id = ? AND linear_issue_id = ?
