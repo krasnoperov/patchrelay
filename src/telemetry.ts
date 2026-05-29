@@ -216,8 +216,25 @@ export class OperatorFeedTelemetrySink implements PatchRelayTelemetry {
           };
         }
         return undefined;
+      case "health.invariant":
+        return {
+          level: event.status === "observed" ? "warn" : "info",
+          kind: "workflow",
+          ...(event.issueKey ? { issueKey: event.issueKey } : {}),
+          ...(event.projectId ? { projectId: event.projectId } : {}),
+          ...(event.runType ? { stage: event.runType } : {}),
+          status: `health_${event.status}`,
+          summary: event.status === "observed"
+            ? `Health warning: ${formatInvariant(event.invariant)}`
+            : `Health repaired: ${formatInvariant(event.invariant)}`,
+          ...(event.detail ? { detail: event.detail } : {}),
+        };
       default:
         return undefined;
     }
   }
+}
+
+function formatInvariant(invariant: string): string {
+  return invariant.replaceAll("_", " ");
 }

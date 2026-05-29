@@ -61,6 +61,42 @@ test("operator feed telemetry sink publishes only curated human-facing events", 
   assert.equal(events[0]?.stage, "review_fix");
 });
 
+test("operator feed telemetry sink maps health invariant events", () => {
+  const feed = new OperatorEventFeed();
+  const sink = new OperatorFeedTelemetrySink(feed);
+
+  sink.emit({
+    type: "health.invariant",
+    invariant: "stale_lease_blocking_runnable_work",
+    status: "observed",
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    issueKey: "PRJ-1",
+    runType: "implementation",
+    detail: "Runnable work could not acquire an issue-session lease",
+  });
+  sink.emit({
+    type: "health.invariant",
+    invariant: "stale_blocked_read_model",
+    status: "repaired",
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    issueKey: "PRJ-1",
+  });
+
+  const events = feed.list({ limit: 10 });
+  assert.equal(events.length, 2);
+  const observed = events.find((event) => event.status === "health_observed");
+  const repaired = events.find((event) => event.status === "health_repaired");
+  assert.equal(observed?.level, "warn");
+  assert.equal(observed?.kind, "workflow");
+  assert.equal(observed?.stage, "implementation");
+  assert.equal(observed?.summary, "Health warning: stale lease blocking runnable work");
+  assert.equal(observed?.detail, "Runnable work could not acquire an issue-session lease");
+  assert.equal(repaired?.level, "info");
+  assert.equal(repaired?.summary, "Health repaired: stale blocked read model");
+});
+
 test("logger telemetry sink emits machine-readable event fields", () => {
   const records: Array<Record<string, unknown>> = [];
   const logger = {

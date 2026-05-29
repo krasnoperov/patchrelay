@@ -15,6 +15,7 @@ The harness is not a generic prompt runner. It is the deterministic orchestratio
 5. **Repository-local guidance as the source of truth** — `IMPLEMENTATION_WORKFLOW.md`, `REVIEW_WORKFLOW.md`, and repo-local docs define how the agent should work in that repo.
 
 The decisions behind these priorities are captured in [design-docs/core-beliefs.md](./design-docs/core-beliefs.md).
+Telemetry and dashboard activity boundaries are captured in [telemetry.md](./telemetry.md).
 
 ## Component topology
 

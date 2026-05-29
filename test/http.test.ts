@@ -172,6 +172,32 @@ test("http routes handle webhook validation and issue/live lookups", async () =>
                 ],
               }
             : undefined,
+        listIssueFeedEvents: (issueKey: string, options?: { afterId?: number; limit?: number }) => {
+          if (issueKey !== "USE-42") return undefined;
+          const events = [
+            {
+              id: 1,
+              at: "2026-03-13T11:05:00.000Z",
+              level: "info",
+              kind: "workflow",
+              issueKey: "USE-42",
+              projectId: "usertold",
+              status: "dependency_unblocked",
+              summary: "Dependency unblocked; implementation queued",
+            },
+            {
+              id: 2,
+              at: "2026-03-13T11:10:00.000Z",
+              level: "warn",
+              kind: "workflow",
+              issueKey: "USE-42",
+              projectId: "usertold",
+              status: "health_observed",
+              summary: "Health warning: stale lease blocking runnable work",
+            },
+          ].filter((event) => options?.afterId === undefined || event.id > options.afterId);
+          return { events: events.slice(0, options?.limit ?? events.length) };
+        },
         getActiveRunStatus: async (issueKey: string) =>
           issueKey === "USE-42"
             ? {
@@ -287,6 +313,47 @@ test("http routes handle webhook validation and issue/live lookups", async () =>
     });
     assert.equal(missingOverview.statusCode, 404);
     assert.deepEqual(missingOverview.json(), { ok: false, reason: "issue_not_found" });
+
+    const unauthorizedFeed = await app.inject({
+      method: "GET",
+      url: "/api/issues/USE-42/feed",
+    });
+    assert.equal(unauthorizedFeed.statusCode, 401);
+    assert.deepEqual(unauthorizedFeed.json(), { ok: false, reason: "operator_auth_required" });
+
+    const feed = await app.inject({
+      method: "GET",
+      url: "/api/issues/USE-42/feed?afterId=1&limit=500",
+      headers: {
+        authorization: "Bearer operator-token",
+      },
+    });
+    assert.equal(feed.statusCode, 200);
+    assert.deepEqual(feed.json(), {
+      ok: true,
+      events: [
+        {
+          id: 2,
+          at: "2026-03-13T11:10:00.000Z",
+          level: "warn",
+          kind: "workflow",
+          issueKey: "USE-42",
+          projectId: "usertold",
+          status: "health_observed",
+          summary: "Health warning: stale lease blocking runnable work",
+        },
+      ],
+    });
+
+    const missingFeed = await app.inject({
+      method: "GET",
+      url: "/api/issues/USE-404/feed",
+      headers: {
+        authorization: "Bearer operator-token",
+      },
+    });
+    assert.equal(missingFeed.statusCode, 404);
+    assert.deepEqual(missingFeed.json(), { ok: false, reason: "issue_not_found" });
 
     const issueList = await app.inject({
       method: "GET",
