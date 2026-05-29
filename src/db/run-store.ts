@@ -1,7 +1,9 @@
 import type { IssueRecord, RunRecord, RunStatus, ThreadEventRecord } from "../db-types.ts";
 import type { CompletionCheckResult } from "../completion-check-types.ts";
 import type { RunType } from "../factory-state.ts";
+import type { IssueSessionProjectionInvalidator, IssueSessionProjectionOptions } from "../issue-session-projection-invalidator.ts";
 import { extractLatestAssistantSummary } from "../issue-session-events.ts";
+import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "../telemetry.ts";
 import type { IssueStore } from "./issue-store.ts";
 import { isoNow, type DatabaseConnection } from "./shared.ts";
 
@@ -10,15 +12,13 @@ export class RunStore {
     private readonly connection: DatabaseConnection,
     private readonly mapRunRow: (row: Record<string, unknown>) => RunRecord,
     private readonly issues: IssueStore,
-    private readonly syncIssueSessionFromIssue: (
-      issue: IssueRecord,
-      options?: {
-        summaryText?: string | undefined;
-        lastRunType?: RunType | undefined;
-        lastWakeReason?: string | undefined;
-      },
-    ) => void,
+    private readonly issueSessionProjection: IssueSessionProjectionInvalidator,
+    private readonly telemetry: PatchRelayTelemetry = noopTelemetry,
   ) {}
+
+  private projectIssueRun(issue: IssueRecord, options?: IssueSessionProjectionOptions): void {
+    this.issueSessionProjection.issueRunChanged(issue, options);
+  }
 
   createRun(params: {
     issueId: number;
@@ -44,8 +44,16 @@ export class RunStore {
     const run = this.getRunById(Number(result.lastInsertRowid))!;
     const issue = this.issues.getIssue(params.projectId, params.linearIssueId);
     if (issue) {
-      this.syncIssueSessionFromIssue(issue, { lastRunType: run.runType });
+      this.projectIssueRun(issue, { lastRunType: run.runType });
     }
+    emitTelemetry(this.telemetry, {
+      type: "run.claimed",
+      projectId: params.projectId,
+      linearIssueId: params.linearIssueId,
+      runId: run.id,
+      runType: run.runType,
+      ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
+    });
     return run;
   }
 
@@ -102,8 +110,16 @@ export class RunStore {
     if (!run) return;
     const issue = this.issues.getIssue(run.projectId, run.linearIssueId);
     if (issue) {
-      this.syncIssueSessionFromIssue(issue);
+      this.projectIssueRun(issue);
     }
+    emitTelemetry(this.telemetry, {
+      type: "run.started",
+      projectId: run.projectId,
+      linearIssueId: run.linearIssueId,
+      runId: run.id,
+      runType: run.runType,
+      ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
+    });
   }
 
   updateRunTurnId(runId: number, turnId: string): void {
@@ -143,11 +159,25 @@ export class RunStore {
     if (!run) return;
     const issue = this.issues.getIssue(run.projectId, run.linearIssueId);
     if (issue) {
-      this.syncIssueSessionFromIssue(issue, {
+      this.projectIssueRun(issue, {
         summaryText: extractLatestAssistantSummary(this.getRunById(runId) ?? run),
         lastRunType: run.runType,
       });
     }
+    emitTelemetry(this.telemetry, {
+      type: params.status === "completed"
+        ? "run.completed"
+        : params.status === "released"
+          ? "run.released"
+          : params.status === "superseded"
+            ? "run.superseded"
+            : "run.failed",
+      projectId: run.projectId,
+      linearIssueId: run.linearIssueId,
+      runId: run.id,
+      runType: run.runType,
+      ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
+    });
   }
 
   // Plan §4.4: flag a still-running run as superseded. We deliberately
@@ -171,7 +201,7 @@ export class RunStore {
     if (!run) return;
     const issue = this.issues.getIssue(run.projectId, run.linearIssueId);
     if (issue) {
-      this.syncIssueSessionFromIssue(issue, {
+      this.projectIssueRun(issue, {
         summaryText: params.reason,
         lastRunType: run.runType,
       });
@@ -225,7 +255,7 @@ export class RunStore {
     if (!run) return;
     const issue = this.issues.getIssue(run.projectId, run.linearIssueId);
     if (issue) {
-      this.syncIssueSessionFromIssue(issue, {
+      this.projectIssueRun(issue, {
         lastRunType: run.runType,
       });
     }

@@ -6,6 +6,7 @@ import type {
   IssueRecord,
 } from "../db-types.ts";
 import type { FactoryState, RunType } from "../factory-state.ts";
+import type { IssueSessionProjectionInvalidator } from "../issue-session-projection-invalidator.ts";
 import type { IssueClass, IssueClassSource } from "../issue-class.ts";
 import { buildInsertBindings, buildUpdateAssignments } from "./issue-upsert-columns.ts";
 import { isoNow, type DatabaseConnection } from "./shared.ts";
@@ -90,7 +91,7 @@ const OPEN_CHILD_PREDICATE = `
 export class IssueStore {
   constructor(
     private readonly connection: DatabaseConnection,
-    private readonly syncIssueSessionFromIssue: (issue: IssueRecord) => void,
+    private readonly issueSessionProjection: IssueSessionProjectionInvalidator,
   ) {}
 
   upsertIssue(params: UpsertIssueParams): IssueRecord {
@@ -116,7 +117,7 @@ export class IssueStore {
       });
     }
     const updated = this.getIssue(params.projectId, params.linearIssueId)!;
-    this.syncIssueSessionFromIssue(updated);
+    this.issueSessionProjection.issueChanged(updated);
     return updated;
   }
 
@@ -276,6 +277,7 @@ export class IssueStore {
       .run(params.projectId, params.linearIssueId);
 
     if (params.blockers.length === 0) {
+      this.issueSessionProjection.issueDependenciesChanged(params.projectId, params.linearIssueId);
       return;
     }
 
@@ -304,6 +306,8 @@ export class IssueStore {
         now,
       );
     }
+
+    this.issueSessionProjection.issueDependenciesChanged(params.projectId, params.linearIssueId);
   }
 
   updateDependencyBlockerSnapshot(params: {
@@ -344,6 +348,10 @@ export class IssueStore {
       WHERE project_id = @projectId
         AND blocker_linear_issue_id = @blockerLinearIssueId
     `).run(values);
+
+    if (Number(result.changes) > 0) {
+      this.issueSessionProjection.dependencyBlockerChanged(params.projectId, params.blockerLinearIssueId);
+    }
 
     return Number(result.changes);
   }

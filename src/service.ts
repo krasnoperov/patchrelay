@@ -31,6 +31,7 @@ import type { AppConfig, LinearClient, LinearClientProvider } from "./types.ts";
 import { parseStringArray, TrackedIssueListQuery } from "./tracked-issue-list-query.ts";
 import { AgentInputService } from "./agent-input-service.ts";
 import { CodexFollowupIntentClassifier } from "./followup-intent.ts";
+import { FanoutPatchRelayTelemetry, LoggerTelemetrySink, OperatorFeedTelemetrySink } from "./telemetry.ts";
 
 export class PatchRelayService {
   readonly linearProvider: LinearClientProvider;
@@ -56,6 +57,11 @@ export class PatchRelayService {
   ) {
     this.linearProvider = toLinearClientProvider(linearProvider);
     this.feed = new OperatorEventFeed(db.operatorFeed);
+    const telemetry = new FanoutPatchRelayTelemetry([
+      new LoggerTelemetrySink(logger),
+      new OperatorFeedTelemetrySink(this.feed),
+    ]);
+    db.setTelemetry(telemetry);
 
     let enqueueIssue: (projectId: string, issueId: string) => void = () => {
       throw new Error("Service runtime enqueueIssue is not initialized");
@@ -76,6 +82,7 @@ export class PatchRelayService {
       (projectId, issueId) => leaseRelease(projectId, issueId),
       logger,
       this.feed,
+      telemetry,
     );
     const agentInput = new AgentInputService(
       db,
@@ -96,6 +103,7 @@ export class PatchRelayService {
       logger,
       this.feed,
       this.configPath,
+      telemetry,
     );
     leaseRelease = (projectId, issueId) => this.orchestrator.leaseService.release(projectId, issueId);
 
@@ -109,6 +117,7 @@ export class PatchRelayService {
       this.feed,
       undefined,
       agentInput,
+      telemetry,
     );
 
     this.githubWebhookHandler = new GitHubWebhookHandler(

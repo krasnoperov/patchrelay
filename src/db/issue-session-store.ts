@@ -1,9 +1,11 @@
 import type { IssueRecord, IssueSessionEventRecord, IssueSessionRecord, RunStatus } from "../db-types.ts";
 import type { RunType } from "../factory-state.ts";
+import type { IssueSessionProjectionInvalidator } from "../issue-session-projection-invalidator.ts";
 import type { IssueStore, UpsertIssueParams } from "./issue-store.ts";
 import type { RunStore } from "./run-store.ts";
 import { deriveSessionWakePlan, isActionableIssueSessionEventType, type IssueSessionEventType } from "../issue-session-events.ts";
 import { mergeRequestedChangesEventJson, readRequestedChangesCoalesceKey } from "../reactive-wake-keys.ts";
+import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "../telemetry.ts";
 import { isoNow, type DatabaseConnection } from "./shared.ts";
 
 interface IssueSessionLease {
@@ -19,6 +21,8 @@ export class IssueSessionStore {
     private readonly mapIssueSessionEventRow: (row: Record<string, unknown>) => IssueSessionEventRecord,
     private readonly issues: IssueStore,
     private readonly runs: RunStore,
+    private readonly issueSessionProjection: IssueSessionProjectionInvalidator,
+    private readonly telemetry: PatchRelayTelemetry = noopTelemetry,
   ) {}
 
   getIssueSession(projectId: string, linearIssueId: string): IssueSessionRecord | undefined {
@@ -46,10 +50,16 @@ export class IssueSessionStore {
         WHERE project_id = ? AND linear_issue_id = ? AND dedupe_key = ? AND processed_at IS NULL
         ORDER BY id DESC LIMIT 1
       `).get(params.projectId, params.linearIssueId, params.dedupeKey) as Record<string, unknown> | undefined;
-      if (existing) return this.mapIssueSessionEventRow(existing);
+      if (existing) {
+        this.issueSessionProjection.issueSessionEventsChanged(params.projectId, params.linearIssueId);
+        return this.mapIssueSessionEventRow(existing);
+      }
     }
     const coalesced = this.coalescePendingRequestedChangesEvent(params);
-    if (coalesced) return coalesced;
+    if (coalesced) {
+      this.issueSessionProjection.issueSessionEventsChanged(params.projectId, params.linearIssueId);
+      return coalesced;
+    }
 
     const now = isoNow();
     const result = this.connection.prepare(`
@@ -64,7 +74,9 @@ export class IssueSessionStore {
       params.dedupeKey ?? null,
       now,
     );
-    return this.getIssueSessionEvent(Number(result.lastInsertRowid))!;
+    const event = this.getIssueSessionEvent(Number(result.lastInsertRowid))!;
+    this.issueSessionProjection.issueSessionEventsChanged(params.projectId, params.linearIssueId);
+    return event;
   }
 
   private coalescePendingRequestedChangesEvent(params: {
@@ -157,6 +169,16 @@ export class IssueSessionStore {
       SET processed_at = ?, consumed_by_run_id = ?
       WHERE project_id = ? AND linear_issue_id = ? AND id IN (${placeholders}) AND processed_at IS NULL
     `).run(now, runId, projectId, linearIssueId, ...eventIds);
+    this.issueSessionProjection.issueSessionEventsChanged(projectId, linearIssueId);
+    const issue = this.issues.getIssue(projectId, linearIssueId);
+    emitTelemetry(this.telemetry, {
+      type: "wake.consumed",
+      projectId,
+      linearIssueId,
+      ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
+      eventIds,
+      runId,
+    });
   }
 
   dismissIssueSessionEvents(projectId: string, linearIssueId: string, eventIds: number[]): void {
@@ -167,14 +189,35 @@ export class IssueSessionStore {
       SET processed_at = ?, consumed_by_run_id = NULL
       WHERE project_id = ? AND linear_issue_id = ? AND id IN (${placeholders}) AND processed_at IS NULL
     `).run(isoNow(), projectId, linearIssueId, ...eventIds);
+    this.issueSessionProjection.issueSessionEventsChanged(projectId, linearIssueId);
+    const issue = this.issues.getIssue(projectId, linearIssueId);
+    emitTelemetry(this.telemetry, {
+      type: "wake.dismissed",
+      projectId,
+      linearIssueId,
+      ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
+      eventIds,
+      reason: "dismissed",
+    });
   }
 
   clearPendingIssueSessionEvents(projectId: string, linearIssueId: string): void {
+    const eventIds = this.listIssueSessionEvents(projectId, linearIssueId, { pendingOnly: true }).map((event) => event.id);
     this.connection.prepare(`
       UPDATE issue_session_events
       SET processed_at = ?, consumed_by_run_id = NULL
       WHERE project_id = ? AND linear_issue_id = ? AND processed_at IS NULL
     `).run(isoNow(), projectId, linearIssueId);
+    this.issueSessionProjection.issueSessionEventsChanged(projectId, linearIssueId);
+    const issue = this.issues.getIssue(projectId, linearIssueId);
+    emitTelemetry(this.telemetry, {
+      type: "wake.dismissed",
+      projectId,
+      linearIssueId,
+      ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
+      eventIds,
+      reason: "cleared_pending",
+    });
   }
 
   hasPendingIssueSessionEvents(projectId: string, linearIssueId: string): boolean {

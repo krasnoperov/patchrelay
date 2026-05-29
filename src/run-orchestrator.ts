@@ -38,6 +38,7 @@ import { classifyIssue } from "./issue-class.ts";
 import { buildIssueTriageHash, IssueTriageService } from "./issue-triage.ts";
 import { loadConfig } from "./config.ts";
 import { CodexThreadMaterializingError, isThreadMaterializingError } from "./codex-thread-errors.ts";
+import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry, type RunSkipReason } from "./telemetry.ts";
 
 function lowerCaseFirst(value: string): string {
   return value ? `${value.slice(0, 1).toLowerCase()}${value.slice(1)}` : value;
@@ -125,6 +126,7 @@ export class RunOrchestrator {
   private readonly logger: Logger;
   private readonly feed: OperatorEventFeed | undefined;
   private readonly configPath: string | undefined;
+  private readonly telemetry: PatchRelayTelemetry;
 
   constructor(
     private readonly config: AppConfig,
@@ -136,12 +138,14 @@ export class RunOrchestrator {
     loggerOrFeed?: Logger | OperatorEventFeed,
     feedOrConfigPath?: OperatorEventFeed | string,
     configPathOrUndefined?: string,
+    telemetryOrUndefined?: PatchRelayTelemetry,
   ) {
     // Backward-compat: tests pass `(config, db, codex, lp, enqueue, logger, feed?, configPath?)`
     // (no dispatcher). Production passes `(..., enqueue, dispatcher, logger, feed?, configPath?)`.
     let logger: Logger;
     let feed: OperatorEventFeed | undefined;
     let configPath: string | undefined;
+    const telemetry = telemetryOrUndefined ?? noopTelemetry;
     if (wakeDispatcherOrLogger instanceof WakeDispatcher) {
       this.wakeDispatcher = wakeDispatcherOrLogger;
       logger = loggerOrFeed as Logger;
@@ -161,11 +165,13 @@ export class RunOrchestrator {
         (projectId, linearIssueId) => this.leaseService?.release(projectId, linearIssueId),
         logger,
         feed,
+        telemetry,
       );
     }
     this.logger = logger;
     this.feed = feed;
     this.configPath = configPath;
+    this.telemetry = telemetry;
     this.worktreeManager = new WorktreeManager(config);
     this.codexRuntimeConfig = config.runner.codex;
     this.linearSync = new LinearSessionSync(config, db, linearProvider, logger, feed);
@@ -174,6 +180,7 @@ export class RunOrchestrator {
       logger,
       this.workerId,
       this.threadPorts.readThreadWithRetry,
+      telemetry,
     );
     this.activeSessionLeases = this.leaseService.activeSessionLeases;
     this.runCompletionPolicy = new RunCompletionPolicy(
@@ -392,10 +399,21 @@ export class RunOrchestrator {
   // ─── Run ────────────────────────────────────────────────────────
 
   async run(item: { projectId: string; issueId: string }): Promise<void> {
+    emitTelemetry(this.telemetry, {
+      type: "queue.dequeued",
+      projectId: item.projectId,
+      linearIssueId: item.issueId,
+    });
+    emitTelemetry(this.telemetry, {
+      type: "run.dequeued",
+      projectId: item.projectId,
+      linearIssueId: item.issueId,
+    });
     await this.refreshCodexRuntimeConfig();
 
     const project = this.config.projects.find((p) => p.id === item.projectId);
     if (!project) {
+      this.emitRunSkipped(item, "project_not_configured");
       this.logger.info(
         { projectId: item.projectId, linearIssueId: item.issueId, reason: "project_not_configured" },
         "Skipped issue run: project missing from config",
@@ -408,6 +426,7 @@ export class RunOrchestrator {
     // pending wake didn't actually run. The original incident
     // (LSR-495) was undiagnosable because these guards were silent.
     if (this.leaseService.hasLocalLease(item.projectId, item.issueId)) {
+      this.emitRunSkipped(item, "lease_held_locally");
       this.logger.info(
         { projectId: item.projectId, linearIssueId: item.issueId, reason: "lease_held_locally" },
         "Skipped issue run: another in-process call still holds the lease",
@@ -417,6 +436,7 @@ export class RunOrchestrator {
 
     const initialIssue = this.db.issues.getIssue(item.projectId, item.issueId);
     if (!initialIssue) {
+      this.emitRunSkipped(item, "issue_missing");
       this.logger.info(
         { projectId: item.projectId, linearIssueId: item.issueId, reason: "issue_missing" },
         "Skipped issue run: issue row not found",
@@ -424,6 +444,8 @@ export class RunOrchestrator {
       return;
     }
     if (initialIssue.activeRunId !== undefined) {
+      this.emitActiveRunBlockerInvariant(initialIssue);
+      this.emitRunSkipped(item, "active_run_present", initialIssue, { activeRunId: initialIssue.activeRunId });
       this.logger.info(
         { issueKey: initialIssue.issueKey, projectId: item.projectId, reason: "active_run_present", activeRunId: initialIssue.activeRunId },
         "Skipped issue run: an active run is already in flight",
@@ -432,6 +454,7 @@ export class RunOrchestrator {
     }
     const issue = await this.classifyTrackedIssue(initialIssue);
     if (!issue) {
+      this.emitRunSkipped(item, "classification_dropped_issue");
       this.logger.info(
         { projectId: item.projectId, linearIssueId: item.issueId, reason: "classification_dropped_issue" },
         "Skipped issue run: classification returned no issue",
@@ -439,6 +462,8 @@ export class RunOrchestrator {
       return;
     }
     if (issue.activeRunId !== undefined) {
+      this.emitActiveRunBlockerInvariant(issue);
+      this.emitRunSkipped(item, "active_run_present_post_classify", issue, { activeRunId: issue.activeRunId });
       this.logger.info(
         { issueKey: issue.issueKey, projectId: item.projectId, reason: "active_run_present_post_classify", activeRunId: issue.activeRunId },
         "Skipped issue run: an active run appeared during classification",
@@ -449,6 +474,7 @@ export class RunOrchestrator {
 
     const leaseId = this.leaseService.acquire(item.projectId, item.issueId);
     if (!leaseId) {
+      this.emitRunSkipped(item, "lease_acquire_failed", issue);
       this.logger.info({ issueKey: issue.issueKey, projectId: item.projectId, reason: "lease_acquire_failed" }, "Skipped issue run: another worker holds the session lease");
       return;
     }
@@ -465,6 +491,7 @@ export class RunOrchestrator {
     const wakeIssue = this.materializeLegacyPendingWake(issue, { projectId: item.projectId, linearIssueId: item.issueId, leaseId });
     const wake = this.resolveRunWake(wakeIssue);
     if (!wake) {
+      this.emitRunSkipped(item, "no_wake_derivable", issue);
       this.logger.info(
         { issueKey: issue.issueKey, projectId: item.projectId, reason: "no_wake_derivable" },
         "Skipped issue run: no actionable wake derivable from pending events",
@@ -474,13 +501,16 @@ export class RunOrchestrator {
     }
     const { runType, context, resumeThread } = wake;
     if (runType === "implementation" && this.db.issues.countUnresolvedBlockers(item.projectId, item.issueId) > 0) {
+      const blockerCount = this.db.issues.countUnresolvedBlockers(item.projectId, item.issueId);
       this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(item.projectId, item.issueId);
       this.releaseIssueSessionLease(item.projectId, item.issueId);
+      this.emitRunSkipped(item, "blocked", issue, { runType, blockerCount });
       this.logger.info({ issueKey: issue.issueKey }, "Skipped implementation launch because the issue is blocked");
       return;
     }
     const remainingZombieDelayMs = shouldDelayZombieRecoveryLaunch(issue, issueSession, runType);
     if (remainingZombieDelayMs > 0) {
+      this.emitRunSkipped(item, "zombie_backoff", issue, { runType, remainingDelayMs: remainingZombieDelayMs });
       this.logger.debug(
         { issueKey: issue.issueKey, runType, remainingZombieDelayMs },
         "Deferring recovered run launch until zombie backoff elapses",
@@ -502,6 +532,7 @@ export class RunOrchestrator {
       const dismissed = this.db.issueSessions.dismissIssueSessionEventsWithLease(lease, requestedChangesEventIds);
       if (!dismissed) {
         this.releaseIssueSessionLease(item.projectId, item.issueId);
+        this.emitRunSkipped(item, "lease_lost_dismissing_inactive_requested_changes_wake", issue, { runType });
         this.logger.info(
           { issueKey: issue.issueKey, projectId: item.projectId, reason: "lease_lost_dismissing_inactive_requested_changes_wake" },
           "Skipped issue run: lost lease while dismissing inactive requested-changes wake",
@@ -529,6 +560,7 @@ export class RunOrchestrator {
         },
         "Skipped issue run: requested-changes wake is no longer active",
       );
+      this.emitRunSkipped(item, "inactive_requested_changes_wake", issue, { runType });
       this.releaseIssueSessionLease(item.projectId, item.issueId);
       this.wakeDispatcher.dispatchIfWakePending(item.projectId, item.issueId);
       return;
@@ -557,6 +589,7 @@ export class RunOrchestrator {
         : issue.prHeadSha;
     const budgetExceeded = this.runWakePlanner.budgetExceeded(issue, project, runType, isRequestedChangesRunType);
     if (budgetExceeded) {
+      this.emitRunSkipped(item, "budget_exceeded", issue, { runType });
       this.escalate(issue, runType, budgetExceeded);
       return;
     }
@@ -567,6 +600,7 @@ export class RunOrchestrator {
       runType,
       isRequestedChangesRunType,
     )) {
+      this.emitRunSkipped(item, "lease_lost_incrementing_attempts", issue, { runType });
       this.releaseIssueSessionLease(item.projectId, item.issueId);
       return;
     }
@@ -592,6 +626,7 @@ export class RunOrchestrator {
       worktreePath,
     });
     if (!run) {
+      this.emitRunSkipped(item, "claim_failed", issue, { runType });
       this.releaseIssueSessionLease(item.projectId, item.issueId);
       return;
     }
@@ -679,6 +714,47 @@ export class RunOrchestrator {
     issue: Pick<IssueRecord, "issueKey">,
   ): Promise<void> {
     await this.worktreeManager.resetWorktreeToTrackedBranch(worktreePath, branchName, issue, this.logger);
+  }
+
+  private emitRunSkipped(
+    item: { projectId: string; issueId: string },
+    reason: RunSkipReason,
+    issue?: IssueRecord | undefined,
+    details?: {
+      runType?: RunType | undefined;
+      activeRunId?: number | undefined;
+      blockerCount?: number | undefined;
+      remainingDelayMs?: number | undefined;
+    },
+  ): void {
+    emitTelemetry(this.telemetry, {
+      type: "run.skipped",
+      projectId: item.projectId,
+      linearIssueId: item.issueId,
+      ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
+      reason,
+      ...(details?.runType ? { runType: details.runType } : {}),
+      ...(details?.activeRunId !== undefined ? { activeRunId: details.activeRunId } : {}),
+      ...(details?.blockerCount !== undefined ? { blockerCount: details.blockerCount } : {}),
+      ...(details?.remainingDelayMs !== undefined ? { remainingDelayMs: details.remainingDelayMs } : {}),
+    });
+  }
+
+  private emitActiveRunBlockerInvariant(issue: IssueRecord): void {
+    if (issue.activeRunId === undefined) return;
+    const blockerCount = this.db.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId);
+    if (blockerCount === 0) return;
+    emitTelemetry(this.telemetry, {
+      type: "health.invariant",
+      invariant: "active_run_with_unresolved_blocker",
+      status: "observed",
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+      runId: issue.activeRunId,
+      blockerCount,
+      detail: "Run dequeue found an active run while blockers are unresolved",
+    });
   }
 
   private async restoreIdleWorktree(

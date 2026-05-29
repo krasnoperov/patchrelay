@@ -5,6 +5,7 @@ import type { RunType } from "./factory-state.ts";
 import type { ReleaseIssueSessionLease } from "./issue-session-lease-service.ts";
 import type { IssueSessionEventType } from "./issue-session-events.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
+import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
 
 export interface DispatchableSessionEvent {
   eventType: IssueSessionEventType;
@@ -43,6 +44,7 @@ export class WakeDispatcher {
     private readonly releaseLease: ReleaseIssueSessionLease,
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
+    private readonly telemetry: PatchRelayTelemetry = noopTelemetry,
   ) {}
 
   // Scope the next enqueue calls inside `fn` to a single dedupe Set.
@@ -68,11 +70,23 @@ export class WakeDispatcher {
     event: DispatchableSessionEvent,
     options?: { enqueuedThisTick?: Set<string> },
   ): RunType | undefined {
-    this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(projectId, linearIssueId, {
+    const appended = this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(projectId, linearIssueId, {
       projectId,
       linearIssueId,
       ...event,
     });
+    const issue = this.db.issues.getIssue(projectId, linearIssueId);
+    if (appended) {
+      emitTelemetry(this.telemetry, {
+        type: "wake.created",
+        projectId,
+        linearIssueId,
+        ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
+        eventIds: [appended.id],
+        sessionEventType: event.eventType,
+        ...(event.dedupeKey ? { dedupeKey: event.dedupeKey } : {}),
+      });
+    }
     // Honour the active tick scope (set via withTick) so callers nested
     // inside a reconcile pass automatically dedupe without threading
     // the Set through every helper signature.
@@ -96,20 +110,143 @@ export class WakeDispatcher {
     options?: { enqueuedThisTick?: Set<string> },
   ): RunType | undefined {
     const issue = this.db.issues.getIssue(projectId, linearIssueId);
-    if (issue?.activeRunId !== undefined) return undefined;
+    if (!issue) {
+      emitTelemetry(this.telemetry, {
+        type: "wake.suppressed",
+        projectId,
+        linearIssueId,
+        reason: "issue_missing",
+      });
+      return undefined;
+    }
+    if (issue.activeRunId !== undefined) {
+      const blockerCount = this.db.issues.countUnresolvedBlockers(projectId, linearIssueId);
+      emitTelemetry(this.telemetry, {
+        type: "wake.suppressed",
+        projectId,
+        linearIssueId,
+        ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+        reason: "active_run_present",
+        activeRunId: issue.activeRunId,
+        ...(blockerCount > 0 ? { blockerCount } : {}),
+      });
+      if (blockerCount > 0) {
+        emitTelemetry(this.telemetry, {
+          type: "health.invariant",
+          invariant: "active_run_with_unresolved_blocker",
+          status: "observed",
+          projectId,
+          linearIssueId,
+          ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+          runId: issue.activeRunId,
+          blockerCount,
+          detail: "Wake suppressed because an active run exists while blockers are unresolved",
+        });
+      }
+      return undefined;
+    }
+    const unresolvedBlockers = this.db.issues.countUnresolvedBlockers(projectId, linearIssueId);
+    if (unresolvedBlockers > 0) {
+      const blockerKeys = this.unresolvedBlockerKeys(projectId, linearIssueId);
+      emitTelemetry(this.telemetry, {
+        type: "wake.suppressed",
+        projectId,
+        linearIssueId,
+        ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+        reason: "blocked",
+        blockerCount: unresolvedBlockers,
+        blockerKeys,
+      });
+      const pendingBlockedWake = this.db.issueSessions.peekIssueSessionWake(projectId, linearIssueId) ?? issue.pendingRunType;
+      if (pendingBlockedWake) {
+        emitTelemetry(this.telemetry, {
+          type: "health.invariant",
+          invariant: "blocked_issue_with_pending_wake",
+          status: "observed",
+          projectId,
+          linearIssueId,
+          ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+          blockerCount: unresolvedBlockers,
+          detail: "Wake remains pending while blockers are unresolved",
+        });
+      }
+      return undefined;
+    }
     const wake = this.db.workflowWakes.peekIssueWake(projectId, linearIssueId);
     // Fall back to the legacy pending_run_type column. The orchestrator
     // materializes it into a real event at run time, but the poke still
     // needs to happen now so the orchestrator gets called at all.
-    const runType = wake?.runType ?? issue?.pendingRunType;
-    if (!runType) return undefined;
+    const runType = wake?.runType ?? issue.pendingRunType;
+    if (!runType) {
+      emitTelemetry(this.telemetry, {
+        type: "wake.suppressed",
+        projectId,
+        linearIssueId,
+        ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+        reason: "no_wake_derivable",
+      });
+      if (this.db.listIssuesReadyForExecution().some((entry) => entry.projectId === projectId && entry.linearIssueId === linearIssueId)) {
+        emitTelemetry(this.telemetry, {
+          type: "health.invariant",
+          invariant: "ready_issue_not_enqueued",
+          status: "observed",
+          projectId,
+          linearIssueId,
+          ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+          detail: "Issue appears ready for execution but no wake was derivable for enqueue",
+        });
+      }
+      return undefined;
+    }
+    emitTelemetry(this.telemetry, {
+      type: "wake.derived",
+      projectId,
+      linearIssueId,
+      ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+      runType,
+      ...(wake?.wakeReason ? { wakeReason: wake.wakeReason } : {}),
+      ...(wake?.eventIds ? { eventIds: wake.eventIds } : {}),
+      source: wake ? (wake.eventIds.length > 0 ? "session_event" : "implicit") : "legacy_pending_run_type",
+    });
     const tick = options?.enqueuedThisTick ?? this.currentTick;
     const key = `${projectId}:${linearIssueId}`;
     if (tick?.has(key)) {
+      emitTelemetry(this.telemetry, {
+        type: "wake.deduped",
+        projectId,
+        linearIssueId,
+        ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+        runType,
+        ...(wake?.wakeReason ? { wakeReason: wake.wakeReason } : {}),
+        ...(wake?.eventIds ? { eventIds: wake.eventIds } : {}),
+      });
+      emitTelemetry(this.telemetry, {
+        type: "queue.deduped",
+        projectId,
+        linearIssueId,
+        ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+        runType,
+      });
       return runType;
     }
     tick?.add(key);
     this.enqueueIssue(projectId, linearIssueId);
+    emitTelemetry(this.telemetry, {
+      type: "wake.dispatched",
+      projectId,
+      linearIssueId,
+      ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+      runType,
+      ...(wake?.wakeReason ? { wakeReason: wake.wakeReason } : {}),
+      ...(wake?.eventIds ? { eventIds: wake.eventIds } : {}),
+    });
+    emitTelemetry(this.telemetry, {
+      type: "queue.enqueued",
+      projectId,
+      linearIssueId,
+      ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+      runType,
+    });
     return runType;
   }
 
@@ -129,12 +266,45 @@ export class WakeDispatcher {
     publishDeferredFollowUp?: boolean;
   }): WakeDispatchResult | undefined {
     this.releaseLease(params.run.projectId, params.run.linearIssueId);
+    emitTelemetry(this.telemetry, {
+      type: "run.released",
+      projectId: params.run.projectId,
+      linearIssueId: params.run.linearIssueId,
+      ...(params.issueKey ? { issueKey: params.issueKey } : {}),
+      runId: params.run.id,
+      runType: params.run.runType,
+    });
     const wake = this.db.workflowWakes.peekIssueWake(
       params.run.projectId,
       params.run.linearIssueId,
     );
-    if (!wake) return undefined;
+    if (!wake) {
+      emitTelemetry(this.telemetry, {
+        type: "wake.suppressed",
+        projectId: params.run.projectId,
+        linearIssueId: params.run.linearIssueId,
+        ...(params.issueKey ? { issueKey: params.issueKey } : {}),
+        reason: "no_wake_derivable",
+      });
+      return undefined;
+    }
     this.enqueueIssue(params.run.projectId, params.run.linearIssueId);
+    emitTelemetry(this.telemetry, {
+      type: "wake.dispatched",
+      projectId: params.run.projectId,
+      linearIssueId: params.run.linearIssueId,
+      ...(params.issueKey ? { issueKey: params.issueKey } : {}),
+      runType: wake.runType,
+      ...(wake.wakeReason ? { wakeReason: wake.wakeReason } : {}),
+      eventIds: wake.eventIds,
+    });
+    emitTelemetry(this.telemetry, {
+      type: "queue.enqueued",
+      projectId: params.run.projectId,
+      linearIssueId: params.run.linearIssueId,
+      ...(params.issueKey ? { issueKey: params.issueKey } : {}),
+      runType: wake.runType,
+    });
     if (params.publishDeferredFollowUp) {
       this.feed?.publish({
         level: "info",
@@ -151,5 +321,12 @@ export class WakeDispatcher {
       runType: wake.runType,
       ...(wake.wakeReason ? { wakeReason: wake.wakeReason } : {}),
     };
+  }
+
+  private unresolvedBlockerKeys(projectId: string, linearIssueId: string): string[] {
+    return this.db.issues.listIssueDependencies(projectId, linearIssueId)
+      .filter((entry) => entry.blockerCurrentLinearStateType !== "completed"
+        && entry.blockerCurrentLinearState?.trim().toLowerCase() !== "done")
+      .map((entry) => entry.blockerIssueKey ?? entry.blockerLinearIssueId);
   }
 }

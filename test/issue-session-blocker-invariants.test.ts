@@ -1,0 +1,455 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import pino from "pino";
+import test from "node:test";
+import { PatchRelayDatabase } from "../src/db.ts";
+import { IssueOverviewQuery } from "../src/issue-overview-query.ts";
+import { DependencyReadinessHandler } from "../src/webhooks/dependency-readiness-handler.ts";
+import { TrackedIssueListQuery } from "../src/tracked-issue-list-query.ts";
+import { WakeDispatcher } from "../src/wake-dispatcher.ts";
+import type { RunType } from "../src/factory-state.ts";
+import { MemoryPatchRelayTelemetry, type PatchRelayTelemetryEvent } from "../src/telemetry.ts";
+
+async function withDb(fn: (db: PatchRelayDatabase, telemetry: MemoryPatchRelayTelemetry) => Promise<void> | void): Promise<void> {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-blocker-invariants-"));
+  const telemetry = new MemoryPatchRelayTelemetry();
+  try {
+    const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true, telemetry);
+    db.runMigrations();
+    await fn(db, telemetry);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+}
+
+function makeDispatcher(
+  db: PatchRelayDatabase,
+  enqueued: Array<{ projectId: string; issueId: string }>,
+  telemetry?: MemoryPatchRelayTelemetry,
+): WakeDispatcher {
+  return new WakeDispatcher(
+    db,
+    (projectId, issueId) => {
+      enqueued.push({ projectId, issueId });
+    },
+    (projectId, issueId) => db.issueSessions.releaseIssueSessionLease(projectId, issueId),
+    pino({ enabled: false }),
+    undefined,
+    telemetry,
+  );
+}
+
+function makeDependencyReadinessHandler(
+  db: PatchRelayDatabase,
+  dispatcher: WakeDispatcher,
+  telemetry?: MemoryPatchRelayTelemetry,
+): DependencyReadinessHandler {
+  return new DependencyReadinessHandler(
+    db,
+    dispatcher,
+    (projectId, issueId): RunType | undefined => db.issueSessions.peekIssueSessionWake(projectId, issueId)?.runType,
+    telemetry,
+  );
+}
+
+function eventsOf<T extends PatchRelayTelemetryEvent["type"]>(
+  telemetry: MemoryPatchRelayTelemetry,
+  type: T,
+): Array<Extract<PatchRelayTelemetryEvent, { type: T }>> {
+  return telemetry.list(type);
+}
+
+async function getOverviewWaitingReason(db: PatchRelayDatabase, issueKey: string): Promise<string | undefined> {
+  const overview = await new IssueOverviewQuery(
+    db,
+    { readThread: async () => ({ id: "thread-1", turns: [] }) } as never,
+    { getActiveRunStatus: async () => undefined },
+  ).getIssueOverview(issueKey);
+  return overview?.issue.waitingReason;
+}
+
+function getListEntry(db: PatchRelayDatabase, issueKey: string) {
+  return new TrackedIssueListQuery(db).listTrackedIssues().find((entry) => entry.issueKey === issueKey);
+}
+
+function upsertBlockedImplementationIssue(db: PatchRelayDatabase, params?: {
+  linearIssueId?: string;
+  issueKey?: string;
+  blockerLinearIssueId?: string;
+  blockerIssueKey?: string;
+  pendingRunType?: RunType;
+}): void {
+  const linearIssueId = params?.linearIssueId ?? "issue-child";
+  const blockerLinearIssueId = params?.blockerLinearIssueId ?? "issue-blocker";
+  db.replaceIssueDependencies({
+    projectId: "usertold",
+    linearIssueId,
+    blockers: [{
+      blockerLinearIssueId,
+      blockerIssueKey: params?.blockerIssueKey ?? "USE-1",
+      blockerTitle: "Blocking issue",
+      blockerCurrentLinearState: "In Progress",
+      blockerCurrentLinearStateType: "started",
+    }],
+  });
+  db.upsertIssue({
+    projectId: "usertold",
+    linearIssueId,
+    issueKey: params?.issueKey ?? "USE-2",
+    title: "Blocked issue",
+    delegatedToPatchRelay: true,
+    factoryState: "delegated",
+    ...(params?.pendingRunType ? { pendingRunType: params.pendingRunType } : {}),
+  });
+}
+
+test("blocked idle issue has one blocked truth across session, list, overview, and dispatch", async () => {
+  await withDb(async (db, telemetry) => {
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    upsertBlockedImplementationIssue(db, { pendingRunType: "implementation" });
+
+    const dispatcher = makeDispatcher(db, enqueued, telemetry);
+    const listEntry = getListEntry(db, "USE-2");
+
+    assert.equal(db.countUnresolvedBlockers("usertold", "issue-child"), 1);
+    assert.equal(db.workflowWakes.peekIssueWake("usertold", "issue-child"), undefined);
+    assert.deepEqual(db.listIssuesReadyForExecution(), []);
+    assert.equal(dispatcher.dispatchIfWakePending("usertold", "issue-child"), undefined);
+    assert.deepEqual(enqueued, []);
+    assert.equal(db.issueSessions.getIssueSession("usertold", "issue-child")?.waitingReason, "Blocked by USE-1");
+    assert.equal(listEntry?.blockedByCount, 1);
+    assert.deepEqual(listEntry?.blockedByKeys, ["USE-1"]);
+    assert.equal(listEntry?.waitingReason, "Blocked by USE-1");
+    assert.equal(await getOverviewWaitingReason(db, "USE-2"), "Blocked by USE-1");
+    assert.ok(eventsOf(telemetry, "wake.suppressed").some((event) => (
+      event.reason === "blocked"
+      && event.linearIssueId === "issue-child"
+      && event.blockerCount === 1
+      && event.blockerKeys?.includes("USE-1")
+    )));
+    assert.ok(eventsOf(telemetry, "health.invariant").some((event) => (
+      event.invariant === "blocked_issue_with_pending_wake"
+      && event.linearIssueId === "issue-child"
+    )));
+  });
+});
+
+test("unblock while idle enqueues implementation and clears stale blocked read-model text", async () => {
+  await withDb(async (db, telemetry) => {
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const dispatcher = makeDispatcher(db, enqueued, telemetry);
+    const readiness = makeDependencyReadinessHandler(db, dispatcher, telemetry);
+    upsertBlockedImplementationIssue(db);
+
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-blocker",
+      issueKey: "USE-1",
+      currentLinearState: "Done",
+      currentLinearStateType: "completed",
+      factoryState: "done",
+    });
+
+    assert.deepEqual(readiness.reconcile("usertold", "issue-blocker"), ["issue-child"]);
+    const listEntry = getListEntry(db, "USE-2");
+
+    assert.equal(db.countUnresolvedBlockers("usertold", "issue-child"), 0);
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-child")?.runType, "implementation");
+    assert.deepEqual(db.listIssuesReadyForExecution(), [{ projectId: "usertold", linearIssueId: "issue-child" }]);
+    assert.deepEqual(enqueued, [{ projectId: "usertold", issueId: "issue-child" }]);
+    assert.notEqual(db.issueSessions.getIssueSession("usertold", "issue-child")?.waitingReason, "Blocked by USE-1");
+    assert.equal(listEntry?.blockedByCount, 0);
+    assert.deepEqual(listEntry?.blockedByKeys, []);
+    assert.equal(listEntry?.readyForExecution, true);
+    assert.notEqual(listEntry?.waitingReason, "Blocked by USE-1");
+    assert.notEqual(await getOverviewWaitingReason(db, "USE-2"), "Blocked by USE-1");
+    assert.ok(eventsOf(telemetry, "projection.invalidated").some((event) => (
+      event.reason === "issue_changed"
+      && event.linearIssueId === "issue-blocker"
+      && event.affectedCount === 2
+    )));
+    assert.ok(eventsOf(telemetry, "dependency.dependent_unblocked").some((event) => (
+      event.linearIssueId === "issue-child"
+      && event.blockerLinearIssueId === "issue-blocker"
+      && event.dispatchedRunType === "implementation"
+    )));
+    assert.ok(eventsOf(telemetry, "health.invariant").some((event) => (
+      event.invariant === "stale_blocked_read_model"
+      && event.status === "repaired"
+      && event.linearIssueId === "issue-child"
+    )));
+    assert.equal(eventsOf(telemetry, "wake.dispatched").filter((event) => event.linearIssueId === "issue-child").length, 1);
+  });
+});
+
+test("blocked active issue emits invariant telemetry when dispatch is suppressed", async () => {
+  await withDb(async (db, telemetry) => {
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const dispatcher = makeDispatcher(db, enqueued, telemetry);
+    upsertBlockedImplementationIssue(db, { pendingRunType: "implementation" });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-child",
+      activeRunId: 123,
+      factoryState: "implementing",
+    });
+
+    assert.equal(dispatcher.dispatchIfWakePending("usertold", "issue-child"), undefined);
+    assert.deepEqual(enqueued, []);
+    assert.ok(eventsOf(telemetry, "health.invariant").some((event) => (
+      event.invariant === "active_run_with_unresolved_blocker"
+      && event.linearIssueId === "issue-child"
+      && event.runId === 123
+    )));
+  });
+});
+
+test("external blocker completion releases dependents without a blocker issue row or stale blocked text", async () => {
+  await withDb(async (db, telemetry) => {
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const readiness = makeDependencyReadinessHandler(db, makeDispatcher(db, enqueued, telemetry), telemetry);
+    upsertBlockedImplementationIssue(db);
+
+    db.issues.updateDependencyBlockerSnapshot({
+      projectId: "usertold",
+      blockerLinearIssueId: "issue-blocker",
+      blockerCurrentLinearState: "Done",
+      blockerCurrentLinearStateType: "completed",
+    });
+
+    assert.equal(db.getIssue("usertold", "issue-blocker"), undefined);
+    assert.deepEqual(readiness.reconcile("usertold", "issue-blocker"), ["issue-child"]);
+    const listEntry = getListEntry(db, "USE-2");
+    assert.equal(db.countUnresolvedBlockers("usertold", "issue-child"), 0);
+    assert.deepEqual(enqueued, [{ projectId: "usertold", issueId: "issue-child" }]);
+    assert.notEqual(db.issueSessions.getIssueSession("usertold", "issue-child")?.waitingReason, "Blocked by USE-1");
+    assert.equal(listEntry?.readyForExecution, true);
+    assert.notEqual(listEntry?.waitingReason, "Blocked by USE-1");
+    assert.ok(eventsOf(telemetry, "projection.invalidated").some((event) => (
+      event.reason === "dependency_blocker_changed"
+      && event.linearIssueId === "issue-blocker"
+      && event.affectedCount === 1
+    )));
+    assert.ok(eventsOf(telemetry, "dependency.dependent_unblocked").some((event) => event.linearIssueId === "issue-child"));
+  });
+});
+
+test("multiple blockers keep the remaining blocker until the final unblock wakes work", async () => {
+  await withDb(async (db, telemetry) => {
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const readiness = makeDependencyReadinessHandler(db, makeDispatcher(db, enqueued, telemetry), telemetry);
+    db.replaceIssueDependencies({
+      projectId: "usertold",
+      linearIssueId: "issue-child",
+      blockers: [
+        {
+          blockerLinearIssueId: "issue-blocker-1",
+          blockerIssueKey: "USE-1",
+          blockerCurrentLinearState: "In Progress",
+          blockerCurrentLinearStateType: "started",
+        },
+        {
+          blockerLinearIssueId: "issue-blocker-2",
+          blockerIssueKey: "USE-3",
+          blockerCurrentLinearState: "In Progress",
+          blockerCurrentLinearStateType: "started",
+        },
+      ],
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-child",
+      issueKey: "USE-2",
+      delegatedToPatchRelay: true,
+      factoryState: "delegated",
+      pendingRunType: "implementation",
+    });
+
+    db.issues.updateDependencyBlockerSnapshot({
+      projectId: "usertold",
+      blockerLinearIssueId: "issue-blocker-1",
+      blockerCurrentLinearState: "Done",
+      blockerCurrentLinearStateType: "completed",
+    });
+    assert.deepEqual(readiness.reconcile("usertold", "issue-blocker-1"), []);
+    let listEntry = getListEntry(db, "USE-2");
+    assert.equal(db.countUnresolvedBlockers("usertold", "issue-child"), 1);
+    assert.deepEqual(enqueued, []);
+    assert.deepEqual(listEntry?.blockedByKeys, ["USE-3"]);
+    assert.equal(listEntry?.waitingReason, "Blocked by USE-3");
+    assert.ok(eventsOf(telemetry, "dependency.remaining_blockers").some((event) => (
+      event.linearIssueId === "issue-child"
+      && event.blockerLinearIssueId === "issue-blocker-1"
+      && event.blockerCount === 1
+      && event.blockerKeys?.includes("USE-3")
+    )));
+
+    db.issues.updateDependencyBlockerSnapshot({
+      projectId: "usertold",
+      blockerLinearIssueId: "issue-blocker-2",
+      blockerCurrentLinearState: "Done",
+      blockerCurrentLinearStateType: "completed",
+    });
+    assert.deepEqual(readiness.reconcile("usertold", "issue-blocker-2"), ["issue-child"]);
+    listEntry = getListEntry(db, "USE-2");
+    assert.equal(db.countUnresolvedBlockers("usertold", "issue-child"), 0);
+    assert.deepEqual(enqueued, [{ projectId: "usertold", issueId: "issue-child" }]);
+    assert.deepEqual(listEntry?.blockedByKeys, []);
+    assert.equal(listEntry?.waitingReason, "Ready to run implementation");
+    assert.ok(eventsOf(telemetry, "dependency.dependent_unblocked").some((event) => (
+      event.linearIssueId === "issue-child"
+      && event.blockerLinearIssueId === "issue-blocker-2"
+      && event.dispatchedRunType === "implementation"
+    )));
+  });
+});
+
+test("blocked requested-changes work waits until unblock and then wakes review_fix, not implementation", async () => {
+  await withDb(async (db, telemetry) => {
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const dispatcher = makeDispatcher(db, enqueued, telemetry);
+    const readiness = makeDependencyReadinessHandler(db, dispatcher, telemetry);
+    db.replaceIssueDependencies({
+      projectId: "usertold",
+      linearIssueId: "issue-review",
+      blockers: [{
+        blockerLinearIssueId: "issue-blocker",
+        blockerIssueKey: "USE-1",
+        blockerCurrentLinearState: "In Progress",
+        blockerCurrentLinearStateType: "started",
+      }],
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-review",
+      issueKey: "USE-4",
+      delegatedToPatchRelay: true,
+      factoryState: "changes_requested",
+      prNumber: 44,
+      prState: "open",
+      prReviewState: "changes_requested",
+      prCheckStatus: "success",
+    });
+
+    assert.equal(dispatcher.recordEventAndDispatch("usertold", "issue-review", {
+      eventType: "review_changes_requested",
+      dedupeKey: "review:issue-review:head",
+    }), undefined);
+    assert.deepEqual(enqueued, []);
+
+    db.issues.updateDependencyBlockerSnapshot({
+      projectId: "usertold",
+      blockerLinearIssueId: "issue-blocker",
+      blockerCurrentLinearState: "Done",
+      blockerCurrentLinearStateType: "completed",
+    });
+    assert.deepEqual(readiness.reconcile("usertold", "issue-blocker"), ["issue-review"]);
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-review")?.runType, "review_fix");
+    assert.deepEqual(enqueued, [{ projectId: "usertold", issueId: "issue-review" }]);
+    assert.ok(eventsOf(telemetry, "wake.suppressed").some((event) => (
+      event.reason === "blocked"
+      && event.linearIssueId === "issue-review"
+    )));
+    assert.ok(eventsOf(telemetry, "dependency.dependent_unblocked").some((event) => (
+      event.linearIssueId === "issue-review"
+      && event.dispatchedRunType === "review_fix"
+    )));
+  });
+});
+
+test("blocked red-CI work waits until unblock and then wakes ci_repair, not implementation", async () => {
+  await withDb(async (db, telemetry) => {
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const dispatcher = makeDispatcher(db, enqueued, telemetry);
+    const readiness = makeDependencyReadinessHandler(db, dispatcher, telemetry);
+    db.replaceIssueDependencies({
+      projectId: "usertold",
+      linearIssueId: "issue-ci",
+      blockers: [{
+        blockerLinearIssueId: "issue-blocker",
+        blockerIssueKey: "USE-1",
+        blockerCurrentLinearState: "In Progress",
+        blockerCurrentLinearStateType: "started",
+      }],
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-ci",
+      issueKey: "USE-5",
+      delegatedToPatchRelay: true,
+      factoryState: "repairing_ci",
+      prNumber: 55,
+      prState: "open",
+      prCheckStatus: "failure",
+      lastGitHubFailureSource: "branch_ci",
+      lastGitHubFailureHeadSha: "sha-1",
+      lastGitHubFailureSignature: "ci::sha-1",
+    });
+
+    assert.equal(dispatcher.recordEventAndDispatch("usertold", "issue-ci", {
+      eventType: "settled_red_ci",
+      dedupeKey: "ci:issue-ci:sha-1",
+    }), undefined);
+    assert.deepEqual(enqueued, []);
+
+    db.issues.updateDependencyBlockerSnapshot({
+      projectId: "usertold",
+      blockerLinearIssueId: "issue-blocker",
+      blockerCurrentLinearState: "Done",
+      blockerCurrentLinearStateType: "completed",
+    });
+    assert.deepEqual(readiness.reconcile("usertold", "issue-blocker"), ["issue-ci"]);
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-ci")?.runType, "ci_repair");
+    assert.deepEqual(enqueued, [{ projectId: "usertold", issueId: "issue-ci" }]);
+    assert.ok(eventsOf(telemetry, "dependency.dependent_unblocked").some((event) => (
+      event.linearIssueId === "issue-ci"
+      && event.dispatchedRunType === "ci_repair"
+    )));
+  });
+});
+
+test("unblock under a held lease preserves lease ownership and dedupes enqueue within a reconcile tick", async () => {
+  await withDb(async (db, telemetry) => {
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const dispatcher = makeDispatcher(db, enqueued, telemetry);
+    const readiness = makeDependencyReadinessHandler(db, dispatcher, telemetry);
+    upsertBlockedImplementationIssue(db);
+    assert.equal(db.issueSessions.acquireIssueSessionLease({
+      projectId: "usertold",
+      linearIssueId: "issue-child",
+      leaseId: "lease-live",
+      workerId: "worker-a",
+      leasedUntil: "2030-01-01T00:05:00.000Z",
+      now: "2030-01-01T00:00:00.000Z",
+    }), true);
+    assert.equal(db.issueSessions.upsertIssueWithLease({
+      projectId: "usertold",
+      linearIssueId: "issue-child",
+      leaseId: "lease-stale",
+    }, {
+      projectId: "usertold",
+      linearIssueId: "issue-child",
+      factoryState: "implementing",
+    }), undefined);
+
+    db.issues.updateDependencyBlockerSnapshot({
+      projectId: "usertold",
+      blockerLinearIssueId: "issue-blocker",
+      blockerCurrentLinearState: "Done",
+      blockerCurrentLinearStateType: "completed",
+    });
+
+    await dispatcher.withTick(async () => {
+      assert.deepEqual(readiness.reconcile("usertold", "issue-blocker"), ["issue-child"]);
+      assert.deepEqual(readiness.reconcile("usertold", "issue-blocker"), ["issue-child"]);
+    });
+    const session = db.issueSessions.getIssueSession("usertold", "issue-child");
+    assert.equal(session?.leaseId, "lease-live");
+    assert.deepEqual(enqueued, [{ projectId: "usertold", issueId: "issue-child" }]);
+    assert.equal(eventsOf(telemetry, "wake.dispatched").filter((event) => event.linearIssueId === "issue-child").length, 1);
+    assert.ok(eventsOf(telemetry, "wake.deduped").some((event) => event.linearIssueId === "issue-child"));
+    assert.ok(eventsOf(telemetry, "queue.deduped").some((event) => event.linearIssueId === "issue-child"));
+  });
+});
