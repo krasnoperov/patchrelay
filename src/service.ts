@@ -14,7 +14,7 @@ import { IssueQueryService } from "./issue-query-service.ts";
 import { DatabaseBackedLinearClientProvider } from "./linear-client.ts";
 import { LinearOAuthService } from "./linear-oauth-service.ts";
 import { RunOrchestrator } from "./run-orchestrator.ts";
-import { OperatorEventFeed } from "./operator-feed.ts";
+import { OperatorEventFeed, type OperatorFeedEvent } from "./operator-feed.ts";
 import {
   buildSessionStatusUrl,
   createSessionStatusToken,
@@ -493,6 +493,26 @@ export class PatchRelayService {
 
   async getIssueOverview(issueKey: string) {
     return await this.queryService.getIssueOverview(issueKey);
+  }
+
+  listIssueFeedEvents(
+    issueKey: string,
+    options?: { afterId?: number; limit?: number },
+  ): { events: OperatorFeedEvent[] } | undefined {
+    const session = this.db.issueSessions.getIssueSessionByKey(issueKey);
+    const issue = this.db.issues.getIssueByKey(issueKey);
+    const projectId = session?.projectId ?? issue?.projectId;
+    const resolvedIssueKey = session?.issueKey ?? issue?.issueKey ?? issueKey;
+    if (!projectId) return undefined;
+
+    return {
+      events: this.db.operatorFeed.list({
+        issueKey: resolvedIssueKey,
+        projectId,
+        ...(options?.afterId !== undefined ? { afterId: options.afterId } : {}),
+        limit: Math.min(options?.limit ?? 100, 100),
+      }),
+    };
   }
 
   async getActiveRunStatus(issueKey: string) {
