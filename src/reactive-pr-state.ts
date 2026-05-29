@@ -1,9 +1,19 @@
 import { readRemotePrState, type RemotePrState } from "./remote-pr-state.ts";
-import type { RunType } from "./factory-state.ts";
+import type { FactoryState, RunType } from "./factory-state.ts";
 import type { AppConfig } from "./types.ts";
 
 export function isRequestedChangesRunType(runType: RunType): boolean {
   return runType === "review_fix" || runType === "branch_upkeep";
+}
+
+/**
+ * The terminal state a failed run should land the issue in: requested-changes
+ * repairs escalate (a human asked for the change, so a silent failure must
+ * surface), everything else fails. Centralized so the mapping cannot diverge
+ * between the launcher and the notification handler.
+ */
+export function resolveFailureFactoryState(runType: RunType): FactoryState {
+  return isRequestedChangesRunType(runType) ? "escalated" : "failed";
 }
 
 export function normalizeRemotePrState(value: string | undefined): "open" | "closed" | "merged" | undefined {

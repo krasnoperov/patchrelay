@@ -8,10 +8,7 @@ import type { LinearSessionSync } from "./linear-session-sync.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { RunCompletionPolicy } from "./run-completion-policy.ts";
 import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
-
-function isRequestedChangesRunType(runType: RunType): boolean {
-  return runType === "review_fix" || runType === "branch_upkeep";
-}
+import { isRequestedChangesRunType } from "./reactive-pr-state.ts";
 
 function resolveRetryRunType(runType: RunType, context: Record<string, unknown> | undefined): "review_fix" | "branch_upkeep" {
   if (runType === "branch_upkeep") {

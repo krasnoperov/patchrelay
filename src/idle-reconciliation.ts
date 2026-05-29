@@ -3,6 +3,7 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
 import { TERMINAL_STATES } from "./factory-state.ts";
+import { CLEARED_FAILURE_PROVENANCE } from "./failure-provenance.ts";
 import type { AppConfig } from "./types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import {
@@ -30,7 +31,7 @@ import { getReviewFixBudget } from "./run-budgets.ts";
 import { queueSettledOrchestrationIssue } from "./orchestration-parent-wake.ts";
 import { fetchPullRequestSnapshot } from "./reconcile-pr-fetch.ts";
 import { buildPrStateUpdates } from "./reconcile-pr-state-updates.ts";
-import { buildRequestedChangesWakeIdentity } from "./reactive-wake-keys.ts";
+import { buildRepairWakeDedupeKey, buildRequestedChangesWakeIdentity, reactiveWakeEventType } from "./reactive-wake-keys.ts";
 import { execCommand } from "./utils.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
@@ -276,19 +277,7 @@ export class IdleIssueReconciler {
           }
         : {}),
       ...(options?.clearFailureProvenance
-        ? {
-            lastGitHubFailureSource: null,
-            lastGitHubFailureHeadSha: null,
-            lastGitHubFailureSignature: null,
-            lastGitHubFailureCheckName: null,
-            lastGitHubFailureCheckUrl: null,
-            lastGitHubFailureContextJson: null,
-            lastGitHubFailureAt: null,
-            lastQueueIncidentJson: null,
-            lastAttemptedFailureHeadSha: null,
-            lastAttemptedFailureSignature: null,
-            lastAttemptedFailureAt: null,
-          }
+        ? { ...CLEARED_FAILURE_PROVENANCE }
         : {}),
     });
     const updatedIssue = this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
@@ -323,23 +312,24 @@ export class IdleIssueReconciler {
     context?: Record<string, unknown>,
     dedupeScope = "idle_reconciliation",
   ): void {
-    let eventType: "delegated" | "review_changes_requested" | "settled_red_ci" | "merge_steward_incident";
+    const eventType = reactiveWakeEventType(runType);
     let dedupeKey: string;
-    if (runType === "queue_repair") {
-      eventType = "merge_steward_incident";
-      dedupeKey = `${dedupeScope}:queue_repair:${issue.linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown"}`;
-    } else if (runType === "ci_repair") {
-      eventType = "settled_red_ci";
-      dedupeKey = `${dedupeScope}:ci_repair:${issue.linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown"}`;
+    if (runType === "queue_repair" || runType === "ci_repair") {
+      dedupeKey = buildRepairWakeDedupeKey({
+        scope: dedupeScope,
+        runType,
+        linearIssueId: issue.linearIssueId,
+        signature: issue.lastGitHubFailureSignature,
+        prHeadSha: issue.prHeadSha,
+        failureHeadSha: issue.lastGitHubFailureHeadSha,
+      });
     } else if (runType === "review_fix" || runType === "branch_upkeep") {
-      eventType = "review_changes_requested";
       dedupeKey = buildRequestedChangesWakeIdentity({
         linearIssueId: issue.linearIssueId,
         runType,
         headSha: issue.prHeadSha,
       }).dedupeKey;
     } else {
-      eventType = "delegated";
       dedupeKey = `${dedupeScope}:implementation:${issue.linearIssueId}`;
     }
     const requestedChangesIdentity = eventType === "review_changes_requested"

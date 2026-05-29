@@ -5,7 +5,7 @@ import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
 import type { LinearClientProvider } from "./types.ts";
 import type { LinearSessionSync } from "./linear-session-sync.ts";
 import { isResumablePausedLocalWork } from "./paused-issue-state.ts";
-import { buildRequestedChangesWakeIdentity } from "./reactive-wake-keys.ts";
+import { buildRepairWakeDedupeKey, buildRequestedChangesWakeIdentity, reactiveWakeEventType } from "./reactive-wake-keys.ts";
 
 export class ServiceStartupRecovery {
   constructor(
@@ -190,20 +190,21 @@ export class ServiceStartupRecovery {
     issue: { prHeadSha?: string | undefined; lastGitHubFailureHeadSha?: string | undefined; lastGitHubFailureSignature?: string | undefined },
     runType: "review_fix" | "branch_upkeep" | "ci_repair" | "queue_repair",
   ): void {
-    const eventType = runType === "queue_repair"
-      ? "merge_steward_incident"
-      : runType === "ci_repair"
-        ? "settled_red_ci"
-        : "review_changes_requested";
-    const dedupeKey = runType === "queue_repair"
-      ? `startup_recovery:queue_repair:${linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown"}`
-      : runType === "ci_repair"
-        ? `startup_recovery:ci_repair:${linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown"}`
-        : buildRequestedChangesWakeIdentity({
-            linearIssueId,
-            runType,
-            headSha: issue.prHeadSha,
-          }).dedupeKey;
+    const eventType = reactiveWakeEventType(runType);
+    const dedupeKey = runType === "queue_repair" || runType === "ci_repair"
+      ? buildRepairWakeDedupeKey({
+          scope: "startup_recovery",
+          runType,
+          linearIssueId,
+          signature: issue.lastGitHubFailureSignature,
+          prHeadSha: issue.prHeadSha,
+          failureHeadSha: issue.lastGitHubFailureHeadSha,
+        })
+      : buildRequestedChangesWakeIdentity({
+          linearIssueId,
+          runType,
+          headSha: issue.prHeadSha,
+        }).dedupeKey;
     const requestedChangesIdentity = eventType === "review_changes_requested"
       ? buildRequestedChangesWakeIdentity({
           linearIssueId,

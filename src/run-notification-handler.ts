@@ -2,7 +2,7 @@ import type { Logger } from "pino";
 import type { CodexNotification } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
-import type { FactoryState, RunType } from "./factory-state.ts";
+import type { FactoryState } from "./factory-state.ts";
 import { buildRunFailureActivity } from "./linear-session-reporting.ts";
 import type { LinearSessionSync } from "./linear-session-sync.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
@@ -10,10 +10,7 @@ import { extractTurnId, resolveRunCompletionStatus } from "./run-reporting.ts";
 import type { CodexThreadSummary } from "./types.ts";
 import type { RunFinalizer } from "./run-finalizer.ts";
 import { resolveRecoverablePostRunState } from "./interrupted-run-recovery.ts";
-
-function isRequestedChangesRunType(runType: RunType): boolean {
-  return runType === "review_fix" || runType === "branch_upkeep";
-}
+import { resolveFailureFactoryState } from "./reactive-pr-state.ts";
 
 const DEFAULT_PUBLISH_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -109,7 +106,7 @@ export class RunNotificationHandler {
         return;
       }
 
-      const nextState: FactoryState = isRequestedChangesRunType(run.runType) ? "escalated" : "failed";
+      const nextState: FactoryState = resolveFailureFactoryState(run.runType);
       const updated = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, (lease) => {
         this.db.issueSessions.finishRunWithLease(lease, run.id, {
           status: "failed",

@@ -3,6 +3,7 @@ import type { CompletionCheckExecution } from "./completion-check.ts";
 import type { CodexThreadSummary } from "./types.ts";
 import type { IssueRecord, IssueSessionEventRecord, RunRecord } from "./db-types.ts";
 import type { FactoryState } from "./factory-state.ts";
+import { CLEARED_FAILURE_PROVENANCE } from "./failure-provenance.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { ReleaseIssueSessionLease, WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import type { LinearSessionSync } from "./linear-session-sync.ts";
@@ -563,19 +564,7 @@ export class RunFinalizer {
         pendingRunType: null,
         pendingRunContextJson: null,
         ...(postRunFollowUp ? {} : (postRunState === "awaiting_queue" || postRunState === "done"
-          ? {
-              lastGitHubFailureSource: null,
-              lastGitHubFailureHeadSha: null,
-              lastGitHubFailureSignature: null,
-              lastGitHubFailureCheckName: null,
-              lastGitHubFailureCheckUrl: null,
-              lastGitHubFailureContextJson: null,
-              lastGitHubFailureAt: null,
-              lastQueueIncidentJson: null,
-              lastAttemptedFailureHeadSha: null,
-              lastAttemptedFailureSignature: null,
-              lastAttemptedFailureAt: null,
-            }
+          ? { ...CLEARED_FAILURE_PROVENANCE }
           : {})),
       });
       if (postRunFollowUp) {
