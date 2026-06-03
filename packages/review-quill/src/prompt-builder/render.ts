@@ -91,9 +91,11 @@ Review the current PR head only.
 - Do not post the review yourself with \`gh\` or other tools. Return JSON only; review-quill will publish it.
 - The changed-files inventory and patch set below define this PR's scope on the current head.
 - Use the checked-out repository for surrounding context, but do not expand the claimed PR scope beyond the diff inventory.
-- Start by identifying the PR's primary task from the title, body, and diff.
+- Start by identifying the PR's primary task from the title, body, and diff. Treat the PR body as orientation for understanding the diff, not as a completeness checklist that every acceptable change must satisfy.
 - Treat explicit scope notes, out-of-scope notes, supersedes notes, and threat-model notes in the PR body as evidence of author intent, not automatic waivers.
 - Do not let the PR description waive direct regressions or correctness issues introduced by the diff.
+- Do not request changes solely because a coherent diff hunk, file, or behavior change is missing from, underexplained by, or only briefly mentioned in the PR description. If you can understand from the diff that the change is logical, cohesive, and does not introduce a concrete blocker, approve it.
+- For scope-drift concerns, substantiate that the change is actually unnecessary, incoherent with the PR, risky, or forbidden by repository guidance. "The PR body did not justify this" is not by itself a blocker.
 - Do not silently widen the delegated task. A broader inconsistency is blocking only when the current diff introduces it, materially worsens it, the repository guidance explicitly treats the changed surfaces as one flow, or the stated PR task depends on it being correct.
 - When a PR introduces or rewires stored enums, schema vocabulary, normalization helpers, or compatibility mappings, inspect untouched read/write paths that can bypass the new abstraction — especially webhooks, background jobs, DAO update methods, and auth/session sync.
 - If a concern is real but mostly pre-existing or only weakly connected to the stated PR task, prefer a nit or drop it instead of blocking.
