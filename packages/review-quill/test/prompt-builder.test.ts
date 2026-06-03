@@ -127,8 +127,11 @@ test("renderReviewPrompt includes explicit guidance docs and suppressed summarie
   assert.match(prompt, /do not intentionally stop after the first blocker/);
   assert.match(prompt, /Include nits only when they are high-confidence, directly tied to the diff, and useful to fix while touching this code/);
   assert.match(prompt, /Start by identifying the PR's primary task from the title, body, and diff/);
+  assert.match(prompt, /Treat the PR body as orientation for understanding the diff, not as a completeness checklist/);
   assert.match(prompt, /Treat explicit scope notes, out-of-scope notes, supersedes notes, and threat-model notes in the PR body as evidence of author intent, not automatic waivers/);
   assert.match(prompt, /Do not let the PR description waive direct regressions or correctness issues introduced by the diff/);
+  assert.match(prompt, /Do not request changes solely because a coherent diff hunk, file, or behavior change is missing from, underexplained by, or only briefly mentioned in the PR description/);
+  assert.match(prompt, /"The PR body did not justify this" is not by itself a blocker/);
   assert.match(prompt, /Do not silently widen the delegated task/);
   assert.match(prompt, /When a PR introduces or rewires stored enums, schema vocabulary, normalization helpers, or compatibility mappings, inspect untouched read\/write paths that can bypass the new abstraction/);
   assert.match(prompt, /If a concern is real but mostly pre-existing or only weakly connected to the stated PR task, prefer a nit or drop it instead of blocking/);
