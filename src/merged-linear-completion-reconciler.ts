@@ -7,6 +7,7 @@ import { resolvePreferredCompletedLinearState } from "./linear-workflow.ts";
 import { isCompletedLinearState } from "./pr-state.ts";
 import { hasTrustedNoPrCompletion } from "./trusted-no-pr-completion.ts";
 import type { LinearClientProvider } from "./types.ts";
+import { replaceIssueDependenciesFromLinearIssue } from "./linear-issue-projection.ts";
 
 const COMPLETION_RECONCILE_WINDOW_MS = 60 * 60 * 1000;
 const COMPLETION_RECONCILE_SUCCESS_BACKOFF_MS = 60 * 60 * 1000;
@@ -60,17 +61,7 @@ export class MergedLinearCompletionReconciler {
 
       try {
         const liveIssue = await linear.getIssue(issue.linearIssueId);
-        this.db.issues.replaceIssueDependencies({
-          projectId: issue.projectId,
-          linearIssueId: issue.linearIssueId,
-          blockers: liveIssue.blockedBy.map((blocker) => ({
-            blockerLinearIssueId: blocker.id,
-            ...(blocker.identifier ? { blockerIssueKey: blocker.identifier } : {}),
-            ...(blocker.title ? { blockerTitle: blocker.title } : {}),
-            ...(blocker.stateName ? { blockerCurrentLinearState: blocker.stateName } : {}),
-            ...(blocker.stateType ? { blockerCurrentLinearStateType: blocker.stateType } : {}),
-          })),
-        });
+        replaceIssueDependenciesFromLinearIssue(this.db, issue.projectId, liveIssue);
 
         const latestRun = this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
         const trustedNoPrDone = hasTrustedNoPrCompletion(issue, latestRun);

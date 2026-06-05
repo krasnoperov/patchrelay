@@ -121,6 +121,70 @@ test("LinearGraphqlClient sends Bearer auth for access tokens", async () => {
   }
 });
 
+test("LinearGraphqlClient lists delegated issues with Linear ID variables", async () => {
+  const originalFetch = globalThis.fetch;
+  let seenBody = "";
+
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    seenBody = String(init?.body ?? "");
+    return new Response(
+      JSON.stringify({
+        data: {
+          issues: {
+            nodes: [
+              {
+                id: "issue_lsr_809",
+                identifier: "LSR-809",
+                title: "Delegated missing issue",
+                state: { id: "state_started", name: "Implementing", type: "started" },
+                labels: { nodes: [] },
+                team: {
+                  id: "team_subtitles",
+                  key: "LSR",
+                  states: { nodes: [] },
+                  labels: { nodes: [] },
+                },
+              },
+            ],
+            pageInfo: {
+              hasNextPage: false,
+              endCursor: null,
+            },
+          },
+        },
+      }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+    );
+  }) as typeof fetch;
+
+  try {
+    const client = new LinearGraphqlClient(
+      {
+        accessToken: "secret-token",
+        graphqlUrl: "https://linear.example/graphql",
+      },
+      pino({ enabled: false }),
+    );
+
+    const issues = await client.listIssuesDelegatedTo({
+      delegateId: "patchrelay-actor",
+      teamIds: ["team_subtitles"],
+    });
+
+    const request = JSON.parse(seenBody) as { query?: string; variables?: Record<string, unknown> };
+    assert.match(request.query ?? "", /\$delegateId: ID!/);
+    assert.match(request.query ?? "", /\$teamIds: \[ID!\]/);
+    assert.equal(request.variables?.delegateId, "patchrelay-actor");
+    assert.deepEqual(request.variables?.teamIds, ["team_subtitles"]);
+    assert.deepEqual(issues.map((issue) => issue.identifier), ["LSR-809"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("LinearGraphqlClient surfaces HTTP and GraphQL failures", async () => {
   const originalFetch = globalThis.fetch;
   const client = new LinearGraphqlClient(

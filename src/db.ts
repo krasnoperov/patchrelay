@@ -52,6 +52,7 @@ export class PatchRelayDatabase {
     this.connection.pragma("foreign_keys = ON");
     if (wal) {
       this.connection.pragma("journal_mode = WAL");
+      this.connection.pragma("synchronous = NORMAL");
     }
     this.linearInstallations = new LinearInstallationStore(this.connection);
     this.operatorFeed = new OperatorFeedStore(this.connection);

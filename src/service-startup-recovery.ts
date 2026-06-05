@@ -2,13 +2,15 @@ import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import { appendDelegationObservedEvent } from "./delegation-audit.ts";
 import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
-import type { LinearClientProvider } from "./types.ts";
+import type { AppConfig, LinearClientProvider, LinearIssueSnapshot, ProjectConfig } from "./types.ts";
 import type { LinearSessionSync } from "./linear-session-sync.ts";
 import { isResumablePausedLocalWork } from "./paused-issue-state.ts";
 import { buildRepairWakeDedupeKey, buildRequestedChangesWakeIdentity, reactiveWakeEventType } from "./reactive-wake-keys.ts";
+import { upsertLinearIssueProjection } from "./linear-issue-projection.ts";
 
 export class ServiceStartupRecovery {
   constructor(
+    private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
     private readonly linearProvider: LinearClientProvider,
     private readonly linearSync: LinearSessionSync,
@@ -19,6 +21,9 @@ export class ServiceStartupRecovery {
   async syncKnownAgentSessions(): Promise<void> {
     for (const issue of this.db.issues.listIssues()) {
       if (issue.factoryState === "done") {
+        continue;
+      }
+      if (!issue.activeRunId) {
         continue;
       }
       const syncedIssue = issue.agentSessionId
@@ -36,7 +41,11 @@ export class ServiceStartupRecovery {
       if (!syncedIssue.agentSessionId) {
         continue;
       }
-      const activeRun = syncedIssue.activeRunId ? this.db.runs.getRunById(syncedIssue.activeRunId) : undefined;
+      const activeRunId = syncedIssue.activeRunId;
+      if (!activeRunId) {
+        continue;
+      }
+      const activeRun = this.db.runs.getRunById(activeRunId);
       if (!activeRun) {
         continue;
       }
@@ -45,6 +54,8 @@ export class ServiceStartupRecovery {
   }
 
   async recoverDelegatedIssueStateFromLinear(): Promise<void> {
+    await this.discoverDelegatedIssuesFromLinear();
+
     for (const issue of this.db.issues.listIssues()) {
       if (issue.factoryState === "done" || issue.activeRunId !== undefined) {
         continue;
@@ -63,17 +74,7 @@ export class ServiceStartupRecovery {
         continue;
       }
 
-      this.db.issues.replaceIssueDependencies({
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        blockers: liveIssue.blockedBy.map((blocker) => ({
-          blockerLinearIssueId: blocker.id,
-          ...(blocker.identifier ? { blockerIssueKey: blocker.identifier } : {}),
-          ...(blocker.title ? { blockerTitle: blocker.title } : {}),
-          ...(blocker.stateName ? { blockerCurrentLinearState: blocker.stateName } : {}),
-          ...(blocker.stateType ? { blockerCurrentLinearStateType: blocker.stateType } : {}),
-        })),
-      });
+      upsertLinearIssueProjection(this.db, issue.projectId, liveIssue);
 
       const delegated = liveIssue.delegateId === installation.actorId;
       if (issue.delegatedToPatchRelay !== delegated) {
@@ -182,6 +183,97 @@ export class ServiceStartupRecovery {
         );
       }
     }
+  }
+
+  private async discoverDelegatedIssuesFromLinear(): Promise<void> {
+    for (const project of this.config.projects) {
+      const installation = this.db.linearInstallations.getLinearInstallationForProject(project.id);
+      if (!installation?.actorId) {
+        continue;
+      }
+      const linear = await this.linearProvider.forProject(project.id).catch(() => undefined);
+      if (!linear?.listIssuesDelegatedTo) {
+        continue;
+      }
+
+      const liveIssues = await linear.listIssuesDelegatedTo({
+        delegateId: installation.actorId,
+        teamIds: project.linearTeamIds,
+      }).catch((error) => {
+        this.logger.warn(
+          {
+            projectId: project.id,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          "Failed to discover delegated Linear issues during startup recovery",
+        );
+        return [];
+      });
+
+      for (const liveIssue of liveIssues) {
+        if (!this.shouldRecoverDiscoveredIssue(project, liveIssue, installation.actorId)) {
+          continue;
+        }
+        const existing = this.db.issues.getIssue(project.id, liveIssue.id);
+        if (existing) {
+          continue;
+        }
+        this.upsertDiscoveredDelegatedIssue(project, liveIssue);
+      }
+    }
+  }
+
+  private shouldRecoverDiscoveredIssue(project: ProjectConfig, liveIssue: LinearIssueSnapshot, actorId: string): boolean {
+    if (liveIssue.delegateId !== actorId) return false;
+    if (liveIssue.stateType === "completed" || liveIssue.stateType === "canceled") return false;
+    if (project.linearTeamIds.length > 0 && (!liveIssue.teamId || !project.linearTeamIds.includes(liveIssue.teamId))) {
+      return false;
+    }
+    return true;
+  }
+
+  private upsertDiscoveredDelegatedIssue(project: ProjectConfig, liveIssue: LinearIssueSnapshot): void {
+    upsertLinearIssueProjection(this.db, project.id, liveIssue);
+
+    const existing = this.db.issues.getIssue(project.id, liveIssue.id);
+    const updated = this.db.issues.upsertIssue({
+      projectId: project.id,
+      linearIssueId: liveIssue.id,
+      delegatedToPatchRelay: true,
+      factoryState: existing?.factoryState ?? "delegated",
+      ...(liveIssue.identifier ? { issueKey: liveIssue.identifier } : {}),
+      ...(liveIssue.title ? { title: liveIssue.title } : {}),
+      ...(liveIssue.description ? { description: liveIssue.description } : {}),
+      ...(liveIssue.url ? { url: liveIssue.url } : {}),
+      ...(liveIssue.priority != null ? { priority: liveIssue.priority } : {}),
+      ...(liveIssue.estimate != null ? { estimate: liveIssue.estimate } : {}),
+      ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
+      ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
+    });
+
+    const hasPendingWake = this.db.workflowWakes.peekIssueWake(project.id, liveIssue.id) !== undefined;
+    const unresolvedBlockers = this.db.issues.countUnresolvedBlockers(project.id, liveIssue.id);
+    if (!hasPendingWake && unresolvedBlockers === 0) {
+      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, liveIssue.id, {
+        projectId: project.id,
+        linearIssueId: liveIssue.id,
+        eventType: "delegated",
+        dedupeKey: `delegated:${liveIssue.id}`,
+      });
+    }
+    if (this.db.workflowWakes.peekIssueWake(project.id, liveIssue.id)) {
+      this.enqueueIssue(project.id, liveIssue.id);
+    }
+    this.logger.info(
+      {
+        issueKey: updated.issueKey,
+        projectId: project.id,
+        unresolvedBlockers,
+      },
+      unresolvedBlockers === 0
+        ? "Discovered delegated Linear issue during startup recovery and queued implementation"
+        : "Discovered delegated blocked Linear issue during startup recovery",
+    );
   }
 
   private appendReactiveWakeEvent(

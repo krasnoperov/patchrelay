@@ -1,6 +1,7 @@
 import type { PatchRelayDatabase } from "../db.ts";
 import type { DelegationAuditHydration } from "../delegation-audit.ts";
 import type { IssueMetadata, LinearClientProvider } from "../types.ts";
+import { replaceIssueDependenciesFromLinearIssue } from "../linear-issue-projection.ts";
 import { mergeIssueMetadata } from "./decision-helpers.ts";
 
 export interface SyncIssueDependenciesResult {
@@ -38,17 +39,7 @@ export async function syncIssueDependencies(
   }
 
   if (source.relationsKnown) {
-    db.issues.replaceIssueDependencies({
-      projectId,
-      linearIssueId: source.id,
-      blockers: source.blockedBy.map((blocker) => ({
-        blockerLinearIssueId: blocker.id,
-        ...(blocker.identifier ? { blockerIssueKey: blocker.identifier } : {}),
-        ...(blocker.title ? { blockerTitle: blocker.title } : {}),
-        ...(blocker.stateName ? { blockerCurrentLinearState: blocker.stateName } : {}),
-        ...(blocker.stateType ? { blockerCurrentLinearStateType: blocker.stateType } : {}),
-      })),
-    });
+    replaceIssueDependenciesFromLinearIssue(db, projectId, source);
   }
 
   db.issues.replaceIssueParentLink({

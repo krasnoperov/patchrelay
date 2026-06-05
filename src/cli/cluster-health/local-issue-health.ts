@@ -17,23 +17,34 @@ export function isResolvedDependency(dep: IssueDependencyRecord): boolean {
 }
 
 export function needsReviewAutomation(issue: IssueRecord): boolean {
-  if (issue.factoryState === "awaiting_queue" || issue.factoryState === "done") {
+  if (issue.factoryState === "awaiting_queue" || !isActiveWorkflowIssue(issue)) {
     return false;
   }
   return hasOpenPr(issue.prNumber, issue.prState);
 }
 
+export function isActiveWorkflowIssue(issue: IssueRecord): boolean {
+  return issue.factoryState !== "done" && !isTerminalFailureIssue(issue);
+}
+
+export function isTerminalFailureIssue(issue: IssueRecord): boolean {
+  return issue.factoryState === "failed" || issue.factoryState === "escalated";
+}
+
+export function evaluateTerminalIssueHealth(issue: IssueRecord): ClusterHealthCheck | undefined {
+  if (issue.factoryState === "failed" || issue.factoryState === "escalated") {
+    return {
+      status: "warn",
+      scope: "issue:terminal",
+      message: `Historical terminal issue is in failure state ${issue.factoryState}`,
+    };
+  }
+  return undefined;
+}
+
 export function evaluateLocalIssueHealth(snapshot: IssueSnapshot): ClusterHealthCheck | undefined {
   const { issue, session, missingTrackedBlockers, blockedBy, ageMs, readyForExecution } = snapshot;
   const pausedNoPrWork = isUndelegatedPausedNoPrWork(issue);
-  if (issue.factoryState === "failed" || issue.factoryState === "escalated") {
-    return {
-      status: "fail",
-      scope: "issue:terminal",
-      message: `Issue is in terminal failure state ${issue.factoryState}`,
-    };
-  }
-
   if (missingTrackedBlockers.length > 0) {
     return {
       status: "fail",

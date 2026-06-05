@@ -48,7 +48,7 @@ export function formatClusterHealth(report: ClusterHealthReport): string {
 
   lines.push("");
   lines.push(
-    `Summary: tracked=${report.summary.trackedIssues} non_done=${report.summary.openIssues} active_runs=${report.summary.activeRuns} blocked=${report.summary.blockedIssues} ready=${report.summary.readyIssues}`,
+    `Summary: tracked=${report.summary.trackedIssues} active=${report.summary.openIssues} active_runs=${report.summary.activeRuns} blocked=${report.summary.blockedIssues} ready=${report.summary.readyIssues}`,
   );
   if (report.summary.ciTrackedPrs > 0) {
     lines.push(

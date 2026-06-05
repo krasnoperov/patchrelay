@@ -8,7 +8,7 @@ import pino from "pino";
 import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { RunOrchestrator } from "../src/run-orchestrator.ts";
-import type { AppConfig, LinearClient } from "../src/types.ts";
+import type { AppConfig, LinearClient, LinearIssueSnapshot } from "../src/types.ts";
 
 function createConfig(baseDir: string): AppConfig {
   return {
@@ -189,6 +189,33 @@ function patchOrchestratorLeaseService(orchestrator: RunOrchestrator, db: PatchR
   };
 }
 
+function buildLiveIssue(params: {
+  id: string;
+  identifier: string;
+  title?: string;
+  stateName?: string;
+  stateType?: string;
+  delegateId?: string;
+  blockedBy?: LinearIssueSnapshot["blockedBy"];
+}): LinearIssueSnapshot {
+  return {
+    id: params.id,
+    identifier: params.identifier,
+    title: params.title ?? params.identifier,
+    teamId: "USE",
+    teamKey: "USE",
+    delegateId: params.delegateId,
+    stateName: params.stateName ?? "Start",
+    stateType: params.stateType ?? "unstarted",
+    workflowStates: [],
+    labelIds: [],
+    labels: [],
+    teamLabels: [],
+    blockedBy: params.blockedBy ?? [],
+    blocks: [],
+  };
+}
+
 function runGit(args: string[], cwd: string): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
@@ -272,6 +299,154 @@ test("idle reconciliation re-enqueues issues with orphaned pending wakes", async
       (call) => call.projectId === "usertold" && call.issueId === "issue-orphan-wake",
     );
     assert.ok(orphanedEnqueues.length >= 1, "stuck pending wake should be re-enqueued");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("idle reconciliation refreshes stale Linear blockers and wakes newly unblocked delegated issues", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-stale-blocker-"));
+  try {
+    const { db, enqueueCalls, orchestrator } = createOrchestrator(baseDir, {
+      forProject: async () => ({
+        getIssue: async (issueId: string) => {
+          assert.equal(issueId, "issue-stale-blocked-child");
+          return buildLiveIssue({
+            id: "issue-stale-blocked-child",
+            identifier: "USE-STALE-BLOCKED",
+            title: "Stale blocked child",
+            blockedBy: [{
+              id: "issue-stale-blocker",
+              identifier: "USE-BLOCKER",
+              title: "Already done blocker",
+              stateName: "Done",
+              stateType: "completed",
+            }],
+          });
+        },
+      }) as LinearClient,
+    });
+    db.replaceIssueDependencies({
+      projectId: "usertold",
+      linearIssueId: "issue-stale-blocked-child",
+      blockers: [{
+        blockerLinearIssueId: "issue-stale-blocker",
+        blockerIssueKey: "USE-BLOCKER",
+        blockerTitle: "Already done blocker",
+        blockerCurrentLinearState: "In Merge Queue",
+        blockerCurrentLinearStateType: "started",
+      }],
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-stale-blocked-child",
+      issueKey: "USE-STALE-BLOCKED",
+      title: "Stale blocked child",
+      delegatedToPatchRelay: true,
+      factoryState: "delegated",
+    });
+    enqueueCalls.length = 0;
+
+    assert.equal(db.countUnresolvedBlockers("usertold", "issue-stale-blocked-child"), 1);
+
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    assert.equal(db.countUnresolvedBlockers("usertold", "issue-stale-blocked-child"), 0);
+    assert.equal(
+      db.issueSessions.peekIssueSessionWake("usertold", "issue-stale-blocked-child")?.runType,
+      "implementation",
+    );
+    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-stale-blocked-child" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("idle reconciliation clears stale pending wakes from terminal issues", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-terminal-wake-cleanup-"));
+  try {
+    const { db, orchestrator } = createOrchestrator(baseDir);
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-terminal-stale-wake",
+      issueKey: "USE-TERMINAL-WAKE",
+      delegatedToPatchRelay: true,
+      factoryState: "done",
+      pendingRunType: "implementation",
+    });
+    db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "delegated",
+      dedupeKey: `delegated:${issue.linearIssueId}`,
+    });
+
+    assert.equal(db.issueSessions.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId), true);
+
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    const updated = db.getIssue(issue.projectId, issue.linearIssueId);
+    assert.equal(updated?.factoryState, "done");
+    assert.equal(updated?.pendingRunType, undefined);
+    assert.equal(db.issueSessions.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId), false);
+    assert.equal(db.workflowWakes.peekIssueWake(issue.projectId, issue.linearIssueId), undefined);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("implementation launch refreshes Linear blockers before claiming a run", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-launch-live-blocker-preflight-"));
+  try {
+    let startedThread = false;
+    const { db, orchestrator } = createOrchestrator(baseDir, {
+      forProject: async () => ({
+        getIssue: async (issueId: string) => {
+          assert.equal(issueId, "issue-live-blocked-child");
+          return buildLiveIssue({
+            id: "issue-live-blocked-child",
+            identifier: "USE-LIVE-BLOCKED",
+            title: "Live blocked child",
+            blockedBy: [{
+              id: "issue-live-blocker",
+              identifier: "USE-LIVE-BLOCKER",
+              title: "Still running blocker",
+              stateName: "Implementing",
+              stateType: "started",
+            }],
+          });
+        },
+      }) as LinearClient,
+    }, {
+      startThreadForIssueTriage: async () => ({ id: "triage-thread-1", cwd: "/tmp/triage", preview: "", status: "idle", turns: [] }),
+      startThread: async () => {
+        startedThread = true;
+        return { threadId: "thread-should-not-start" };
+      },
+      steerTurn: async () => undefined,
+      readThread: async () => ({ id: "thread-1", turns: [] }),
+    });
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-live-blocked-child",
+      issueKey: "USE-LIVE-BLOCKED",
+      title: "Live blocked child",
+      delegatedToPatchRelay: true,
+      factoryState: "delegated",
+    });
+    db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "delegated",
+      dedupeKey: `delegated:${issue.linearIssueId}`,
+    });
+
+    await orchestrator.run({ projectId: issue.projectId, issueId: issue.linearIssueId });
+
+    assert.equal(startedThread, false);
+    assert.equal(db.runs.listRunsForIssue(issue.projectId, issue.linearIssueId).length, 0);
+    assert.equal(db.countUnresolvedBlockers(issue.projectId, issue.linearIssueId), 1);
+    assert.equal(db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId), undefined);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

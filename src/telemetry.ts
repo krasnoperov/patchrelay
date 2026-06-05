@@ -35,6 +35,7 @@ export type RunSkipReason =
   | "lease_acquire_failed"
   | "no_wake_derivable"
   | "blocked"
+  | "dependency_refresh_failed"
   | "zombie_backoff"
   | "inactive_requested_changes_wake"
   | "lease_lost_dismissing_inactive_requested_changes_wake"

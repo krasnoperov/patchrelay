@@ -39,6 +39,8 @@ import { buildIssueTriageHash, IssueTriageService } from "./issue-triage.ts";
 import { loadConfig } from "./config.ts";
 import { CodexThreadMaterializingError, isThreadMaterializingError } from "./codex-thread-errors.ts";
 import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry, type RunSkipReason } from "./telemetry.ts";
+import { LinearIssueProjectionService } from "./linear-issue-projection.ts";
+import { RunAdmissionController } from "./run-admission-controller.ts";
 
 function lowerCaseFirst(value: string): string {
   return value ? `${value.slice(0, 1).toLowerCase()}${value.slice(1)}` : value;
@@ -104,6 +106,8 @@ export class RunOrchestrator {
   private readonly runNotificationHandler: RunNotificationHandler;
   private readonly runReconciler: RunReconciler;
   private readonly mergedLinearCompletionReconciler: MergedLinearCompletionReconciler;
+  private readonly linearIssueProjection: LinearIssueProjectionService;
+  private readonly runAdmission: RunAdmissionController;
   private codexRuntimeConfig: AppConfig["runner"]["codex"];
   private readonly threadPorts: RunThreadPorts = {
     readThreadWithRetry: (threadId, maxRetries) => this.readThreadWithRetry(threadId, maxRetries),
@@ -256,6 +260,8 @@ export class RunOrchestrator {
       feed,
     );
     this.runWakePlanner = new RunWakePlanner(db);
+    this.linearIssueProjection = new LinearIssueProjectionService(db, linearProvider, logger);
+    this.runAdmission = new RunAdmissionController(db, this.linearIssueProjection);
     this.idleReconciler = new IdleIssueReconciler(
       db,
       config,
@@ -264,6 +270,7 @@ export class RunOrchestrator {
       feed,
       undefined,
       (issue) => this.linearSync.syncSession(issue),
+      linearProvider,
     );
     this.mergedLinearCompletionReconciler = new MergedLinearCompletionReconciler(db, linearProvider, logger);
     this.queueHealthMonitor = new QueueHealthMonitor(db, config, {
@@ -500,12 +507,26 @@ export class RunOrchestrator {
       return;
     }
     const { runType, context, resumeThread } = wake;
-    if (runType === "implementation" && this.db.issues.countUnresolvedBlockers(item.projectId, item.issueId) > 0) {
-      const blockerCount = this.db.issues.countUnresolvedBlockers(item.projectId, item.issueId);
+    const admission = await this.runAdmission.check({
+      projectId: item.projectId,
+      linearIssueId: item.issueId,
+      runType,
+    });
+    if (!admission.allowed) {
       this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(item.projectId, item.issueId);
       this.releaseIssueSessionLease(item.projectId, item.issueId);
-      this.emitRunSkipped(item, "blocked", issue, { runType, blockerCount });
-      this.logger.info({ issueKey: issue.issueKey }, "Skipped implementation launch because the issue is blocked");
+      this.emitRunSkipped(item, admission.reason, issue, { runType, ...admission });
+      if (admission.reason === "dependency_refresh_failed") {
+        this.logger.info(
+          { issueKey: issue.issueKey, projectId: item.projectId, knownDependencyRows: admission.knownDependencyRows },
+          "Skipped implementation launch because dependency refresh failed for an issue with known blockers",
+        );
+      } else {
+        this.logger.info(
+          { issueKey: issue.issueKey, blockerCount: admission.blockerCount },
+          "Skipped implementation launch because the issue is blocked",
+        );
+      }
       return;
     }
     const remainingZombieDelayMs = shouldDelayZombieRecoveryLaunch(issue, issueSession, runType);

@@ -1,10 +1,12 @@
 import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import { SerialWorkQueue } from "./service-queue.ts";
+import { retrySqliteLockedQueueFailure } from "./queue-failure-policy.ts";
 
 const ISSUE_KEY_DELIMITER = "::";
 const DEFAULT_RECONCILE_INTERVAL_MS = 5_000;
 const DEFAULT_RECONCILE_TIMEOUT_MS = 60_000;
+const DEFAULT_MAX_ACTIVE_ISSUE_RUNS = 4;
 
 export interface RuntimeIssueQueueItem {
   projectId: string;
@@ -25,11 +27,13 @@ export interface ActiveRunReconciler {
 
 export interface ReadyIssueSource {
   listIssuesReadyForExecution(): Array<{ projectId: string; linearIssueId: string }>;
+  countActiveIssueRuns?(): number;
 }
 
 export interface ServiceRuntimeOptions {
   reconcileIntervalMs?: number;
   reconcileTimeoutMs?: number;
+  maxActiveIssueRuns?: number;
 }
 
 function makeIssueQueueKey(item: RuntimeIssueQueueItem): string {
@@ -57,7 +61,9 @@ export class ServiceRuntime {
     private readonly options: ServiceRuntimeOptions = {},
   ) {
     this.webhookQueue = new SerialWorkQueue((eventId) => webhookProcessor.processWebhookEvent(eventId), logger, (eventId) => String(eventId));
-    this.issueQueue = new SerialWorkQueue((item) => issueProcessor.processIssue(item), logger, makeIssueQueueKey);
+    this.issueQueue = new SerialWorkQueue((item) => issueProcessor.processIssue(item), logger, makeIssueQueueKey, {
+      retryOnError: (error, _item, attempt) => retrySqliteLockedQueueFailure(error, attempt),
+    });
   }
 
   async start(): Promise<void> {
@@ -87,6 +93,19 @@ export class ServiceRuntime {
   }
 
   enqueueIssue(projectId: string, issueId: string): void {
+    if (!this.hasIssueRunCapacity()) {
+      this.logger.warn(
+        {
+          projectId,
+          issueId,
+          activeIssueRuns: this.getActiveIssueRunCount(),
+          queuedIssueRuns: this.issueQueue.size(),
+          maxActiveIssueRuns: this.getMaxActiveIssueRuns(),
+        },
+        "Skipped issue enqueue: active run capacity is full",
+      );
+      return;
+    }
     this.issueQueue.enqueue({ projectId, issueId });
   }
 
@@ -143,6 +162,9 @@ export class ServiceRuntime {
       // Pick up issues that became ready outside the webhook path
       // (e.g. CLI retry, manual DB edits) without requiring a restart.
       for (const issue of this.readyIssueSource.listIssuesReadyForExecution()) {
+        if (!this.hasIssueRunCapacity()) {
+          break;
+        }
         this.enqueueIssue(issue.projectId, issue.linearIssueId);
       }
     } catch (error) {
@@ -156,6 +178,19 @@ export class ServiceRuntime {
         this.scheduleBackgroundReconcile();
       }
     }
+  }
+
+  private getMaxActiveIssueRuns(): number {
+    const configured = this.options.maxActiveIssueRuns ?? DEFAULT_MAX_ACTIVE_ISSUE_RUNS;
+    return Math.max(1, Math.floor(configured));
+  }
+
+  private getActiveIssueRunCount(): number {
+    return Math.max(0, this.readyIssueSource.countActiveIssueRuns?.() ?? 0);
+  }
+
+  private hasIssueRunCapacity(): boolean {
+    return this.getActiveIssueRunCount() + this.issueQueue.size() < this.getMaxActiveIssueRuns();
   }
 }
 

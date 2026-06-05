@@ -129,7 +129,10 @@ export class PatchRelayService {
       codex,
       logger,
       this.orchestrator,
-      { listIssuesReadyForExecution: () => db.listIssuesReadyForExecution() },
+      {
+        listIssuesReadyForExecution: () => db.listIssuesReadyForExecution(),
+        countActiveIssueRuns: () => db.runs.listActiveRuns().length,
+      },
       this.webhookHandler,
       {
         processIssue: async (item: { projectId: string; issueId: string }) => {
@@ -144,6 +147,7 @@ export class PatchRelayService {
     this.runtime = runtime;
     this.issueActions = new ServiceIssueActions(config, db, agentInput, codex, runtime, this.feed, logger);
     this.startupRecovery = new ServiceStartupRecovery(
+      config,
       db,
       this.linearProvider,
       this.orchestrator.linearSync,

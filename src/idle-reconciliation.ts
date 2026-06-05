@@ -34,8 +34,18 @@ import { buildPrStateUpdates } from "./reconcile-pr-state-updates.ts";
 import { buildRepairWakeDedupeKey, buildRequestedChangesWakeIdentity, reactiveWakeEventType } from "./reactive-wake-keys.ts";
 import { execCommand } from "./utils.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
+import { LinearIssueProjectionService } from "./linear-issue-projection.ts";
+import type { LinearClientProvider } from "./types.ts";
+import { TerminalWakeReconciler } from "./terminal-wake-reconciler.ts";
+
+const BLOCKED_DEPENDENCY_REFRESH_SUCCESS_BACKOFF_MS = 60_000;
+const BLOCKED_DEPENDENCY_REFRESH_FAILURE_BACKOFF_MS = 5 * 60_000;
 
 export class IdleIssueReconciler {
+  private readonly blockedDependencyRefreshAfter = new Map<string, number>();
+  private readonly terminalWakeReconciler: TerminalWakeReconciler;
+  private readonly linearIssueProjection: LinearIssueProjectionService | undefined;
+
   constructor(
     private readonly db: PatchRelayDatabase,
     private readonly config: AppConfig,
@@ -45,7 +55,13 @@ export class IdleIssueReconciler {
     // Injectable for tests; production uses the real `gh`-backed watcher.
     private readonly deployEvaluator: DeployEvaluator = evaluateDeploy,
     private readonly syncIssue?: (issue: IssueRecord) => void | Promise<void>,
-  ) {}
+    private readonly linearProvider?: LinearClientProvider,
+  ) {
+    this.terminalWakeReconciler = new TerminalWakeReconciler(db, logger);
+    this.linearIssueProjection = linearProvider
+      ? new LinearIssueProjectionService(db, linearProvider, logger)
+      : undefined;
+  }
 
   async reconcile(): Promise<void> {
     // Wrap the entire reconcile pass in a dispatcher tick. Every
@@ -103,8 +119,24 @@ export class IdleIssueReconciler {
       await this.reconcileFromGitHub(issue);
     }
 
+    this.terminalWakeReconciler.reconcile();
+
     for (const issue of this.db.issues.listBlockedDelegatedIssues()) {
       if (!issue.delegatedToPatchRelay) continue;
+      const dependencyKey = `${issue.projectId}::${issue.linearIssueId}`;
+      const refreshAfter = this.blockedDependencyRefreshAfter.get(dependencyKey);
+      if (this.linearIssueProjection) {
+        if (refreshAfter === undefined || refreshAfter <= Date.now()) {
+          const refresh = await this.linearIssueProjection.refreshIssue(issue.projectId, issue.linearIssueId);
+          this.blockedDependencyRefreshAfter.set(
+            dependencyKey,
+            Date.now() + (refresh.refreshed ? BLOCKED_DEPENDENCY_REFRESH_SUCCESS_BACKOFF_MS : BLOCKED_DEPENDENCY_REFRESH_FAILURE_BACKOFF_MS),
+          );
+          if (!refresh.refreshed) {
+            continue;
+          }
+        }
+      }
       const unresolved = this.db.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId);
       if (unresolved === 0) {
         this.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {

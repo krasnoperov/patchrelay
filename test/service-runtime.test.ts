@@ -115,6 +115,69 @@ test("service runtime processes enqueued webhook and deduplicates identical issu
   ]);
 });
 
+test("service runtime caps issue run fanout", async () => {
+  const codex = new FakeCodexClient();
+  const processedIssues: RuntimeIssueQueueItem[] = [];
+  let activeRuns = 1;
+
+  const runtime = new ServiceRuntime(
+    codex as never,
+    pino({ enabled: false }),
+    { async reconcileActiveRuns() {} },
+    {
+      listIssuesReadyForExecution: () => [],
+      countActiveIssueRuns: () => activeRuns,
+    },
+    { async processWebhookEvent() {} },
+    { async processIssue(item) { processedIssues.push(item); } },
+    { maxActiveIssueRuns: 2 },
+  );
+
+  runtime.enqueueIssue("app", "issue-1");
+  runtime.enqueueIssue("app", "issue-2");
+  await flushQueue();
+
+  assert.deepEqual(processedIssues, [{ projectId: "app", issueId: "issue-1" }]);
+
+  activeRuns = 0;
+  runtime.enqueueIssue("app", "issue-2");
+  await flushQueue();
+
+  assert.deepEqual(processedIssues, [
+    { projectId: "app", issueId: "issue-1" },
+    { projectId: "app", issueId: "issue-2" },
+  ]);
+});
+
+test("service runtime retries issue queue items that hit a transient SQLite lock", async () => {
+  const codex = new FakeCodexClient();
+  const processedIssues: RuntimeIssueQueueItem[] = [];
+  let attempts = 0;
+
+  const runtime = new ServiceRuntime(
+    codex as never,
+    pino({ enabled: false }),
+    { async reconcileActiveRuns() {} },
+    { listIssuesReadyForExecution: () => [] },
+    { async processWebhookEvent() {} },
+    {
+      async processIssue(item) {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new Error("database is locked");
+        }
+        processedIssues.push(item);
+      },
+    },
+  );
+
+  runtime.enqueueIssue("app", "issue-locked-once");
+  await delay(350);
+
+  assert.equal(attempts, 2);
+  assert.deepEqual(processedIssues, [{ projectId: "app", issueId: "issue-locked-once" }]);
+});
+
 test("service runtime prioritizes urgent webhook items without introducing a second processing lane", async () => {
   const codex = new FakeCodexClient();
   const processedWebhooks: number[] = [];

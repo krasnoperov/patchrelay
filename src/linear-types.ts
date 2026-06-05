@@ -287,6 +287,7 @@ export interface LinearAgentSessionUpdateResult {
 
 export interface LinearClient {
   getIssue(issueId: string): Promise<LinearIssueSnapshot>;
+  listIssuesDelegatedTo?(params: { delegateId: string; teamIds: string[]; first?: number }): Promise<LinearIssueSnapshot[]>;
   createIssue?(params: { teamId: string; title: string; description?: string; labelNames?: string[] }): Promise<LinearIssueSnapshot>;
   setIssueState(issueId: string, stateName: string): Promise<LinearIssueSnapshot>;
   upsertIssueComment(params: { issueId: string; commentId?: string; body: string }): Promise<LinearCommentUpsertResult>;

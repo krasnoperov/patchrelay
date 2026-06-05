@@ -955,10 +955,10 @@ test("cli cluster treats closed PRs on terminal issues as historical, not active
       runCommand: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
     });
 
-    assert.equal(exitCode, 1);
+    assert.equal(exitCode, 0);
     assert.equal(stderr.read(), "");
     const text = stdout.read();
-    assert.match(text, /FAIL \[issue:terminal USE-CLOSED-TERM(?: PR #194)?\] Issue is in terminal failure state escalated/);
+    assert.match(text, /WARN \[issue:terminal USE-CLOSED-TERM(?: PR #194)?\] Historical terminal issue is in failure state escalated/);
     assert.doesNotMatch(text, /CI USE-CLOSED-TERM PR #194/);
     assert.doesNotMatch(text, /github:reconcile USE-CLOSED-TERM/);
     assert.doesNotMatch(text, /missing_owner=1/);

@@ -218,6 +218,61 @@ export class LinearGraphqlClient implements LinearClient {
     return this.mapIssue(response.issue);
   }
 
+  async listIssuesDelegatedTo(params: { delegateId: string; teamIds: string[]; first?: number }): Promise<LinearIssueSnapshot[]> {
+    const teamIds = params.teamIds.filter((teamId) => teamId.trim().length > 0);
+    if (teamIds.length === 0) {
+      return [];
+    }
+
+    const first = Math.max(1, Math.min(params.first ?? 100, 100));
+    const issues: LinearIssueSnapshot[] = [];
+    let after: string | undefined;
+
+    do {
+      const response = await this.request<{
+        issues: {
+          nodes?: LinearIssueRawFields[] | null;
+          pageInfo: {
+            hasNextPage: boolean;
+            endCursor?: string | null;
+          };
+        };
+      }>(
+        `
+        query PatchRelayDelegatedIssues($delegateId: ID!, $teamIds: [ID!], $first: Int!, $after: String) {
+          issues(
+            first: $first
+            after: $after
+            filter: {
+              delegate: { id: { eq: $delegateId } }
+              team: { id: { in: $teamIds } }
+            }
+          ) {
+            nodes {
+              ${LINEAR_ISSUE_SELECTION}
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+          }
+        }
+        `,
+        {
+          delegateId: params.delegateId,
+          teamIds,
+          first,
+          after: after ?? null,
+        },
+      );
+
+      issues.push(...(response.issues.nodes ?? []).map((issue) => this.mapIssue(issue)));
+      after = response.issues.pageInfo.hasNextPage ? response.issues.pageInfo.endCursor ?? undefined : undefined;
+    } while (after);
+
+    return issues;
+  }
+
   async createIssue(params: { teamId: string; title: string; description?: string; labelNames?: string[] }): Promise<LinearIssueSnapshot> {
     const response = await this.request<{
       issueCreate: {

@@ -100,6 +100,7 @@ test("startup recovery repairs re-delegated paused local work even without an ag
 
     const enqueued: Array<{ projectId: string; issueId: string }> = [];
     const recovery = new ServiceStartupRecovery(
+      config,
       db,
       {
         forProject: async () => ({
@@ -143,6 +144,89 @@ test("startup recovery repairs re-delegated paused local work even without an ag
   }
 });
 
+test("startup recovery discovers delegated Linear issues missing from the local database", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-startup-recovery-discover-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("usertold", installation.id);
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const recovery = new ServiceStartupRecovery(
+      config,
+      db,
+      {
+        forProject: async () => ({
+          getIssue: async (issueId: string) => ({
+            id: issueId,
+            identifier: "USE-MISSED",
+            title: "Recover missed delegated issue",
+            description: "",
+            url: "https://linear.app/usertold/issue/USE-MISSED",
+            teamId: "USE",
+            teamKey: "USE",
+            stateId: "state-backlog",
+            stateName: "Backlog",
+            stateType: "backlog",
+            delegateId: "patchrelay-actor",
+            delegateName: "PatchRelay",
+            workflowStates: [],
+            labelIds: [],
+            labels: [],
+            teamLabels: [],
+            blockedBy: [],
+            blocks: [],
+          }),
+          listIssuesDelegatedTo: async () => [
+            {
+              id: "issue-missed",
+              identifier: "USE-MISSED",
+              title: "Recover missed delegated issue",
+              description: "",
+              url: "https://linear.app/usertold/issue/USE-MISSED",
+              teamId: "USE",
+              teamKey: "USE",
+              stateId: "state-backlog",
+              stateName: "Backlog",
+              stateType: "backlog",
+              delegateId: "patchrelay-actor",
+              delegateName: "PatchRelay",
+              workflowStates: [],
+              labelIds: [],
+              labels: [],
+              teamLabels: [],
+              blockedBy: [],
+              blocks: [],
+            },
+          ],
+        } satisfies Partial<LinearClient> as LinearClient),
+      } as never,
+      { syncSession: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    await recovery.recoverDelegatedIssueStateFromLinear();
+
+    const issue = db.getIssue("usertold", "issue-missed");
+    assert.equal(issue?.issueKey, "USE-MISSED");
+    assert.equal(issue?.delegatedToPatchRelay, true);
+    assert.equal(issue?.factoryState, "delegated");
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-missed");
+    assert.equal(wake?.runType, "implementation");
+    assert.deepEqual(enqueued, [{ projectId: "usertold", issueId: "issue-missed" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("startup recovery re-queues delegated requested-changes work after a restart", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-startup-recovery-reactive-pr-"));
   try {
@@ -173,6 +257,7 @@ test("startup recovery re-queues delegated requested-changes work after a restar
 
     const enqueued: Array<{ projectId: string; issueId: string }> = [];
     const recovery = new ServiceStartupRecovery(
+      config,
       db,
       {
         forProject: async () => ({
@@ -235,6 +320,7 @@ test("startup recovery does not resync idle paused issues just because they stil
 
     const syncCalls: Array<Record<string, unknown>> = [];
     const recovery = new ServiceStartupRecovery(
+      config,
       db,
       { forProject: async () => undefined } as never,
       {
@@ -252,6 +338,45 @@ test("startup recovery does not resync idle paused issues just because they stil
     await recovery.syncKnownAgentSessions();
 
     assert.deepEqual(syncCalls, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("startup recovery does not scan webhook history for idle issues without active runs", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-startup-recovery-no-idle-webhook-scan-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-idle-no-session",
+      issueKey: "USE-IDLE",
+      title: "Idle issue without an agent session",
+      delegatedToPatchRelay: true,
+      factoryState: "changes_requested",
+    });
+
+    let webhookHistoryLookups = 0;
+    db.webhookEvents.findLatestAgentSessionIdForIssue = () => {
+      webhookHistoryLookups += 1;
+      return "session-from-history";
+    };
+
+    const recovery = new ServiceStartupRecovery(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { syncSession: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    await recovery.syncKnownAgentSessions();
+
+    assert.equal(webhookHistoryLookups, 0);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -287,6 +412,7 @@ test("startup recovery still resyncs active runs with agent sessions", async () 
 
     const syncCalls: Array<Record<string, unknown>> = [];
     const recovery = new ServiceStartupRecovery(
+      config,
       db,
       { forProject: async () => undefined } as never,
       {

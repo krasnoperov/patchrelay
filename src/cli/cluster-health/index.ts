@@ -5,6 +5,9 @@ import type { CommandRunner } from "../command-types.ts";
 import { collectActiveOverlapFindings } from "./active-overlap.ts";
 import {
   evaluateLocalIssueHealth,
+  evaluateTerminalIssueHealth,
+  isActiveWorkflowIssue,
+  isTerminalFailureIssue,
   isResolvedDependency,
   needsReviewAutomation,
 } from "./local-issue-health.ts";
@@ -48,7 +51,8 @@ export async function collectClusterHealth(
   const ciEntries: ClusterCiEntry[] = [];
   const now = Date.now();
   const issues = db.listIssues();
-  const openIssues = issues.filter((issue) => issue.factoryState !== "done");
+  const activeWorkflowIssues = issues.filter((issue) => isActiveWorkflowIssue(issue));
+  const historicalTerminalIssues = issues.filter((issue) => isTerminalFailureIssue(issue));
   const trackedByKey = new Map(
     issues
       .filter((issue) => issue.issueKey)
@@ -63,7 +67,7 @@ export async function collectClusterHealth(
     message: patchRelayProbe.message,
   });
 
-  const snapshots: IssueSnapshot[] = openIssues.map((issue) => {
+  const snapshots: IssueSnapshot[] = activeWorkflowIssues.map((issue) => {
     const tracked = db.getTrackedIssue(issue.projectId, issue.linearIssueId);
     const deps = db.issues.listIssueDependencies(issue.projectId, issue.linearIssueId);
     const blockedBy = deps.filter((dep) => !isResolvedDependency(dep));
@@ -144,6 +148,18 @@ export async function collectClusterHealth(
     }
   }
 
+  for (const issue of historicalTerminalIssues) {
+    const finding = evaluateTerminalIssueHealth(issue);
+    if (finding) {
+      checks.push({
+        ...finding,
+        ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+        projectId: issue.projectId,
+        ...(issue.prNumber !== undefined ? { prNumber: issue.prNumber } : {}),
+      });
+    }
+  }
+
   checks.push(...await collectActiveOverlapFindings(snapshots, runCommand));
 
   for (const snapshot of snapshots) {
@@ -172,18 +188,18 @@ export async function collectClusterHealth(
   }
 
   const workflowFailures = checks.filter((check) => check.scope.startsWith("issue:") || check.scope.startsWith("github:"));
-  if (workflowFailures.every((check) => check.status === "pass" || check.status === "warn") && openIssues.length > 0) {
+  if (workflowFailures.every((check) => check.status === "pass" || check.status === "warn") && activeWorkflowIssues.length > 0) {
     checks.push({
       status: "pass",
       scope: "workflow",
-      message: `All ${openIssues.length} non-done issues currently have active work, a tracked blocker, or a downstream owner`,
+      message: `All ${activeWorkflowIssues.length} active workflow issues currently have active work, a tracked blocker, or a downstream owner`,
     });
   }
-  if (openIssues.length === 0) {
+  if (activeWorkflowIssues.length === 0) {
     checks.push({
       status: "pass",
       scope: "workflow",
-      message: "No non-done issues are currently tracked",
+      message: "No active workflow issues are currently tracked",
     });
   }
   if (ciEntries.length > 0) {
@@ -199,8 +215,8 @@ export async function collectClusterHealth(
 
   const summary: ClusterHealthSummary = {
     trackedIssues: issues.length,
-    openIssues: openIssues.length,
-    activeRuns: openIssues.filter((issue) => issue.activeRunId !== undefined).length,
+    openIssues: activeWorkflowIssues.length,
+    activeRuns: activeWorkflowIssues.filter((issue) => issue.activeRunId !== undefined).length,
     blockedIssues: snapshots.filter((snapshot) => snapshot.blockedBy.length > 0).length,
     readyIssues: snapshots.filter((snapshot) => snapshot.readyForExecution).length,
     ciTrackedPrs: ciEntries.length,
