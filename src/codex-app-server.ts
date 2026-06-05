@@ -98,6 +98,8 @@ const FOLLOWUP_INTENT_DEVELOPER_INSTRUCTIONS = [
   "Return only the requested JSON object.",
 ].join("\n");
 
+const MAX_STDOUT_MESSAGES_PER_DRAIN = 100;
+
 export function resolveCodexAppServerLaunch(config: CodexAppServerConfig): { command: string; args: string[] } {
   if (!config.sourceBashrc) {
     return {
@@ -123,6 +125,7 @@ export class CodexAppServerClient extends EventEmitter {
   private nextRequestId = 1;
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private stdoutBuffer = "";
+  private drainScheduled = false;
   private started = false;
   private stopping = false;
   private startPromise: Promise<void> | undefined;
@@ -471,6 +474,7 @@ export class CodexAppServerClient extends EventEmitter {
       this.started = false;
       this.child = undefined;
       this.stdoutBuffer = "";
+      this.drainScheduled = false;
       const log = this.stopping ? this.logger.info.bind(this.logger) : this.logger.warn.bind(this.logger);
       log(
         {
@@ -489,11 +493,12 @@ export class CodexAppServerClient extends EventEmitter {
       if (this.stdoutBuffer.length > 50 * 1024 * 1024) {
         this.logger.error({ bufferSize: this.stdoutBuffer.length }, "Codex app-server stdout buffer exceeded 50 MB — killing process");
         this.stdoutBuffer = "";
+        this.drainScheduled = false;
         this.rejectAllPending(new Error("Codex app-server stdout buffer overflow"));
         this.child?.kill("SIGTERM");
         return;
       }
-      this.drainMessages();
+      this.scheduleDrainMessages();
     });
 
     const initializeResponse = await this.sendRequest("initialize", {
@@ -561,6 +566,7 @@ export class CodexAppServerClient extends EventEmitter {
     this.started = false;
     this.child = undefined;
     this.stdoutBuffer = "";
+    this.drainScheduled = false;
     this.logger.error(
       {
         error: sanitizeDiagnosticText(error.message),
@@ -573,7 +579,8 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   private drainMessages(): void {
-    while (true) {
+    let processed = 0;
+    while (processed < MAX_STDOUT_MESSAGES_PER_DRAIN) {
       const newlineIndex = this.stdoutBuffer.indexOf("\n");
       if (newlineIndex === -1) {
         return;
@@ -587,6 +594,7 @@ export class CodexAppServerClient extends EventEmitter {
 
       try {
         this.handleMessage(JSON.parse(line) as JsonRpcSuccess | JsonRpcFailure | JsonRpcRequest | JsonRpcNotification);
+        processed += 1;
       } catch (error) {
         const err = error instanceof Error ? error : new Error(String(error));
         this.started = false;
@@ -602,6 +610,21 @@ export class CodexAppServerClient extends EventEmitter {
         return;
       }
     }
+
+    if (this.stdoutBuffer.includes("\n")) {
+      this.scheduleDrainMessages();
+    }
+  }
+
+  private scheduleDrainMessages(): void {
+    if (this.drainScheduled) {
+      return;
+    }
+    this.drainScheduled = true;
+    setImmediate(() => {
+      this.drainScheduled = false;
+      this.drainMessages();
+    });
   }
 
   private handleMessage(message: JsonRpcSuccess | JsonRpcFailure | JsonRpcRequest | JsonRpcNotification): void {

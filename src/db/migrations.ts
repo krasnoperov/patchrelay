@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS runs (
   linear_issue_id TEXT NOT NULL,
   run_type TEXT NOT NULL DEFAULT 'implementation',
   status TEXT NOT NULL,
+  launch_phase TEXT,
   source_head_sha TEXT,
   prompt_text TEXT,
   thread_id TEXT,
@@ -250,6 +251,7 @@ CREATE INDEX IF NOT EXISTS idx_issue_sessions_key ON issue_sessions(issue_key);
 CREATE INDEX IF NOT EXISTS idx_issue_sessions_lease ON issue_sessions(leased_until, session_state);
 CREATE INDEX IF NOT EXISTS idx_issue_session_events_issue ON issue_session_events(project_id, linear_issue_id, id);
 CREATE INDEX IF NOT EXISTS idx_issue_session_events_pending ON issue_session_events(processed_at, project_id, linear_issue_id, id);
+CREATE INDEX IF NOT EXISTS idx_webhook_events_retention ON webhook_events(processing_status, received_at, id);
 CREATE INDEX IF NOT EXISTS idx_run_thread_events_run ON run_thread_events(run_id, id);
 CREATE INDEX IF NOT EXISTS idx_operator_feed_events_issue ON operator_feed_events(issue_key, id);
 CREATE INDEX IF NOT EXISTS idx_operator_feed_events_project ON operator_feed_events(project_id, id);
@@ -306,6 +308,7 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
     WHERE display_updated_at IS NULL
   `).run();
   addColumnIfMissing(connection, "runs", "source_head_sha", "TEXT");
+  addColumnIfMissing(connection, "runs", "launch_phase", "TEXT");
   addColumnIfMissing(connection, "runs", "completion_check_thread_id", "TEXT");
   addColumnIfMissing(connection, "runs", "completion_check_turn_id", "TEXT");
   addColumnIfMissing(connection, "runs", "completion_check_outcome", "TEXT");

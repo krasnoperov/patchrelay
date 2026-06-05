@@ -169,52 +169,54 @@ export class RunLauncher {
     worktreePath: string;
   }): RunRecord | undefined {
     return this.db.issueSessions.withIssueSessionLease(params.item.projectId, params.item.issueId, params.leaseId, () => {
-      const fresh = this.db.issues.getIssue(params.item.projectId, params.item.issueId);
-      if (!fresh || fresh.activeRunId !== undefined) return undefined;
-      const wakeIssue = params.materializeLegacyPendingWake(fresh, {
-        projectId: params.item.projectId,
-        linearIssueId: params.item.issueId,
-        leaseId: params.leaseId,
-      });
-      const freshWake = params.resolveRunWake(wakeIssue);
-      if (!freshWake || freshWake.runType !== params.runType) return undefined;
+      return this.db.batchIssueSessionProjections(() => {
+        const fresh = this.db.issues.getIssue(params.item.projectId, params.item.issueId);
+        if (!fresh || fresh.activeRunId !== undefined) return undefined;
+        const wakeIssue = params.materializeLegacyPendingWake(fresh, {
+          projectId: params.item.projectId,
+          linearIssueId: params.item.issueId,
+          leaseId: params.leaseId,
+        });
+        const freshWake = params.resolveRunWake(wakeIssue);
+        if (!freshWake || freshWake.runType !== params.runType) return undefined;
 
-      const created = this.db.runs.createRun({
-        issueId: fresh.id,
-        projectId: params.item.projectId,
-        linearIssueId: params.item.issueId,
-        runType: params.runType,
-        ...(params.sourceHeadSha ? { sourceHeadSha: params.sourceHeadSha } : {}),
-        promptText: params.prompt,
+        const created = this.db.runs.createRun({
+          issueId: fresh.id,
+          projectId: params.item.projectId,
+          linearIssueId: params.item.issueId,
+          runType: params.runType,
+          ...(params.sourceHeadSha ? { sourceHeadSha: params.sourceHeadSha } : {}),
+          promptText: params.prompt,
+        });
+        const failureHeadSha = typeof params.effectiveContext?.failureHeadSha === "string"
+          ? params.effectiveContext.failureHeadSha
+          : typeof params.effectiveContext?.headSha === "string" ? params.effectiveContext.headSha : undefined;
+        const failureSignature = typeof params.effectiveContext?.failureSignature === "string" ? params.effectiveContext.failureSignature : undefined;
+        this.db.issues.upsertIssue({
+          projectId: params.item.projectId,
+          linearIssueId: params.item.issueId,
+          pendingRunType: null,
+          pendingRunContextJson: null,
+          activeRunId: created.id,
+          branchName: params.branchName,
+          worktreePath: params.worktreePath,
+          factoryState: params.runType === "implementation" ? "implementing"
+            : params.runType === "ci_repair" ? "repairing_ci"
+            : params.runType === "review_fix" || params.runType === "branch_upkeep" ? "changes_requested"
+            : params.runType === "queue_repair" ? "repairing_queue"
+            : "implementing",
+          ...((params.runType === "ci_repair" || params.runType === "queue_repair") && failureSignature
+            ? {
+                lastAttemptedFailureSignature: failureSignature,
+                lastAttemptedFailureHeadSha: failureHeadSha ?? null,
+                lastAttemptedFailureAt: new Date().toISOString(),
+              }
+            : {}),
+        });
+        this.db.issueSessions.consumeIssueSessionEvents(params.item.projectId, params.item.issueId, freshWake.eventIds, created.id);
+        this.db.issueSessions.setIssueSessionLastWakeReason(params.item.projectId, params.item.issueId, freshWake.wakeReason ?? null);
+        return created;
       });
-      const failureHeadSha = typeof params.effectiveContext?.failureHeadSha === "string"
-        ? params.effectiveContext.failureHeadSha
-        : typeof params.effectiveContext?.headSha === "string" ? params.effectiveContext.headSha : undefined;
-      const failureSignature = typeof params.effectiveContext?.failureSignature === "string" ? params.effectiveContext.failureSignature : undefined;
-      this.db.issues.upsertIssue({
-        projectId: params.item.projectId,
-        linearIssueId: params.item.issueId,
-        pendingRunType: null,
-        pendingRunContextJson: null,
-        activeRunId: created.id,
-        branchName: params.branchName,
-        worktreePath: params.worktreePath,
-        factoryState: params.runType === "implementation" ? "implementing"
-          : params.runType === "ci_repair" ? "repairing_ci"
-          : params.runType === "review_fix" || params.runType === "branch_upkeep" ? "changes_requested"
-          : params.runType === "queue_repair" ? "repairing_queue"
-          : "implementing",
-        ...((params.runType === "ci_repair" || params.runType === "queue_repair") && failureSignature
-          ? {
-              lastAttemptedFailureSignature: failureSignature,
-              lastAttemptedFailureHeadSha: failureHeadSha ?? null,
-              lastAttemptedFailureAt: new Date().toISOString(),
-            }
-          : {}),
-      });
-      this.db.issueSessions.consumeIssueSessionEvents(params.item.projectId, params.item.issueId, freshWake.eventIds, created.id);
-      this.db.issueSessions.setIssueSessionLastWakeReason(params.item.projectId, params.item.issueId, freshWake.wakeReason ?? null);
-      return created;
     });
   }
 
@@ -281,6 +283,7 @@ export class RunLauncher {
       if (prepareResult.ran && prepareResult.exitCode !== 0) {
         throw new Error(`prepare-worktree hook failed (exit ${prepareResult.exitCode}): ${prepareResult.stderr?.slice(0, 500) ?? ""}`);
       }
+      this.db.runs.updateLaunchPhase(params.run.id, "worktree_prepared");
       params.assertLaunchLease(params.run, "before starting the Codex turn");
 
       const compactThread = shouldCompactThread(params.issue, params.issueSession?.threadGeneration, params.effectiveContext);
@@ -298,10 +301,12 @@ export class RunLauncher {
           { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, threadId },
         );
       }
+      this.db.runs.updateLaunchPhase(params.run.id, "thread_started");
 
       try {
         const turn = await this.codex.startTurn({ threadId, cwd: params.worktreePath, input: params.prompt });
         turnId = turn.turnId;
+        this.db.runs.updateLaunchPhase(params.run.id, "turn_started");
       } catch (turnError) {
         const msg = turnError instanceof Error ? turnError.message : String(turnError);
         if (msg.includes("thread not found") || msg.includes("not materialized")) {
@@ -315,6 +320,7 @@ export class RunLauncher {
           );
           const turn = await this.codex.startTurn({ threadId, cwd: params.worktreePath, input: params.prompt });
           turnId = turn.turnId;
+          this.db.runs.updateLaunchPhase(params.run.id, "turn_started");
         } else {
           throw turnError;
         }

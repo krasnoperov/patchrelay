@@ -68,6 +68,9 @@ export interface AppConfig {
   database: {
     path: string;
     wal: boolean;
+    eventRetentionDays?: number;
+    archiveOldEvents?: boolean;
+    archivePath?: string;
   };
   linear: {
     webhookSecret: string;

@@ -9,6 +9,7 @@ import type { CompletionCheckOutcome } from "./completion-check-types.ts";
 // with `shouldNotPublish` on the run row, this stops the next
 // finalizer step from emitting a no-op republish.
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "released" | "superseded";
+export type RunLaunchPhase = "claimed" | "worktree_prepared" | "thread_started" | "turn_started" | "running";
 export type GitHubFailureSource = "branch_ci" | "queue_eviction";
 
 export interface GitHubCiSnapshotCheckRecord {
@@ -150,6 +151,7 @@ export interface RunRecord {
   linearIssueId: string;
   runType: RunType;
   status: RunStatus;
+  launchPhase?: RunLaunchPhase | undefined;
   sourceHeadSha?: string | undefined;
   promptText?: string | undefined;
   threadId?: string | undefined;

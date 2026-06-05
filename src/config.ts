@@ -149,6 +149,9 @@ const configSchema = z.object({
   database: z.object({
     path: z.string().min(1).default(getDefaultDatabasePath()),
     wal: z.boolean().default(true),
+    event_retention_days: z.number().int().positive().default(7),
+    archive_old_events: z.boolean().default(false),
+    archive_path: z.string().min(1).optional(),
   }),
   linear: z.object({
     webhook_secret_env: z.string().default("LINEAR_WEBHOOK_SECRET"),
@@ -652,6 +655,9 @@ export function loadConfig(
     database: {
       path: ensureAbsolutePath(env.PATCHRELAY_DB_PATH ?? parsed.database.path),
       wal: parsed.database.wal,
+      eventRetentionDays: parsed.database.event_retention_days,
+      archiveOldEvents: parsed.database.archive_old_events,
+      archivePath: ensureAbsolutePath(parsed.database.archive_path ?? path.join(path.dirname(env.PATCHRELAY_DB_PATH ?? parsed.database.path), "archive")),
     },
     linear: {
       webhookSecret: webhookSecret ?? "",

@@ -1,4 +1,4 @@
-import type { IssueRecord, RunRecord, RunStatus, ThreadEventRecord } from "../db-types.ts";
+import type { IssueRecord, RunLaunchPhase, RunRecord, RunStatus, ThreadEventRecord } from "../db-types.ts";
 import type { CompletionCheckResult } from "../completion-check-types.ts";
 import type { RunType } from "../factory-state.ts";
 import type { IssueSessionProjectionInvalidator, IssueSessionProjectionOptions } from "../issue-session-projection-invalidator.ts";
@@ -30,8 +30,8 @@ export class RunStore {
   }): RunRecord {
     const now = isoNow();
     const result = this.connection.prepare(`
-      INSERT INTO runs (issue_id, project_id, linear_issue_id, run_type, status, source_head_sha, prompt_text, started_at)
-      VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)
+      INSERT INTO runs (issue_id, project_id, linear_issue_id, run_type, status, launch_phase, source_head_sha, prompt_text, started_at)
+      VALUES (?, ?, ?, ?, 'queued', 'claimed', ?, ?, ?)
     `).run(
       params.issueId,
       params.projectId,
@@ -101,7 +101,8 @@ export class RunStore {
         thread_id = ?,
         parent_thread_id = COALESCE(?, parent_thread_id),
         turn_id = COALESCE(?, turn_id),
-        status = 'running'
+        status = 'running',
+        launch_phase = 'running'
       WHERE id = ?
         AND ended_at IS NULL
         AND status IN ('queued', 'running')
@@ -124,6 +125,16 @@ export class RunStore {
 
   updateRunTurnId(runId: number, turnId: string): void {
     this.connection.prepare("UPDATE runs SET turn_id = ? WHERE id = ?").run(turnId, runId);
+  }
+
+  updateLaunchPhase(runId: number, launchPhase: RunLaunchPhase): void {
+    this.connection.prepare(`
+      UPDATE runs
+      SET launch_phase = ?
+      WHERE id = ?
+        AND ended_at IS NULL
+        AND status IN ('queued', 'running')
+    `).run(launchPhase, runId);
   }
 
   finishRun(runId: number, params: {

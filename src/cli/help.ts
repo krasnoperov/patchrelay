@@ -1,4 +1,4 @@
-export type CliHelpTopic = "root" | "linear" | "repo" | "issue" | "service" | "cluster" | "sequence-check";
+export type CliHelpTopic = "root" | "linear" | "repo" | "issue" | "service" | "cluster" | "maintenance" | "sequence-check";
 
 export function rootHelpText(): string {
   return [
@@ -47,6 +47,8 @@ export function rootHelpText(): string {
   "  service status [--json]                                 Show systemd state and local health",
   "  service codex-status [--json]                           Show Codex account and usage snapshot from this service",
   "  cluster [--json]                                        Check service + workflow health across all tracked issues",
+  "  maintenance prune-events [--dry-run] [--archive|--discard] [--retention-days <days>] [--json]",
+  "                                                          Prune or archive old processed webhook events",
   "  service logs [--lines <count>] [--json]                 Show recent service logs",
     "  serve                                                   Run the local PatchRelay service",
     "",
@@ -81,6 +83,7 @@ export function rootHelpText(): string {
     "  patchrelay help issue",
     "  patchrelay help service",
     "  patchrelay help cluster",
+    "  patchrelay help maintenance",
   ].join("\n");
 }
 
@@ -212,10 +215,36 @@ export function clusterHelpText(): string {
   ].join("\n");
 }
 
+export function maintenanceHelpText(): string {
+  return [
+    "Usage:",
+    "  patchrelay maintenance prune-events [options]",
+    "",
+    "Options:",
+    "  --dry-run                    Count archiveable events without deleting",
+    "  --archive                    Write old events to cold JSONL gzip storage before deleting",
+    "  --discard                    Delete old events without archiving",
+    "  --retention-days <days>      Override configured retention window (default 7)",
+    "  --batch-size <count>         Override maintenance batch size",
+    "  --json                       Emit structured JSON output",
+    "  --help, -h                   Show this help",
+    "",
+    "Behavior:",
+    "  Only processed webhook events older than the retention cutoff are touched.",
+    "  Pending/unprocessed webhook events are never pruned.",
+    "",
+    "Examples:",
+    "  patchrelay maintenance prune-events --dry-run",
+    "  patchrelay maintenance prune-events --archive",
+  ].join("\n");
+}
+
 export function helpTextFor(topic: CliHelpTopic): string {
   switch (topic) {
     case "cluster":
       return clusterHelpText();
+    case "maintenance":
+      return maintenanceHelpText();
     case "linear":
       return linearHelpText();
     case "repo":

@@ -96,6 +96,7 @@ test("issue upserts and run completion dual-write into issue_sessions", () => {
       runType: "implementation",
       promptText: "Ship it",
     });
+    assert.equal(db.runs.getRunById(run.id)?.launchPhase, "claimed");
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-1",
@@ -103,6 +104,8 @@ test("issue upserts and run completion dual-write into issue_sessions", () => {
       pendingRunType: null,
       factoryState: "implementing",
     });
+    db.runs.updateRunThread(run.id, { threadId: "thread-2", turnId: "turn-1" });
+    assert.equal(db.runs.getRunById(run.id)?.launchPhase, "running");
     const runningSession = db.issueSessions.getIssueSession("usertold", "issue-1");
     assert.equal(runningSession?.sessionState, "running");
     assert.equal(runningSession?.activeRunId, run.id);

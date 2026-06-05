@@ -27,6 +27,7 @@ import { ServiceStartupRecovery } from "./service-startup-recovery.ts";
 import { WakeDispatcher } from "./wake-dispatcher.ts";
 import { WebhookHandler } from "./webhook-handler.ts";
 import { acceptIncomingWebhook } from "./service-webhooks.ts";
+import { runWebhookEventRetention } from "./event-retention.ts";
 import type { AppConfig, LinearClient, LinearClientProvider } from "./types.ts";
 import { parseStringArray, TrackedIssueListQuery } from "./tracked-issue-list-query.ts";
 import { AgentInputService } from "./agent-input-service.ts";
@@ -46,6 +47,7 @@ export class PatchRelayService {
   private readonly issueActions: ServiceIssueActions;
   private readonly startupRecovery: ServiceStartupRecovery;
   private readonly trackedIssueListQuery: TrackedIssueListQuery;
+  private eventRetentionTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     readonly config: AppConfig,
@@ -263,6 +265,7 @@ export class PatchRelayService {
       });
     }
     await this.runtime.start();
+    this.scheduleEventRetention(60_000);
     void this.startupRecovery.recoverDelegatedIssueStateFromLinear().catch((error) => {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.warn({ error: msg }, "Background delegated issue recovery failed");
@@ -274,6 +277,10 @@ export class PatchRelayService {
   }
 
   async stop(): Promise<void> {
+    if (this.eventRetentionTimer !== undefined) {
+      clearTimeout(this.eventRetentionTimer);
+      this.eventRetentionTimer = undefined;
+    }
     this.githubAppTokenManager?.stop();
     await this.runtime.stop();
   }
@@ -371,6 +378,40 @@ export class PatchRelayService {
 
   getReadiness() {
     return this.runtime.getReadiness();
+  }
+
+  private scheduleEventRetention(delayMs = 24 * 60 * 60 * 1000): void {
+    if (this.eventRetentionTimer !== undefined) {
+      clearTimeout(this.eventRetentionTimer);
+    }
+    const timer = setTimeout(() => {
+      void this.runEventRetentionMaintenance();
+    }, delayMs);
+    timer.unref?.();
+    this.eventRetentionTimer = timer;
+  }
+
+  private async runEventRetentionMaintenance(): Promise<void> {
+    try {
+      const result = await runWebhookEventRetention({
+        db: this.db,
+        config: this.config,
+      });
+      if (result.deleted > 0 || result.archived > 0 || result.remaining > 0) {
+        this.logger.info(result, "Webhook event retention maintenance completed");
+      }
+      if (this.config.database.wal) {
+        const checkpoint = this.db.runWalCheckpoint("PASSIVE");
+        this.logger.debug({ checkpoint }, "SQLite WAL checkpoint completed");
+      }
+    } catch (error) {
+      this.logger.warn(
+        { error: error instanceof Error ? error.message : String(error) },
+        "Webhook event retention maintenance failed",
+      );
+    } finally {
+      this.scheduleEventRetention();
+    }
   }
 
   listTrackedIssues(): Array<{

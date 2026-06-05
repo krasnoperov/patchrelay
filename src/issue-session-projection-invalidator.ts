@@ -17,6 +17,9 @@ export interface IssueSessionProjectionInvalidator {
 }
 
 export class ImmediateIssueSessionProjectionInvalidator implements IssueSessionProjectionInvalidator {
+  private batchDepth = 0;
+  private readonly pendingProjections = new Map<string, PendingProjection>();
+
   constructor(
     private readonly deps: {
       getIssue: (projectId: string, linearIssueId: string) => IssueRecord | undefined;
@@ -27,6 +30,18 @@ export class ImmediateIssueSessionProjectionInvalidator implements IssueSessionP
       telemetry?: PatchRelayTelemetry | undefined;
     },
   ) {}
+
+  batch<T>(fn: () => T): T {
+    this.batchDepth += 1;
+    try {
+      return fn();
+    } finally {
+      this.batchDepth -= 1;
+      if (this.batchDepth === 0) {
+        this.flushPendingProjections();
+      }
+    }
+  }
 
   issueChanged(issue: IssueRecord, options?: IssueSessionProjectionOptions): void {
     const dependents = this.deps.listDependents(issue.projectId, issue.linearIssueId);
@@ -61,6 +76,10 @@ export class ImmediateIssueSessionProjectionInvalidator implements IssueSessionP
   }
 
   private projectIssueById(projectId: string, linearIssueId: string, reason: ProjectionInvalidationReason): void {
+    if (this.batchDepth > 0) {
+      this.queueProjection({ projectId, linearIssueId, reason });
+      return;
+    }
     const issue = this.deps.getIssue(projectId, linearIssueId);
     if (issue) {
       this.projectIssue(issue, reason);
@@ -72,6 +91,16 @@ export class ImmediateIssueSessionProjectionInvalidator implements IssueSessionP
     reason: ProjectionInvalidationReason,
     options?: IssueSessionProjectionOptions,
   ): void {
+    if (this.batchDepth > 0) {
+      this.queueProjection({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        issue,
+        reason,
+        ...(options ? { options } : {}),
+      });
+      return;
+    }
     const beforeWaitingReason = this.deps.getIssueSessionWaitingReason?.(issue.projectId, issue.linearIssueId);
     this.deps.projectIssue(issue, options);
     this.emitReprojected(reason, issue);
@@ -130,4 +159,44 @@ export class ImmediateIssueSessionProjectionInvalidator implements IssueSessionP
       ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
     });
   }
+
+  private queueProjection(projection: PendingProjection): void {
+    const key = `${projection.projectId}::${projection.linearIssueId}`;
+    const current = this.pendingProjections.get(key);
+    this.pendingProjections.set(key, {
+      projectId: projection.projectId,
+      linearIssueId: projection.linearIssueId,
+      issue: projection.issue ?? current?.issue,
+      reason: projection.reason,
+      options: mergeProjectionOptions(current?.options, projection.options),
+    });
+  }
+
+  private flushPendingProjections(): void {
+    const pending = Array.from(this.pendingProjections.values());
+    this.pendingProjections.clear();
+    for (const projection of pending) {
+      const issue = projection.issue ?? this.deps.getIssue(projection.projectId, projection.linearIssueId);
+      if (issue) {
+        this.projectIssue(issue, projection.reason, projection.options);
+      }
+    }
+  }
+}
+
+interface PendingProjection {
+  projectId: string;
+  linearIssueId: string;
+  issue?: IssueRecord | undefined;
+  reason: ProjectionInvalidationReason;
+  options?: IssueSessionProjectionOptions | undefined;
+}
+
+function mergeProjectionOptions(
+  current: IssueSessionProjectionOptions | undefined,
+  next: IssueSessionProjectionOptions | undefined,
+): IssueSessionProjectionOptions | undefined {
+  if (!current) return next;
+  if (!next) return current;
+  return { ...current, ...next };
 }

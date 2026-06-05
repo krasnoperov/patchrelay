@@ -7,6 +7,8 @@ interface QueueEntry<T> {
 
 export interface SerialWorkQueueRetryDecision {
   delayMs: number;
+  logLevel?: "debug" | "warn";
+  message?: string;
 }
 
 export interface SerialWorkQueueOptions<T> {
@@ -93,9 +95,9 @@ export class SerialWorkQueue<T> {
         const nextAttempt = entry.attempt + 1;
         const retry = this.options.retryOnError?.(err, entry.item, nextAttempt);
         if (retry) {
-          this.logger.warn(
+          this.logger[retry.logLevel ?? "warn"](
             { item: entry.item, error: err.message, attempt: nextAttempt, retryDelayMs: retry.delayMs },
-            "Queue item processing failed; retrying",
+            retry.message ?? "Queue item processing failed; retrying",
           );
           this.scheduleRetry({ item: entry.item, attempt: nextAttempt }, retry.delayMs);
           continue;

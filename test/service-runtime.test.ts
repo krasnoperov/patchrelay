@@ -72,7 +72,7 @@ test("service runtime starts codex, seeds ready issues, triggers reconcile in th
     },
   );
 
-  assert.deepEqual(runtime.getReadiness(), { ready: false, codexStarted: false, linearConnected: false, githubAppAuthHealthy: true });
+  assert.deepEqual(runtime.getReadiness(), { ready: false, codexStarted: false, linearConnected: false, githubAppAuthHealthy: true, eventLoopLagMs: 0 });
 
   runtime.setLinearConnected(true);
   await runtime.start();
@@ -84,8 +84,8 @@ test("service runtime starts codex, seeds ready issues, triggers reconcile in th
     { projectId: "app", issueId: "issue-1" },
     { projectId: "app", issueId: "issue-2" },
   ]);
-  assert.deepEqual(runtime.getReadiness(), { ready: true, codexStarted: true, linearConnected: true, githubAppAuthHealthy: true });
-  runtime.stop();
+  assert.deepEqual(runtime.getReadiness(), { ready: true, codexStarted: true, linearConnected: true, githubAppAuthHealthy: true, eventLoopLagMs: 0 });
+  await runtime.stop();
 });
 
 test("service runtime processes enqueued webhook and deduplicates identical issue queue keys", async () => {
@@ -129,8 +129,13 @@ test("service runtime caps issue run fanout", async () => {
       countActiveIssueRuns: () => activeRuns,
     },
     { async processWebhookEvent() {} },
-    { async processIssue(item) { processedIssues.push(item); } },
-    { maxActiveIssueRuns: 2 },
+    {
+      async processIssue(item) {
+        processedIssues.push(item);
+        activeRuns += 1;
+      },
+    },
+    { maxActiveIssueRuns: 2, issueRunCapacityRetryDelayMs: 20 },
   );
 
   runtime.enqueueIssue("app", "issue-1");
@@ -140,8 +145,7 @@ test("service runtime caps issue run fanout", async () => {
   assert.deepEqual(processedIssues, [{ projectId: "app", issueId: "issue-1" }]);
 
   activeRuns = 0;
-  runtime.enqueueIssue("app", "issue-2");
-  await flushQueue();
+  await delay(60);
 
   assert.deepEqual(processedIssues, [
     { projectId: "app", issueId: "issue-1" },
@@ -212,13 +216,13 @@ test("service runtime clears ready state on stop and preserves codex status in r
 
   runtime.setLinearConnected(true);
   await runtime.start();
-  assert.deepEqual(runtime.getReadiness(), { ready: true, codexStarted: true, linearConnected: true, githubAppAuthHealthy: true });
+  assert.deepEqual(runtime.getReadiness(), { ready: true, codexStarted: true, linearConnected: true, githubAppAuthHealthy: true, eventLoopLagMs: 0 });
 
-  runtime.stop();
+  await runtime.stop();
   await flushQueue();
 
   assert.equal(codex.stopCalls, 1);
-  assert.deepEqual(runtime.getReadiness(), { ready: false, codexStarted: false, linearConnected: true, githubAppAuthHealthy: true });
+  assert.deepEqual(runtime.getReadiness(), { ready: false, codexStarted: false, linearConnected: true, githubAppAuthHealthy: true, eventLoopLagMs: 0 });
 });
 
 test("service runtime treats unhealthy GitHub App auth as not ready", async () => {
@@ -241,8 +245,10 @@ test("service runtime treats unhealthy GitHub App auth as not ready", async () =
     codexStarted: true,
     linearConnected: true,
     githubAppAuthHealthy: false,
+    eventLoopLagMs: 0,
     githubAppAuthError: "credential check failed",
   });
+  await runtime.stop();
 });
 
 test("service runtime records startup error when codex start fails", async () => {
@@ -267,6 +273,7 @@ test("service runtime records startup error when codex start fails", async () =>
     codexStarted: false,
     linearConnected: false,
     githubAppAuthHealthy: true,
+    eventLoopLagMs: 0,
     startupError: "codex offline",
   });
 });
@@ -295,7 +302,9 @@ test("service runtime does not fail startup when background reconciliation fails
     codexStarted: true,
     linearConnected: false,
     githubAppAuthHealthy: true,
+    eventLoopLagMs: 0,
   });
+  await runtime.stop();
 });
 
 test("service runtime continues reconciling active runs after startup", async () => {
@@ -316,7 +325,7 @@ test("service runtime continues reconciling active runs after startup", async ()
   await delay(20);
 
   assert.ok(reconcileCalls >= 2);
-  runtime.stop();
+  await runtime.stop();
 });
 
 test("service runtime does not wait for the first reconciliation pass before returning from start", async () => {
@@ -349,6 +358,7 @@ test("service runtime does not wait for the first reconciliation pass before ret
 
   releaseReconcile?.();
   await flushQueue();
+  await runtime.stop();
 });
 
 test("service runtime recovers after a background reconciliation timeout", async () => {
@@ -374,5 +384,5 @@ test("service runtime recovers after a background reconciliation timeout", async
   await delay(80);
 
   assert.ok(reconcileCalls >= 2);
-  runtime.stop();
+  await runtime.stop();
 });

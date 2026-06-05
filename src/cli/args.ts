@@ -13,6 +13,7 @@ export const KNOWN_COMMANDS = new Set([
   "repos",
   "linear",
   "repo",
+  "maintenance",
   "dashboard",
   "dash",
   "d",
@@ -141,7 +142,9 @@ export function assertKnownFlags(parsed: ParsedArgs, command: string, allowedFla
         ? "issue"
         : command === "service"
           ? "service"
-          : "root",
+          : command === "maintenance"
+            ? "maintenance"
+            : "root",
   );
 }
 

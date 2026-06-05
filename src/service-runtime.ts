@@ -7,6 +7,8 @@ const ISSUE_KEY_DELIMITER = "::";
 const DEFAULT_RECONCILE_INTERVAL_MS = 5_000;
 const DEFAULT_RECONCILE_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_ACTIVE_ISSUE_RUNS = 4;
+const DEFAULT_ISSUE_RUN_CAPACITY_RETRY_DELAY_MS = 5_000;
+const EVENT_LOOP_MONITOR_INTERVAL_MS = 1_000;
 
 export interface RuntimeIssueQueueItem {
   projectId: string;
@@ -34,6 +36,7 @@ export interface ServiceRuntimeOptions {
   reconcileIntervalMs?: number;
   reconcileTimeoutMs?: number;
   maxActiveIssueRuns?: number;
+  issueRunCapacityRetryDelayMs?: number;
 }
 
 function makeIssueQueueKey(item: RuntimeIssueQueueItem): string {
@@ -49,6 +52,9 @@ export class ServiceRuntime {
   private githubAppAuthError: string | undefined;
   private startupError: string | undefined;
   private reconcileTimer: ReturnType<typeof setTimeout> | undefined;
+  private eventLoopMonitorTimer: ReturnType<typeof setInterval> | undefined;
+  private eventLoopMonitorExpectedAt = 0;
+  private eventLoopLagMs = 0;
   private reconcileInProgress = false;
 
   constructor(
@@ -61,14 +67,24 @@ export class ServiceRuntime {
     private readonly options: ServiceRuntimeOptions = {},
   ) {
     this.webhookQueue = new SerialWorkQueue((eventId) => webhookProcessor.processWebhookEvent(eventId), logger, (eventId) => String(eventId));
-    this.issueQueue = new SerialWorkQueue((item) => issueProcessor.processIssue(item), logger, makeIssueQueueKey, {
-      retryOnError: (error, _item, attempt) => retrySqliteLockedQueueFailure(error, attempt),
+    this.issueQueue = new SerialWorkQueue((item) => this.processIssueWithCapacity(item, issueProcessor), logger, makeIssueQueueKey, {
+      retryOnError: (error, _item, attempt) => {
+        if (error instanceof IssueRunCapacityFullError) {
+          return {
+            delayMs: this.getIssueRunCapacityRetryDelayMs(),
+            logLevel: "debug",
+            message: "Issue run capacity is full; keeping item queued for retry",
+          };
+        }
+        return retrySqliteLockedQueueFailure(error, attempt);
+      },
     });
   }
 
   async start(): Promise<void> {
     try {
       await this.codex.start();
+      this.startEventLoopMonitor();
       for (const issue of this.readyIssueSource.listIssuesReadyForExecution()) {
         this.enqueueIssue(issue.projectId, issue.linearIssueId);
       }
@@ -85,6 +101,7 @@ export class ServiceRuntime {
   async stop(): Promise<void> {
     this.ready = false;
     this.clearBackgroundReconcile();
+    this.clearEventLoopMonitor();
     await this.codex.stop();
   }
 
@@ -93,19 +110,6 @@ export class ServiceRuntime {
   }
 
   enqueueIssue(projectId: string, issueId: string): void {
-    if (!this.hasIssueRunCapacity()) {
-      this.logger.warn(
-        {
-          projectId,
-          issueId,
-          activeIssueRuns: this.getActiveIssueRunCount(),
-          queuedIssueRuns: this.issueQueue.size(),
-          maxActiveIssueRuns: this.getMaxActiveIssueRuns(),
-        },
-        "Skipped issue enqueue: active run capacity is full",
-      );
-      return;
-    }
     this.issueQueue.enqueue({ projectId, issueId });
   }
 
@@ -124,9 +128,30 @@ export class ServiceRuntime {
       codexStarted: this.codex.isStarted(),
       linearConnected: this.linearConnected,
       githubAppAuthHealthy: this.githubAppAuthHealthy,
+      eventLoopLagMs: this.eventLoopLagMs,
       ...(this.githubAppAuthError ? { githubAppAuthError: this.githubAppAuthError } : {}),
       ...(this.startupError ? { startupError: this.startupError } : {}),
     };
+  }
+
+  private startEventLoopMonitor(): void {
+    this.clearEventLoopMonitor();
+    this.eventLoopMonitorExpectedAt = Date.now() + EVENT_LOOP_MONITOR_INTERVAL_MS;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      this.eventLoopLagMs = Math.max(0, now - this.eventLoopMonitorExpectedAt);
+      this.eventLoopMonitorExpectedAt = now + EVENT_LOOP_MONITOR_INTERVAL_MS;
+    }, EVENT_LOOP_MONITOR_INTERVAL_MS);
+    timer.unref?.();
+    this.eventLoopMonitorTimer = timer;
+  }
+
+  private clearEventLoopMonitor(): void {
+    if (this.eventLoopMonitorTimer !== undefined) {
+      clearInterval(this.eventLoopMonitorTimer);
+      this.eventLoopMonitorTimer = undefined;
+    }
+    this.eventLoopLagMs = 0;
   }
 
   private scheduleBackgroundReconcile(): void {
@@ -162,9 +187,6 @@ export class ServiceRuntime {
       // Pick up issues that became ready outside the webhook path
       // (e.g. CLI retry, manual DB edits) without requiring a restart.
       for (const issue of this.readyIssueSource.listIssuesReadyForExecution()) {
-        if (!this.hasIssueRunCapacity()) {
-          break;
-        }
         this.enqueueIssue(issue.projectId, issue.linearIssueId);
       }
     } catch (error) {
@@ -185,12 +207,29 @@ export class ServiceRuntime {
     return Math.max(1, Math.floor(configured));
   }
 
+  private getIssueRunCapacityRetryDelayMs(): number {
+    const configured = this.options.issueRunCapacityRetryDelayMs ?? DEFAULT_ISSUE_RUN_CAPACITY_RETRY_DELAY_MS;
+    return Math.max(1, Math.floor(configured));
+  }
+
   private getActiveIssueRunCount(): number {
     return Math.max(0, this.readyIssueSource.countActiveIssueRuns?.() ?? 0);
   }
 
-  private hasIssueRunCapacity(): boolean {
-    return this.getActiveIssueRunCount() + this.issueQueue.size() < this.getMaxActiveIssueRuns();
+  private async processIssueWithCapacity(item: RuntimeIssueQueueItem, processor: IssueExecutionProcessor): Promise<void> {
+    const activeIssueRuns = this.getActiveIssueRunCount();
+    const maxActiveIssueRuns = this.getMaxActiveIssueRuns();
+    if (activeIssueRuns >= maxActiveIssueRuns) {
+      throw new IssueRunCapacityFullError(activeIssueRuns, maxActiveIssueRuns);
+    }
+    await processor.processIssue(item);
+  }
+}
+
+class IssueRunCapacityFullError extends Error {
+  constructor(readonly activeIssueRuns: number, readonly maxActiveIssueRuns: number) {
+    super(`active issue run capacity is full (${activeIssueRuns}/${maxActiveIssueRuns})`);
+    this.name = "IssueRunCapacityFullError";
   }
 }
 

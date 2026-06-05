@@ -29,6 +29,7 @@ import { WorkflowWakeResolver } from "./workflow-wake-resolver.ts";
 
 export class PatchRelayDatabase {
   private readonly connection: DatabaseConnection;
+  private readonly issueSessionProjection: ImmediateIssueSessionProjectionInvalidator;
   private telemetry: PatchRelayTelemetry = noopTelemetry;
   private readonly telemetryProxy: PatchRelayTelemetry = {
     emit: (event) => this.telemetry.emit(event),
@@ -58,7 +59,7 @@ export class PatchRelayDatabase {
     this.operatorFeed = new OperatorFeedStore(this.connection);
     this.repositories = new RepositoryLinkStore(this.connection);
     this.webhookEvents = new WebhookEventStore(this.connection);
-    const issueSessionProjection = new ImmediateIssueSessionProjectionInvalidator({
+    this.issueSessionProjection = new ImmediateIssueSessionProjectionInvalidator({
       getIssue: (projectId, linearIssueId) => this.issues.getIssue(projectId, linearIssueId),
       listDependents: (projectId, blockerLinearIssueId) => this.issues.listDependents(projectId, blockerLinearIssueId),
       countUnresolvedBlockers: (projectId, linearIssueId) => this.issues.countUnresolvedBlockers(projectId, linearIssueId),
@@ -73,12 +74,12 @@ export class PatchRelayDatabase {
       }),
       telemetry: this.telemetryProxy,
     });
-    this.issues = new IssueStore(this.connection, issueSessionProjection);
+    this.issues = new IssueStore(this.connection, this.issueSessionProjection);
     this.runs = new RunStore(
       this.connection,
       mapRunRow,
       this.issues,
-      issueSessionProjection,
+      this.issueSessionProjection,
       this.telemetryProxy,
     );
     this.issueSessions = new IssueSessionStore(
@@ -87,7 +88,7 @@ export class PatchRelayDatabase {
       mapIssueSessionEventRow,
       this.issues,
       this.runs,
-      issueSessionProjection,
+      this.issueSessionProjection,
       this.telemetryProxy,
     );
     this.workflowWakes = new WorkflowWakeResolver(this.issues, this.issueSessions);
@@ -111,6 +112,14 @@ export class PatchRelayDatabase {
 
   transaction<T>(fn: () => T): T {
     return this.connection.transaction(fn)();
+  }
+
+  batchIssueSessionProjections<T>(fn: () => T): T {
+    return this.issueSessionProjection.batch(fn);
+  }
+
+  runWalCheckpoint(mode: "PASSIVE" | "FULL" | "RESTART" | "TRUNCATE" = "PASSIVE"): Array<Record<string, unknown>> {
+    return this.connection.prepare(`PRAGMA wal_checkpoint(${mode})`).all() as Array<Record<string, unknown>>;
   }
 
   close(): void {
@@ -332,6 +341,7 @@ function mapRunRow(row: Record<string, unknown>): RunRecord {
     linearIssueId: String(row.linear_issue_id),
     runType: String(row.run_type ?? "implementation") as RunType,
     status: String(row.status) as RunStatus,
+    ...(row.launch_phase !== null && row.launch_phase !== undefined ? { launchPhase: String(row.launch_phase) as RunRecord["launchPhase"] } : {}),
     ...(row.source_head_sha !== null ? { sourceHeadSha: String(row.source_head_sha) } : {}),
     ...(row.prompt_text !== null ? { promptText: String(row.prompt_text) } : {}),
     ...(row.thread_id !== null ? { threadId: String(row.thread_id) } : {}),

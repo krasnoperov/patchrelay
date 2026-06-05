@@ -9,6 +9,7 @@ import { handleClusterCommand } from "./commands/cluster.ts";
 import { handleLinearCommand } from "./commands/linear.ts";
 import { handleSequenceCheckCommand } from "./commands/sequence-check.ts";
 import { handleRepoCommand } from "./commands/repo.ts";
+import { handleMaintenanceCommand } from "./commands/maintenance.ts";
 import { handleInitCommand, handleServiceCommand } from "./commands/setup.ts";
 import type { RunCliOptions } from "./command-types.ts";
 import type { CliDataAccess } from "./data.ts";
@@ -31,6 +32,7 @@ function getCommandConfigProfile(command: string): ConfigLoadProfile {
     case "cluster":
     case "repo":
     case "issue":
+    case "maintenance":
     case "sequence-check":
       return "cli";
     default:
@@ -95,6 +97,13 @@ function validateFlags(command: string, commandArgs: string[], parsed: ReturnTyp
       return;
     case "cluster":
       assertKnownFlags(parsed, command, ["json"]);
+      return;
+    case "maintenance":
+      if (commandArgs[0] === "prune-events") {
+        assertKnownFlags(parsed, command, ["json", "dry-run", "archive", "discard", "retention-days", "batch-size"]);
+        return;
+      }
+      assertKnownFlags(parsed, command, []);
       return;
     case "sequence-check":
       assertKnownFlags(parsed, command, ["json", "base"]);
@@ -195,7 +204,7 @@ export async function runCli(
   const json = parsed.flags.get("json") === true;
   if (command === "help") {
     const topic = commandArgs[0];
-    if (topic === "linear" || topic === "repo" || topic === "issue" || topic === "service" || topic === "cluster") {
+    if (topic === "linear" || topic === "repo" || topic === "issue" || topic === "service" || topic === "cluster" || topic === "maintenance") {
       writeOutput(stdout, `${helpTextFor(topic)}\n`);
       return 0;
     }
@@ -217,7 +226,7 @@ export async function runCli(
         ? "linear"
         : command === "repo"
           ? "repo"
-        : command === "issue" || command === "service" || command === "cluster"
+        : command === "issue" || command === "service" || command === "cluster" || command === "maintenance"
           ? command
           : "root";
     writeOutput(
@@ -376,6 +385,22 @@ export async function runCli(
         data: issueData,
         config,
         runCommand,
+      });
+    }
+
+    if (command === "maintenance") {
+      const issueData = await ensureIssueDataAccess(data, config);
+      if (!data) {
+        data = issueData;
+        ownsData = true;
+      }
+      return await handleMaintenanceCommand({
+        commandArgs,
+        parsed,
+        json,
+        stdout,
+        data: issueData,
+        config,
       });
     }
 

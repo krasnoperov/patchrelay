@@ -1,5 +1,14 @@
 import type { DatabaseConnection } from "./shared.ts";
 
+export interface WebhookEventArchiveRecord {
+  id: number;
+  webhookId: string;
+  receivedAt: string;
+  projectId?: string | undefined;
+  payloadJson?: string | undefined;
+  processingStatus: string;
+}
+
 export class WebhookEventStore {
   constructor(private readonly connection: DatabaseConnection) {}
 
@@ -49,6 +58,48 @@ export class WebhookEventStore {
 
   assignWebhookProject(id: number, projectId: string): void {
     this.connection.prepare("UPDATE webhook_events SET project_id = ? WHERE id = ?").run(projectId, id);
+  }
+
+  listArchiveableEventsBefore(cutoffIso: string, limit: number): WebhookEventArchiveRecord[] {
+    const rows = this.connection.prepare(`
+      SELECT id, webhook_id, received_at, project_id, payload_json, processing_status
+      FROM webhook_events
+      WHERE received_at < ?
+        AND processing_status != 'pending'
+      ORDER BY received_at ASC, id ASC
+      LIMIT ?
+    `).all(cutoffIso, limit) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      id: Number(row.id),
+      webhookId: String(row.webhook_id),
+      receivedAt: String(row.received_at),
+      ...(row.project_id != null ? { projectId: String(row.project_id) } : {}),
+      ...(row.payload_json != null ? { payloadJson: String(row.payload_json) } : {}),
+      processingStatus: String(row.processing_status),
+    }));
+  }
+
+  countArchiveableEventsBefore(cutoffIso: string): number {
+    const row = this.connection.prepare(`
+      SELECT COUNT(*) AS count
+      FROM webhook_events
+      WHERE received_at < ?
+        AND processing_status != 'pending'
+    `).get(cutoffIso) as Record<string, unknown> | undefined;
+    return Number(row?.count ?? 0);
+  }
+
+  deleteWebhookEventsByIds(ids: number[]): number {
+    if (ids.length === 0) return 0;
+    return this.connection.transaction(() => {
+      let deleted = 0;
+      const statement = this.connection.prepare("DELETE FROM webhook_events WHERE id = ?");
+      for (const id of ids) {
+        const result = statement.run(id);
+        deleted += Number(result.changes ?? 0);
+      }
+      return deleted;
+    })();
   }
 
   findLatestAgentSessionIdForIssue(linearIssueId: string): string | undefined {
