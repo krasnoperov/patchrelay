@@ -42,6 +42,11 @@ import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry, type RunSkipRea
 import { LinearIssueProjectionService } from "./linear-issue-projection.ts";
 import { RunAdmissionController } from "./run-admission-controller.ts";
 
+// A terminal run must hold the active slot for at least this long before
+// the orchestrator force-clears it, so we never race the normal
+// notification-driven finalize that runs within seconds of completion.
+const DANGLING_ACTIVE_RUN_MIN_AGE_MS = 2 * 60_000;
+
 function lowerCaseFirst(value: string): string {
   return value ? `${value.slice(0, 1).toLowerCase()}${value.slice(1)}` : value;
 }
@@ -815,6 +820,10 @@ export class RunOrchestrator {
     for (const run of this.db.runs.listRunningRuns()) {
       await this.reconcileRun(run);
     }
+    // Free any issue whose active slot is pinned to an already-terminal
+    // run (post-run finalize interrupted by restart). Must run before the
+    // idle reconciler so the freed issue is routed in this same pass.
+    this.finalizeDanglingActiveRuns();
     // Preemptively detect stuck merge-queue PRs (conflicts visible on
     // GitHub) and dispatch queue_repair before the Steward evicts.
     await this.queueHealthMonitor.reconcile();
@@ -849,6 +858,65 @@ export class RunOrchestrator {
       reason,
       isRequestedChangesRunType,
     });
+  }
+
+  // Clear a dangling active slot: an issue still pointing at an
+  // already-terminal run via `activeRunId`. The post-run finalize was
+  // interrupted (almost always a restart between marking the run
+  // terminal and clearing the slot), so the run can never drive the
+  // session forward, yet every idle/recovery pass skips the issue
+  // because `activeRunId` is set. We re-read under the issue-session
+  // lease and null the slot; the idle reconciler then routes the issue
+  // from GitHub truth (e.g. a missed changes_requested → review_fix).
+  private finalizeDanglingActiveRuns(): void {
+    for (const issue of this.db.issues.listIssuesWithTerminalActiveRun()) {
+      if (issue.activeRunId === undefined) continue;
+      const run = this.db.runs.getRunById(issue.activeRunId);
+      // The query already filters to terminal runs; this guards against a
+      // race where the run advanced back to active between query and read.
+      if (!run || run.status === "running" || run.status === "queued") continue;
+      // Hold off until the run has been terminal long enough that the
+      // normal notification-driven finalize has demonstrably not run —
+      // avoids racing a live completion that is milliseconds from clearing
+      // the slot itself.
+      const endedAtMs = run.endedAt ? Date.parse(run.endedAt) : Number.NaN;
+      if (Number.isFinite(endedAtMs) && Date.now() - endedAtMs < DANGLING_ACTIVE_RUN_MIN_AGE_MS) continue;
+
+      const lease = this.claimLeaseForReconciliation(run.projectId, run.linearIssueId);
+      // "skip" → a live lease owns the session (a real run is in flight);
+      // leave it alone. "owned" → an outer local scope holds it, so we
+      // must not release it here.
+      if (lease === "skip") continue;
+      try {
+        const cleared = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, (held) => {
+          const fresh = this.db.issues.getIssue(run.projectId, run.linearIssueId);
+          if (!fresh || fresh.activeRunId !== run.id) return false;
+          this.db.issueSessions.upsertIssueWithLease(held, {
+            projectId: run.projectId,
+            linearIssueId: run.linearIssueId,
+            activeRunId: null,
+          });
+          return true;
+        });
+        if (cleared) {
+          this.logger.warn(
+            { issueKey: issue.issueKey, runId: run.id, runType: run.runType, runStatus: run.status },
+            "Cleared dangling active-run slot left by a terminal run; idle reconcile will resume the issue",
+          );
+          this.feed?.publish({
+            level: "warn",
+            kind: "workflow",
+            issueKey: issue.issueKey,
+            projectId: run.projectId,
+            stage: run.runType,
+            status: "recovered",
+            summary: `Cleared stuck active slot: run #${run.id} was ${run.status} but still held the issue`,
+          });
+        }
+      } finally {
+        if (lease !== "owned") this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+      }
+    }
   }
 
   private async reconcileRun(run: RunRecord): Promise<void> {
