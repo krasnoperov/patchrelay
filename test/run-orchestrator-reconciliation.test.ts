@@ -3602,3 +3602,101 @@ test("reconcileIdleIssues still dedupes queue_repair when the last attempt cover
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("reconcileActiveRuns frees an issue whose active slot is pinned to a terminal run", async () => {
+  // Regression: a run that finished (status completed) while the issue
+  // still referenced it through activeRunId — the post-run finalize was
+  // interrupted, almost always by a restart between marking the run
+  // terminal and clearing the slot — left the issue invisible to every
+  // idle and recovery pass, all of which gate on activeRunId IS NULL.
+  // The orchestrator must clear the dangling slot so the issue resumes.
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-dangling-active-"));
+  try {
+    const { db, orchestrator } = createOrchestrator(baseDir);
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-dangling-active",
+      issueKey: "USE-DANGLING",
+      branchName: "feat-dangling",
+      prNumber: 321,
+      prState: "open",
+      prHeadSha: "sha-dangling",
+      prReviewState: "changes_requested",
+      prCheckStatus: "success",
+      factoryState: "pr_open",
+      delegatedToPatchRelay: true,
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    // Mark the run terminal and backdate its end past the safety window so
+    // the orchestrator treats it as a genuinely stranded slot, not a
+    // completion that is about to finalize itself.
+    const longAgo = new Date(Date.now() - 10 * 60_000).toISOString();
+    (db as unknown as { connection: { prepare(sql: string): { run(...args: unknown[]): void } } }).connection
+      .prepare("UPDATE runs SET status = 'completed', ended_at = ? WHERE id = ?")
+      .run(longAgo, run.id);
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+    assert.equal(db.getIssue(issue.projectId, issue.linearIssueId)?.activeRunId, run.id);
+
+    (orchestrator as unknown as { finalizeDanglingActiveRuns: () => void }).finalizeDanglingActiveRuns();
+
+    assert.equal(
+      db.getIssue(issue.projectId, issue.linearIssueId)?.activeRunId,
+      undefined,
+      "dangling active slot should be cleared so idle reconcile can resume the issue",
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("reconcileActiveRuns leaves a freshly completed run's active slot alone", async () => {
+  // The clear only fires after the run has been terminal past the safety
+  // window; a completion that just landed must be left for the normal
+  // notification-driven finalize.
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-fresh-active-"));
+  try {
+    const { db, orchestrator } = createOrchestrator(baseDir);
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-fresh-active",
+      issueKey: "USE-FRESH",
+      branchName: "feat-fresh",
+      prNumber: 322,
+      prState: "open",
+      factoryState: "pr_open",
+      delegatedToPatchRelay: true,
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    // Terminal but only just now — within the safety window.
+    db.runs.finishRun(run.id, { status: "completed" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+
+    (orchestrator as unknown as { finalizeDanglingActiveRuns: () => void }).finalizeDanglingActiveRuns();
+
+    assert.equal(
+      db.getIssue(issue.projectId, issue.linearIssueId)?.activeRunId,
+      run.id,
+      "a freshly completed run's slot must not be force-cleared",
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

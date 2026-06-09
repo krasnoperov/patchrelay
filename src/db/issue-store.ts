@@ -182,6 +182,29 @@ export class IssueStore {
     return rows.map(mapIssueRow);
   }
 
+  // Recovery net for a dangling active slot: an issue whose
+  // `active_run_id` still points at a run that has already reached a
+  // terminal status. This happens when the post-run finalize never ran
+  // to completion — almost always a service restart landing between
+  // `finishRun` (which marks the run terminal) and the issue write that
+  // clears `active_run_id` and arms the next wake. The Codex
+  // `turn/completed` notification that would finalize it never re-fires
+  // after restart, and every idle/recovery pass gates on
+  // `active_run_id IS NULL`, so the issue is invisible to all of them
+  // and freezes indefinitely. The orchestrator clears the slot so the
+  // idle reconciler can route the issue forward (review_fix, etc.).
+  listIssuesWithTerminalActiveRun(): IssueRecord[] {
+    const rows = this.connection
+      .prepare(
+        `SELECT i.* FROM issues i
+         JOIN runs r ON r.id = i.active_run_id
+         WHERE i.active_run_id IS NOT NULL
+         AND r.status IN ('completed', 'failed', 'released', 'superseded')`,
+      )
+      .all() as Array<Record<string, unknown>>;
+    return rows.map(mapIssueRow);
+  }
+
   // Safety net for orphaned wakes: any delegated, non-terminal issue
   // with at least one unprocessed session event but no active run.
   // The orchestrator's enqueueIssue is the only path that drains these
