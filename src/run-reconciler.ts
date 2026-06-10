@@ -9,13 +9,13 @@ import type { LinearSessionSync } from "./linear-session-sync.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { LinearClientProvider, CodexThreadSummary } from "./types.ts";
 import { getThreadTurns } from "./codex-thread-utils.ts";
-import type { InterruptedRunRecovery } from "./interrupted-run-recovery.ts";
-import { resolveRecoverablePostRunState } from "./interrupted-run-recovery.ts";
+import type { RunFailurePolicy } from "./run-failure-policy.ts";
 import type { RunFinalizer } from "./run-finalizer.ts";
 import type { ReleaseIssueSessionLease, WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import { resolveEffectiveActiveRun } from "./effective-active-run.ts";
 import { isThreadMaterializingError } from "./codex-thread-errors.ts";
 import { fetchPullRequestSnapshot } from "./reconcile-pr-fetch.ts";
+import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
 
 const THREAD_MATERIALIZATION_GRACE_MS = 10 * 60_000;
 
@@ -33,14 +33,14 @@ export class RunReconciler {
     private readonly logger: Logger,
     private readonly linearProvider: LinearClientProvider,
     private readonly linearSync: LinearSessionSync,
-    private readonly interruptedRunRecovery: InterruptedRunRecovery,
+    private readonly failurePolicy: Pick<RunFailurePolicy, "settleStrandedRunAndRecover" | "handleInterruptedRun">,
     private readonly runFinalizer: RunFinalizer,
     private readonly withHeldLease: WithHeldIssueSessionLease,
     private readonly releaseLease: ReleaseIssueSessionLease,
     private readonly readThreadWithRetry: (threadId: string, maxRetries?: number) => Promise<CodexThreadSummary>,
-    private readonly recoverOrEscalate: (issue: IssueRecord, runType: RunRecord["runType"], reason: string) => void,
     private readonly resolveRepoFullName: (projectId: string) => string | undefined = () => undefined,
     private readonly feed?: OperatorEventFeed,
+    private readonly telemetry: PatchRelayTelemetry = noopTelemetry,
   ) {}
 
   async reconcile(params: {
@@ -76,6 +76,19 @@ export class RunReconciler {
           { issueKey: effectiveIssue.issueKey, runId: run.id, runType: run.runType },
           "Reattached detached active run during reconciliation",
         );
+        // Plan §B5: with settleRun idempotent and the launcher persisting the
+        // thread id before startTurn, this reattachment should never fire.
+        // Telemetry observes it for one release before the block is deleted.
+        emitTelemetry(this.telemetry, {
+          type: "health.invariant",
+          invariant: "detached_active_run",
+          status: "repaired",
+          projectId: run.projectId,
+          linearIssueId: run.linearIssueId,
+          ...(effectiveIssue.issueKey ? { issueKey: effectiveIssue.issueKey } : {}),
+          runId: run.id,
+          detail: `Reattached detached active ${run.runType} run during reconciliation`,
+        });
       } else if (commit?.outcome === "conflict_skipped" && commit.issue) {
         effectiveIssue = commit.issue;
       }
@@ -129,18 +142,14 @@ export class RunReconciler {
       { issueKey: effectiveIssue.issueKey, runId: run.id, runType: run.runType },
       "Zombie run detected (no thread)",
     );
-      const zombieClear = { projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null };
-      this.withHeldLease(run.projectId, run.linearIssueId, () => {
-        const commit = this.db.issueSessions.commitIssueState({
-          writer: WRITER,
-          expectedVersion: effectiveIssue.version,
-          update: zombieClear,
-          onConflict: (current) => (current.activeRunId === run.id ? zombieClear : undefined),
-        });
-        if (commit.outcome !== "applied") return;
-        this.db.runs.finishRun(run.id, { status: "failed", failureReason: "Zombie: never started (no thread after restart)" });
+      // Detection only — the failure policy settles the run and decides
+      // retry vs escalate (plan §B4).
+      this.failurePolicy.settleStrandedRunAndRecover({
+        run,
+        issue: effectiveIssue,
+        reason: "zombie",
+        failureReason: "Zombie: never started (no thread after restart)",
       });
-      this.recoverOrEscalate(effectiveIssue, run.runType, "zombie");
       const recoveredIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? effectiveIssue;
       void this.linearSync.emitActivity(recoveredIssue, buildRunFailureActivity(run.runType, "The Codex turn never started before PatchRelay restarted."));
       void this.linearSync.syncSession(recoveredIssue, { activeRunType: run.runType });
@@ -167,18 +176,14 @@ export class RunReconciler {
         { issueKey: effectiveIssue.issueKey, runId: run.id, runType: run.runType, threadId: run.threadId },
         "Stale thread during reconciliation",
       );
-      const staleClear = { projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null };
-      this.withHeldLease(run.projectId, run.linearIssueId, () => {
-        const commit = this.db.issueSessions.commitIssueState({
-          writer: WRITER,
-          expectedVersion: effectiveIssue.version,
-          update: staleClear,
-          onConflict: (current) => (current.activeRunId === run.id ? staleClear : undefined),
-        });
-        if (commit.outcome !== "applied") return;
-        this.db.runs.finishRun(run.id, { status: "failed", failureReason: "Stale thread after restart" });
+      // Detection only — the failure policy settles the run and decides
+      // retry vs escalate (plan §B4).
+      this.failurePolicy.settleStrandedRunAndRecover({
+        run,
+        issue: effectiveIssue,
+        reason: "stale_thread",
+        failureReason: "Stale thread after restart",
       });
-      this.recoverOrEscalate(effectiveIssue, run.runType, "stale_thread");
       const recoveredIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? effectiveIssue;
       void this.linearSync.emitActivity(recoveredIssue, buildRunFailureActivity(run.runType, "PatchRelay lost the active Codex thread after restart and needs to recover."));
       void this.linearSync.syncSession(recoveredIssue, { activeRunType: run.runType });
@@ -230,7 +235,7 @@ export class RunReconciler {
 
     const latestTurn = getThreadTurns(thread).at(-1);
     if (latestTurn?.status === "interrupted") {
-      await this.interruptedRunRecovery.handle(run, effectiveIssue);
+      await this.failurePolicy.handleInterruptedRun(run, effectiveIssue);
       return;
     }
 
@@ -242,7 +247,6 @@ export class RunReconciler {
         thread,
         threadId: run.threadId,
         ...(latestTurn.id ? { completedTurnId: latestTurn.id } : {}),
-        resolveRecoverableRunState: resolveRecoverablePostRunState,
       });
       return;
     }

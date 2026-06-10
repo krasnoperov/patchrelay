@@ -314,6 +314,11 @@ export class RunLauncher {
           update: { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, threadId },
         });
       }
+      // Plan §B5: persist the thread id on the run row BEFORE startTurn is
+      // awaited, so a turn/completed notification arriving while the turn is
+      // starting can already resolve the run by thread id. The orchestrator
+      // re-records it (with the turn id) after the launch returns.
+      this.recordRunThread(params, threadId, parentThreadId);
       this.db.runs.updateLaunchPhase(params.run.id, "thread_started");
 
       try {
@@ -332,6 +337,9 @@ export class RunLauncher {
             lease: { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, leaseId: params.leaseId },
             update: { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, threadId },
           });
+          // Plan §B5: re-point the run row at the fresh thread before the
+          // retried startTurn, for the same notification race.
+          this.recordRunThread(params, threadId, parentThreadId);
           const turn = await this.codex.startTurn({ threadId, cwd: params.worktreePath, input: params.prompt });
           turnId = turn.turnId;
           this.db.runs.updateLaunchPhase(params.run.id, "turn_started");
@@ -376,6 +384,35 @@ export class RunLauncher {
       params.releaseLease(params.project.id, params.issue.linearIssueId);
       throw error;
     }
+  }
+
+  // Persist the Codex thread id on the run row under the launch lease.
+  // Losing the lease here aborts the launch the same way assertLaunchLease
+  // does — the run row must not be touched by a worker that no longer owns
+  // the session.
+  private recordRunThread(
+    params: {
+      project: AppConfig["projects"][number];
+      issue: IssueRecord;
+      run: RunRecord;
+      leaseId: string;
+    },
+    threadId: string,
+    parentThreadId: string | undefined,
+  ): void {
+    const recorded = this.db.issueSessions.updateRunThreadWithLease(
+      { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, leaseId: params.leaseId },
+      params.run.id,
+      { threadId, ...(parentThreadId ? { parentThreadId } : {}) },
+    );
+    if (recorded) return;
+    const error = new Error("Lost issue-session lease while recording the Codex thread id");
+    error.name = "IssueSessionLeaseLostError";
+    this.logger.warn(
+      { runId: params.run.id, issueId: params.issue.linearIssueId },
+      "Aborting run launch after losing issue-session lease while recording the Codex thread id",
+    );
+    throw error;
   }
 
   private async setInitialImplementationGoal(threadId: string, issue: IssueRecord): Promise<void> {

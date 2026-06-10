@@ -24,17 +24,16 @@ import { IdleIssueReconciler } from "./idle-reconciliation.ts";
 import { LinearSessionSync } from "./linear-session-sync.ts";
 import { recoverLinearAgentActivityContext } from "./linear-agent-activity-recovery.ts";
 import { IssueSessionLeaseService } from "./issue-session-lease-service.ts";
-import { InterruptedRunRecovery } from "./interrupted-run-recovery.ts";
 import { RunCompletionPolicy } from "./run-completion-policy.ts";
+import { RunFailurePolicy } from "./run-failure-policy.ts";
 import { RunFinalizer } from "./run-finalizer.ts";
 import { RunLauncher } from "./run-launcher.ts";
 import { RunNotificationHandler } from "./run-notification-handler.ts";
 import { RunReconciler } from "./run-reconciler.ts";
-import { RunRecoveryService } from "./run-recovery-service.ts";
 import { RunWakePlanner, type PendingRunWake } from "./run-wake-planner.ts";
 import { WakeDispatcher } from "./wake-dispatcher.ts";
 import { settleRun } from "./run-settlement.ts";
-import { getRemainingZombieRecoveryDelayMs } from "./zombie-recovery.ts";
+import { getRemainingZombieRecoveryDelayMs } from "./run-budgets.ts";
 import { classifyIssue } from "./issue-class.ts";
 import { buildIssueTriageHash, IssueTriageService } from "./issue-triage.ts";
 import { loadConfig } from "./config.ts";
@@ -84,7 +83,6 @@ interface RunLeasePorts {
 interface RunRecoveryPorts {
   failRunAndClear: (run: RunRecord, message: string, nextState?: FactoryState) => void;
   restoreIdleWorktree: (issue: Pick<IssueRecord, "issueKey" | "worktreePath" | "branchName">) => Promise<void>;
-  recoverOrEscalate: (issue: IssueRecord, runType: RunType, reason: string) => void;
 }
 
 export class RunOrchestrator {
@@ -100,9 +98,8 @@ export class RunOrchestrator {
   readonly leaseService: IssueSessionLeaseService;
   private readonly runFinalizer: RunFinalizer;
   private readonly runLauncher: RunLauncher;
-  private readonly runRecovery: RunRecoveryService;
+  private readonly runFailurePolicy: RunFailurePolicy;
   private readonly runWakePlanner: RunWakePlanner;
-  private readonly interruptedRunRecovery: InterruptedRunRecovery;
   private readonly runCompletionPolicy: RunCompletionPolicy;
   private readonly completionCheck: CompletionCheckService;
   private readonly issueTriage: IssueTriageService;
@@ -124,7 +121,6 @@ export class RunOrchestrator {
   private readonly recoveryPorts: RunRecoveryPorts = {
     failRunAndClear: (run, message, nextState) => this.failRunAndClear(run, message, nextState),
     restoreIdleWorktree: (issue) => this.restoreIdleWorktree(issue),
-    recoverOrEscalate: (issue, runType, reason) => this.recoverOrEscalate(issue, runType, reason),
   };
   readonly activeSessionLeases: Map<string, string>;
   botIdentity?: GitHubAppBotIdentity;
@@ -225,27 +221,17 @@ export class RunOrchestrator {
       feed,
       { interruptTurn: (options) => codex.interruptTurn(options) },
     );
-    this.runRecovery = new RunRecoveryService(
+    this.runFailurePolicy = new RunFailurePolicy(
       db,
       logger,
       this.linearSync,
       this.leasePorts.withHeldLease,
-      this.leasePorts.getHeldLease,
+      this.leasePorts.releaseLease,
       (lease, issue, runType, context, dedupeScope) => this.appendWakeEventWithLease(lease, issue, runType, context, dedupeScope),
-      this.leasePorts.releaseLease,
-      (projectId, issueId) => this.enqueueIssue(projectId, issueId),
-      feed,
-    );
-    this.interruptedRunRecovery = new InterruptedRunRecovery(
-      db,
-      logger,
-      this.linearSync,
-      this.leasePorts.withHeldLease,
-      this.leasePorts.releaseLease,
-      this.recoveryPorts.failRunAndClear,
+      this.wakeDispatcher,
       this.recoveryPorts.restoreIdleWorktree,
       this.runCompletionPolicy,
-      (projectId, issueId) => this.enqueueIssue(projectId, issueId),
+      (projectId) => this.config.projects.find((project) => project.id === projectId),
       feed,
     );
     this.runReconciler = new RunReconciler(
@@ -253,14 +239,14 @@ export class RunOrchestrator {
       logger,
       linearProvider,
       this.linearSync,
-      this.interruptedRunRecovery,
+      this.runFailurePolicy,
       this.runFinalizer,
       this.leasePorts.withHeldLease,
       this.leasePorts.releaseLease,
       this.threadPorts.readThreadWithRetry,
-      this.recoveryPorts.recoverOrEscalate,
       (projectId) => this.config.projects.find((project) => project.id === projectId)?.github?.repoFullName,
       feed,
+      telemetry,
     );
     this.runWakePlanner = new RunWakePlanner(db);
     this.linearIssueProjection = new LinearIssueProjectionService(db, linearProvider, logger);
@@ -863,20 +849,6 @@ export class RunOrchestrator {
     this.idleReconciler.advanceIdleIssue(issue, newState, options);
   }
 
-  /**
-   * After a zombie/stale run is cleared, decide whether to re-enqueue
-   * or escalate. Checks: PR already merged → done; budget exhausted →
-   * escalate; backoff delay not elapsed → skip.
-   */
-  private recoverOrEscalate(issue: IssueRecord, runType: RunType, reason: string): void {
-    this.runRecovery.recoverOrEscalate({
-      issue,
-      runType,
-      reason,
-      isRequestedChangesRunType,
-    });
-  }
-
   // Settle a dangling active slot: an issue still pointing at an
   // already-terminal run via `activeRunId`. The post-run finalize was
   // interrupted (almost always a restart between marking the run
@@ -939,7 +911,7 @@ export class RunOrchestrator {
   // ─── Internal helpers ─────────────────────────────────────────────
 
   private escalate(issue: IssueRecord, runType: string, reason: string): void {
-    this.runRecovery.escalate({
+    this.runFailurePolicy.escalate({
       issue,
       runType,
       reason,
@@ -947,7 +919,7 @@ export class RunOrchestrator {
   }
 
   private failRunAndClear(run: RunRecord, message: string, nextState: FactoryState = "failed"): void {
-    this.runRecovery.failRunAndClear({
+    this.runFailurePolicy.failRunAndClear({
       run,
       message,
       nextState,
