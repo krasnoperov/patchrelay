@@ -308,10 +308,11 @@ export class RunLauncher {
         const thread = await this.codex.startThread({ cwd: params.worktreePath });
         threadId = thread.id;
         createdThreadForRun = true;
-        this.db.issueSessions.upsertIssueWithLease(
-          { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, leaseId: params.leaseId },
-          { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, threadId },
-        );
+        this.db.issueSessions.commitIssueState({
+          writer: WRITER,
+          lease: { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, leaseId: params.leaseId },
+          update: { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, threadId },
+        });
       }
       this.db.runs.updateLaunchPhase(params.run.id, "thread_started");
 
@@ -326,10 +327,11 @@ export class RunLauncher {
           const thread = await this.codex.startThread({ cwd: params.worktreePath });
           threadId = thread.id;
           createdThreadForRun = true;
-          this.db.issueSessions.upsertIssueWithLease(
-            { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, leaseId: params.leaseId },
-            { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, threadId },
-          );
+          this.db.issueSessions.commitIssueState({
+            writer: WRITER,
+            lease: { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, leaseId: params.leaseId },
+            update: { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, threadId },
+          });
           const turn = await this.codex.startTurn({ threadId, cwd: params.worktreePath, input: params.prompt });
           turnId = turn.turnId;
           this.db.runs.updateLaunchPhase(params.run.id, "turn_started");
@@ -347,19 +349,25 @@ export class RunLauncher {
       const lostLease = error instanceof Error && error.name === "IssueSessionLeaseLostError";
       if (!lostLease) {
         const nextState: FactoryState = resolveFailureFactoryState(params.runType);
-        this.db.issueSessions.finishRunWithLease({ projectId: params.project.id, linearIssueId: params.issue.linearIssueId, leaseId: params.leaseId }, params.run.id, {
-          status: "failed",
-          failureReason: message,
+        // Issue clear + run-terminal write ride in one transaction; the run
+        // finish is gated on the issue commit so a lost lease skips both.
+        this.db.transaction(() => {
+          const commit = this.db.issueSessions.commitIssueState({
+            writer: WRITER,
+            lease: { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, leaseId: params.leaseId },
+            update: {
+              projectId: params.project.id,
+              linearIssueId: params.issue.linearIssueId,
+              activeRunId: null,
+              factoryState: nextState,
+            },
+          });
+          if (commit.outcome !== "applied") return;
+          this.db.runs.finishRun(params.run.id, {
+            status: "failed",
+            failureReason: message,
+          });
         });
-        this.db.issueSessions.upsertIssueWithLease(
-          { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, leaseId: params.leaseId },
-          {
-            projectId: params.project.id,
-            linearIssueId: params.issue.linearIssueId,
-            activeRunId: null,
-            factoryState: nextState,
-          },
-        );
       }
       this.logger.error({ issueKey: params.issue.issueKey, runType: params.runType, error: message }, `Failed to launch ${params.runType} run`);
       const failedIssue = this.db.issues.getIssue(params.project.id, params.issue.linearIssueId) ?? params.issue;

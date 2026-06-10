@@ -5,6 +5,8 @@ import type { WithHeldIssueSessionLease } from "./issue-session-lease-service.ts
 import type { AppConfig } from "./types.ts";
 import { execCommand } from "./utils.ts";
 
+const WRITER = "implementation-outcome-policy";
+
 export class ImplementationOutcomePolicy {
   constructor(
     private readonly config: AppConfig,
@@ -121,9 +123,10 @@ export class ImplementationOutcomePolicy {
     params: Parameters<PatchRelayDatabase["upsertIssue"]>[0],
     context: string,
   ): IssueRecord | undefined {
-    const updated = this.withHeldLease(projectId, linearIssueId, (lease) =>
-      this.db.issueSessions.upsertIssueWithLease(lease, params)
-    );
+    const updated = this.withHeldLease(projectId, linearIssueId, (lease) => {
+      const commit = this.db.issueSessions.commitIssueState({ writer: WRITER, lease, update: params });
+      return commit.outcome === "applied" ? commit.issue : undefined;
+    });
     if (updated === undefined) {
       this.logger.warn({ projectId, linearIssueId, context }, "Skipping issue write after losing issue-session lease");
     }

@@ -1,6 +1,7 @@
 import type { Logger } from "pino";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
+import type { UpsertIssueParams } from "./db/issue-store.ts";
 import { ACTIVE_RUN_STATES, type FactoryState, type RunType } from "./factory-state.ts";
 import type { ReleaseIssueSessionLease, WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import { buildRunFailureActivity } from "./linear-session-reporting.ts";
@@ -11,6 +12,36 @@ import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
 import { isRequestedChangesRunType } from "./reactive-pr-state.ts";
 
 const WRITER = "interrupted-run-recovery";
+
+// Roll back the attempt counter consumed by the interrupted run and clear the
+// attempted-failure provenance for repair runs, as a single issue update so
+// the whole repair commits (and conflict-recomputes) atomically.
+function buildInterruptedAttemptRepairUpdate(
+  runType: RunType,
+  issue: Pick<IssueRecord, "projectId" | "linearIssueId" | "ciRepairAttempts" | "queueRepairAttempts" | "reviewFixAttempts">,
+): UpsertIssueParams | undefined {
+  const counter = runType === "ci_repair" && issue.ciRepairAttempts > 0
+    ? { ciRepairAttempts: issue.ciRepairAttempts - 1 }
+    : runType === "queue_repair" && issue.queueRepairAttempts > 0
+      ? { queueRepairAttempts: issue.queueRepairAttempts - 1 }
+      : isRequestedChangesRunType(runType) && issue.reviewFixAttempts > 0
+        ? { reviewFixAttempts: issue.reviewFixAttempts - 1 }
+        : undefined;
+  const provenance = runType === "ci_repair" || runType === "queue_repair"
+    ? {
+        lastAttemptedFailureHeadSha: null,
+        lastAttemptedFailureSignature: null,
+        lastAttemptedFailureAt: null,
+      }
+    : undefined;
+  if (!counter && !provenance) return undefined;
+  return {
+    projectId: issue.projectId,
+    linearIssueId: issue.linearIssueId,
+    ...counter,
+    ...provenance,
+  };
+}
 
 function resolveRetryRunType(runType: RunType, context: Record<string, unknown> | undefined): "review_fix" | "branch_upkeep" {
   if (runType === "branch_upkeep") {
@@ -71,32 +102,16 @@ export class InterruptedRunRecovery {
     );
 
     const repairedCounters = this.withHeldLease(issue.projectId, issue.linearIssueId, (lease) => {
-      if (run.runType === "ci_repair" && issue.ciRepairAttempts > 0) {
-        this.db.issueSessions.upsertIssueWithLease(lease, {
-          projectId: issue.projectId,
-          linearIssueId: issue.linearIssueId,
-          ciRepairAttempts: issue.ciRepairAttempts - 1,
-        });
-      } else if (run.runType === "queue_repair" && issue.queueRepairAttempts > 0) {
-        this.db.issueSessions.upsertIssueWithLease(lease, {
-          projectId: issue.projectId,
-          linearIssueId: issue.linearIssueId,
-          queueRepairAttempts: issue.queueRepairAttempts - 1,
-        });
-      } else if (isRequestedChangesRunType(run.runType) && issue.reviewFixAttempts > 0) {
-        this.db.issueSessions.upsertIssueWithLease(lease, {
-          projectId: issue.projectId,
-          linearIssueId: issue.linearIssueId,
-          reviewFixAttempts: issue.reviewFixAttempts - 1,
-        });
-      }
-      if (run.runType === "ci_repair" || run.runType === "queue_repair") {
-        this.db.issueSessions.upsertIssueWithLease(lease, {
-          projectId: issue.projectId,
-          linearIssueId: issue.linearIssueId,
-          lastAttemptedFailureHeadSha: null,
-          lastAttemptedFailureSignature: null,
-          lastAttemptedFailureAt: null,
+      // The decrement is read-modify-write against an issue row read before
+      // the awaits that led here; on conflict, recompute from the fresh row.
+      const update = buildInterruptedAttemptRepairUpdate(run.runType, issue);
+      if (update) {
+        this.db.issueSessions.commitIssueState({
+          writer: WRITER,
+          lease,
+          expectedVersion: issue.version,
+          update,
+          onConflict: (current) => buildInterruptedAttemptRepairUpdate(run.runType, current),
         });
       }
       return true;

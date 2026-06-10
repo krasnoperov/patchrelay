@@ -424,15 +424,19 @@ test("unblock under a held lease preserves lease ownership and dedupes enqueue w
       leasedUntil: "2030-01-01T00:05:00.000Z",
       now: "2030-01-01T00:00:00.000Z",
     }), true);
-    assert.equal(db.issueSessions.upsertIssueWithLease({
-      projectId: "usertold",
-      linearIssueId: "issue-child",
-      leaseId: "lease-stale",
-    }, {
-      projectId: "usertold",
-      linearIssueId: "issue-child",
-      factoryState: "implementing",
-    }), undefined);
+    assert.equal(db.issueSessions.commitIssueState({
+      writer: "test",
+      lease: {
+        projectId: "usertold",
+        linearIssueId: "issue-child",
+        leaseId: "lease-stale",
+      },
+      update: {
+        projectId: "usertold",
+        linearIssueId: "issue-child",
+        factoryState: "implementing",
+      },
+    }).outcome, "lease_denied");
 
     db.issues.updateDependencyBlockerSnapshot({
       projectId: "usertold",

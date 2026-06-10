@@ -12,6 +12,8 @@ import type { RunFinalizer } from "./run-finalizer.ts";
 import { resolveRecoverablePostRunState } from "./interrupted-run-recovery.ts";
 import { resolveFailureFactoryState } from "./reactive-pr-state.ts";
 
+const WRITER = "run-notification-handler";
+
 const DEFAULT_PUBLISH_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 
 interface RunNotificationHandlerOptions {
@@ -107,18 +109,28 @@ export class RunNotificationHandler {
       }
 
       const nextState: FactoryState = resolveFailureFactoryState(run.runType);
+      const failureUpdate = {
+        projectId: run.projectId,
+        linearIssueId: run.linearIssueId,
+        activeRunId: null,
+        factoryState: nextState,
+      };
       const updated = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, (lease) => {
-        this.db.issueSessions.finishRunWithLease(lease, run.id, {
+        const commit = this.db.issueSessions.commitIssueState({
+          writer: WRITER,
+          lease,
+          // The issue row was read before awaiting the failed-run recovery;
+          // only clear the slot if it still belongs to this run.
+          expectedVersion: issue.version,
+          update: failureUpdate,
+          onConflict: (current) => (current.activeRunId === run.id ? failureUpdate : undefined),
+        });
+        if (commit.outcome !== "applied") return false;
+        this.db.runs.finishRun(run.id, {
           status: "failed",
           threadId,
           ...(completedTurnId ? { turnId: completedTurnId } : {}),
           failureReason,
-        });
-        this.db.issueSessions.upsertIssueWithLease(lease, {
-          projectId: run.projectId,
-          linearIssueId: run.linearIssueId,
-          activeRunId: null,
-          factoryState: nextState,
         });
         return true;
       });

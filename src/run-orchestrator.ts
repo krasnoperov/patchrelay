@@ -511,10 +511,11 @@ export class RunOrchestrator {
     }
 
     if (issue.prState === "merged") {
-      this.db.issueSessions.upsertIssueWithLease(
-        { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId },
-        { projectId: issue.projectId, linearIssueId: issue.linearIssueId, pendingRunType: null, factoryState: "done" as never },
-      );
+      this.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        lease: { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId },
+        update: { projectId: issue.projectId, linearIssueId: issue.linearIssueId, pendingRunType: null, factoryState: "done" },
+      });
       this.leaseService.release(item.projectId, item.issueId);
       return;
     }
@@ -722,15 +723,16 @@ export class RunOrchestrator {
 
     // Reset zombie recovery counter — this run started successfully
     if (issue.zombieRecoveryAttempts > 0) {
-      this.db.issueSessions.upsertIssueWithLease(
-        { projectId: item.projectId, linearIssueId: item.issueId, leaseId },
-        {
+      this.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        lease: { projectId: item.projectId, linearIssueId: item.issueId, leaseId },
+        update: {
           projectId: item.projectId,
           linearIssueId: item.issueId,
           zombieRecoveryAttempts: 0,
           lastZombieRecoveryAt: null,
         },
-      );
+      });
     }
 
     this.logger.info(
@@ -910,12 +912,20 @@ export class RunOrchestrator {
         const cleared = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, (held) => {
           const fresh = this.db.issues.getIssue(run.projectId, run.linearIssueId);
           if (!fresh || fresh.activeRunId !== run.id) return false;
-          this.db.issueSessions.upsertIssueWithLease(held, {
+          const danglingClear = {
             projectId: run.projectId,
             linearIssueId: run.linearIssueId,
             activeRunId: null,
+          };
+          const commit = this.db.issueSessions.commitIssueState({
+            writer: WRITER,
+            lease: held,
+            expectedVersion: fresh.version,
+            update: danglingClear,
+            // Never clear a slot a concurrent writer re-pointed elsewhere.
+            onConflict: (current) => (current.activeRunId === run.id ? danglingClear : undefined),
           });
-          return true;
+          return commit.outcome === "applied";
         });
         if (cleared) {
           this.logger.warn(

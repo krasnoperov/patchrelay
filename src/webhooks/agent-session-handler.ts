@@ -29,6 +29,8 @@ import type { WakeDispatcher } from "../wake-dispatcher.ts";
 
 type LinearClient = NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>;
 
+const WRITER = "agent-session-handler";
+
 const PATCHRELAY_AGENT_ACTIVITY_TYPES = new Set([
   "action",
   "elicitation",
@@ -228,21 +230,29 @@ export class AgentSessionHandler {
       } catch (error) {
         this.logger.warn({ issueKey: params.trackedIssue?.issueKey, error: error instanceof Error ? error.message : String(error) }, "Failed to steer Codex turn for stop signal");
       }
-
-      this.db.runs.finishRun(params.activeRun.id, {
-        status: "released",
-        threadId: params.activeRun.threadId,
-        turnId: params.activeRun.turnId,
-        failureReason: dirtySummary ? `Stop signal received; ${dirtySummary}` : "Stop signal received",
-      });
     }
 
-    this.db.issueSessions.upsertIssueRespectingActiveLease(params.project.id, issueId, {
-      projectId: params.project.id,
-      linearIssueId: issueId,
-      activeRunId: null,
-      factoryState: "awaiting_input",
-      agentSessionId: sessionId,
+    // The stop signal is a user fact: the issue slot clear and the run
+    // release ride in one transaction, with the run gated on the issue commit.
+    this.db.transaction(() => {
+      const commit = this.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        update: {
+          projectId: params.project.id,
+          linearIssueId: issueId,
+          activeRunId: null,
+          factoryState: "awaiting_input",
+          agentSessionId: sessionId,
+        },
+      });
+      if (commit.outcome === "applied" && params.activeRun?.threadId && params.activeRun.turnId) {
+        this.db.runs.finishRun(params.activeRun.id, {
+          status: "released",
+          threadId: params.activeRun.threadId,
+          turnId: params.activeRun.turnId,
+          failureReason: dirtySummary ? `Stop signal received; ${dirtySummary}` : "Stop signal received",
+        });
+      }
     });
     this.db.issueSessions.appendIssueSessionEvent({
       projectId: params.project.id,

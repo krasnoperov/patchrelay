@@ -9,6 +9,8 @@ import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { ServiceRuntime } from "./service-runtime.ts";
 import type { AppConfig } from "./types.ts";
 
+const WRITER = "service-issue-actions";
+
 export class ServiceIssueActions {
   constructor(
     private readonly config: AppConfig,
@@ -81,10 +83,13 @@ export class ServiceIssueActions {
       dedupeKey: `operator_stop:${issue.linearIssueId}`,
     });
     this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
-    this.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      factoryState: "awaiting_input" as never,
+    this.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      update: {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        factoryState: "awaiting_input",
+      },
     });
 
     this.feed.publish({
@@ -117,20 +122,26 @@ export class ServiceIssueActions {
     });
 
     if (retryTarget.runType === "none") {
-      this.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        factoryState: "done" as never,
+      this.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        update: {
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          factoryState: "done",
+        },
       });
       return { issueKey, runType: "none" };
     }
 
     this.appendOperatorRetryEvent(issue, retryTarget.runType);
-    this.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      factoryState: retryTarget.factoryState as never,
-      ...buildManualRetryAttemptReset(retryTarget.runType),
+    this.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      update: {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        factoryState: retryTarget.factoryState,
+        ...buildManualRetryAttemptReset(retryTarget.runType),
+      },
     });
     this.feed.publish({
       level: "info",
@@ -180,22 +191,29 @@ export class ServiceIssueActions {
       dedupeKey: `operator_closed:${issue.linearIssueId}:${terminalState}:${issue.activeRunId ?? "no-run"}`,
     });
     this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
-    if (run) {
-      this.db.issueSessions.finishRunRespectingActiveLease(issue.projectId, issue.linearIssueId, run.id, {
-        status: "released",
-        failureReason: options?.reason
-          ? `Operator closed issue as ${terminalState}: ${options.reason}`
-          : `Operator closed issue as ${terminalState}`,
+    // Operator close is authoritative: the issue terminal write and the run
+    // release ride in one transaction, with the run gated on the issue commit.
+    this.db.transaction(() => {
+      const commit = this.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        update: {
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          delegatedToPatchRelay: false,
+          factoryState: terminalState,
+          activeRunId: null,
+          pendingRunType: null,
+          pendingRunContextJson: null,
+        },
       });
-    }
-    this.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      delegatedToPatchRelay: false,
-      factoryState: terminalState as never,
-      activeRunId: null,
-      pendingRunType: null,
-      pendingRunContextJson: null,
+      if (run && commit.outcome === "applied") {
+        this.db.runs.finishRun(run.id, {
+          status: "released",
+          failureReason: options?.reason
+            ? `Operator closed issue as ${terminalState}: ${options.reason}`
+            : `Operator closed issue as ${terminalState}`,
+        });
+      }
     });
     this.db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(issue.projectId, issue.linearIssueId);
 

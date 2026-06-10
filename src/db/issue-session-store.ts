@@ -54,6 +54,7 @@ export class IssueSessionStore {
   ) {}
 
   getIssueSession(projectId: string, linearIssueId: string): IssueSessionRecord | undefined {
+    this.issueSessionProjection.assertNotMidBatch?.("getIssueSession");
     const row = this.connection
       .prepare("SELECT * FROM issue_sessions WHERE project_id = ? AND linear_issue_id = ?")
       .get(projectId, linearIssueId) as Record<string, unknown> | undefined;
@@ -447,18 +448,6 @@ export class IssueSessionStore {
       emitConflict("applied_anyway");
       return { outcome: "applied", issue: this.issues.upsertIssue(params.update), conflicted: true };
     })();
-  }
-
-  upsertIssueWithLease(lease: IssueSessionLease, params: UpsertIssueParams): IssueRecord | undefined {
-    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => this.issues.upsertIssue(params));
-  }
-
-  upsertIssueRespectingActiveLease(projectId: string, linearIssueId: string, params: UpsertIssueParams): IssueRecord | undefined {
-    const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
-    if (!lease) {
-      return this.issues.upsertIssue(params);
-    }
-    return this.upsertIssueWithLease(lease, params);
   }
 
   finishRunWithLease(lease: IssueSessionLease, runId: number, params: {

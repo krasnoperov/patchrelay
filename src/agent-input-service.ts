@@ -17,6 +17,8 @@ import type { WakeDispatcher } from "./wake-dispatcher.ts";
 import { extractLatestAssistantSummary } from "./issue-session-events.ts";
 import { dirtyWorktreeEventPayload, inspectGitWorktreeStatus } from "./git-worktree-status.ts";
 
+const WRITER = "agent-input-service";
+
 export interface AgentInputDeliveryResult {
   status: "answered" | "ignored" | "queued" | "steered" | "delivery_failed" | "stopped";
   queuedRunType?: RunType | undefined;
@@ -281,21 +283,25 @@ export class AgentInputService {
   private prepareReplacementWork(project: ProjectConfig, issue: IssueRecord): IssueRecord {
     const issueRef = (issue.issueKey ?? issue.linearIssueId).replace(/[^a-zA-Z0-9._-]+/g, "-");
     const suffix = Date.now().toString(36);
-    return this.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      factoryState: "delegated",
-      branchName: `${project.branchPrefix}/${issueRef}-replacement-${suffix}`,
-      prNumber: null,
-      prUrl: null,
-      prState: null,
-      prIsDraft: null,
-      prHeadSha: null,
-      prAuthorLogin: null,
-      prReviewState: null,
-      prCheckStatus: null,
-      lastBlockingReviewHeadSha: null,
-    }) ?? issue;
+    const commit = this.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      update: {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        factoryState: "delegated",
+        branchName: `${project.branchPrefix}/${issueRef}-replacement-${suffix}`,
+        prNumber: null,
+        prUrl: null,
+        prState: null,
+        prIsDraft: null,
+        prHeadSha: null,
+        prAuthorLogin: null,
+        prReviewState: null,
+        prCheckStatus: null,
+        lastBlockingReviewHeadSha: null,
+      },
+    });
+    return commit.outcome === "applied" ? commit.issue : issue;
   }
 
   private async stopActiveRun(
@@ -318,19 +324,28 @@ export class AgentInputService {
       } catch (error) {
         this.logger.warn({ issueKey: issue.issueKey, error: error instanceof Error ? error.message : String(error) }, "Failed to steer Codex turn for stop request");
       }
-      this.db.runs.finishRun(run.id, {
-        status: "released",
-        threadId: run.threadId,
-        turnId: run.turnId,
-        failureReason: dirtySummary ? `Operator stopped run; ${dirtySummary}` : "Operator stopped run",
-      });
     }
 
-    this.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      activeRunId: null,
-      factoryState: "awaiting_input",
+    // The stop is an operator fact: the issue slot clear and the run release
+    // ride in one transaction, with the run gated on the issue commit.
+    this.db.transaction(() => {
+      const commit = this.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        update: {
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          activeRunId: null,
+          factoryState: "awaiting_input",
+        },
+      });
+      if (commit.outcome === "applied" && run.threadId && run.turnId) {
+        this.db.runs.finishRun(run.id, {
+          status: "released",
+          threadId: run.threadId,
+          turnId: run.turnId,
+          failureReason: dirtySummary ? `Operator stopped run; ${dirtySummary}` : "Operator stopped run",
+        });
+      }
     });
     this.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
       eventType: "stop_requested",
