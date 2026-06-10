@@ -13,6 +13,8 @@ import type { AppendWakeEventWithLease } from "./run-wake-planner.ts";
 import { buildRunFailureActivity } from "./linear-session-reporting.ts";
 import { getRemainingZombieRecoveryDelayMs } from "./zombie-recovery.ts";
 
+const WRITER = "run-recovery-service";
+
 const DEFAULT_ZOMBIE_RECOVERY_BUDGET = 5;
 
 export class RunRecoveryService {
@@ -208,16 +210,22 @@ export class RunRecoveryService {
   }): void {
     const { run, message, nextState } = params;
     const updated = this.withHeldLease(run.projectId, run.linearIssueId, (lease) => {
+      const commit = this.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        update: {
+          projectId: run.projectId,
+          linearIssueId: run.linearIssueId,
+          activeRunId: null,
+          factoryState: nextState,
+        },
+      });
+      if (commit.outcome !== "applied") {
+        return false;
+      }
       this.db.runs.finishRun(run.id, { status: "failed", failureReason: message });
       if (nextState === "failed" || nextState === "escalated" || nextState === "awaiting_input" || nextState === "done") {
         this.db.issueSessions.clearPendingIssueSessionEventsWithLease(lease);
       }
-      this.db.issues.upsertIssue({
-        projectId: run.projectId,
-        linearIssueId: run.linearIssueId,
-        activeRunId: null,
-        factoryState: nextState,
-      });
       return true;
     });
     if (!updated) {

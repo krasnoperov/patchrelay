@@ -17,6 +17,8 @@ import { isQueueEvictionFailure, isSettledBranchFailure } from "./github-webhook
 import { buildRequestedChangesWakeIdentity } from "./reactive-wake-keys.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
+const WRITER = "github-webhook-reactive-run";
+
 type FetchLike = typeof fetch;
 
 interface GitHubReviewThreadComment {
@@ -172,17 +174,20 @@ async function handleCheckFailedEvent(params: {
     return;
   }
   const snapshot = getRelevantGitHubCiSnapshot(db, issue, event);
-  db.issues.upsertIssue({
-    projectId: issue.projectId,
-    linearIssueId: issue.linearIssueId,
-    lastGitHubFailureSource: "branch_ci",
-    lastGitHubFailureHeadSha: failureContext.failureHeadSha ?? null,
-    lastGitHubFailureSignature: failureContext.failureSignature ?? null,
-    lastGitHubFailureCheckName: failureContext.checkName ?? event.checkName ?? null,
-    lastGitHubFailureCheckUrl: failureContext.checkUrl ?? event.checkUrl ?? null,
-    lastGitHubFailureContextJson: JSON.stringify(failureContext),
-    lastGitHubFailureAt: new Date().toISOString(),
-    lastQueueIncidentJson: null,
+  db.issueSessions.commitIssueState({
+    writer: WRITER,
+    update: {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      lastGitHubFailureSource: "branch_ci",
+      lastGitHubFailureHeadSha: failureContext.failureHeadSha ?? null,
+      lastGitHubFailureSignature: failureContext.failureSignature ?? null,
+      lastGitHubFailureCheckName: failureContext.checkName ?? event.checkName ?? null,
+      lastGitHubFailureCheckUrl: failureContext.checkUrl ?? event.checkUrl ?? null,
+      lastGitHubFailureContextJson: JSON.stringify(failureContext),
+      lastGitHubFailureAt: new Date().toISOString(),
+      lastQueueIncidentJson: null,
+    },
   });
   const queuedRunType = wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
     eventType: "settled_red_ci",

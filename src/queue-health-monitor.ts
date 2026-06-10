@@ -9,6 +9,8 @@ import { buildRepairWakeDedupeKey } from "./reactive-wake-keys.ts";
 import { execCommand } from "./utils.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
+const WRITER = "queue-health-monitor";
+
 const QUEUE_HEALTH_GRACE_MS = 120_000;
 const QUEUE_HEALTH_PROBE_FAILURE_COOLDOWN_MS = 300_000;
 // Plan §6.2: an approved PR with red branch CI for >= this long is
@@ -147,7 +149,11 @@ export class QueueHealthMonitor {
     this.probeFailureFeedTimes.delete(`${issue.projectId}::${issue.linearIssueId}`);
 
     if (pr.state === "MERGED") {
-      const merged = this.db.issues.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "merged" });
+      const mergedCommit = this.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        update: { projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "merged" },
+      });
+      const merged = mergedCommit.outcome === "applied" ? mergedCommit.issue : issue;
       this.advancer.advanceIdleIssue(merged, "done", { clearFailureProvenance: true });
       return;
     }
@@ -196,12 +202,16 @@ export class QueueHealthMonitor {
         return;
       }
 
-      const probed = this.db.issues.upsertIssue({
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        lastAttemptedFailureHeadSha: headRefOid,
-        lastAttemptedFailureSignature: signature,
+      const probedCommit = this.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        update: {
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          lastAttemptedFailureHeadSha: headRefOid,
+          lastAttemptedFailureSignature: signature,
+        },
       });
+      const probed = probedCommit.outcome === "applied" ? probedCommit.issue : issue;
       this.advancer.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
         eventType: "merge_steward_incident",
         eventJson: JSON.stringify(pendingRunContext),

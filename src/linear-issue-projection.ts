@@ -2,6 +2,8 @@ import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { LinearClientProvider, LinearIssueRelationSummary, LinearIssueSnapshot } from "./types.ts";
 
+const WRITER = "linear-issue-projection";
+
 interface LinearIssueDependencySource {
   id: string;
   blockedBy: LinearIssueRelationSummary[];
@@ -84,17 +86,20 @@ export function upsertLinearIssueProjection(
     parentLinearIssueId: liveIssue.parentId ?? null,
   });
 
-  db.issues.upsertIssue({
-    projectId,
-    linearIssueId: liveIssue.id,
-    ...(liveIssue.identifier ? { issueKey: liveIssue.identifier } : {}),
-    ...(liveIssue.title ? { title: liveIssue.title } : {}),
-    ...(liveIssue.description ? { description: liveIssue.description } : {}),
-    ...(liveIssue.url ? { url: liveIssue.url } : {}),
-    ...(liveIssue.priority != null ? { priority: liveIssue.priority } : {}),
-    ...(liveIssue.estimate != null ? { estimate: liveIssue.estimate } : {}),
-    ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
-    ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
+  db.issueSessions.commitIssueState({
+    writer: WRITER,
+    update: {
+      projectId,
+      linearIssueId: liveIssue.id,
+      ...(liveIssue.identifier ? { issueKey: liveIssue.identifier } : {}),
+      ...(liveIssue.title ? { title: liveIssue.title } : {}),
+      ...(liveIssue.description ? { description: liveIssue.description } : {}),
+      ...(liveIssue.url ? { url: liveIssue.url } : {}),
+      ...(liveIssue.priority != null ? { priority: liveIssue.priority } : {}),
+      ...(liveIssue.estimate != null ? { estimate: liveIssue.estimate } : {}),
+      ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
+      ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
+    },
   });
 }
 

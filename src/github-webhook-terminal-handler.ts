@@ -12,6 +12,8 @@ import type { AppConfig } from "./types.ts";
 import { wakeOrchestrationParentsForChildEvent } from "./orchestration-parent-wake.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
+const WRITER = "github-webhook-terminal-handler";
+
 export async function handleGitHubTerminalPrEvent(params: {
   config: AppConfig;
   db: PatchRelayDatabase;
@@ -53,31 +55,35 @@ export async function handleGitHubTerminalPrEvent(params: {
     }
   }
 
-  const commitTerminalUpdate = () => {
-    if (run) {
-      db.runs.finishRun(run.id, {
-        status: "released",
-        failureReason: event.triggerEvent === "pr_merged"
-          ? "Pull request merged during active run"
-          : "Pull request closed during active run",
-      });
-    }
+  const buildTerminalUpdate = (row: IssueRecord) => {
     const terminalFactoryState = event.triggerEvent === "pr_merged"
       ? postMergeState
-      : resolveClosedPrFactoryState(issue);
-    db.issues.upsertIssue({
+      : resolveClosedPrFactoryState(row);
+    return {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       activeRunId: null,
       factoryState: terminalFactoryState,
       ...(terminalFactoryState === "deploying" ? { deployStartedAt: new Date().toISOString() } : {}),
-    });
+    };
   };
   const activeLease = db.issueSessions.getActiveIssueSessionLease(issue.projectId, issue.linearIssueId);
-  if (activeLease) {
-    db.issueSessions.withIssueSessionLease(issue.projectId, issue.linearIssueId, activeLease.leaseId, commitTerminalUpdate);
-  } else {
-    db.transaction(commitTerminalUpdate);
+  const terminalCommit = db.issueSessions.commitIssueState({
+    writer: WRITER,
+    expectedVersion: issue.version,
+    ...(activeLease ? { lease: activeLease } : {}),
+    update: buildTerminalUpdate(issue),
+    // The terminal PR fact comes from GitHub; re-derive the closed-PR
+    // disposition from the fresh row instead of dropping the event.
+    onConflict: (current) => buildTerminalUpdate(current),
+  });
+  if (terminalCommit.outcome === "applied" && run) {
+    db.runs.finishRun(run.id, {
+      status: "released",
+      failureReason: event.triggerEvent === "pr_merged"
+        ? "Pull request merged during active run"
+        : "Pull request closed during active run",
+    });
   }
   db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(issue.projectId, issue.linearIssueId);
   const updatedIssue = db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
@@ -126,21 +132,27 @@ async function completeLinearIssueAfterMerge(
 
     const normalizedCurrent = liveIssue.stateName?.trim().toLowerCase();
     if (normalizedCurrent === targetState.trim().toLowerCase()) {
-      params.db.issues.upsertIssue({
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
-        ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
+      params.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        update: {
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
+          ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
+        },
       });
       return;
     }
 
     const updated = await linear.setIssueState(issue.linearIssueId, targetState);
-    params.db.issues.upsertIssue({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      ...(updated.stateName ? { currentLinearState: updated.stateName } : {}),
-      ...(updated.stateType ? { currentLinearStateType: updated.stateType } : {}),
+    params.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      update: {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        ...(updated.stateName ? { currentLinearState: updated.stateName } : {}),
+        ...(updated.stateType ? { currentLinearStateType: updated.stateType } : {}),
+      },
     });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);

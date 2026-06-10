@@ -20,6 +20,8 @@ import type { AppConfig, LinearAgentActivityContent } from "./types.ts";
 import type { WorktreeManager } from "./worktree-manager.ts";
 import { sanitizeDiagnosticText } from "./utils.ts";
 
+const WRITER = "run-launcher";
+
 function slugify(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
 }
@@ -192,7 +194,7 @@ export class RunLauncher {
           ? params.effectiveContext.failureHeadSha
           : typeof params.effectiveContext?.headSha === "string" ? params.effectiveContext.headSha : undefined;
         const failureSignature = typeof params.effectiveContext?.failureSignature === "string" ? params.effectiveContext.failureSignature : undefined;
-        this.db.issues.upsertIssue({
+        const claimUpdate = {
           projectId: params.item.projectId,
           linearIssueId: params.item.issueId,
           pendingRunType: null,
@@ -200,11 +202,11 @@ export class RunLauncher {
           activeRunId: created.id,
           branchName: params.branchName,
           worktreePath: params.worktreePath,
-          factoryState: params.runType === "implementation" ? "implementing"
-            : params.runType === "ci_repair" ? "repairing_ci"
-            : params.runType === "review_fix" || params.runType === "branch_upkeep" ? "changes_requested"
-            : params.runType === "queue_repair" ? "repairing_queue"
-            : "implementing",
+          factoryState: params.runType === "implementation" ? "implementing" as const
+            : params.runType === "ci_repair" ? "repairing_ci" as const
+            : params.runType === "review_fix" || params.runType === "branch_upkeep" ? "changes_requested" as const
+            : params.runType === "queue_repair" ? "repairing_queue" as const
+            : "implementing" as const,
           ...((params.runType === "ci_repair" || params.runType === "queue_repair") && failureSignature
             ? {
                 lastAttemptedFailureSignature: failureSignature,
@@ -212,7 +214,17 @@ export class RunLauncher {
                 lastAttemptedFailureAt: new Date().toISOString(),
               }
             : {}),
+        };
+        const claimCommit = this.db.issueSessions.commitIssueState({
+          writer: WRITER,
+          // `wakeIssue` is the freshest row this claim transaction has seen
+          // (materializeLegacyPendingWake may have bumped the version).
+          expectedVersion: wakeIssue.version,
+          update: claimUpdate,
+          // Never steal a slot another writer claimed concurrently.
+          onConflict: (current) => (current.activeRunId == null ? claimUpdate : undefined),
         });
+        if (claimCommit.outcome !== "applied") return undefined;
         this.db.issueSessions.consumeIssueSessionEvents(params.item.projectId, params.item.issueId, freshWake.eventIds, created.id);
         this.db.issueSessions.setIssueSessionLastWakeReason(params.item.projectId, params.item.issueId, freshWake.wakeReason ?? null);
         return created;

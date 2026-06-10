@@ -49,6 +49,34 @@ This matters most for webhook handlers and runtime flows.
 - Do not rely on loosely re-deriving state in another module when the earlier phase already resolved it.
 - When splitting a handler, keep the order of: resolve facts, project state, decide follow-up, perform side effects.
 
+## Issue-state writes go through one door
+
+Every production write to the `issues` table goes through
+`db.issueSessions.commitIssueState({ writer, update, ... })` — never raw
+`db.issues.upsertIssue(...)`. The door wraps three things a raw write skips:
+
+- a transaction,
+- an optimistic version check against the row the update was derived from
+  (`expectedVersion` + `onConflict`), so a writer holding a row across an
+  `await` cannot silently clobber a newer write,
+- `state.write_conflict` telemetry surfaced in the operator feed.
+
+Choosing the conflict policy:
+
+- Fields that are facts from an external payload or live API response:
+  commit unconditionally (no `expectedVersion`).
+- Updates derived from a previously-read row (counters, factory-state
+  decisions): pass `expectedVersion` and recompute from the fresh row in
+  `onConflict`, or return `undefined` to skip and let reconciliation
+  re-derive.
+- Writes that clear a run slot: re-check `current.activeRunId === run.id`
+  in `onConflict`, and gate the paired `finishRun` on the commit outcome so
+  the run/issue pair applies or skips together.
+- Never pass a row your own pass already bumped — thread `commit.issue`
+  forward (self-conflicts are bugs).
+
+`test/issue-write-door-guard.test.ts` enforces the allowlist.
+
 ## Smells to stop on
 
 Stop and refactor when a file starts doing several of these at once:
