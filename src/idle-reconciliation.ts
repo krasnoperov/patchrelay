@@ -899,7 +899,7 @@ export class IdleIssueReconciler {
         return;
       }
       if (isReviewDecisionApproved(pr.reviewDecision)) {
-        this.db.issueSessions.commitIssueState({
+        const reviewCommit = this.db.issueSessions.commitIssueState({
           writer: WRITER,
           update: {
             projectId: issue.projectId,
@@ -907,6 +907,14 @@ export class IdleIssueReconciler {
             prReviewState: "approved",
           },
         });
+        // Continue with the refreshed row so the version-checked advance
+        // below doesn't see our own review-state write as a conflict (same
+        // pattern as the facts commit above). Without this the advance was
+        // conflict-skipped on EVERY pass while the poll succeeded, so a lost
+        // review_approved webhook never converged to awaiting_queue.
+        if (reviewCommit.outcome === "applied") {
+          issue = reviewCommit.issue;
+        }
         const approvedState = deriveFactoryStateFromPrFacts(observed, currentFacts(issue));
         if (approvedState === "awaiting_queue") {
           // Provenance survives unless the polled evidence is newer than the
