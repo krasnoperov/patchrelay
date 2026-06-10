@@ -874,7 +874,7 @@ test("lost check_passed: green BRANCH gate does NOT clear queue_eviction provena
 
 // ─── pr_synchronize ──────────────────────────────────────────────────
 
-test("lost pr_synchronize: poll with the advanced head clears provenance; repair budgets do NOT reset (documented divergence)", { concurrency: false }, async () => {
+test("lost pr_synchronize: poll with the advanced head clears provenance and resets repair budgets", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-lost-sync-"));
   const restoreGh = installFakeGh(baseDir, {
     prView: {
@@ -923,21 +923,16 @@ test("lost pr_synchronize: poll with the advanced head clears provenance; repair
     assert.equal(pair.lost.db.getIssue(PROJECT, ISSUE)?.prHeadSha, "sha-new");
     assert.deepEqual(b, a, "factory-state facts and provenance must converge");
 
-    // FINDING (documented divergence, do not weaken): the webhook path
-    // resets the repair budgets on every push (projector pr_synchronize
-    // branch writes ciRepairAttempts/queueRepairAttempts = 0); the
-    // re-derivation path clears provenance via mayClearFailureProvenance
-    // but has NO budget-reset rule. After a lost pr_synchronize the fresh
-    // head starts with the old head's consumed budget, so it escalates
-    // earlier than the delivered world would. The doctrine (plan §C1
-    // "clears provenance + resets repair budgets equivalently") wants these
-    // equal — flagged for a production fix rather than silently asserted
-    // away here.
+    // Doctrine (plan §C1): head-advance evidence "clears provenance + resets
+    // repair budgets equivalently". The webhook path resets the budgets on
+    // every push; the reconciler's facts commit resets them when the polled
+    // head differs from the recorded one, so a fresh head never inherits the
+    // old head's consumed budget.
     assert.equal(pair.delivered.db.getIssue(PROJECT, ISSUE)?.ciRepairAttempts, 0);
     assert.equal(
       pair.lost.db.getIssue(PROJECT, ISSUE)?.ciRepairAttempts,
-      2,
-      "known divergence: the poll path does not reset repair budgets on head advance (see FINDING above)",
+      0,
+      "the poll path must reset repair budgets on head advance, like the webhook path",
     );
   } finally {
     pair.close();
@@ -1130,7 +1125,7 @@ test("merge_group events are inert by design and every trigger event is accounte
   // until the event gets a delivered/lost pair (or a documented-inert entry).
   const accountedFor = [
     "pr_opened", // documented asymmetry: poll cannot discover an unknown PR
-    "pr_synchronize", // pair + documented budget-reset divergence (FINDING)
+    "pr_synchronize", // pair incl. budget reset on head advance
     "pr_closed", // pair
     "pr_merged", // pair
     "review_approved", // pair
