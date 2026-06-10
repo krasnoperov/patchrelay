@@ -19,6 +19,8 @@ import { fetchPullRequestSnapshot } from "./reconcile-pr-fetch.ts";
 
 const THREAD_MATERIALIZATION_GRACE_MS = 10 * 60_000;
 
+const WRITER = "run-reconciler";
+
 function isWithinThreadMaterializationGrace(run: Pick<RunRecord, "startedAt">, nowMs = Date.now()): boolean {
   const startedAtMs = Date.parse(run.startedAt);
   if (!Number.isFinite(startedAtMs)) return true;
@@ -55,16 +57,28 @@ export class RunReconciler {
       latestRun: run,
     });
     if (effectiveActiveRun?.id === run.id && issue.activeRunId !== run.id) {
-      effectiveIssue = this.withHeldLease(run.projectId, run.linearIssueId, () => this.db.issues.upsertIssue({
+      const reattachUpdate = {
         projectId: run.projectId,
         linearIssueId: run.linearIssueId,
         activeRunId: run.id,
         ...(run.threadId ? { threadId: run.threadId } : {}),
-      })) ?? effectiveIssue;
-      this.logger.info(
-        { issueKey: effectiveIssue.issueKey, runId: run.id, runType: run.runType },
-        "Reattached detached active run during reconciliation",
-      );
+      };
+      const commit = this.withHeldLease(run.projectId, run.linearIssueId, () => this.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        expectedVersion: issue.version,
+        update: reattachUpdate,
+        // Never steal the slot from a run that was attached concurrently.
+        onConflict: (current) => (current.activeRunId == null ? reattachUpdate : undefined),
+      }));
+      if (commit?.outcome === "applied") {
+        effectiveIssue = commit.issue;
+        this.logger.info(
+          { issueKey: effectiveIssue.issueKey, runId: run.id, runType: run.runType },
+          "Reattached detached active run during reconciliation",
+        );
+      } else if (commit?.outcome === "conflict_skipped" && commit.issue) {
+        effectiveIssue = commit.issue;
+      }
     }
 
     if (!effectiveIssue.delegatedToPatchRelay) {
@@ -79,9 +93,18 @@ export class RunReconciler {
     }
 
     if (TERMINAL_STATES.has(effectiveIssue.factoryState)) {
+      const terminalClear = { projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null };
       this.withHeldLease(run.projectId, run.linearIssueId, () => {
+        const commit = this.db.issueSessions.commitIssueState({
+          writer: WRITER,
+          expectedVersion: effectiveIssue.version,
+          update: terminalClear,
+          // Re-check the release predicate against the fresh row.
+          onConflict: (current) =>
+            TERMINAL_STATES.has(current.factoryState) && current.activeRunId === run.id ? terminalClear : undefined,
+        });
+        if (commit.outcome !== "applied") return;
         this.db.runs.finishRun(run.id, { status: "released", failureReason: "Issue reached terminal state during active run" });
-        this.db.issues.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
       });
       this.logger.info({ issueKey: effectiveIssue.issueKey, runId: run.id, factoryState: effectiveIssue.factoryState }, "Reconciliation: released run on terminal issue");
       const releasedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? effectiveIssue;
@@ -106,9 +129,16 @@ export class RunReconciler {
       { issueKey: effectiveIssue.issueKey, runId: run.id, runType: run.runType },
       "Zombie run detected (no thread)",
     );
+      const zombieClear = { projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null };
       this.withHeldLease(run.projectId, run.linearIssueId, () => {
+        const commit = this.db.issueSessions.commitIssueState({
+          writer: WRITER,
+          expectedVersion: effectiveIssue.version,
+          update: zombieClear,
+          onConflict: (current) => (current.activeRunId === run.id ? zombieClear : undefined),
+        });
+        if (commit.outcome !== "applied") return;
         this.db.runs.finishRun(run.id, { status: "failed", failureReason: "Zombie: never started (no thread after restart)" });
-        this.db.issues.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
       });
       this.recoverOrEscalate(effectiveIssue, run.runType, "zombie");
       const recoveredIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? effectiveIssue;
@@ -137,9 +167,16 @@ export class RunReconciler {
         { issueKey: effectiveIssue.issueKey, runId: run.id, runType: run.runType, threadId: run.threadId },
         "Stale thread during reconciliation",
       );
+      const staleClear = { projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null };
       this.withHeldLease(run.projectId, run.linearIssueId, () => {
+        const commit = this.db.issueSessions.commitIssueState({
+          writer: WRITER,
+          expectedVersion: effectiveIssue.version,
+          update: staleClear,
+          onConflict: (current) => (current.activeRunId === run.id ? staleClear : undefined),
+        });
+        if (commit.outcome !== "applied") return;
         this.db.runs.finishRun(run.id, { status: "failed", failureReason: "Stale thread after restart" });
-        this.db.issues.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
       });
       this.recoverOrEscalate(effectiveIssue, run.runType, "stale_thread");
       const recoveredIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? effectiveIssue;
@@ -155,15 +192,24 @@ export class RunReconciler {
       if (linearIssue) {
         const stopState = resolveAuthoritativeLinearStopState(linearIssue);
         if (stopState?.isFinal) {
+          const stopUpdate = {
+            projectId: run.projectId,
+            linearIssueId: run.linearIssueId,
+            activeRunId: null,
+            currentLinearState: stopState.stateName,
+            factoryState: "done" as const,
+          };
           this.withHeldLease(run.projectId, run.linearIssueId, () => {
-            this.db.runs.finishRun(run.id, { status: "released" });
-            this.db.issues.upsertIssue({
-              projectId: run.projectId,
-              linearIssueId: run.linearIssueId,
-              activeRunId: null,
-              currentLinearState: stopState.stateName,
-              factoryState: "done",
+            const commit = this.db.issueSessions.commitIssueState({
+              writer: WRITER,
+              expectedVersion: effectiveIssue.version,
+              // The Linear stop state is authoritative; only the run-slot
+              // ownership needs re-checking on conflict.
+              update: stopUpdate,
+              onConflict: (current) => (current.activeRunId === run.id ? stopUpdate : undefined),
             });
+            if (commit.outcome !== "applied") return;
+            this.db.runs.finishRun(run.id, { status: "released" });
           });
           this.feed?.publish({
             level: "info",
@@ -230,20 +276,29 @@ export class RunReconciler {
   }
 
   private releaseMergedRun(run: RunRecord, issue: IssueRecord, reason: string): void {
+    const mergedUpdate = {
+      projectId: run.projectId,
+      linearIssueId: run.linearIssueId,
+      activeRunId: null,
+      factoryState: "done" as const,
+      prState: "merged",
+      pendingRunType: null,
+      pendingRunContextJson: null,
+    };
     this.withHeldLease(run.projectId, run.linearIssueId, () => {
+      const commit = this.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        expectedVersion: issue.version,
+        // The merge itself is external truth; only re-check that the run
+        // slot still belongs to this run before clearing it.
+        update: mergedUpdate,
+        onConflict: (current) => (current.activeRunId === run.id ? mergedUpdate : undefined),
+      });
+      if (commit.outcome !== "applied") return;
       this.db.issueSessions.clearPendingIssueSessionEvents(run.projectId, run.linearIssueId);
       this.db.runs.finishRun(run.id, {
         status: "released",
         failureReason: reason,
-      });
-      this.db.issues.upsertIssue({
-        projectId: run.projectId,
-        linearIssueId: run.linearIssueId,
-        activeRunId: null,
-        factoryState: "done",
-        prState: "merged",
-        pendingRunType: null,
-        pendingRunContextJson: null,
       });
     });
     this.feed?.publish({
@@ -326,19 +381,26 @@ export class RunReconciler {
     });
 
     if (delegated) {
-      const repairedIssue = this.withHeldLease(run.projectId, run.linearIssueId, () => this.db.issues.upsertIssue({
-        projectId: run.projectId,
-        linearIssueId: run.linearIssueId,
-        delegatedToPatchRelay: true,
-        ...(linearIssue.identifier ? { issueKey: linearIssue.identifier } : {}),
-        ...(linearIssue.title ? { title: linearIssue.title } : {}),
-        ...(linearIssue.description ? { description: linearIssue.description } : {}),
-        ...(linearIssue.url ? { url: linearIssue.url } : {}),
-        ...(linearIssue.priority != null ? { priority: linearIssue.priority } : {}),
-        ...(linearIssue.estimate != null ? { estimate: linearIssue.estimate } : {}),
-        ...(linearIssue.stateName ? { currentLinearState: linearIssue.stateName } : {}),
-        ...(linearIssue.stateType ? { currentLinearStateType: linearIssue.stateType } : {}),
-      })) ?? issue;
+      // Live Linear is the authority on delegation; commit unconditionally.
+      const repairedIssue = this.withHeldLease(run.projectId, run.linearIssueId, () => {
+        const commit = this.db.issueSessions.commitIssueState({
+          writer: WRITER,
+          update: {
+            projectId: run.projectId,
+            linearIssueId: run.linearIssueId,
+            delegatedToPatchRelay: true,
+            ...(linearIssue.identifier ? { issueKey: linearIssue.identifier } : {}),
+            ...(linearIssue.title ? { title: linearIssue.title } : {}),
+            ...(linearIssue.description ? { description: linearIssue.description } : {}),
+            ...(linearIssue.url ? { url: linearIssue.url } : {}),
+            ...(linearIssue.priority != null ? { priority: linearIssue.priority } : {}),
+            ...(linearIssue.estimate != null ? { estimate: linearIssue.estimate } : {}),
+            ...(linearIssue.stateName ? { currentLinearState: linearIssue.stateName } : {}),
+            ...(linearIssue.stateType ? { currentLinearStateType: linearIssue.stateType } : {}),
+          },
+        });
+        return commit.outcome === "applied" ? commit.issue : undefined;
+      }) ?? issue;
       return { issue: repairedIssue, released: false };
     }
 
@@ -356,22 +418,27 @@ export class RunReconciler {
     });
 
     this.withHeldLease(run.projectId, run.linearIssueId, () => {
-      this.db.runs.finishRun(run.id, { status: "released", failureReason: "Issue was un-delegated during active run" });
-      this.db.issues.upsertIssue({
-        projectId: run.projectId,
-        linearIssueId: run.linearIssueId,
-        activeRunId: null,
-        factoryState: issue.factoryState,
-        delegatedToPatchRelay: false,
-        ...(linearIssue.identifier ? { issueKey: linearIssue.identifier } : {}),
-        ...(linearIssue.title ? { title: linearIssue.title } : {}),
-        ...(linearIssue.description ? { description: linearIssue.description } : {}),
-        ...(linearIssue.url ? { url: linearIssue.url } : {}),
-        ...(linearIssue.priority != null ? { priority: linearIssue.priority } : {}),
-        ...(linearIssue.estimate != null ? { estimate: linearIssue.estimate } : {}),
-        ...(linearIssue.stateName ? { currentLinearState: linearIssue.stateName } : {}),
-        ...(linearIssue.stateType ? { currentLinearStateType: linearIssue.stateType } : {}),
+      // Undelegation confirmed against live Linear — external truth, commit
+      // unconditionally; the run release rides in the same transaction.
+      this.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        update: {
+          projectId: run.projectId,
+          linearIssueId: run.linearIssueId,
+          activeRunId: null,
+          factoryState: issue.factoryState,
+          delegatedToPatchRelay: false,
+          ...(linearIssue.identifier ? { issueKey: linearIssue.identifier } : {}),
+          ...(linearIssue.title ? { title: linearIssue.title } : {}),
+          ...(linearIssue.description ? { description: linearIssue.description } : {}),
+          ...(linearIssue.url ? { url: linearIssue.url } : {}),
+          ...(linearIssue.priority != null ? { priority: linearIssue.priority } : {}),
+          ...(linearIssue.estimate != null ? { estimate: linearIssue.estimate } : {}),
+          ...(linearIssue.stateName ? { currentLinearState: linearIssue.stateName } : {}),
+          ...(linearIssue.stateType ? { currentLinearStateType: linearIssue.stateType } : {}),
+        },
       });
+      this.db.runs.finishRun(run.id, { status: "released", failureReason: "Issue was un-delegated during active run" });
     });
     return { issue, released: true };
   }

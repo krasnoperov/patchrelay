@@ -8,6 +8,8 @@ import { isResumablePausedLocalWork } from "./paused-issue-state.ts";
 import { buildRepairWakeDedupeKey, buildRequestedChangesWakeIdentity, reactiveWakeEventType } from "./reactive-wake-keys.ts";
 import { upsertLinearIssueProjection } from "./linear-issue-projection.ts";
 
+const WRITER = "service-startup-recovery";
+
 export class ServiceStartupRecovery {
   constructor(
     private readonly config: AppConfig,
@@ -30,13 +32,16 @@ export class ServiceStartupRecovery {
         ? issue
         : (() => {
             const recoveredAgentSessionId = this.db.webhookEvents.findLatestAgentSessionIdForIssue(issue.linearIssueId);
-            return recoveredAgentSessionId
-              ? this.db.issues.upsertIssue({
-                  projectId: issue.projectId,
-                  linearIssueId: issue.linearIssueId,
-                  agentSessionId: recoveredAgentSessionId,
-                })
-              : issue;
+            if (!recoveredAgentSessionId) return issue;
+            const commit = this.db.issueSessions.commitIssueState({
+              writer: WRITER,
+              update: {
+                projectId: issue.projectId,
+                linearIssueId: issue.linearIssueId,
+                agentSessionId: recoveredAgentSessionId,
+              },
+            });
+            return commit.outcome === "applied" ? commit.issue : issue;
           })();
       if (!syncedIssue.agentSessionId) {
         continue;
@@ -56,7 +61,7 @@ export class ServiceStartupRecovery {
   async recoverDelegatedIssueStateFromLinear(): Promise<void> {
     await this.discoverDelegatedIssuesFromLinear();
 
-    for (const issue of this.db.issues.listIssues()) {
+    for (let issue of this.db.issues.listIssues()) {
       if (issue.factoryState === "done" || issue.activeRunId !== undefined) {
         continue;
       }
@@ -75,6 +80,9 @@ export class ServiceStartupRecovery {
       }
 
       upsertLinearIssueProjection(this.db, issue.projectId, liveIssue);
+      // The projection write bumped the issue version; continue with the
+      // fresh row so the recovery commit below doesn't self-conflict.
+      issue = this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
 
       const delegated = liveIssue.delegateId === installation.actorId;
       if (issue.delegatedToPatchRelay !== delegated) {
@@ -124,24 +132,36 @@ export class ServiceStartupRecovery {
         && issue.prNumber !== undefined
         && reactiveIntent !== undefined;
 
-      const updated = this.db.issues.upsertIssue({
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        delegatedToPatchRelay: delegated,
-        ...(liveIssue.identifier ? { issueKey: liveIssue.identifier } : {}),
-        ...(liveIssue.title ? { title: liveIssue.title } : {}),
-        ...(liveIssue.description ? { description: liveIssue.description } : {}),
-        ...(liveIssue.url ? { url: liveIssue.url } : {}),
-        ...(liveIssue.priority != null ? { priority: liveIssue.priority } : {}),
-        ...(liveIssue.estimate != null ? { estimate: liveIssue.estimate } : {}),
-        ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
-        ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
-        ...(shouldRecoverPausedLocalWork
-          ? { factoryState: "delegated" as never }
-          : shouldRecoverReactivePrWork
-            ? { factoryState: reactiveIntent.compatibilityFactoryState }
-            : {}),
+      const commit = this.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        expectedVersion: issue.version,
+        update: {
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          delegatedToPatchRelay: delegated,
+          ...(liveIssue.identifier ? { issueKey: liveIssue.identifier } : {}),
+          ...(liveIssue.title ? { title: liveIssue.title } : {}),
+          ...(liveIssue.description ? { description: liveIssue.description } : {}),
+          ...(liveIssue.url ? { url: liveIssue.url } : {}),
+          ...(liveIssue.priority != null ? { priority: liveIssue.priority } : {}),
+          ...(liveIssue.estimate != null ? { estimate: liveIssue.estimate } : {}),
+          ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
+          ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
+          ...(shouldRecoverPausedLocalWork
+            ? { factoryState: "delegated" as never }
+            : shouldRecoverReactivePrWork
+              ? { factoryState: reactiveIntent.compatibilityFactoryState }
+              : {}),
+        },
+        // The recovery decision was derived from the row read at loop start
+        // plus stale PR facts; a concurrent writer (webhook, another recovery
+        // pass) invalidates it. Skip — reconciliation re-derives shortly.
+        onConflict: () => undefined,
       });
+      if (commit.outcome !== "applied") {
+        continue;
+      }
+      const updated = commit.issue;
 
       if (!shouldRecoverPausedLocalWork && !shouldRecoverReactivePrWork) {
         continue;
@@ -236,20 +256,25 @@ export class ServiceStartupRecovery {
     upsertLinearIssueProjection(this.db, project.id, liveIssue);
 
     const existing = this.db.issues.getIssue(project.id, liveIssue.id);
-    const updated = this.db.issues.upsertIssue({
-      projectId: project.id,
-      linearIssueId: liveIssue.id,
-      delegatedToPatchRelay: true,
-      factoryState: existing?.factoryState ?? "delegated",
-      ...(liveIssue.identifier ? { issueKey: liveIssue.identifier } : {}),
-      ...(liveIssue.title ? { title: liveIssue.title } : {}),
-      ...(liveIssue.description ? { description: liveIssue.description } : {}),
-      ...(liveIssue.url ? { url: liveIssue.url } : {}),
-      ...(liveIssue.priority != null ? { priority: liveIssue.priority } : {}),
-      ...(liveIssue.estimate != null ? { estimate: liveIssue.estimate } : {}),
-      ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
-      ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
+    const commit = this.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      update: {
+        projectId: project.id,
+        linearIssueId: liveIssue.id,
+        delegatedToPatchRelay: true,
+        factoryState: existing?.factoryState ?? "delegated",
+        ...(liveIssue.identifier ? { issueKey: liveIssue.identifier } : {}),
+        ...(liveIssue.title ? { title: liveIssue.title } : {}),
+        ...(liveIssue.description ? { description: liveIssue.description } : {}),
+        ...(liveIssue.url ? { url: liveIssue.url } : {}),
+        ...(liveIssue.priority != null ? { priority: liveIssue.priority } : {}),
+        ...(liveIssue.estimate != null ? { estimate: liveIssue.estimate } : {}),
+        ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
+        ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
+      },
     });
+    if (commit.outcome !== "applied") return;
+    const updated = commit.issue;
 
     const hasPendingWake = this.db.workflowWakes.peekIssueWake(project.id, liveIssue.id) !== undefined;
     const unresolvedBlockers = this.db.issues.countUnresolvedBlockers(project.id, liveIssue.id);

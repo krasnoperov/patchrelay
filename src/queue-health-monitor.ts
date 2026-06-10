@@ -147,8 +147,8 @@ export class QueueHealthMonitor {
     this.probeFailureFeedTimes.delete(`${issue.projectId}::${issue.linearIssueId}`);
 
     if (pr.state === "MERGED") {
-      this.db.issues.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "merged" });
-      this.advancer.advanceIdleIssue(issue, "done", { clearFailureProvenance: true });
+      const merged = this.db.issues.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "merged" });
+      this.advancer.advanceIdleIssue(merged, "done", { clearFailureProvenance: true });
       return;
     }
 
@@ -196,7 +196,7 @@ export class QueueHealthMonitor {
         return;
       }
 
-      this.db.issues.upsertIssue({
+      const probed = this.db.issues.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         lastAttemptedFailureHeadSha: headRefOid,
@@ -212,7 +212,7 @@ export class QueueHealthMonitor {
           signature,
         }),
       });
-      this.advancer.advanceIdleIssue(issue, "repairing_queue");
+      this.advancer.advanceIdleIssue(probed, "repairing_queue");
       this.logger.info(
         { issueKey: issue.issueKey, prNumber: issue.prNumber, headRefOid, reason },
         "Queue health: queue issue detected, dispatching repair",

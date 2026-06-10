@@ -10,6 +10,25 @@ import { wakeOrchestrationParentsForChildEvent } from "./orchestration-parent-wa
 import type { buildStageReport } from "./run-reporting.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
+const WRITER = "no-pr-completion-check";
+
+// Post-completion-check decision writes all clear the run slot; on a version
+// conflict, apply only if the slot still belongs to this run on the fresh row.
+function commitRunSlotUpdate(
+  db: PatchRelayDatabase,
+  run: Pick<RunRecord, "id">,
+  issue: Pick<IssueRecord, "version">,
+  update: Parameters<PatchRelayDatabase["issueSessions"]["commitIssueState"]>[0]["update"],
+): boolean {
+  const commit = db.issueSessions.commitIssueState({
+    writer: WRITER,
+    expectedVersion: issue.version,
+    update,
+    onConflict: (current) => (current.activeRunId === run.id ? update : undefined),
+  });
+  return commit.outcome === "applied";
+}
+
 function shouldContinueForUnpublishedLocalChanges(message: string): boolean {
   const normalized = message.trim().toLowerCase();
   if (!normalized) return false;
@@ -121,16 +140,18 @@ export async function handleNoPrCompletionCheck(params: {
 
   if (completionCheck.outcome === "continue") {
     const continued = params.withHeldLease(params.run.projectId, params.run.linearIssueId, (lease) => {
-      params.db.runs.finishRun(params.run.id, runUpdate);
-      params.db.runs.saveCompletionCheck(params.run.id, completionCheck);
-      params.db.issues.upsertIssue({
+      if (!commitRunSlotUpdate(params.db, params.run, params.issue, {
         projectId: params.run.projectId,
         linearIssueId: params.run.linearIssueId,
         activeRunId: null,
         factoryState: "delegated",
         pendingRunType: null,
         pendingRunContextJson: null,
-      });
+      })) {
+        return false;
+      }
+      params.db.runs.finishRun(params.run.id, runUpdate);
+      params.db.runs.saveCompletionCheck(params.run.id, completionCheck);
       return Boolean(params.db.issueSessions.appendIssueSessionEventWithLease(lease, {
         projectId: params.run.projectId,
         linearIssueId: params.run.linearIssueId,
@@ -161,17 +182,19 @@ export async function handleNoPrCompletionCheck(params: {
 
   if (completionCheck.outcome === "needs_input") {
     const completed = params.withHeldLease(params.run.projectId, params.run.linearIssueId, (lease) => {
-      params.db.runs.finishRun(params.run.id, runUpdate);
-      params.db.runs.saveCompletionCheck(params.run.id, completionCheck);
-      params.db.issueSessions.clearPendingIssueSessionEventsWithLease(lease);
-      params.db.issues.upsertIssue({
+      if (!commitRunSlotUpdate(params.db, params.run, params.issue, {
         projectId: params.run.projectId,
         linearIssueId: params.run.linearIssueId,
         activeRunId: null,
         factoryState: "awaiting_input",
         pendingRunType: null,
         pendingRunContextJson: null,
-      });
+      })) {
+        return false;
+      }
+      params.db.runs.finishRun(params.run.id, runUpdate);
+      params.db.runs.saveCompletionCheck(params.run.id, completionCheck);
+      params.db.issueSessions.clearPendingIssueSessionEventsWithLease(lease);
       return true;
     });
     if (!completed) {
@@ -194,20 +217,22 @@ export async function handleNoPrCompletionCheck(params: {
   if (completionCheck.outcome === "done") {
     if (shouldContinueForUnpublishedLocalChanges(params.publishedOutcomeError)) {
       const continued = params.withHeldLease(params.run.projectId, params.run.linearIssueId, (lease) => {
-        params.db.runs.finishRun(params.run.id, runUpdate);
-        params.db.runs.saveCompletionCheck(params.run.id, {
-          ...completionCheck,
-          outcome: "continue",
-          summary: "PatchRelay changed files locally but has not published them yet; continuing automatically to finish publication.",
-          why: params.publishedOutcomeError,
-        });
-        params.db.issues.upsertIssue({
+        if (!commitRunSlotUpdate(params.db, params.run, params.issue, {
           projectId: params.run.projectId,
           linearIssueId: params.run.linearIssueId,
           activeRunId: null,
           factoryState: "delegated",
           pendingRunType: null,
           pendingRunContextJson: null,
+        })) {
+          return false;
+        }
+        params.db.runs.finishRun(params.run.id, runUpdate);
+        params.db.runs.saveCompletionCheck(params.run.id, {
+          ...completionCheck,
+          outcome: "continue",
+          summary: "PatchRelay changed files locally but has not published them yet; continuing automatically to finish publication.",
+          why: params.publishedOutcomeError,
         });
         return Boolean(params.db.issueSessions.appendIssueSessionEventWithLease(lease, {
           projectId: params.run.projectId,
@@ -241,10 +266,7 @@ export async function handleNoPrCompletionCheck(params: {
       ? params.db.issues.countOpenChildIssues(params.run.projectId, params.run.linearIssueId)
       : 0;
     const completed = params.withHeldLease(params.run.projectId, params.run.linearIssueId, (lease) => {
-      params.db.runs.finishRun(params.run.id, runUpdate);
-      params.db.runs.saveCompletionCheck(params.run.id, completionCheck);
-      params.db.issueSessions.clearPendingIssueSessionEventsWithLease(lease);
-      params.db.issues.upsertIssue({
+      if (!commitRunSlotUpdate(params.db, params.run, params.issue, {
         projectId: params.run.projectId,
         linearIssueId: params.run.linearIssueId,
         activeRunId: null,
@@ -253,7 +275,12 @@ export async function handleNoPrCompletionCheck(params: {
         pendingRunContextJson: null,
         orchestrationSettleUntil: null,
         ...CLEARED_FAILURE_PROVENANCE,
-      });
+      })) {
+        return false;
+      }
+      params.db.runs.finishRun(params.run.id, runUpdate);
+      params.db.runs.saveCompletionCheck(params.run.id, completionCheck);
+      params.db.issueSessions.clearPendingIssueSessionEventsWithLease(lease);
       return true;
     });
     if (!completed) {
@@ -286,20 +313,22 @@ export async function handleNoPrCompletionCheck(params: {
 
   const failureReason = `No PR observed and the completion check failed this run: ${completionCheck.summary}`;
   const failed = params.withHeldLease(params.run.projectId, params.run.linearIssueId, () => {
-    params.db.runs.finishRun(params.run.id, {
-      ...runUpdate,
-      status: "failed",
-      failureReason,
-    });
-    params.db.runs.saveCompletionCheck(params.run.id, completionCheck);
-    params.db.issues.upsertIssue({
+    if (!commitRunSlotUpdate(params.db, params.run, params.issue, {
       projectId: params.run.projectId,
       linearIssueId: params.run.linearIssueId,
       activeRunId: null,
       factoryState: "failed",
       pendingRunType: null,
       pendingRunContextJson: null,
+    })) {
+      return false;
+    }
+    params.db.runs.finishRun(params.run.id, {
+      ...runUpdate,
+      status: "failed",
+      failureReason,
     });
+    params.db.runs.saveCompletionCheck(params.run.id, completionCheck);
     return true;
   });
   if (!failed) {

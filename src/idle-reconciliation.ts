@@ -41,6 +41,8 @@ import { TerminalWakeReconciler } from "./terminal-wake-reconciler.ts";
 const BLOCKED_DEPENDENCY_REFRESH_SUCCESS_BACKOFF_MS = 60_000;
 const BLOCKED_DEPENDENCY_REFRESH_FAILURE_BACKOFF_MS = 5 * 60_000;
 
+const WRITER = "idle-reconciliation";
+
 export class IdleIssueReconciler {
   private readonly blockedDependencyRefreshAfter = new Map<string, number>();
   private readonly terminalWakeReconciler: TerminalWakeReconciler;
@@ -202,12 +204,16 @@ export class IdleIssueReconciler {
     if (TERMINAL_STATES.has(issue.factoryState)) return;
     const project = this.config.projects.find((candidate) => candidate.id === issue.projectId);
     if (isDeployTrackingEnabled(project)) {
-      this.advanceIdleIssue(issue, "deploying", { clearFailureProvenance: true });
-      this.db.issues.upsertIssue({
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        deployStartedAt: new Date().toISOString(),
-      });
+      if (this.advanceIdleIssue(issue, "deploying", { clearFailureProvenance: true }) !== "skipped") {
+        this.db.issueSessions.commitIssueState({
+          writer: WRITER,
+          update: {
+            projectId: issue.projectId,
+            linearIssueId: issue.linearIssueId,
+            deployStartedAt: new Date().toISOString(),
+          },
+        });
+      }
     } else {
       this.advanceIdleIssue(issue, "done", { clearFailureProvenance: true });
     }
@@ -274,11 +280,16 @@ export class IdleIssueReconciler {
   }
 
   private finishDeploy(issue: IssueRecord, state: "done" | "escalated"): void {
-    this.advanceIdleIssue(issue, state, state === "done" ? { clearFailureProvenance: true } : undefined);
-    this.db.issues.upsertIssue({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      deployStartedAt: null,
+    if (this.advanceIdleIssue(issue, state, state === "done" ? { clearFailureProvenance: true } : undefined) === "skipped") {
+      return;
+    }
+    this.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      update: {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        deployStartedAt: null,
+      },
     });
   }
 
@@ -290,29 +301,43 @@ export class IdleIssueReconciler {
       pendingRunContext?: Record<string, unknown>;
       clearFailureProvenance?: boolean;
     },
-  ): void {
+  ): "applied" | "noop" | "skipped" {
     if (issue.factoryState === newState && !options?.pendingRunType && !options?.clearFailureProvenance) {
-      return;
+      return "noop";
+    }
+    const commit = this.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      expectedVersion: issue.version,
+      update: {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        factoryState: newState,
+        ...((options?.pendingRunType || newState === "awaiting_queue" || newState === "delegated" || newState === "done")
+          ? {
+              pendingRunType: null,
+              pendingRunContextJson: null,
+            }
+          : {}),
+        ...(options?.clearFailureProvenance
+          ? { ...CLEARED_FAILURE_PROVENANCE }
+          : {}),
+      },
+      // A writer that landed mid-tick (almost always a webhook) is newer
+      // truth than this pass's read; skip and let the next tick re-derive.
+      onConflict: () => undefined,
+    });
+    if (commit.outcome !== "applied") {
+      this.logger.info(
+        { issueKey: issue.issueKey, from: issue.factoryState, to: newState, outcome: commit.outcome },
+        "Reconciliation: skipped advancing idle issue after a concurrent write",
+      );
+      return "skipped";
     }
     this.logger.info(
       { issueKey: issue.issueKey, from: issue.factoryState, to: newState, pendingRunType: options?.pendingRunType },
       "Reconciliation: advancing idle issue",
     );
-    this.db.issues.upsertIssue({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      factoryState: newState,
-      ...((options?.pendingRunType || newState === "awaiting_queue" || newState === "delegated" || newState === "done")
-        ? {
-            pendingRunType: null,
-            pendingRunContextJson: null,
-          }
-        : {}),
-      ...(options?.clearFailureProvenance
-        ? { ...CLEARED_FAILURE_PROVENANCE }
-        : {}),
-    });
-    const updatedIssue = this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+    const updatedIssue = commit.issue;
     if (this.syncIssue) {
       void Promise.resolve(this.syncIssue(updatedIssue)).catch((error: unknown) => {
         this.logger.warn(
@@ -336,6 +361,7 @@ export class IdleIssueReconciler {
     // The dispatcher's recordEventAndDispatch in recordWakeEvent already
     // handles the enqueue when no run is in flight, so no extra poke
     // is needed here.
+    return "applied";
   }
 
   private recordWakeEvent(
@@ -452,21 +478,30 @@ export class IdleIssueReconciler {
       ?? (inferred === "queue_eviction" && failureHeadSha && checkName
         ? ["queue_eviction", failureHeadSha, checkName].join("::")
         : null);
-    this.db.issues.upsertIssue({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      lastGitHubFailureSource: inferred,
-      ...(failureHeadSha ? { lastGitHubFailureHeadSha: failureHeadSha } : {}),
-      ...(checkName ? { lastGitHubFailureCheckName: checkName } : {}),
-      ...(failureSignature ? { lastGitHubFailureSignature: failureSignature } : {}),
+    // Inference from a stale read must never overwrite provenance a
+    // concurrent webhook just recorded — skip on conflict and continue
+    // with the fresh row.
+    const commit = this.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      expectedVersion: issue.version,
+      update: {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        lastGitHubFailureSource: inferred,
+        ...(failureHeadSha ? { lastGitHubFailureHeadSha: failureHeadSha } : {}),
+        ...(checkName ? { lastGitHubFailureCheckName: checkName } : {}),
+        ...(failureSignature ? { lastGitHubFailureSignature: failureSignature } : {}),
+      },
+      onConflict: () => undefined,
     });
-    const refreshed = this.db.issues.getIssue(issue.projectId, issue.linearIssueId);
-    if (!refreshed) return issue;
+    if (commit.outcome !== "applied") {
+      return (commit.outcome === "conflict_skipped" ? commit.issue : undefined) ?? issue;
+    }
     this.logger.info(
       { issueKey: issue.issueKey, prNumber: issue.prNumber, inferred, factoryState: issue.factoryState },
       "Recovered missing failure provenance from GitHub state",
     );
-    return refreshed;
+    return commit.issue;
   }
 
   private async reclassifyStaleBranchFailure(issue: IssueRecord): Promise<IssueRecord> {
@@ -483,21 +518,27 @@ export class IdleIssueReconciler {
     const checkName = issue.lastGitHubFailureCheckName ?? protocol.evictionCheckName;
     const failureSignature = issue.lastGitHubFailureSignature
       ?? (failureHeadSha && checkName ? ["queue_eviction", failureHeadSha, checkName].join("::") : null);
-    this.db.issues.upsertIssue({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      lastGitHubFailureSource: "queue_eviction",
-      ...(failureHeadSha ? { lastGitHubFailureHeadSha: failureHeadSha } : {}),
-      ...(checkName ? { lastGitHubFailureCheckName: checkName } : {}),
-      ...(failureSignature ? { lastGitHubFailureSignature: failureSignature } : {}),
+    const commit = this.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      expectedVersion: issue.version,
+      update: {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        lastGitHubFailureSource: "queue_eviction",
+        ...(failureHeadSha ? { lastGitHubFailureHeadSha: failureHeadSha } : {}),
+        ...(checkName ? { lastGitHubFailureCheckName: checkName } : {}),
+        ...(failureSignature ? { lastGitHubFailureSignature: failureSignature } : {}),
+      },
+      onConflict: () => undefined,
     });
-    const refreshed = this.db.issues.getIssue(issue.projectId, issue.linearIssueId);
-    if (!refreshed) return issue;
+    if (commit.outcome !== "applied") {
+      return (commit.outcome === "conflict_skipped" ? commit.issue : undefined) ?? issue;
+    }
     this.logger.info(
       { issueKey: issue.issueKey, prNumber: issue.prNumber },
       "Reclassified stale branch failure as queue repair from GitHub state",
     );
-    return refreshed;
+    return commit.issue;
   }
 
   private async inferFailureSourceFromGitHub(issue: IssueRecord): Promise<"queue_eviction" | "branch_ci" | undefined> {
@@ -549,7 +590,8 @@ export class IdleIssueReconciler {
   private async reconcileFromGitHub(issue: IssueRecord): Promise<void> {
     const project = this.config.projects.find((p) => p.id === issue.projectId);
     if (!project?.github?.repoFullName || !issue.prNumber) return;
-    const snapshot = await fetchPullRequestSnapshot(project.github.repoFullName, issue.prNumber);
+    const prNumber = issue.prNumber;
+    const snapshot = await fetchPullRequestSnapshot(project.github.repoFullName, prNumber);
     if (!snapshot.ok) {
       this.logger.debug(
         { issueKey: issue.issueKey, error: snapshot.error.message },
@@ -571,25 +613,42 @@ export class IdleIssueReconciler {
       const previousHeadSha = issue.prHeadSha;
       const gateCheckNames = getGateCheckNames(project);
       const gateCheckStatus = deriveGateCheckStatusFromRollup(pr.statusCheckRollup, gateCheckNames);
-      this.db.issues.upsertIssue({
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        ...buildPrStateUpdates(pr, gateCheckStatus, gateCheckNames[0] ?? "verify"),
+      const factsCommit = this.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        update: {
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          ...buildPrStateUpdates(pr, gateCheckStatus, gateCheckNames[0] ?? "verify"),
+        },
       });
+      // Continue the pass with the refreshed row so later version-checked
+      // writes don't see our own facts write as a conflict.
+      if (factsCommit.outcome === "applied") {
+        issue = factsCommit.issue;
+      }
       if (pr.state === "MERGED") {
-        this.db.issues.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "merged" });
+        this.db.issueSessions.commitIssueState({
+          writer: WRITER,
+          update: { projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "merged" },
+        });
         const merged = this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? { ...issue, prState: "merged" };
         await this.handleMergedIssue(merged);
         return;
       }
       if (pr.state === "CLOSED") {
         const closedPrDisposition = resolveClosedPrDisposition(issue);
-        this.db.issues.upsertIssue({
-          projectId: issue.projectId,
-          linearIssueId: issue.linearIssueId,
-          prState: "closed",
-          ...buildClosedPrCleanupFields(),
+        const closedCommit = this.db.issueSessions.commitIssueState({
+          writer: WRITER,
+          update: {
+            projectId: issue.projectId,
+            linearIssueId: issue.linearIssueId,
+            prState: "closed",
+            ...buildClosedPrCleanupFields(),
+          },
         });
+        if (closedCommit.outcome === "applied") {
+          issue = closedCommit.issue;
+        }
         if (closedPrDisposition === "done") {
           this.logger.info(
             { issueKey: issue.issueKey, prNumber: issue.prNumber },
@@ -698,7 +757,7 @@ export class IdleIssueReconciler {
         }
         const pendingRunContext = reactiveIntent.runType === "branch_upkeep"
           ? buildBranchUpkeepContext(
-              issue.prNumber,
+              prNumber,
               project.github?.baseBranch ?? "main",
               pr.mergeStateStatus,
               pr.headRefOid,
@@ -758,7 +817,7 @@ export class IdleIssueReconciler {
         this.advanceIdleIssue(issue, reactiveIntent.compatibilityFactoryState, {
           pendingRunType: reactiveIntent.runType,
           pendingRunContext: buildBranchUpkeepContext(
-            issue.prNumber,
+            prNumber,
             project.github?.baseBranch ?? "main",
             pr.mergeStateStatus,
             pr.headRefOid,
@@ -800,10 +859,13 @@ export class IdleIssueReconciler {
         return;
       }
       if (isReviewDecisionApproved(pr.reviewDecision)) {
-        this.db.issues.upsertIssue({
-          projectId: issue.projectId,
-          linearIssueId: issue.linearIssueId,
-          prReviewState: "approved",
+        this.db.issueSessions.commitIssueState({
+          writer: WRITER,
+          update: {
+            projectId: issue.projectId,
+            linearIssueId: issue.linearIssueId,
+            prReviewState: "approved",
+          },
         });
         if (issue.factoryState !== "awaiting_queue" || hasFailureProvenance(issue)) {
           const options = hasFailureProvenance(issue) ? { clearFailureProvenance: true } : undefined;

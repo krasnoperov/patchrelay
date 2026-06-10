@@ -17,15 +17,31 @@ export class TerminalWakeReconciler {
         && issue.pendingRunType === undefined) {
         continue;
       }
-      this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
-      this.db.issues.upsertIssue({
+      const pendingEvents = this.db.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { pendingOnly: true });
+      const clearUpdate = {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         pendingRunType: null,
         pendingRunContextJson: null,
+      };
+      const commit = this.db.issueSessions.commitIssueState({
+        writer: "terminal-wake-reconciler",
+        expectedVersion: issue.version,
+        update: clearUpdate,
+        // Only clear if the issue is still terminal on the fresh row.
+        onConflict: (current) => (TERMINAL_STATES.has(current.factoryState) ? clearUpdate : undefined),
       });
+      if (commit.outcome !== "applied") continue;
+      this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
+      // Audit trail: record what was dropped so "why didn't this retry?"
+      // is answerable later.
       this.logger.info(
-        { issueKey: issue.issueKey, factoryState: issue.factoryState },
+        {
+          issueKey: issue.issueKey,
+          factoryState: issue.factoryState,
+          droppedPendingRunType: issue.pendingRunType,
+          droppedEventTypes: pendingEvents.map((event) => event.eventType),
+        },
         "Reconciliation: cleared stale terminal wake",
       );
     }
