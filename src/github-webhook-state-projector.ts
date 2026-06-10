@@ -27,6 +27,8 @@ import {
 import { emitGitHubLinearActivity, syncGitHubLinearSession } from "./github-linear-session-sync.ts";
 import { buildQueueRepairContextFromEvent } from "./merge-queue-incident.ts";
 
+const WRITER = "github-webhook-state-projector";
+
 export interface GitHubWebhookStateProjectorDeps {
   config: AppConfig;
   db: PatchRelayDatabase;
@@ -55,26 +57,31 @@ export async function projectGitHubWebhookState(
   // landed and GitHub auto-retargeted) or when the PR closes.
   const parentPrBranch = computeParentPrBranchUpdate(event, project);
 
-  deps.db.issues.upsertIssue({
-    projectId: issue.projectId,
-    linearIssueId: issue.linearIssueId,
-    ...(event.prNumber !== undefined ? { prNumber: event.prNumber } : {}),
-    ...(event.prUrl !== undefined ? { prUrl: event.prUrl } : {}),
-    ...(event.prState !== undefined ? { prState: event.prState } : {}),
-    ...(event.headSha !== undefined ? { prHeadSha: event.headSha } : {}),
-    ...(event.prAuthorLogin !== undefined ? { prAuthorLogin: event.prAuthorLogin } : {}),
-    ...(event.reviewState !== undefined ? { prReviewState: event.reviewState } : {}),
-    ...(immediateCheckStatus !== undefined ? { prCheckStatus: immediateCheckStatus } : {}),
-    ...(linkedBy === "issue_key" ? { branchName: event.branchName } : {}),
-    ...(parentPrBranch !== undefined ? { parentPrBranch } : {}),
-    ...(event.reviewState === "changes_requested"
-      ? { lastBlockingReviewHeadSha: event.reviewCommitId ?? event.headSha ?? null }
-      : event.reviewState === "approved"
-        ? { lastBlockingReviewHeadSha: null }
+  // Unconditional commit: every field below is a fact carried by the webhook
+  // payload itself, not derived from a prior read of the issue row.
+  deps.db.issueSessions.commitIssueState({
+    writer: WRITER,
+    update: {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      ...(event.prNumber !== undefined ? { prNumber: event.prNumber } : {}),
+      ...(event.prUrl !== undefined ? { prUrl: event.prUrl } : {}),
+      ...(event.prState !== undefined ? { prState: event.prState } : {}),
+      ...(event.headSha !== undefined ? { prHeadSha: event.headSha } : {}),
+      ...(event.prAuthorLogin !== undefined ? { prAuthorLogin: event.prAuthorLogin } : {}),
+      ...(event.reviewState !== undefined ? { prReviewState: event.reviewState } : {}),
+      ...(immediateCheckStatus !== undefined ? { prCheckStatus: immediateCheckStatus } : {}),
+      ...(linkedBy === "issue_key" ? { branchName: event.branchName } : {}),
+      ...(parentPrBranch !== undefined ? { parentPrBranch } : {}),
+      ...(event.reviewState === "changes_requested"
+        ? { lastBlockingReviewHeadSha: event.reviewCommitId ?? event.headSha ?? null }
+        : event.reviewState === "approved"
+          ? { lastBlockingReviewHeadSha: null }
+          : {}),
+      ...(event.triggerEvent === "pr_closed"
+        ? buildClosedPrCleanupFields()
         : {}),
-    ...(event.triggerEvent === "pr_closed"
-      ? buildClosedPrCleanupFields()
-      : {}),
+    },
   });
   await updateGitHubCiSnapshot(deps, issue, event, project, ciSnapshotResolver);
   await updateGitHubFailureProvenance(deps, issue, event, project, failureContextResolver);
@@ -99,73 +106,107 @@ export async function projectGitHubWebhookState(
     );
 
     if (newState && newState !== afterMetadata.factoryState) {
-      deps.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        factoryState: newState,
+      const transitionCommit = deps.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        expectedVersion: afterMetadata.version,
+        update: {
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          factoryState: newState,
+        },
+        // Conflict: another writer landed since `afterMetadata` was read.
+        // Re-resolve the transition against the fresh row so we never
+        // regress a state someone else just advanced.
+        onConflict: (current) => {
+          const recomputed = resolveGitHubFactoryStateForEvent(
+            current,
+            event,
+            project,
+            activeRun
+              ? {
+                  ...(activeRun.runType ? { runType: activeRun.runType } : {}),
+                  ...(activeRun.sourceHeadSha ? { sourceHeadSha: activeRun.sourceHeadSha } : {}),
+                }
+              : undefined,
+          );
+          if (!recomputed || recomputed === current.factoryState) return undefined;
+          return {
+            projectId: issue.projectId,
+            linearIssueId: issue.linearIssueId,
+            factoryState: recomputed,
+          };
+        },
       });
-      deps.logger.info(
-        { issueKey: issue.issueKey, from: afterMetadata.factoryState, to: newState, trigger: event.triggerEvent },
-        "Factory state transition from GitHub event",
-      );
+      const appliedState = transitionCommit.outcome === "applied"
+        ? transitionCommit.issue.factoryState
+        : undefined;
+      if (appliedState) {
+        deps.logger.info(
+          { issueKey: issue.issueKey, from: afterMetadata.factoryState, to: appliedState, trigger: event.triggerEvent },
+          "Factory state transition from GitHub event",
+        );
 
-      // Plan §4.4: when the transition fired *because* an approval
-      // landed during a review_fix run on the same head (the
-      // mid-run-approval rule), the run's premise is gone. Mark it
-      // superseded and set the publication-suppression flag so the
-      // finalizer cannot push a cosmetic patch-id-equivalent commit.
-      maybeSupersedeActiveRun({
-        db: deps.db,
-        logger: deps.logger,
-        feed: deps.feed,
-        issue: afterMetadata,
-        newState,
-        event,
-        activeRun,
-      });
+        // Plan §4.4: when the transition fired *because* an approval
+        // landed during a review_fix run on the same head (the
+        // mid-run-approval rule), the run's premise is gone. Mark it
+        // superseded and set the publication-suppression flag so the
+        // finalizer cannot push a cosmetic patch-id-equivalent commit.
+        maybeSupersedeActiveRun({
+          db: deps.db,
+          logger: deps.logger,
+          feed: deps.feed,
+          issue: afterMetadata,
+          newState: appliedState,
+          event,
+          activeRun,
+        });
 
-      const transitionedIssue = deps.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
-      void emitGitHubLinearActivity({
-        linearProvider: deps.linearProvider,
-        logger: deps.logger,
-        feed: deps.feed,
-        issue: transitionedIssue,
-        newState,
-        event,
-      });
-      void syncGitHubLinearSession({
-        config: deps.config,
-        linearProvider: deps.linearProvider,
-        logger: deps.logger,
-        issue: transitionedIssue,
-      });
+        const transitionedIssue = deps.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+        void emitGitHubLinearActivity({
+          linearProvider: deps.linearProvider,
+          logger: deps.logger,
+          feed: deps.feed,
+          issue: transitionedIssue,
+          newState: appliedState,
+          event,
+        });
+        void syncGitHubLinearSession({
+          config: deps.config,
+          linearProvider: deps.linearProvider,
+          logger: deps.logger,
+          issue: transitionedIssue,
+        });
+      }
     }
   }
 
   const freshIssue = deps.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
 
   if (event.triggerEvent === "pr_synchronize" && !freshIssue.activeRunId) {
-    deps.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      ciRepairAttempts: 0,
-      queueRepairAttempts: 0,
-      lastGitHubFailureSource: null,
-      lastGitHubFailureHeadSha: null,
-      lastGitHubFailureSignature: null,
-      lastGitHubFailureCheckName: null,
-      lastGitHubFailureCheckUrl: null,
-      lastGitHubFailureContextJson: null,
-      lastGitHubFailureAt: null,
-      lastGitHubCiSnapshotHeadSha: event.headSha ?? null,
-      lastGitHubCiSnapshotGateCheckName: getPrimaryGateCheckName(project),
-      lastGitHubCiSnapshotGateCheckStatus: "pending",
-      lastGitHubCiSnapshotJson: null,
-      lastGitHubCiSnapshotSettledAt: null,
-      lastQueueIncidentJson: null,
-      lastAttemptedFailureHeadSha: null,
-      lastAttemptedFailureSignature: null,
-      lastAttemptedFailureAt: null,
+    deps.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      update: {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        ciRepairAttempts: 0,
+        queueRepairAttempts: 0,
+        lastGitHubFailureSource: null,
+        lastGitHubFailureHeadSha: null,
+        lastGitHubFailureSignature: null,
+        lastGitHubFailureCheckName: null,
+        lastGitHubFailureCheckUrl: null,
+        lastGitHubFailureContextJson: null,
+        lastGitHubFailureAt: null,
+        lastGitHubCiSnapshotHeadSha: event.headSha ?? null,
+        lastGitHubCiSnapshotGateCheckName: getPrimaryGateCheckName(project),
+        lastGitHubCiSnapshotGateCheckStatus: "pending",
+        lastGitHubCiSnapshotJson: null,
+        lastGitHubCiSnapshotSettledAt: null,
+        lastQueueIncidentJson: null,
+        lastAttemptedFailureHeadSha: null,
+        lastAttemptedFailureSignature: null,
+        lastAttemptedFailureAt: null,
+      },
     });
   }
 
@@ -261,28 +302,34 @@ async function updateGitHubCiSnapshot(
   ciSnapshotResolver: GitHubCiSnapshotResolver,
 ): Promise<void> {
   if (event.triggerEvent === "pr_merged") {
-    deps.db.issues.upsertIssue({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      lastGitHubCiSnapshotHeadSha: null,
-      lastGitHubCiSnapshotGateCheckName: null,
-      lastGitHubCiSnapshotGateCheckStatus: null,
-      lastGitHubCiSnapshotJson: null,
-      lastGitHubCiSnapshotSettledAt: null,
+    deps.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      update: {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        lastGitHubCiSnapshotHeadSha: null,
+        lastGitHubCiSnapshotGateCheckName: null,
+        lastGitHubCiSnapshotGateCheckStatus: null,
+        lastGitHubCiSnapshotJson: null,
+        lastGitHubCiSnapshotSettledAt: null,
+      },
     });
     return;
   }
 
   if (event.triggerEvent === "pr_synchronize") {
-    deps.db.issues.upsertIssue({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      prCheckStatus: "pending",
-      lastGitHubCiSnapshotHeadSha: event.headSha ?? null,
-      lastGitHubCiSnapshotGateCheckName: getPrimaryGateCheckName(project),
-      lastGitHubCiSnapshotGateCheckStatus: "pending",
-      lastGitHubCiSnapshotJson: null,
-      lastGitHubCiSnapshotSettledAt: null,
+    deps.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      update: {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        prCheckStatus: "pending",
+        lastGitHubCiSnapshotHeadSha: event.headSha ?? null,
+        lastGitHubCiSnapshotGateCheckName: getPrimaryGateCheckName(project),
+        lastGitHubCiSnapshotGateCheckStatus: "pending",
+        lastGitHubCiSnapshotJson: null,
+        lastGitHubCiSnapshotSettledAt: null,
+      },
     });
     return;
   }
@@ -293,33 +340,43 @@ async function updateGitHubCiSnapshot(
   if (!isGateCheckEvent(event, project)) return;
   if (isStaleGateEvent(issue, event)) return;
   if (event.triggerEvent === "check_pending") {
-    deps.db.issues.upsertIssue({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      prCheckStatus: "pending",
-      lastGitHubCiSnapshotHeadSha: event.headSha ?? issue.lastGitHubCiSnapshotHeadSha ?? null,
-      lastGitHubCiSnapshotGateCheckName: event.checkName ?? getPrimaryGateCheckName(project),
-      lastGitHubCiSnapshotGateCheckStatus: "pending",
-      lastGitHubCiSnapshotJson: null,
-      lastGitHubCiSnapshotSettledAt: null,
+    deps.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      update: {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        prCheckStatus: "pending",
+        lastGitHubCiSnapshotHeadSha: event.headSha ?? issue.lastGitHubCiSnapshotHeadSha ?? null,
+        lastGitHubCiSnapshotGateCheckName: event.checkName ?? getPrimaryGateCheckName(project),
+        lastGitHubCiSnapshotGateCheckStatus: "pending",
+        lastGitHubCiSnapshotJson: null,
+        lastGitHubCiSnapshotSettledAt: null,
+      },
     });
     return;
   }
 
+  // Version read just before the async snapshot resolution: a conflict on the
+  // write below means another writer landed while we were calling GitHub.
+  const preResolveVersion = (deps.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue).version;
   const snapshot = await ciSnapshotResolver.resolve({
     repoFullName: project?.github?.repoFullName ?? event.repoFullName,
     event,
     gateCheckNames: getGateCheckNames(project),
   });
   if (!snapshot) {
-    deps.db.issues.upsertIssue({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      lastGitHubCiSnapshotHeadSha: event.headSha ?? issue.lastGitHubCiSnapshotHeadSha ?? null,
-      lastGitHubCiSnapshotGateCheckName: getPrimaryGateCheckName(project),
-      lastGitHubCiSnapshotGateCheckStatus: "pending",
-      lastGitHubCiSnapshotJson: null,
-      lastGitHubCiSnapshotSettledAt: null,
+    deps.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      expectedVersion: preResolveVersion,
+      update: {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        lastGitHubCiSnapshotHeadSha: event.headSha ?? issue.lastGitHubCiSnapshotHeadSha ?? null,
+        lastGitHubCiSnapshotGateCheckName: getPrimaryGateCheckName(project),
+        lastGitHubCiSnapshotGateCheckStatus: "pending",
+        lastGitHubCiSnapshotJson: null,
+        lastGitHubCiSnapshotSettledAt: null,
+      },
     });
     deps.logger.warn(
       { issueKey: issue.issueKey, repoFullName: project?.github?.repoFullName ?? event.repoFullName, headSha: event.headSha },
@@ -337,15 +394,19 @@ async function updateGitHubCiSnapshot(
     return;
   }
 
-  deps.db.issues.upsertIssue({
-    projectId: issue.projectId,
-    linearIssueId: issue.linearIssueId,
-    prCheckStatus: snapshot.gateCheckStatus,
-    lastGitHubCiSnapshotHeadSha: snapshot.headSha,
-    lastGitHubCiSnapshotGateCheckName: snapshot.gateCheckName ?? getPrimaryGateCheckName(project),
-    lastGitHubCiSnapshotGateCheckStatus: snapshot.gateCheckStatus,
-    lastGitHubCiSnapshotJson: JSON.stringify(snapshot),
-    lastGitHubCiSnapshotSettledAt: snapshot.settledAt ?? null,
+  deps.db.issueSessions.commitIssueState({
+    writer: WRITER,
+    expectedVersion: preResolveVersion,
+    update: {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      prCheckStatus: snapshot.gateCheckStatus,
+      lastGitHubCiSnapshotHeadSha: snapshot.headSha,
+      lastGitHubCiSnapshotGateCheckName: snapshot.gateCheckName ?? getPrimaryGateCheckName(project),
+      lastGitHubCiSnapshotGateCheckStatus: snapshot.gateCheckStatus,
+      lastGitHubCiSnapshotJson: JSON.stringify(snapshot),
+      lastGitHubCiSnapshotSettledAt: snapshot.settledAt ?? null,
+    },
   });
 }
 
@@ -365,6 +426,8 @@ async function updateGitHubFailureProvenance(
     if (source === "branch_ci" && !isSettledBranchFailure(deps.db, issue, event, project)) {
       return;
     }
+    // Version read before the (possibly async) failure-context resolution.
+    const preResolveVersion = (deps.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue).version;
     const failureContext = source === "queue_eviction"
       ? buildGitHubQueueFailureContext(event, project, buildQueueRepairContextFromEvent(event))
       : await resolveGitHubBranchFailureContext({
@@ -374,24 +437,28 @@ async function updateGitHubFailureProvenance(
           project,
           failureContextResolver,
         });
-    deps.db.issues.upsertIssue({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      lastGitHubFailureSource: source,
-      lastGitHubFailureHeadSha: failureContext.failureHeadSha ?? event.headSha ?? null,
-      lastGitHubFailureSignature: failureContext.failureSignature ?? null,
-      lastGitHubFailureCheckName: failureContext.checkName ?? event.checkName ?? null,
-      lastGitHubFailureCheckUrl: failureContext.checkUrl ?? event.checkUrl ?? null,
-      lastGitHubFailureContextJson: JSON.stringify(failureContext),
-      lastGitHubFailureAt: new Date().toISOString(),
-      ...(source === "queue_eviction"
-        ? {
-            lastQueueSignalAt: new Date().toISOString(),
-            lastQueueIncidentJson: JSON.stringify(buildQueueRepairContextFromEvent(event)),
-          }
-        : {
-            lastQueueIncidentJson: null,
-          }),
+    deps.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      expectedVersion: preResolveVersion,
+      update: {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        lastGitHubFailureSource: source,
+        lastGitHubFailureHeadSha: failureContext.failureHeadSha ?? event.headSha ?? null,
+        lastGitHubFailureSignature: failureContext.failureSignature ?? null,
+        lastGitHubFailureCheckName: failureContext.checkName ?? event.checkName ?? null,
+        lastGitHubFailureCheckUrl: failureContext.checkUrl ?? event.checkUrl ?? null,
+        lastGitHubFailureContextJson: JSON.stringify(failureContext),
+        lastGitHubFailureAt: new Date().toISOString(),
+        ...(source === "queue_eviction"
+          ? {
+              lastQueueSignalAt: new Date().toISOString(),
+              lastQueueIncidentJson: JSON.stringify(buildQueueRepairContextFromEvent(event)),
+            }
+          : {
+              lastQueueIncidentJson: null,
+            }),
+      },
     });
     return;
   }
@@ -404,10 +471,13 @@ async function updateGitHubFailureProvenance(
     if (event.triggerEvent === "check_passed" && !canClearFailureProvenance(issue, event, project)) {
       return;
     }
-    deps.db.issues.upsertIssue({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      ...CLEARED_FAILURE_PROVENANCE,
+    deps.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      update: {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        ...CLEARED_FAILURE_PROVENANCE,
+      },
     });
   }
 }

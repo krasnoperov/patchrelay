@@ -22,6 +22,8 @@ import { buildRunOutcomeSummary, type RunOutcomeFacts } from "./run-outcome-summ
 
 type StageReport = ReturnType<typeof buildStageReport>;
 
+const WRITER = "run-finalizer";
+
 function parseEventJson(eventJson?: string): Record<string, unknown> | undefined {
   if (!eventJson) return undefined;
   try {
@@ -192,12 +194,16 @@ export class RunFinalizer {
       headSha: issue.prHeadSha,
     });
     if (!identity.patchId && !identity.integrationTreeId) return;
-    this.db.issues.upsertIssue({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      ...(identity.patchId ? { lastPublishedPatchId: identity.patchId } : {}),
-      ...(identity.integrationTreeId ? { lastPublishedIntegrationTreeId: identity.integrationTreeId } : {}),
-      lastPublishedHeadSha: issue.prHeadSha,
+    this.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      expectedVersion: issue.version,
+      update: {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        ...(identity.patchId ? { lastPublishedPatchId: identity.patchId } : {}),
+        ...(identity.integrationTreeId ? { lastPublishedIntegrationTreeId: identity.integrationTreeId } : {}),
+        lastPublishedHeadSha: issue.prHeadSha,
+      },
     });
     this.logger.info(
       {
@@ -248,12 +254,15 @@ export class RunFinalizer {
         ...(completedTurnId ? { turnId: completedTurnId } : {}),
         failureReason: run.failureReason ?? "approved on the same head; further publication suppressed",
       });
-      this.db.issues.upsertIssue({
-        projectId: run.projectId,
-        linearIssueId: run.linearIssueId,
-        activeRunId: null,
-        pendingRunType: null,
-        pendingRunContextJson: null,
+      this.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        update: {
+          projectId: run.projectId,
+          linearIssueId: run.linearIssueId,
+          activeRunId: null,
+          pendingRunType: null,
+          pendingRunContextJson: null,
+        },
       });
     });
     this.clearProgressAndRelease(run);
@@ -363,22 +372,32 @@ export class RunFinalizer {
         report: params.report,
         outcomeSummary,
       }));
-      this.db.issueSessions.upsertIssueWithLease(lease, {
+      // The attempt decrements are read-modify-write against the issue row;
+      // on conflict, recompute them from the fresh row instead of writing
+      // counters derived from a stale read.
+      const buildContinueUpdate = (record: Pick<IssueRecord, "ciRepairAttempts" | "queueRepairAttempts" | "reviewFixAttempts">) => ({
         projectId: params.run.projectId,
         linearIssueId: params.run.linearIssueId,
         activeRunId: null,
-        factoryState: "delegated",
+        factoryState: "delegated" as FactoryState,
         pendingRunType: null,
         pendingRunContextJson: null,
-        ...(params.run.runType === "ci_repair" && params.issue.ciRepairAttempts > 0
-          ? { ciRepairAttempts: params.issue.ciRepairAttempts - 1 }
+        ...(params.run.runType === "ci_repair" && record.ciRepairAttempts > 0
+          ? { ciRepairAttempts: record.ciRepairAttempts - 1 }
           : {}),
-        ...(params.run.runType === "queue_repair" && params.issue.queueRepairAttempts > 0
-          ? { queueRepairAttempts: params.issue.queueRepairAttempts - 1 }
+        ...(params.run.runType === "queue_repair" && record.queueRepairAttempts > 0
+          ? { queueRepairAttempts: record.queueRepairAttempts - 1 }
           : {}),
-        ...((params.run.runType === "review_fix" || params.run.runType === "branch_upkeep") && params.issue.reviewFixAttempts > 0
-          ? { reviewFixAttempts: params.issue.reviewFixAttempts - 1 }
+        ...((params.run.runType === "review_fix" || params.run.runType === "branch_upkeep") && record.reviewFixAttempts > 0
+          ? { reviewFixAttempts: record.reviewFixAttempts - 1 }
           : {}),
+      });
+      this.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        lease,
+        expectedVersion: params.issue.version,
+        update: buildContinueUpdate(params.issue),
+        onConflict: (current) => buildContinueUpdate(current),
       });
       return Boolean(this.db.issueSessions.appendIssueSessionEventWithLease(lease, {
         projectId: params.run.projectId,
@@ -549,6 +568,24 @@ export class RunFinalizer {
       latestAssistantSummary: report.assistantMessages.at(-1),
     });
 
+    // `refreshedIssue` was read before several async policy checks; a
+    // version conflict here means a webhook landed mid-finalize. Re-resolve
+    // the post-run state from the fresh row so we never regress it (e.g.
+    // the PR merged while we were verifying the publish).
+    const buildCompletionUpdate = (record: IssueRecord) => {
+      const state = postRunFollowUp?.factoryState ?? resolveCompletedRunState(record, run);
+      return {
+        projectId: run.projectId,
+        linearIssueId: run.linearIssueId,
+        activeRunId: null,
+        ...(state ? { factoryState: state } : {}),
+        pendingRunType: null,
+        pendingRunContextJson: null,
+        ...(postRunFollowUp ? {} : (state === "awaiting_queue" || state === "done"
+          ? { ...CLEARED_FAILURE_PROVENANCE }
+          : {})),
+      };
+    };
     const completed = this.withHeldLease(run.projectId, run.linearIssueId, (lease) => {
       this.db.runs.finishRun(run.id, this.buildCompletedRunUpdate({
         threadId,
@@ -556,16 +593,12 @@ export class RunFinalizer {
         report,
         outcomeSummary,
       }));
-      this.db.issues.upsertIssue({
-        projectId: run.projectId,
-        linearIssueId: run.linearIssueId,
-        activeRunId: null,
-        ...(postRunState ? { factoryState: postRunState } : {}),
-        pendingRunType: null,
-        pendingRunContextJson: null,
-        ...(postRunFollowUp ? {} : (postRunState === "awaiting_queue" || postRunState === "done"
-          ? { ...CLEARED_FAILURE_PROVENANCE }
-          : {})),
+      this.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        lease,
+        expectedVersion: refreshedIssue.version,
+        update: buildCompletionUpdate(refreshedIssue),
+        onConflict: (current) => buildCompletionUpdate(current),
       });
       if (postRunFollowUp) {
         return this.appendWakeEventWithLease(

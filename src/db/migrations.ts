@@ -382,6 +382,10 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   // `deploying` state, so the deploy watcher only considers deploy runs
   // created at/after the merge (and can time out a never-arriving deploy).
   addColumnIfMissing(connection, "issues", "deploy_started_at", "TEXT");
+
+  // Optimistic-concurrency counter for issue-state writes (core
+  // simplification plan, phase A). Bumped on every UPDATE by upsertIssue.
+  addColumnIfMissing(connection, "issues", "version", "INTEGER NOT NULL DEFAULT 0");
 }
 
 function addColumnIfMissing(connection: DatabaseConnection, table: string, column: string, definition: string): void {

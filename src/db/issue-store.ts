@@ -99,7 +99,7 @@ export class IssueStore {
     const existing = this.getIssue(params.projectId, params.linearIssueId);
     if (existing) {
       const { assignments, values } = buildUpdateAssignments(params);
-      const sql = `UPDATE issues SET ${["updated_at = @now", ...assignments].join(", ")} WHERE project_id = @projectId AND linear_issue_id = @linearIssueId`;
+      const sql = `UPDATE issues SET ${["updated_at = @now", "version = version + 1", ...assignments].join(", ")} WHERE project_id = @projectId AND linear_issue_id = @linearIssueId`;
       this.connection.prepare(sql).run({
         ...values,
         now,
@@ -715,5 +715,6 @@ export function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.deploy_started_at !== null && row.deploy_started_at !== undefined
       ? { deployStartedAt: String(row.deploy_started_at) }
       : {}),
+    version: Number(row.version ?? 0),
   };
 }
