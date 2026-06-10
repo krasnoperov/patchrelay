@@ -14,6 +14,34 @@ interface IssueSessionLease {
   leaseId: string;
 }
 
+export interface CommitIssueStateParams {
+  /** Identifies the writer in conflict telemetry (e.g. "github-webhook-state-projector"). */
+  writer: string;
+  update: UpsertIssueParams;
+  /**
+   * Version of the issue row the update was derived from: a number for an
+   * existing row, `null` when the writer believes the issue does not exist
+   * yet, `undefined` for an unconditional write (update derives from external
+   * facts, not from a prior read).
+   */
+  expectedVersion?: number | null | undefined;
+  /** When the caller holds a lease, the write is denied if it is no longer valid. */
+  lease?: IssueSessionLease | undefined;
+  /**
+   * Recompute the update against the fresh row after a version conflict.
+   * Return the recomputed params to apply them, or `undefined` to skip the
+   * write (the concurrent writer's state is newer truth). Without this
+   * callback a conflicted write is applied anyway — current clobber behavior,
+   * but now observable via `state.write_conflict` telemetry.
+   */
+  onConflict?: ((current: IssueRecord) => UpsertIssueParams | undefined) | undefined;
+}
+
+export type CommitIssueStateResult =
+  | { outcome: "applied"; issue: IssueRecord; conflicted: boolean }
+  | { outcome: "conflict_skipped"; issue: IssueRecord | undefined }
+  | { outcome: "lease_denied" };
+
 export class IssueSessionStore {
   constructor(
     private readonly connection: DatabaseConnection,
@@ -370,6 +398,54 @@ export class IssueSessionStore {
         return undefined;
       }
       return fn();
+    })();
+  }
+
+  /**
+   * The single door for issue-state writes (core simplification plan, phase
+   * A): one transaction wrapping lease validity, an optimistic version check
+   * against the row the update was derived from, and the write itself. A
+   * version mismatch means another writer landed between the caller's read
+   * and this commit — emitted as `state.write_conflict` telemetry and either
+   * recomputed via `onConflict`, skipped, or applied anyway (see params).
+   */
+  commitIssueState(params: CommitIssueStateParams): CommitIssueStateResult {
+    return this.connection.transaction((): CommitIssueStateResult => {
+      const { projectId, linearIssueId } = params.update;
+      if (params.lease && !this.hasActiveIssueSessionLease(projectId, linearIssueId, params.lease.leaseId)) {
+        return { outcome: "lease_denied" };
+      }
+      const current = this.issues.getIssue(projectId, linearIssueId);
+      const actualVersion = current?.version ?? null;
+      if (params.expectedVersion === undefined || actualVersion === params.expectedVersion) {
+        return { outcome: "applied", issue: this.issues.upsertIssue(params.update), conflicted: false };
+      }
+
+      const emitConflict = (resolution: "recomputed" | "skipped" | "applied_anyway") => {
+        emitTelemetry(this.telemetry, {
+          type: "state.write_conflict",
+          projectId,
+          linearIssueId,
+          ...(current?.issueKey ? { issueKey: current.issueKey } : {}),
+          writer: params.writer,
+          expectedVersion: params.expectedVersion ?? null,
+          actualVersion,
+          resolution,
+        });
+      };
+
+      if (params.onConflict && current) {
+        const recomputed = params.onConflict(current);
+        if (!recomputed) {
+          emitConflict("skipped");
+          return { outcome: "conflict_skipped", issue: current };
+        }
+        emitConflict("recomputed");
+        return { outcome: "applied", issue: this.issues.upsertIssue(recomputed), conflicted: true };
+      }
+
+      emitConflict("applied_anyway");
+      return { outcome: "applied", issue: this.issues.upsertIssue(params.update), conflicted: true };
     })();
   }
 

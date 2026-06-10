@@ -118,6 +118,13 @@ export type PatchRelayTelemetryEvent =
   })
   | (PatchRelayTelemetryIds & { type: "run.claimed" | "run.started" | "run.completed" | "run.failed" | "run.released" | "run.superseded" })
   | (PatchRelayTelemetryIds & {
+    type: "state.write_conflict";
+    writer: string;
+    expectedVersion: number | null;
+    actualVersion: number | null;
+    resolution: "recomputed" | "skipped" | "applied_anyway";
+  })
+  | (PatchRelayTelemetryIds & {
     type: "health.invariant";
     invariant:
       | "blocked_issue_with_pending_wake"
@@ -217,6 +224,15 @@ export class OperatorFeedTelemetrySink implements PatchRelayTelemetry {
           };
         }
         return undefined;
+      case "state.write_conflict":
+        return {
+          level: "warn",
+          kind: "workflow",
+          ...(event.issueKey ? { issueKey: event.issueKey } : {}),
+          ...(event.projectId ? { projectId: event.projectId } : {}),
+          status: "state_write_conflict",
+          summary: `Issue-state write conflict (${event.writer}): expected v${event.expectedVersion ?? "none"}, found v${event.actualVersion ?? "none"} — ${event.resolution.replaceAll("_", " ")}`,
+        };
       case "health.invariant":
         return {
           level: event.status === "observed" ? "warn" : "info",

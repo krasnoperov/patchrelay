@@ -109,6 +109,10 @@ export interface IssueRecord {
    * by the deploy watcher to scope which deploy runs are relevant and to
    * time out a deploy that never arrives. */
   deployStartedAt?: string | undefined;
+  /** Optimistic-concurrency counter, bumped on every issue write. Writers
+   * that derive an update from a read pass the read row's version to
+   * `commitIssueState`; a mismatch means another writer landed in between. */
+  version: number;
   updatedAt: string;
 }
 
