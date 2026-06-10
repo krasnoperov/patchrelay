@@ -3603,13 +3603,14 @@ test("reconcileIdleIssues still dedupes queue_repair when the last attempt cover
   }
 });
 
-test("reconcileActiveRuns frees an issue whose active slot is pinned to a terminal run", async () => {
-  // Regression: a run that finished (status completed) while the issue
-  // still referenced it through activeRunId — the post-run finalize was
-  // interrupted, almost always by a restart between marking the run
+test("reconcileActiveRuns settles an issue whose active slot is pinned to a terminal run", async () => {
+  // Regression (PR #566): a run that finished (status completed) while the
+  // issue still referenced it through activeRunId — the post-run finalize
+  // was interrupted, almost always by a restart between marking the run
   // terminal and clearing the slot — left the issue invisible to every
   // idle and recovery pass, all of which gate on activeRunId IS NULL.
-  // The orchestrator must clear the dangling slot so the issue resumes.
+  // settleRun is idempotent, so the slot is cleared on the very next
+  // reconciliation pass (no age gate) and a repeat pass is a no-op.
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-dangling-active-"));
   try {
     const { db, orchestrator } = createOrchestrator(baseDir);
@@ -3632,13 +3633,8 @@ test("reconcileActiveRuns frees an issue whose active slot is pinned to a termin
       linearIssueId: issue.linearIssueId,
       runType: "implementation",
     });
-    // Mark the run terminal and backdate its end past the safety window so
-    // the orchestrator treats it as a genuinely stranded slot, not a
-    // completion that is about to finalize itself.
-    const longAgo = new Date(Date.now() - 10 * 60_000).toISOString();
-    (db as unknown as { connection: { prepare(sql: string): { run(...args: unknown[]): void } } }).connection
-      .prepare("UPDATE runs SET status = 'completed', ended_at = ? WHERE id = ?")
-      .run(longAgo, run.id);
+    // Terminal just now — settlement must not wait out any age gate.
+    db.runs.finishRun(run.id, { status: "completed" });
     db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -3646,30 +3642,40 @@ test("reconcileActiveRuns frees an issue whose active slot is pinned to a termin
     });
     assert.equal(db.getIssue(issue.projectId, issue.linearIssueId)?.activeRunId, run.id);
 
-    (orchestrator as unknown as { finalizeDanglingActiveRuns: () => void }).finalizeDanglingActiveRuns();
+    (orchestrator as unknown as { settleDanglingActiveRuns: () => void }).settleDanglingActiveRuns();
 
+    const settled = db.getIssue(issue.projectId, issue.linearIssueId);
     assert.equal(
-      db.getIssue(issue.projectId, issue.linearIssueId)?.activeRunId,
+      settled?.activeRunId,
       undefined,
       "dangling active slot should be cleared so idle reconcile can resume the issue",
     );
+    assert.ok(
+      db.listIdleNonTerminalIssues().some((entry) => entry.linearIssueId === issue.linearIssueId),
+      "settled issue should be visible to the idle reconciler",
+    );
+
+    // A second pass over the already-settled issue must change nothing.
+    (orchestrator as unknown as { settleDanglingActiveRuns: () => void }).settleDanglingActiveRuns();
+    assert.equal(db.getIssue(issue.projectId, issue.linearIssueId)?.version, settled?.version);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("reconcileActiveRuns leaves a freshly completed run's active slot alone", async () => {
-  // The clear only fires after the run has been terminal past the safety
-  // window; a completion that just landed must be left for the normal
-  // notification-driven finalize.
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-fresh-active-"));
+test("reconcileActiveRuns leaves a stranded slot alone while another worker holds the session lease", async () => {
+  // A live foreign lease means a worker is actively finalizing or
+  // launching on this session; settlement defers so the owner can land
+  // its richer post-run state write. The next pass picks the issue up
+  // once the lease expires or is released.
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-leased-active-"));
   try {
     const { db, orchestrator } = createOrchestrator(baseDir);
     const issue = db.upsertIssue({
       projectId: "usertold",
-      linearIssueId: "issue-fresh-active",
-      issueKey: "USE-FRESH",
-      branchName: "feat-fresh",
+      linearIssueId: "issue-leased-active",
+      issueKey: "USE-LEASED",
+      branchName: "feat-leased",
       prNumber: 322,
       prState: "open",
       factoryState: "pr_open",
@@ -3681,20 +3687,26 @@ test("reconcileActiveRuns leaves a freshly completed run's active slot alone", a
       linearIssueId: issue.linearIssueId,
       runType: "implementation",
     });
-    // Terminal but only just now — within the safety window.
     db.runs.finishRun(run.id, { status: "completed" });
     db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       activeRunId: run.id,
     });
+    db.issueSessions.forceAcquireIssueSessionLease({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      leaseId: "foreign-lease",
+      workerId: "patchrelay:other-worker",
+      leasedUntil: new Date(Date.now() + 10 * 60_000).toISOString(),
+    });
 
-    (orchestrator as unknown as { finalizeDanglingActiveRuns: () => void }).finalizeDanglingActiveRuns();
+    (orchestrator as unknown as { settleDanglingActiveRuns: () => void }).settleDanglingActiveRuns();
 
     assert.equal(
       db.getIssue(issue.projectId, issue.linearIssueId)?.activeRunId,
       run.id,
-      "a freshly completed run's slot must not be force-cleared",
+      "a slot owned by a live foreign lease must not be settled from under it",
     );
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
