@@ -9,6 +9,8 @@ import { deriveIssueStatusNote } from "./status-note.ts";
 import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
 import type { LinearClientProvider } from "./types.ts";
 
+const WRITER = "linear-status-comment-sync";
+
 export async function syncVisibleStatusComment(params: {
   db: PatchRelayDatabase;
   issue: IssueRecord;
@@ -26,10 +28,13 @@ export async function syncVisibleStatusComment(params: {
       body,
     });
     if (result.id !== issue.statusCommentId) {
-      db.issues.upsertIssue({
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        statusCommentId: result.id,
+      db.issueSessions.commitIssueState({
+        writer: WRITER,
+        update: {
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          statusCommentId: result.id,
+        },
       });
     }
   } catch (error) {

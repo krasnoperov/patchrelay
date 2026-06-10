@@ -3,6 +3,8 @@ import { TERMINAL_STATES } from "../factory-state.ts";
 import type { OperatorEventFeed } from "../operator-feed.ts";
 import type { IssueMetadata, TrackedIssueRecord } from "../types.ts";
 
+const WRITER = "issue-removal-handler";
+
 export class IssueRemovalHandler {
   constructor(
     private readonly db: PatchRelayDatabase,
@@ -21,27 +23,42 @@ export class IssueRemovalHandler {
     const activeLease = this.db.issueSessions.getActiveIssueSessionLease(params.projectId, params.issue.id);
     const commitRemoval = () => {
       if (removedIssue?.activeRunId) {
-        const run = this.db.runs.getRunById(removedIssue.activeRunId);
-        if (run) {
-          this.db.runs.finishRun(run.id, { status: "released", failureReason: "Issue removed from Linear" });
-        }
-        return this.db.issues.upsertIssue({
+        const removedRunId = removedIssue.activeRunId;
+        const run = this.db.runs.getRunById(removedRunId);
+        const update = {
           projectId: params.projectId,
           linearIssueId: params.issue.id,
           activeRunId: null,
           pendingRunType: null,
           factoryState: "failed" as never,
+        };
+        const commit = this.db.issueSessions.commitIssueState({
+          writer: WRITER,
+          expectedVersion: removedIssue.version,
+          ...(activeLease ? { lease: activeLease } : {}),
+          update,
+          onConflict: (current) => (current.activeRunId === removedRunId ? update : undefined),
         });
+        if (run && commit.outcome === "applied") {
+          this.db.runs.finishRun(run.id, { status: "released", failureReason: "Issue removed from Linear" });
+        }
+        return;
       }
       if (removedIssue && !TERMINAL_STATES.has(removedIssue.factoryState)) {
-        return this.db.issues.upsertIssue({
+        const update = {
           projectId: params.projectId,
           linearIssueId: params.issue.id,
           pendingRunType: null,
           factoryState: "failed" as never,
+        };
+        this.db.issueSessions.commitIssueState({
+          writer: WRITER,
+          expectedVersion: removedIssue.version,
+          ...(activeLease ? { lease: activeLease } : {}),
+          update,
+          onConflict: (current) => (TERMINAL_STATES.has(current.factoryState) ? undefined : update),
         });
       }
-      return removedIssue;
     };
 
     if (removedIssue?.activeRunId) {
@@ -51,11 +68,7 @@ export class IssueRemovalHandler {
       }
     }
 
-    if (activeLease) {
-      this.db.issueSessions.withIssueSessionLease(params.projectId, params.issue.id, activeLease.leaseId, commitRemoval);
-    } else {
-      commitRemoval();
-    }
+    commitRemoval();
 
     this.db.issueSessions.appendIssueSessionEvent({
       projectId: params.projectId,

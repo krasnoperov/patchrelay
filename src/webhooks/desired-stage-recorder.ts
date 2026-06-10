@@ -1,4 +1,5 @@
 import type { PatchRelayDatabase } from "../db.ts";
+import type { IssueRecord } from "../db-types.ts";
 import type { RunType } from "../factory-state.ts";
 import type { OperatorEventFeed } from "../operator-feed.ts";
 import { wakeOrchestrationParentsForChildEvent } from "../orchestration-parent-wake.ts";
@@ -17,6 +18,8 @@ import { buildOperatorRetryEvent } from "../operator-retry-event.ts";
 import { planIssueWebhookWorkflow } from "./issue-webhook-workflow-planner.ts";
 import type { WakeDispatcher } from "../wake-dispatcher.ts";
 import { dirtyWorktreeEventPayload, inspectGitWorktreeStatus } from "../git-worktree-status.ts";
+
+const WRITER = "desired-stage-recorder";
 
 export class DesiredStageRecorder {
   constructor(
@@ -105,8 +108,14 @@ export class DesiredStageRecorder {
       : undefined;
     const dirtyWorktreePayload = releaseWorktreeStatus ? dirtyWorktreeEventPayload(releaseWorktreeStatus) : undefined;
 
-    const commitIssueUpdate = () => {
-      const record = this.db.issues.upsertIssue({
+    const activeLease = this.db.issueSessions.getActiveIssueSessionLease(params.project.id, normalizedIssue.id);
+    // Webhook intake projection: the fields are facts carried by the webhook
+    // payload and the hydrated Linear issue, applied unconditionally (the
+    // active lease still gates the write, matching the previous semantics).
+    const issueCommit = this.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      ...(activeLease ? { lease: activeLease } : {}),
+      update: {
         projectId: params.project.id,
         linearIssueId: normalizedIssue.id,
         ...(hydratedIssue.identifier ? { issueKey: hydratedIssue.identifier } : {}),
@@ -124,21 +133,30 @@ export class DesiredStageRecorder {
         ...linkedPrAdoption?.issueUpdates,
         delegatedToPatchRelay: delegated,
         ...workflowPlan.resolvedIssueUpdate,
-      });
+      },
+    });
+    let issue: IssueRecord;
+    if (issueCommit.outcome === "applied") {
+      issue = issueCommit.issue;
       if (workflowPlan.effectiveRunRelease.release && activeRun && releaseReason) {
         this.db.runs.finishRun(activeRun.id, { status: "released", failureReason: releaseReason });
       }
-      return record;
-    };
-
-    const activeLease = this.db.issueSessions.getActiveIssueSessionLease(params.project.id, normalizedIssue.id);
-    const issue = activeLease
-      ? this.db.issueSessions.withIssueSessionLease(params.project.id, normalizedIssue.id, activeLease.leaseId, commitIssueUpdate) ?? (existingIssue ?? this.db.issues.upsertIssue({
+    } else if (existingIssue) {
+      issue = existingIssue;
+    } else {
+      const fallbackCommit = this.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        update: {
           projectId: params.project.id,
           linearIssueId: normalizedIssue.id,
           ...(hydratedIssue.identifier ? { issueKey: hydratedIssue.identifier } : {}),
-        }))
-      : this.db.transaction(commitIssueUpdate);
+        },
+      });
+      if (fallbackCommit.outcome !== "applied") {
+        return { issue: undefined, wakeRunType: undefined, delegated };
+      }
+      issue = fallbackCommit.issue;
+    }
 
     const previousParentIssueId = existingIssue?.parentLinearIssueId;
     const currentParentIssueId = issue.parentLinearIssueId;

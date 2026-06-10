@@ -4,6 +4,8 @@ import type { NormalizedGitHubEvent } from "./github-types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
+const WRITER = "github-webhook-stack-coordination";
+
 // Plan §8.3-8.4: when a parent PR's head moves (review-fix push,
 // eviction repair, base-branch update), child PRs stacked on it
 // become stale. Patchrelay treats this as a wake event for each
@@ -33,10 +35,13 @@ export function maybeFanChildRebaseWakes(params: {
       );
       continue;
     }
-    db.issues.upsertIssue({
-      projectId: child.projectId,
-      linearIssueId: child.linearIssueId,
-      pendingRunType: "branch_upkeep",
+    db.issueSessions.commitIssueState({
+      writer: WRITER,
+      update: {
+        projectId: child.projectId,
+        linearIssueId: child.linearIssueId,
+        pendingRunType: "branch_upkeep",
+      },
     });
     // The pending_run_type field above isn't an event, so we still need
     // an explicit dispatch call. dispatchIfWakePending will pick up the

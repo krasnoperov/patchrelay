@@ -3,6 +3,8 @@ import type { RunType } from "../factory-state.ts";
 import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "../telemetry.ts";
 import type { WakeDispatcher } from "../wake-dispatcher.ts";
 
+const WRITER = "dependency-readiness-handler";
+
 export class DependencyReadinessHandler {
   constructor(
     private readonly db: PatchRelayDatabase,
@@ -43,11 +45,14 @@ export class DependencyReadinessHandler {
         if (this.peekPendingSessionWakeRunType(projectId, dependent.linearIssueId) === "implementation"
           && issue.activeRunId === undefined
           && !this.db.issueSessions.hasPendingIssueSessionEvents(projectId, dependent.linearIssueId)) {
-          this.db.issues.upsertIssue({
-            projectId,
-            linearIssueId: dependent.linearIssueId,
-            pendingRunType: null,
-            pendingRunContextJson: null,
+          this.db.issueSessions.commitIssueState({
+            writer: WRITER,
+            update: {
+              projectId,
+              linearIssueId: dependent.linearIssueId,
+              pendingRunType: null,
+              pendingRunContextJson: null,
+            },
           });
         }
         continue;
@@ -78,11 +83,14 @@ export class DependencyReadinessHandler {
       }
 
       if (this.peekPendingSessionWakeRunType(projectId, dependent.linearIssueId) === "implementation") {
-        this.db.issues.upsertIssue({
-          projectId,
-          linearIssueId: dependent.linearIssueId,
-          pendingRunType: null,
-          pendingRunContextJson: null,
+        this.db.issueSessions.commitIssueState({
+          writer: WRITER,
+          update: {
+            projectId,
+            linearIssueId: dependent.linearIssueId,
+            pendingRunType: null,
+            pendingRunContextJson: null,
+          },
         });
       }
       const dispatchedRunType = this.wakeDispatcher.recordEventAndDispatch(projectId, dependent.linearIssueId, {

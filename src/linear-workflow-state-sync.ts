@@ -16,6 +16,8 @@ import { hasTrustedNoPrCompletion } from "./trusted-no-pr-completion.ts";
 import type { LinearClientProvider } from "./types.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
 
+const WRITER = "linear-workflow-state-sync";
+
 export async function syncActiveWorkflowState(params: {
   db: PatchRelayDatabase;
   issue: IssueRecord;
@@ -157,11 +159,14 @@ function refreshCachedLinearState(
   stateName: string | undefined,
   stateType: string | undefined,
 ): void {
-  db.issues.upsertIssue({
-    projectId: issue.projectId,
-    linearIssueId: issue.linearIssueId,
-    ...(stateName ? { currentLinearState: stateName } : {}),
-    ...(stateType ? { currentLinearStateType: stateType } : {}),
+  db.issueSessions.commitIssueState({
+    writer: WRITER,
+    update: {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      ...(stateName ? { currentLinearState: stateName } : {}),
+      ...(stateType ? { currentLinearStateType: stateType } : {}),
+    },
   });
 }
 

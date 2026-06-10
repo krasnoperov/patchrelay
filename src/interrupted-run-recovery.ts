@@ -10,6 +10,8 @@ import type { RunCompletionPolicy } from "./run-completion-policy.ts";
 import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
 import { isRequestedChangesRunType } from "./reactive-pr-state.ts";
 
+const WRITER = "interrupted-run-recovery";
+
 function resolveRetryRunType(runType: RunType, context: Record<string, unknown> | undefined): "review_fix" | "branch_upkeep" {
   if (runType === "branch_upkeep") {
     return "branch_upkeep";
@@ -203,11 +205,14 @@ export class InterruptedRunRecovery {
     const recoveredIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? refreshedIssue;
 
     if (recoveredState === "changes_requested") {
-      this.db.issues.upsertIssue({
-        projectId: run.projectId,
-        linearIssueId: run.linearIssueId,
-        pendingRunType: retryRunType,
-        pendingRunContextJson: retryContext ? JSON.stringify(retryContext) : null,
+      this.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        update: {
+          projectId: run.projectId,
+          linearIssueId: run.linearIssueId,
+          pendingRunType: retryRunType,
+          pendingRunContextJson: retryContext ? JSON.stringify(retryContext) : null,
+        },
       });
       this.feed?.publish({
         level: "warn",

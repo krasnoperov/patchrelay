@@ -8,6 +8,8 @@ import { buildAgentSessionPlanForIssue } from "./agent-session-plan.ts";
 import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
 import { computeLinearActivityKey } from "./linear-activity-key.ts";
 
+const WRITER = "linear-agent-session-client";
+
 export class LinearAgentSessionClient {
   constructor(
     private readonly config: AppConfig,
@@ -26,11 +28,15 @@ export class LinearAgentSessionClient {
     if (!recoveredAgentSessionId) return issue;
 
     this.logger.info({ issueKey: issue.issueKey, agentSessionId: recoveredAgentSessionId }, "Recovered missing Linear agent session id from webhook history");
-    return this.db.issues.upsertIssue({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      agentSessionId: recoveredAgentSessionId,
+    const commit = this.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      update: {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        agentSessionId: recoveredAgentSessionId,
+      },
     });
+    return commit.outcome === "applied" ? commit.issue : issue;
   }
 
   async emitActivity(
@@ -55,10 +61,13 @@ export class LinearAgentSessionClient {
         ...(ephemeral ? { ephemeral: true } : {}),
       });
       if (activityKey) {
-        this.db.issues.upsertIssue({
-          projectId: syncedIssue.projectId,
-          linearIssueId: syncedIssue.linearIssueId,
-          lastLinearActivityKey: activityKey,
+        this.db.issueSessions.commitIssueState({
+          writer: WRITER,
+          update: {
+            projectId: syncedIssue.projectId,
+            linearIssueId: syncedIssue.linearIssueId,
+            lastLinearActivityKey: activityKey,
+          },
         });
       }
     } catch (error) {

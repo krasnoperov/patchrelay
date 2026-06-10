@@ -3,6 +3,8 @@ import type { IssueRecord } from "./db-types.ts";
 import { classifyIssue } from "./issue-class.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
+const WRITER = "orchestration-parent-wake";
+
 export const ORCHESTRATION_SETTLE_WINDOW_MS = 10_000;
 
 export function computeOrchestrationSettleUntil(now = Date.now()): string {
@@ -43,10 +45,13 @@ export function startOrchestrationSettleWindow(
   now = Date.now(),
 ): string {
   const settleUntil = computeOrchestrationSettleUntil(now);
-  db.issues.upsertIssue({
-    projectId: issue.projectId,
-    linearIssueId: issue.linearIssueId,
-    orchestrationSettleUntil: settleUntil,
+  db.issueSessions.commitIssueState({
+    writer: WRITER,
+    update: {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      orchestrationSettleUntil: settleUntil,
+    },
   });
   return settleUntil;
 }
@@ -57,10 +62,13 @@ export function queueSettledOrchestrationIssue(params: {
   wakeDispatcher: WakeDispatcher;
   promptContext?: string | undefined;
 }): boolean {
-  params.db.issues.upsertIssue({
-    projectId: params.issue.projectId,
-    linearIssueId: params.issue.linearIssueId,
-    orchestrationSettleUntil: null,
+  params.db.issueSessions.commitIssueState({
+    writer: WRITER,
+    update: {
+      projectId: params.issue.projectId,
+      linearIssueId: params.issue.linearIssueId,
+      orchestrationSettleUntil: null,
+    },
   });
   const dispatched = params.wakeDispatcher.recordEventAndDispatch(
     params.issue.projectId,

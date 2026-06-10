@@ -42,6 +42,8 @@ import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry, type RunSkipRea
 import { LinearIssueProjectionService } from "./linear-issue-projection.ts";
 import { RunAdmissionController } from "./run-admission-controller.ts";
 
+const WRITER = "run-orchestrator";
+
 // A terminal run must hold the active slot for at least this long before
 // the orchestrator force-clears it, so we never race the normal
 // notification-driven finalize that runs within seconds of completion.
@@ -380,14 +382,21 @@ export class RunOrchestrator {
       try {
         const triage = await this.issueTriage.classify({ issue, childIssues });
         if (triage) {
-          return this.db.issues.upsertIssue({
-            projectId: issue.projectId,
-            linearIssueId: issue.linearIssueId,
-            issueClass: triage.issueClass,
-            issueClassSource: "triage",
-            issueTriageHash: triageHash,
-            issueTriageResultJson: JSON.stringify(triage),
+          // The triage verdict is an external classifier response; persist it
+          // unconditionally so a benign version bump during the (slow) triage
+          // call cannot discard the result.
+          const triageCommit = this.db.issueSessions.commitIssueState({
+            writer: WRITER,
+            update: {
+              projectId: issue.projectId,
+              linearIssueId: issue.linearIssueId,
+              issueClass: triage.issueClass,
+              issueClassSource: "triage",
+              issueTriageHash: triageHash,
+              issueTriageResultJson: JSON.stringify(triage),
+            },
           });
+          return triageCommit.outcome === "applied" ? triageCommit.issue : issue;
         }
       } catch (error) {
         const err = error instanceof Error ? error : new Error(String(error));
@@ -400,12 +409,22 @@ export class RunOrchestrator {
     const fallbackClassification = classification.issueClassSource === "triage" && !triageCacheFresh
       ? { issueClass: "implementation" as const, issueClassSource: "heuristic" as const }
       : classification;
-    return this.db.issues.upsertIssue({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      issueClass: fallbackClassification.issueClass,
-      issueClassSource: fallbackClassification.issueClassSource,
+    const fallbackCommit = this.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      expectedVersion: issue.version,
+      update: {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        issueClass: fallbackClassification.issueClass,
+        issueClassSource: fallbackClassification.issueClassSource,
+      },
+      // A concurrent writer is newer truth; the next pass reclassifies.
+      onConflict: () => undefined,
     });
+    if (fallbackCommit.outcome === "applied") {
+      return fallbackCommit.issue;
+    }
+    return (fallbackCommit.outcome === "conflict_skipped" ? fallbackCommit.issue : undefined) ?? issue;
   }
 
   // ─── Run ────────────────────────────────────────────────────────
