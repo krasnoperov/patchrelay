@@ -123,7 +123,6 @@ export class RunOrchestrator {
     failRunAndClear: (run, message, nextState) => this.failRunAndClear(run, message, nextState),
     restoreIdleWorktree: (issue) => this.restoreIdleWorktree(issue),
   };
-  readonly activeSessionLeases: Map<string, string>;
   botIdentity?: GitHubAppBotIdentity;
 
   private readonly wakeDispatcher: WakeDispatcher;
@@ -183,10 +182,8 @@ export class RunOrchestrator {
       db,
       logger,
       this.workerId,
-      this.threadPorts.readThreadWithRetry,
       telemetry,
     );
-    this.activeSessionLeases = this.leaseService.activeSessionLeases;
     this.runCompletionPolicy = new RunCompletionPolicy(
       config,
       db,
@@ -900,7 +897,7 @@ export class RunOrchestrator {
     const issue = this.db.issues.getIssue(run.projectId, run.linearIssueId);
     if (!issue) return;
     let recoveryLease = this.claimLeaseForReconciliation(run.projectId, run.linearIssueId);
-    if (recoveryLease === "skip" && await this.reclaimForeignRecoveryLeaseIfSafe(run, issue)) {
+    if (recoveryLease === "skip" && this.reclaimForeignRecoveryLeaseIfSafe(run, issue)) {
       recoveryLease = true;
     }
     if (recoveryLease === "skip") return;
@@ -1000,8 +997,8 @@ export class RunOrchestrator {
     return this.leaseService.claimForReconciliation(projectId, linearIssueId);
   }
 
-  private async reclaimForeignRecoveryLeaseIfSafe(run: RunRecord, issue: IssueRecord): Promise<boolean> {
-    return await this.leaseService.reclaimForeignRecoveryLeaseIfSafe(run, issue);
+  private reclaimForeignRecoveryLeaseIfSafe(run: RunRecord, issue: IssueRecord): boolean {
+    return this.leaseService.reclaimForeignRecoveryLeaseIfSafe(run, issue);
   }
 
   private heartbeatIssueSessionLease(projectId: string, linearIssueId: string): boolean {

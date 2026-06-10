@@ -186,7 +186,11 @@ export class TrackedIssueListQuery {
         ...(row.last_blocking_review_head_sha !== null ? { lastBlockingReviewHeadSha: String(row.last_blocking_review_head_sha) } : {}),
         ...(row.last_github_failure_check_name !== null ? { latestFailureCheckName: String(row.last_github_failure_check_name) } : {}),
       });
-      const waitingReason = detachedActiveRun ? derivedWaitingReason : sessionWaitingReason ?? derivedWaitingReason;
+      // The derivation (issue-execution-state.ts via waiting-reason.ts) is the
+      // single source; the stored session projection is only a fallback for
+      // rows whose live facts derive no reason. A detached active run means
+      // the projection is stale, so it is not consulted at all.
+      const waitingReason = derivedWaitingReason ?? (detachedActiveRun ? undefined : sessionWaitingReason);
       const latestRun = row.latest_run_type !== null && row.latest_run_status !== null
         ? {
             id: 0,

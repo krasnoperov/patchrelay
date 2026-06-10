@@ -1,27 +1,10 @@
 import type { FactoryState, RunType } from "./factory-state.ts";
-import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
 
 export type IssueSessionState = "idle" | "running" | "waiting_input" | "done" | "failed";
 
 export interface IssueSessionStateInput {
   activeRunId?: number | undefined;
   factoryState: FactoryState;
-}
-
-export interface IssueSessionWaitingReasonInput {
-  delegatedToPatchRelay?: boolean | undefined;
-  activeRunId?: number | undefined;
-  blockedByKeys: string[];
-  factoryState: FactoryState;
-  pendingRunType?: RunType | undefined;
-  orchestrationSettleUntil?: string | undefined;
-  prNumber?: number | undefined;
-  prState?: string | undefined;
-  prHeadSha?: string | undefined;
-  prReviewState?: string | undefined;
-  prCheckStatus?: string | undefined;
-  lastBlockingReviewHeadSha?: string | undefined;
-  latestFailureCheckName?: string | undefined;
 }
 
 export interface IssueSessionWakeReasonInput {
@@ -77,10 +60,6 @@ export function deriveIssueSessionState(params: IssueSessionStateInput): IssueSe
   if (params.factoryState === "awaiting_input") return "waiting_input";
   if (params.activeRunId !== undefined) return "running";
   return "idle";
-}
-
-export function deriveIssueSessionWaitingReason(params: IssueSessionWaitingReasonInput): string | undefined {
-  return derivePatchRelayWaitingReason(params);
 }
 
 export function deriveIssueSessionWakeReason(params: IssueSessionWakeReasonInput): string | undefined {

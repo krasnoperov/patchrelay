@@ -1,12 +1,22 @@
 import { randomUUID } from "node:crypto";
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
-import type { IssueRecord, RunRecord } from "./db-types.ts";
-import type { CodexThreadSummary } from "./types.ts";
-import { getThreadTurns } from "./codex-thread-utils.ts";
+import type { IssueRecord, IssueSessionRecord, RunRecord } from "./db-types.ts";
 import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
 
-const ISSUE_SESSION_LEASE_MS = 10 * 60_000;
+export const ISSUE_SESSION_LEASE_MS = 10 * 60_000;
+
+/**
+ * Expected heartbeat cadence for a live lease holder. Heartbeats are
+ * notification-driven (every Codex notification renews the lease) rather
+ * than timer-driven, so this is the staleness budget granted to a live
+ * holder, not a timer the service runs. A foreign holder whose inferred
+ * last heartbeat (`leasedUntil - ISSUE_SESSION_LEASE_MS`) is older than
+ * 2x this budget is presumed dead (crashed process) and its lease may be
+ * reclaimed for recovery without waiting for full TTL expiry.
+ */
+export const ISSUE_SESSION_HEARTBEAT_INTERVAL_MS = 60_000;
+const FOREIGN_LEASE_RECLAIM_STALENESS_MS = 2 * ISSUE_SESSION_HEARTBEAT_INTERVAL_MS;
 
 export interface IssueSessionLease {
   projectId: string;
@@ -24,25 +34,31 @@ export type ReleaseIssueSessionLease = (projectId: string, linearIssueId: string
 
 export type GetHeldIssueSessionLease = (projectId: string, linearIssueId: string) => IssueSessionLease | undefined;
 
+/**
+ * Issue-session lease coordination over the `issue_sessions` lease columns.
+ * The DB row (`lease_id`, `worker_id`, `leased_until`) is the only truth —
+ * there is no in-memory mirror, so a restarted process loses no lease state
+ * (D4, core simplification plan). "Held by us" means the row carries this
+ * service's `workerId` with an unexpired `leased_until`.
+ */
 export class IssueSessionLeaseService {
-  readonly activeSessionLeases = new Map<string, string>();
-
   constructor(
     private readonly db: PatchRelayDatabase,
     private readonly logger: Logger,
-    private readonly workerId: string,
-    private readonly readThreadWithRetry: (threadId: string, maxRetries?: number) => Promise<CodexThreadSummary>,
+    readonly workerId: string,
     private readonly telemetry: PatchRelayTelemetry = noopTelemetry,
   ) {}
 
   hasLocalLease(projectId: string, linearIssueId: string): boolean {
-    return this.getValidatedLocalLeaseId(projectId, linearIssueId) !== undefined;
+    return this.getHeldLease(projectId, linearIssueId) !== undefined;
   }
 
   getHeldLease(projectId: string, linearIssueId: string): IssueSessionLease | undefined {
-    const leaseId = this.getValidatedLocalLeaseId(projectId, linearIssueId);
-    if (!leaseId) return undefined;
-    return { projectId, linearIssueId, leaseId };
+    const session = this.db.issueSessions.getIssueSession(projectId, linearIssueId);
+    if (!session?.leaseId || session.workerId !== this.workerId || !isLeaseActive(session)) {
+      return undefined;
+    }
+    return { projectId, linearIssueId, leaseId: session.leaseId };
   }
 
   withHeldLease<T>(
@@ -52,6 +68,8 @@ export class IssueSessionLeaseService {
   ): T | undefined {
     const lease = this.getHeldLease(projectId, linearIssueId);
     if (!lease) return undefined;
+    // Re-validated inside the store's transaction so the check and the
+    // guarded writes are atomic.
     return this.db.issueSessions.withIssueSessionLease(projectId, linearIssueId, lease.leaseId, () => fn(lease));
   }
 
@@ -70,7 +88,6 @@ export class IssueSessionLeaseService {
       this.emitStaleLeaseInvariantIfRunnable(projectId, linearIssueId);
       return undefined;
     }
-    this.activeSessionLeases.set(this.issueSessionLeaseKey(projectId, linearIssueId), leaseId);
     this.emitLease("lease.acquired", projectId, linearIssueId, leaseId);
     return leaseId;
   }
@@ -89,20 +106,17 @@ export class IssueSessionLeaseService {
       this.emitLease("lease.acquire_failed", projectId, linearIssueId);
       return undefined;
     }
-    this.activeSessionLeases.set(this.issueSessionLeaseKey(projectId, linearIssueId), leaseId);
     this.emitLease("lease.acquired", projectId, linearIssueId, leaseId);
     return leaseId;
   }
 
   claimForReconciliation(projectId: string, linearIssueId: string): boolean | "owned" | "skip" {
-    const key = this.issueSessionLeaseKey(projectId, linearIssueId);
-    if (this.activeSessionLeases.has(key)) {
-      return "owned";
-    }
     const session = this.db.issueSessions.getIssueSession(projectId, linearIssueId);
     if (!session) return "skip";
-    const leasedUntilMs = session.leasedUntil ? Date.parse(session.leasedUntil) : undefined;
-    if (leasedUntilMs !== undefined && Number.isFinite(leasedUntilMs) && leasedUntilMs > Date.now()) {
+    if (isLeaseActive(session)) {
+      if (session.workerId === this.workerId) {
+        return "owned";
+      }
       this.emitStaleLeaseInvariantIfRunnable(projectId, linearIssueId);
       return "skip";
     }
@@ -112,11 +126,16 @@ export class IssueSessionLeaseService {
     return this.acquire(projectId, linearIssueId) ? true : "skip";
   }
 
-  async reclaimForeignRecoveryLeaseIfSafe(run: RunRecord, issue: IssueRecord): Promise<boolean> {
-    const key = this.issueSessionLeaseKey(run.projectId, run.linearIssueId);
-    if (this.activeSessionLeases.has(key)) {
-      return false;
-    }
+  /**
+   * Post-crash recovery shortcut: take over a foreign (other-worker) lease on
+   * an issue whose active run needs recovery, without waiting for full TTL
+   * expiry. Safe purely on heartbeat staleness — post-phase-B invariants make
+   * the recovery path idempotent (settleRun is idempotent, slot-clearing has
+   * exactly one owner, recovery is detect → RunFailurePolicy → settleRun) —
+   * so no Codex thread probing is needed. A holder that has not heartbeat
+   * for 2x the heartbeat budget is presumed dead.
+   */
+  reclaimForeignRecoveryLeaseIfSafe(run: RunRecord, issue: IssueRecord): boolean {
     const session = this.db.issueSessions.getIssueSession(run.projectId, run.linearIssueId);
     if (!session?.leaseId || !session.workerId || session.workerId === this.workerId) {
       return false;
@@ -124,21 +143,12 @@ export class IssueSessionLeaseService {
     if (issue.activeRunId !== run.id) {
       return false;
     }
-
-    let safeToReclaim = !run.threadId;
-    if (!safeToReclaim && run.threadId) {
-      try {
-        const thread = await this.readThreadWithRetry(run.threadId, 1);
-        const latestTurn = getThreadTurns(thread).at(-1);
-        safeToReclaim = thread.status === "notLoaded"
-          || latestTurn?.status === "interrupted"
-          || latestTurn?.status === "completed";
-      } catch {
-        safeToReclaim = true;
-      }
-    }
-
-    if (!safeToReclaim) {
+    const leasedUntilMs = session.leasedUntil ? Date.parse(session.leasedUntil) : Number.NaN;
+    // A lease row without a parseable leasedUntil cannot prove a live holder.
+    const heartbeatAgeMs = Number.isFinite(leasedUntilMs)
+      ? Date.now() - (leasedUntilMs - ISSUE_SESSION_LEASE_MS)
+      : Number.POSITIVE_INFINITY;
+    if (heartbeatAgeMs < FOREIGN_LEASE_RECLAIM_STALENESS_MS) {
       return false;
     }
 
@@ -151,6 +161,7 @@ export class IssueSessionLeaseService {
       runId: run.id,
       previousWorkerId: session.workerId,
       previousLeaseId: session.leaseId,
+      heartbeatAgeMs: Math.round(heartbeatAgeMs),
       reclaimedLeaseId: leaseId,
     }, "Reclaimed foreign issue-session lease for active-run recovery");
     emitTelemetry(this.telemetry, {
@@ -167,44 +178,30 @@ export class IssueSessionLeaseService {
   }
 
   heartbeat(projectId: string, linearIssueId: string): boolean {
-    const key = this.issueSessionLeaseKey(projectId, linearIssueId);
-    const leaseId = this.activeSessionLeases.get(key) ?? this.db.issueSessions.getIssueSession(projectId, linearIssueId)?.leaseId;
-    if (!leaseId) return false;
-    const renewed = this.db.issueSessions.renewIssueSessionLease({
+    const session = this.db.issueSessions.getIssueSession(projectId, linearIssueId);
+    // Only this worker's lease may be renewed: extending a foreign holder's
+    // lease would let a launch proceed against a lease we do not hold.
+    if (!session?.leaseId || session.workerId !== this.workerId) {
+      return false;
+    }
+    return this.db.issueSessions.renewIssueSessionLease({
       projectId,
       linearIssueId,
-      leaseId,
+      leaseId: session.leaseId,
       leasedUntil: new Date(Date.now() + ISSUE_SESSION_LEASE_MS).toISOString(),
     });
-    if (renewed) {
-      this.activeSessionLeases.set(key, leaseId);
-      return true;
-    }
-    this.activeSessionLeases.delete(key);
-    return false;
   }
 
   release(projectId: string, linearIssueId: string): void {
-    const key = this.issueSessionLeaseKey(projectId, linearIssueId);
-    const leaseId = this.getValidatedLocalLeaseId(projectId, linearIssueId);
-    this.db.issueSessions.releaseIssueSessionLease(projectId, linearIssueId, leaseId);
-    this.activeSessionLeases.delete(key);
-    this.emitLease("lease.released", projectId, linearIssueId, leaseId);
-  }
-
-  private getValidatedLocalLeaseId(projectId: string, linearIssueId: string): string | undefined {
-    const key = this.issueSessionLeaseKey(projectId, linearIssueId);
-    const leaseId = this.activeSessionLeases.get(key);
-    if (!leaseId) return undefined;
-    if (this.db.issueSessions.hasActiveIssueSessionLease(projectId, linearIssueId, leaseId)) {
-      return leaseId;
+    const session = this.db.issueSessions.getIssueSession(projectId, linearIssueId);
+    const ownLeaseId = session?.workerId === this.workerId ? session.leaseId : undefined;
+    if (!ownLeaseId && session?.leaseId && isLeaseActive(session)) {
+      // An active foreign lease is not ours to clear; expired leftovers are
+      // swept by releaseExpiredIssueSessionLeases.
+      return;
     }
-    this.activeSessionLeases.delete(key);
-    return undefined;
-  }
-
-  private issueSessionLeaseKey(projectId: string, linearIssueId: string): string {
-    return `${projectId}:${linearIssueId}`;
+    this.db.issueSessions.releaseIssueSessionLease(projectId, linearIssueId, ownLeaseId);
+    this.emitLease("lease.released", projectId, linearIssueId, ownLeaseId);
   }
 
   private emitLease(
@@ -241,4 +238,13 @@ export class IssueSessionLeaseService {
       detail: "Runnable work could not acquire an issue-session lease",
     });
   }
+}
+
+function isLeaseActive(
+  session: Pick<IssueSessionRecord, "leaseId" | "leasedUntil">,
+  now = Date.now(),
+): boolean {
+  if (!session.leaseId || !session.leasedUntil) return false;
+  const leasedUntilMs = Date.parse(session.leasedUntil);
+  return Number.isFinite(leasedUntilMs) && leasedUntilMs > now;
 }
