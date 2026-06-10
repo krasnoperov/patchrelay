@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -81,24 +80,6 @@ function buildOrchestrator(baseDir: string, logger: pino.Logger) {
     (projectId, issueId) => enqueueCalls.push({ projectId, issueId }),
     logger,
   );
-  // Make lease acquisition succeed without going through codex.
-  const leaseService = (orchestrator as unknown as {
-    leaseService: {
-      activeSessionLeases: Map<string, string>;
-      acquire: (projectId: string, linearIssueId: string) => string | undefined;
-    };
-  }).leaseService;
-  leaseService.acquire = (projectId, linearIssueId) => {
-    const id = randomUUID();
-    const ok = db.issueSessions.acquireIssueSessionLease({
-      projectId, linearIssueId, leaseId: id,
-      workerId: `patchrelay:${process.pid}`,
-      leasedUntil: new Date(Date.now() + 60_000).toISOString(),
-    });
-    if (!ok) return undefined;
-    leaseService.activeSessionLeases.set(`${projectId}:${linearIssueId}`, id);
-    return id;
-  };
   return { config, db, orchestrator, enqueueCalls };
 }
 

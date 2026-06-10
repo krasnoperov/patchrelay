@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -106,87 +105,7 @@ function createOrchestrator(
     },
     pino({ enabled: false }),
   );
-  patchOrchestratorLeaseService(orchestrator, db);
   return { config, db, enqueueCalls, orchestrator };
-}
-
-function patchOrchestratorLeaseService(orchestrator: RunOrchestrator, db: PatchRelayDatabase): void {
-  const leaseService = (orchestrator as unknown as { leaseService: {
-    activeSessionLeases: Map<string, string>;
-    acquire: (projectId: string, linearIssueId: string) => string | undefined;
-    forceAcquire: (projectId: string, linearIssueId: string) => string | undefined;
-    claimForReconciliation: (projectId: string, linearIssueId: string) => boolean | "owned" | "skip";
-    heartbeat: (projectId: string, linearIssueId: string) => boolean;
-    release: (projectId: string, linearIssueId: string) => void;
-  } }).leaseService;
-  const workerId = `patchrelay:${process.pid}`;
-  const leasedUntil = () => new Date(Date.now() + 10 * 60_000).toISOString();
-  const leaseKey = (projectId: string, linearIssueId: string) => `${projectId}:${linearIssueId}`;
-
-  leaseService.acquire = (projectId, linearIssueId) => {
-    const leaseId = randomUUID();
-    const acquired = db.issueSessions.acquireIssueSessionLease({
-      projectId,
-      linearIssueId,
-      leaseId,
-      workerId,
-      leasedUntil: leasedUntil(),
-    });
-    if (!acquired) return undefined;
-    leaseService.activeSessionLeases.set(leaseKey(projectId, linearIssueId), leaseId);
-    return leaseId;
-  };
-
-  leaseService.forceAcquire = (projectId, linearIssueId) => {
-    const leaseId = randomUUID();
-    const acquired = db.issueSessions.forceAcquireIssueSessionLease({
-      projectId,
-      linearIssueId,
-      leaseId,
-      workerId,
-      leasedUntil: leasedUntil(),
-    });
-    if (!acquired) return undefined;
-    leaseService.activeSessionLeases.set(leaseKey(projectId, linearIssueId), leaseId);
-    return leaseId;
-  };
-
-  leaseService.claimForReconciliation = (projectId, linearIssueId) => {
-    const key = leaseKey(projectId, linearIssueId);
-    if (leaseService.activeSessionLeases.has(key)) return "owned";
-    const session = db.issueSessions.getIssueSession(projectId, linearIssueId);
-    if (!session) return "skip";
-    const leasedUntilMs = session.leasedUntil ? Date.parse(session.leasedUntil) : undefined;
-    if (leasedUntilMs !== undefined && Number.isFinite(leasedUntilMs) && leasedUntilMs > Date.now()) {
-      return "skip";
-    }
-    return leaseService.acquire(projectId, linearIssueId) ? true : "skip";
-  };
-
-  leaseService.heartbeat = (projectId, linearIssueId) => {
-    const key = leaseKey(projectId, linearIssueId);
-    const leaseId = leaseService.activeSessionLeases.get(key) ?? db.issueSessions.getIssueSession(projectId, linearIssueId)?.leaseId;
-    if (!leaseId) return false;
-    const renewed = db.issueSessions.renewIssueSessionLease({
-      projectId,
-      linearIssueId,
-      leaseId,
-      leasedUntil: leasedUntil(),
-    });
-    if (!renewed) {
-      leaseService.activeSessionLeases.delete(key);
-      return false;
-    }
-    leaseService.activeSessionLeases.set(key, leaseId);
-    return true;
-  };
-
-  leaseService.release = (projectId, linearIssueId) => {
-    const key = leaseKey(projectId, linearIssueId);
-    const leaseId = leaseService.activeSessionLeases.get(key);
-    db.issueSessions.releaseIssueSessionLease(projectId, linearIssueId, leaseId);
-    leaseService.activeSessionLeases.delete(key);
-  };
 }
 
 function buildLiveIssue(params: {
@@ -1975,14 +1894,12 @@ test("reconcileRun recovers interrupted implementation runs even when reconcilia
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         leaseId,
-        workerId: "worker-interrupted-owned",
+        workerId: `patchrelay:${process.pid}`,
         leasedUntil: "2030-04-06T10:05:00.000Z",
         now: "2030-04-06T10:00:00.000Z",
       }),
       true,
     );
-    ((orchestrator as unknown as { activeSessionLeases: Map<string, string> }).activeSessionLeases)
-      .set(`${issue.projectId}:${issue.linearIssueId}`, leaseId);
 
     await (orchestrator as unknown as { reconcileRun: (run: ReturnType<typeof db.runs.createRun>) => Promise<void> }).reconcileRun(
       db.runs.getRunById(run.id)!,
@@ -2061,7 +1978,7 @@ test("reconcileRun keeps interrupted ci_repair runs in repairing_ci when the PR 
   }
 });
 
-test("reconcileRun reclaims a foreign active-run lease after restart when the thread is already interrupted", async () => {
+test("reconcileRun reclaims a foreign active-run lease after restart once the holder's heartbeat is stale", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-interrupted-foreign-lease-"));
   try {
     const config = createConfig(baseDir);
@@ -2106,8 +2023,10 @@ test("reconcileRun reclaims a foreign active-run lease after restart when the th
         linearIssueId: issue.linearIssueId,
         leaseId: "foreign-lease-15f",
         workerId: "patchrelay:old-process",
-        leasedUntil: "2099-04-07T01:00:00.000Z",
-        now: "2099-04-07T00:50:00.000Z",
+        // Unexpired lease (TTL is 10 min) whose inferred last heartbeat
+        // (leasedUntil - TTL) is 5 min old — past the 2x heartbeat budget,
+        // so recovery may reclaim without waiting for full TTL expiry.
+        leasedUntil: new Date(Date.now() + 5 * 60_000).toISOString(),
       }),
       true,
     );
@@ -2617,14 +2536,12 @@ test("live completion and reconciliation both reject review_fix runs that never 
         projectId: liveIssue.projectId,
         linearIssueId: liveIssue.linearIssueId,
         leaseId: liveLeaseId,
-        workerId: "worker-review-parity-live",
+        workerId: `patchrelay:${process.pid}`,
         leasedUntil: "2030-04-06T10:05:00.000Z",
         now: "2030-04-06T10:00:00.000Z",
       }),
       true,
     );
-    ((liveSetup.orchestrator as unknown as { activeSessionLeases: Map<string, string> }).activeSessionLeases)
-      .set(`${liveIssue.projectId}:${liveIssue.linearIssueId}`, liveLeaseId);
 
     await liveSetup.orchestrator.handleCodexNotification({
       method: "turn/completed",
@@ -2678,14 +2595,12 @@ test("live completion and reconciliation both reject review_fix runs that never 
         projectId: reconcileIssue.projectId,
         linearIssueId: reconcileIssue.linearIssueId,
         leaseId: reconcileLeaseId,
-        workerId: "worker-review-parity-reconcile",
+        workerId: `patchrelay:${process.pid}`,
         leasedUntil: "2030-04-06T10:05:00.000Z",
         now: "2030-04-06T10:00:00.000Z",
       }),
       true,
     );
-    ((reconcileSetup.orchestrator as unknown as { activeSessionLeases: Map<string, string> }).activeSessionLeases)
-      .set(`${reconcileIssue.projectId}:${reconcileIssue.linearIssueId}`, reconcileLeaseId);
 
     await reconcileSetup.orchestrator.reconcileRun(reconcileSetup.db.runs.getRunById(reconcileRun.id)!);
 
@@ -2750,14 +2665,12 @@ test("completion notifications are ignored after the issue-session lease is lost
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         leaseId,
-        workerId: "worker-lease-loss",
+        workerId: `patchrelay:${process.pid}`,
         leasedUntil: "2030-04-06T10:05:00.000Z",
         now: "2030-04-06T10:00:00.000Z",
       }),
       true,
     );
-    ((orchestrator as unknown as { activeSessionLeases: Map<string, string> }).activeSessionLeases)
-      .set(`${issue.projectId}:${issue.linearIssueId}`, leaseId);
     db.issueSessions.releaseIssueSessionLease(issue.projectId, issue.linearIssueId, leaseId);
 
     await orchestrator.handleCodexNotification({
@@ -2834,14 +2747,12 @@ exit 1
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         leaseId,
-        workerId: "worker-review-wake",
+        workerId: `patchrelay:${process.pid}`,
         leasedUntil: "2030-04-06T10:05:00.000Z",
         now: "2030-04-06T10:00:00.000Z",
       }),
       true,
     );
-    ((orchestrator as unknown as { activeSessionLeases: Map<string, string> }).activeSessionLeases)
-      .set(`${issue.projectId}:${issue.linearIssueId}`, leaseId);
 
     const context = await (orchestrator as unknown as {
       resolveRequestedChangesWakeContext: (
@@ -2911,14 +2822,12 @@ exit 1
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         leaseId,
-        workerId: "worker-review-retry-context",
+        workerId: `patchrelay:${process.pid}`,
         leasedUntil: "2030-04-06T10:05:00.000Z",
         now: "2030-04-06T10:00:00.000Z",
       }),
       true,
     );
-    ((orchestrator as unknown as { activeSessionLeases: Map<string, string> }).activeSessionLeases)
-      .set(`${issue.projectId}:${issue.linearIssueId}`, leaseId);
 
     const context = await (orchestrator as unknown as {
       resolveRequestedChangesWakeContext: (
@@ -3088,14 +2997,12 @@ test("completed notification for a released run is ignored", async () => {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         leaseId,
-        workerId: "worker-ignore-released",
+        workerId: `patchrelay:${process.pid}`,
         leasedUntil: "2030-04-06T10:05:00.000Z",
         now: "2030-04-06T10:00:00.000Z",
       }),
       true,
     );
-    ((orchestrator as unknown as { activeSessionLeases: Map<string, string> }).activeSessionLeases)
-      .set(`${issue.projectId}:${issue.linearIssueId}`, leaseId);
 
     await orchestrator.handleCodexNotification({
       method: "turn/completed",
