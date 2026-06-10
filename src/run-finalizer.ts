@@ -19,6 +19,7 @@ import { computeChangeIdentityFromWorktree } from "./change-identity.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
 import { inspectGitWorktreeStatus, isRepairRunType, type GitWorktreeStatus } from "./git-worktree-status.ts";
 import { buildRunOutcomeSummary, type RunOutcomeFacts } from "./run-outcome-summary.ts";
+import { settleRun } from "./run-settlement.ts";
 
 type StageReport = ReturnType<typeof buildStageReport>;
 
@@ -568,16 +569,15 @@ export class RunFinalizer {
       latestAssistantSummary: report.assistantMessages.at(-1),
     });
 
-    // `refreshedIssue` was read before several async policy checks; a
-    // version conflict here means a webhook landed mid-finalize. Re-resolve
-    // the post-run state from the fresh row so we never regress it (e.g.
-    // the PR merged while we were verifying the publish).
+    // `refreshedIssue` was read before several async policy checks; a webhook
+    // may have landed mid-finalize. settleRun re-reads the row inside its
+    // transaction and resolves the post-run state from that fresh truth, so
+    // we never regress it (e.g. the PR merged while we were verifying the
+    // publish). settleRun also owns the slot clear (plan §B1): it refuses to
+    // touch a slot that no longer points at this run.
     const buildCompletionUpdate = (record: IssueRecord) => {
       const state = postRunFollowUp?.factoryState ?? resolveCompletedRunState(record, run);
       return {
-        projectId: run.projectId,
-        linearIssueId: run.linearIssueId,
-        activeRunId: null,
         ...(state ? { factoryState: state } : {}),
         pendingRunType: null,
         pendingRunContextJson: null,
@@ -587,18 +587,17 @@ export class RunFinalizer {
       };
     };
     const completed = this.withHeldLease(run.projectId, run.linearIssueId, (lease) => {
-      this.db.runs.finishRun(run.id, this.buildCompletedRunUpdate({
-        threadId,
-        ...(params.completedTurnId ? { completedTurnId: params.completedTurnId } : {}),
-        report,
-        outcomeSummary,
-      }));
-      this.db.issueSessions.commitIssueState({
-        writer: WRITER,
+      settleRun({
+        db: this.db,
+        run,
+        finish: this.buildCompletedRunUpdate({
+          threadId,
+          ...(params.completedTurnId ? { completedTurnId: params.completedTurnId } : {}),
+          report,
+          outcomeSummary,
+        }),
         lease,
-        expectedVersion: refreshedIssue.version,
-        update: buildCompletionUpdate(refreshedIssue),
-        onConflict: (current) => buildCompletionUpdate(current),
+        buildIssueUpdate: buildCompletionUpdate,
       });
       if (postRunFollowUp) {
         return this.appendWakeEventWithLease(

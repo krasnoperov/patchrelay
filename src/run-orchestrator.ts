@@ -33,6 +33,7 @@ import { RunReconciler } from "./run-reconciler.ts";
 import { RunRecoveryService } from "./run-recovery-service.ts";
 import { RunWakePlanner, type PendingRunWake } from "./run-wake-planner.ts";
 import { WakeDispatcher } from "./wake-dispatcher.ts";
+import { settleRun } from "./run-settlement.ts";
 import { getRemainingZombieRecoveryDelayMs } from "./zombie-recovery.ts";
 import { classifyIssue } from "./issue-class.ts";
 import { buildIssueTriageHash, IssueTriageService } from "./issue-triage.ts";
@@ -43,11 +44,6 @@ import { LinearIssueProjectionService } from "./linear-issue-projection.ts";
 import { RunAdmissionController } from "./run-admission-controller.ts";
 
 const WRITER = "run-orchestrator";
-
-// A terminal run must hold the active slot for at least this long before
-// the orchestrator force-clears it, so we never race the normal
-// notification-driven finalize that runs within seconds of completion.
-const DANGLING_ACTIVE_RUN_MIN_AGE_MS = 2 * 60_000;
 
 function lowerCaseFirst(value: string): string {
   return value ? `${value.slice(0, 1).toLowerCase()}${value.slice(1)}` : value;
@@ -841,10 +837,10 @@ export class RunOrchestrator {
     for (const run of this.db.runs.listRunningRuns()) {
       await this.reconcileRun(run);
     }
-    // Free any issue whose active slot is pinned to an already-terminal
+    // Settle any issue whose active slot is pinned to an already-terminal
     // run (post-run finalize interrupted by restart). Must run before the
     // idle reconciler so the freed issue is routed in this same pass.
-    this.finalizeDanglingActiveRuns();
+    this.settleDanglingActiveRuns();
     // Preemptively detect stuck merge-queue PRs (conflicts visible on
     // GitHub) and dispatch queue_repair before the Steward evicts.
     await this.queueHealthMonitor.reconcile();
@@ -881,53 +877,34 @@ export class RunOrchestrator {
     });
   }
 
-  // Clear a dangling active slot: an issue still pointing at an
+  // Settle a dangling active slot: an issue still pointing at an
   // already-terminal run via `activeRunId`. The post-run finalize was
   // interrupted (almost always a restart between marking the run
   // terminal and clearing the slot), so the run can never drive the
   // session forward, yet every idle/recovery pass skips the issue
-  // because `activeRunId` is set. We re-read under the issue-session
-  // lease and null the slot; the idle reconciler then routes the issue
-  // from GitHub truth (e.g. a missed changes_requested → review_fix).
-  private finalizeDanglingActiveRuns(): void {
+  // because `activeRunId` is set. settleRun is idempotent and its slot
+  // clear is a predicate-guarded versioned commit, so no age gate is
+  // needed — it cannot destructively race the notification finalizer.
+  // The idle reconciler then routes the issue from GitHub truth (e.g. a
+  // missed changes_requested → review_fix).
+  private settleDanglingActiveRuns(): void {
     for (const issue of this.db.issues.listIssuesWithTerminalActiveRun()) {
       if (issue.activeRunId === undefined) continue;
       const run = this.db.runs.getRunById(issue.activeRunId);
-      // The query already filters to terminal runs; this guards against a
-      // race where the run advanced back to active between query and read.
-      if (!run || run.status === "running" || run.status === "queued") continue;
-      // Hold off until the run has been terminal long enough that the
-      // normal notification-driven finalize has demonstrably not run —
-      // avoids racing a live completion that is milliseconds from clearing
-      // the slot itself.
-      const endedAtMs = run.endedAt ? Date.parse(run.endedAt) : Number.NaN;
-      if (Number.isFinite(endedAtMs) && Date.now() - endedAtMs < DANGLING_ACTIVE_RUN_MIN_AGE_MS) continue;
-
+      if (!run) continue;
       const lease = this.claimLeaseForReconciliation(run.projectId, run.linearIssueId);
-      // "skip" → a live lease owns the session (a real run is in flight);
-      // leave it alone. "owned" → an outer local scope holds it, so we
-      // must not release it here.
+      // "skip" → a live lease owns the session (a worker is mid-finalize or
+      // mid-launch); settleRun could not corrupt its writes, but deferring
+      // lets the owner land its richer post-run state first. "owned" → an
+      // outer local scope holds it, so we must not release it here.
       if (lease === "skip") continue;
       try {
-        const cleared = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, (held) => {
-          const fresh = this.db.issues.getIssue(run.projectId, run.linearIssueId);
-          if (!fresh || fresh.activeRunId !== run.id) return false;
-          const danglingClear = {
-            projectId: run.projectId,
-            linearIssueId: run.linearIssueId,
-            activeRunId: null,
-          };
-          const commit = this.db.issueSessions.commitIssueState({
-            writer: WRITER,
-            lease: held,
-            expectedVersion: fresh.version,
-            update: danglingClear,
-            // Never clear a slot a concurrent writer re-pointed elsewhere.
-            onConflict: (current) => (current.activeRunId === run.id ? danglingClear : undefined),
-          });
-          return commit.outcome === "applied";
-        });
-        if (cleared) {
+        // No `finish` outcome: the run is already terminal, and settleRun
+        // leaves a run that raced back to non-terminal status untouched.
+        const settled = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, (held) =>
+          settleRun({ db: this.db, run, lease: held }),
+        );
+        if (settled?.slotCleared) {
           this.logger.warn(
             { issueKey: issue.issueKey, runId: run.id, runType: run.runType, runStatus: run.status },
             "Cleared dangling active-run slot left by a terminal run; idle reconcile will resume the issue",
