@@ -3,7 +3,12 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
 import { TERMINAL_STATES } from "./factory-state.ts";
-import { CLEARED_FAILURE_PROVENANCE } from "./failure-provenance.ts";
+import {
+  CLEARED_FAILURE_PROVENANCE,
+  mayClearFailureProvenance,
+  type ObservedProvenanceEvidence,
+} from "./failure-provenance.ts";
+import { deriveFactoryStateFromPrFacts, type CurrentIssueFacts, type ObservedPrFacts } from "./pr-facts-derivation.ts";
 import type { AppConfig } from "./types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import {
@@ -96,10 +101,13 @@ export class IdleIssueReconciler {
       if (issue.prReviewState === "approved" && !isFailingCheckStatus(issue.prCheckStatus)) {
         if (issue.prNumber) {
           await this.reconcileFromGitHub(issue);
-        } else if (issue.factoryState !== "awaiting_queue") {
-          this.advanceIdleIssue(issue, "awaiting_queue", { clearFailureProvenance: true });
-        } else if (hasFailureProvenance(issue)) {
-          this.advanceIdleIssue(issue, "awaiting_queue", { clearFailureProvenance: true });
+        } else {
+          // No PR to poll means no fresh GitHub evidence — provenance may
+          // only be cleared when nothing concrete is recorded to preserve.
+          const clear = hasFailureProvenance(issue) && mayClearFailureProvenance(issue, {});
+          if (issue.factoryState !== "awaiting_queue" || clear) {
+            this.advanceIdleIssue(issue, "awaiting_queue", clear ? { clearFailureProvenance: true } : {});
+          }
         }
         continue;
       }
@@ -598,12 +606,12 @@ export class IdleIssueReconciler {
         "Failed to query GitHub PR state during reconciliation",
       );
       if (issue.prReviewState === "approved") {
-        if (issue.factoryState !== "awaiting_queue" || hasFailureProvenance(issue)) {
-          this.advanceIdleIssue(
-            issue,
-            "awaiting_queue",
-            hasFailureProvenance(issue) ? { clearFailureProvenance: true } : {},
-          );
+        // The poll failed, so there is no fresh evidence: never clear
+        // recorded failure provenance on this path (a green-looking local
+        // row must not swallow a pending repair).
+        const clear = hasFailureProvenance(issue) && mayClearFailureProvenance(issue, {});
+        if (issue.factoryState !== "awaiting_queue" || clear) {
+          this.advanceIdleIssue(issue, "awaiting_queue", clear ? { clearFailureProvenance: true } : {});
         }
       }
       return;
@@ -613,6 +621,34 @@ export class IdleIssueReconciler {
       const previousHeadSha = issue.prHeadSha;
       const gateCheckNames = getGateCheckNames(project);
       const gateCheckStatus = deriveGateCheckStatusFromRollup(pr.statusCheckRollup, gateCheckNames);
+      const headAdvanced = Boolean(pr.headRefOid && pr.headRefOid !== previousHeadSha);
+      const prState = pr.state === "MERGED" ? "merged" as const : pr.state === "CLOSED" ? "closed" as const : "open" as const;
+      // Normalized level observation shared with the webhook path (plan §C1):
+      // every factory-state decision below goes through
+      // deriveFactoryStateFromPrFacts so both ingestion paths derive the same
+      // state from the same facts.
+      const observed: ObservedPrFacts = {
+        source: "poll",
+        prState,
+        prNumber,
+        ...(pr.reviewDecision ? { reviewDecision: pr.reviewDecision } : {}),
+        ...(gateCheckStatus ? { gateCheckStatus } : {}),
+        ...(pr.headRefOid ? { headSha: pr.headRefOid } : {}),
+        headAdvanced,
+        ...(prState === "closed" ? { closedPrDisposition: resolveClosedPrDisposition(issue) } : {}),
+      };
+      const currentFacts = (record: IssueRecord): CurrentIssueFacts => ({
+        factoryState: record.factoryState,
+        prReviewState: record.prReviewState,
+        activeRunId: record.activeRunId,
+      });
+      // Evidence for the provenance rule: the polled head is current truth.
+      const provenanceEvidence: ObservedProvenanceEvidence = {
+        prState,
+        ...(pr.headRefOid ? { headSha: pr.headRefOid } : {}),
+        headIsCurrentTruth: true,
+        ...(gateCheckStatus ? { gateCheckStatus } : {}),
+      };
       const factsCommit = this.db.issueSessions.commitIssueState({
         writer: WRITER,
         update: {
@@ -636,7 +672,9 @@ export class IdleIssueReconciler {
         return;
       }
       if (pr.state === "CLOSED") {
-        const closedPrDisposition = resolveClosedPrDisposition(issue);
+        // State decision shared with the webhook path; a closed PR is always
+        // newer evidence than any recorded failure, so clearing is allowed.
+        const closedState = deriveFactoryStateFromPrFacts(observed, currentFacts(issue));
         const closedCommit = this.db.issueSessions.commitIssueState({
           writer: WRITER,
           update: {
@@ -649,7 +687,7 @@ export class IdleIssueReconciler {
         if (closedCommit.outcome === "applied") {
           issue = closedCommit.issue;
         }
-        if (closedPrDisposition === "done") {
+        if (closedState === "done") {
           this.logger.info(
             { issueKey: issue.issueKey, prNumber: issue.prNumber },
             "Reconciliation: PR was closed for an already completed issue; preserving done state",
@@ -657,7 +695,7 @@ export class IdleIssueReconciler {
           this.advanceIdleIssue(issue, "done", { clearFailureProvenance: true });
           return;
         }
-        if (closedPrDisposition === "terminal") {
+        if (closedState === undefined) {
           this.logger.info(
             { issueKey: issue.issueKey, prNumber: issue.prNumber, factoryState: issue.factoryState },
             "Reconciliation: PR was closed on a terminal issue; preserving terminal state",
@@ -683,9 +721,9 @@ export class IdleIssueReconciler {
         return;
       }
 
-      const headAdvanced = Boolean(pr.headRefOid && pr.headRefOid !== previousHeadSha);
-      if (issue.factoryState !== "awaiting_input") {
-        const terminalRecoveryState = this.deriveTerminalRecoveryState(issue, pr.reviewDecision, gateCheckStatus, headAdvanced);
+      if (issue.factoryState !== "awaiting_input"
+        && (issue.factoryState === "escalated" || issue.factoryState === "failed")) {
+        const terminalRecoveryState = deriveFactoryStateFromPrFacts(observed, currentFacts(issue));
         if (terminalRecoveryState) {
           this.logger.info(
             {
@@ -699,7 +737,8 @@ export class IdleIssueReconciler {
             },
             "Reconciliation: recovered terminal issue from newer GitHub truth",
           );
-          this.advanceIdleIssue(issue, terminalRecoveryState, { clearFailureProvenance: true });
+          const clear = mayClearFailureProvenance(issue, provenanceEvidence);
+          this.advanceIdleIssue(issue, terminalRecoveryState, clear ? { clearFailureProvenance: true } : {});
           return;
         }
       }
@@ -776,7 +815,7 @@ export class IdleIssueReconciler {
         this.advanceIdleIssue(issue, reactiveIntent.compatibilityFactoryState, {
           pendingRunType: reactiveIntent.runType,
           ...(pendingRunContext ? { pendingRunContext } : {}),
-          clearFailureProvenance: true,
+          ...(mayClearFailureProvenance(issue, provenanceEvidence) ? { clearFailureProvenance: true } : {}),
         });
         return;
       }
@@ -796,7 +835,7 @@ export class IdleIssueReconciler {
         );
         this.advanceIdleIssue(issue, reactiveIntent.compatibilityFactoryState, {
           pendingRunType: reactiveIntent.runType,
-          clearFailureProvenance: true,
+          ...(mayClearFailureProvenance(issue, provenanceEvidence) ? { clearFailureProvenance: true } : {}),
         });
         this.feed?.publish({
           level: "warn",
@@ -867,9 +906,14 @@ export class IdleIssueReconciler {
             prReviewState: "approved",
           },
         });
-        if (issue.factoryState !== "awaiting_queue" || hasFailureProvenance(issue)) {
-          const options = hasFailureProvenance(issue) ? { clearFailureProvenance: true } : undefined;
-          this.advanceIdleIssue(issue, "awaiting_queue", options);
+        const approvedState = deriveFactoryStateFromPrFacts(observed, currentFacts(issue));
+        if (approvedState === "awaiting_queue") {
+          // Provenance survives unless the polled evidence is newer than the
+          // recorded failure (head advanced, gate green on the failure head).
+          const clear = hasFailureProvenance(issue) && mayClearFailureProvenance(issue, provenanceEvidence);
+          if (issue.factoryState !== "awaiting_queue" || clear) {
+            this.advanceIdleIssue(issue, "awaiting_queue", clear ? { clearFailureProvenance: true } : undefined);
+          }
         }
         return;
       }
@@ -882,27 +926,4 @@ export class IdleIssueReconciler {
     }
   }
 
-  private deriveTerminalRecoveryState(
-    issue: Pick<IssueRecord, "factoryState">,
-    reviewDecision: string | undefined,
-    gateCheckStatus: string | undefined,
-    headAdvanced: boolean,
-  ): FactoryState | undefined {
-    if (issue.factoryState !== "escalated" && issue.factoryState !== "failed") {
-      return undefined;
-    }
-    if (isReviewDecisionApproved(reviewDecision) && !isFailingCheckStatus(gateCheckStatus)) {
-      return "awaiting_queue";
-    }
-    if (gateCheckStatus === "pending") {
-      return "pr_open";
-    }
-    if (headAdvanced && !isFailingCheckStatus(gateCheckStatus)) {
-      return "pr_open";
-    }
-    if (isReviewDecisionReviewRequired(reviewDecision) && !isFailingCheckStatus(gateCheckStatus)) {
-      return "pr_open";
-    }
-    return undefined;
-  }
 }

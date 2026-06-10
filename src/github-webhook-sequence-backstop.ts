@@ -5,6 +5,27 @@ import type { OperatorEventFeed } from "./operator-feed.ts";
 
 type FetchLike = typeof fetch;
 
+const MAX_CACHED_FILE_SETS = 512;
+
+/**
+ * Process-lifetime caches for the backstop (core simplification plan, phase
+ * C3): the operator alert is deduped per PR pair, and changed-file lists are
+ * cached per head SHA so re-deliveries and multi-candidate scans don't repeat
+ * the ~6 GitHub API calls per `pr_opened`.
+ */
+export interface SequenceBackstopCaches {
+  /** `owner/repo#new->#candidate` pairs that already produced an alert. */
+  alertedPrPairs: Set<string>;
+  /** `owner/repo@headSha` → changed-file set observed for that head. */
+  changedFilesByHead: Map<string, Set<string>>;
+}
+
+export function createSequenceBackstopCaches(): SequenceBackstopCaches {
+  return { alertedPrPairs: new Set(), changedFilesByHead: new Map() };
+}
+
+const processCaches = createSequenceBackstopCaches();
+
 // Plan §8.2: backstop for missed sequence-checks. When a PR is
 // opened and its changed-file set overlaps with another in-flight
 // PR's, surface an operator event so the agent can be re-prompted
@@ -17,9 +38,11 @@ export async function maybeRunSequenceBackstop(params: {
   feed?: OperatorEventFeed;
   event: NormalizedGitHubEvent;
   fetchImpl?: FetchLike;
+  caches?: SequenceBackstopCaches;
 }): Promise<void> {
   const { db, logger, feed, event } = params;
   const fetchImpl = params.fetchImpl ?? fetch;
+  const caches = params.caches ?? processCaches;
   if (event.triggerEvent !== "pr_opened") return;
   if (!event.repoFullName || event.prNumber === undefined) return;
 
@@ -29,9 +52,15 @@ export async function maybeRunSequenceBackstop(params: {
   const [owner, repo] = event.repoFullName.split("/", 2);
   if (!owner || !repo) return;
 
-  const newPrFiles = await listChangedFiles(fetchImpl, token, owner, repo, event.prNumber).catch(
-    () => undefined,
-  );
+  const newPrFiles = await listChangedFilesCached({
+    caches,
+    fetchImpl,
+    token,
+    owner,
+    repo,
+    prNumber: event.prNumber,
+    headSha: event.headSha,
+  });
   if (!newPrFiles || newPrFiles.size === 0) return;
 
   const candidates = db.issues
@@ -46,17 +75,22 @@ export async function maybeRunSequenceBackstop(params: {
     );
 
   for (const candidate of candidates) {
-    const candidateFiles = await listChangedFiles(
+    const pairKey = `${owner}/${repo}#${event.prNumber}->#${candidate.prNumber}`;
+    if (caches.alertedPrPairs.has(pairKey)) continue;
+    const candidateFiles = await listChangedFilesCached({
+      caches,
       fetchImpl,
       token,
       owner,
       repo,
-      candidate.prNumber!,
-    ).catch(() => undefined);
+      prNumber: candidate.prNumber!,
+      headSha: candidate.prHeadSha,
+    });
     if (!candidateFiles) continue;
     const overlap = intersect(newPrFiles, candidateFiles);
     if (overlap.length === 0) continue;
 
+    caches.alertedPrPairs.add(pairKey);
     logger.info(
       {
         event: "sequence_backstop_overlap_detected",
@@ -78,6 +112,37 @@ export async function maybeRunSequenceBackstop(params: {
     // need to enumerate every potential parent.
     return;
   }
+}
+
+async function listChangedFilesCached(params: {
+  caches: SequenceBackstopCaches;
+  fetchImpl: FetchLike;
+  token: string;
+  owner: string;
+  repo: string;
+  prNumber: number;
+  headSha: string | undefined;
+}): Promise<Set<string> | undefined> {
+  const { caches } = params;
+  const cacheKey = params.headSha ? `${params.owner}/${params.repo}@${params.headSha}` : undefined;
+  if (cacheKey) {
+    const cached = caches.changedFilesByHead.get(cacheKey);
+    if (cached) return cached;
+  }
+  const files = await listChangedFiles(
+    params.fetchImpl,
+    params.token,
+    params.owner,
+    params.repo,
+    params.prNumber,
+  ).catch(() => undefined);
+  if (cacheKey && files) {
+    if (caches.changedFilesByHead.size >= MAX_CACHED_FILE_SETS) {
+      caches.changedFilesByHead.clear();
+    }
+    caches.changedFilesByHead.set(cacheKey, files);
+  }
+  return files;
 }
 
 async function listChangedFiles(

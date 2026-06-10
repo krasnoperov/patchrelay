@@ -27,6 +27,7 @@ import { ServiceStartupRecovery } from "./service-startup-recovery.ts";
 import { WakeDispatcher } from "./wake-dispatcher.ts";
 import { WebhookHandler } from "./webhook-handler.ts";
 import { acceptIncomingWebhook } from "./service-webhooks.ts";
+import { ABANDONED_PENDING_WEBHOOK_AGE_MS } from "./db/webhook-event-store.ts";
 import { runWebhookEventRetention } from "./event-retention.ts";
 import type { AppConfig, LinearClient, LinearClientProvider } from "./types.ts";
 import { parseStringArray, TrackedIssueListQuery } from "./tracked-issue-list-query.ts";
@@ -179,6 +180,7 @@ export class PatchRelayService {
 
   async start(): Promise<void> {
     this.db.issueSessions.releaseExpiredIssueSessionLeases();
+    this.sweepAbandonedWebhookEvents();
 
     const repairedInstallations = this.db.linearInstallations.repairProjectInstallations(
       this.config.projects.map((project) => project.id),
@@ -378,6 +380,26 @@ export class PatchRelayService {
 
   getReadiness() {
     return this.runtime.getReadiness();
+  }
+
+  // Core simplification plan §C2: webhook_events is a dedupe + forensics log,
+  // not a replay queue. A row stuck at 'pending' means a crash or restart
+  // interrupted processing; the event will never be replayed (recovery is
+  // re-derivation from GitHub/Linear via reconciliation), so mark it
+  // 'abandoned' — making it archiveable — and surface the count to the
+  // operator, because every abandoned row is a crash worth seeing.
+  private sweepAbandonedWebhookEvents(): void {
+    const cutoffIso = new Date(Date.now() - ABANDONED_PENDING_WEBHOOK_AGE_MS).toISOString();
+    const abandoned = this.db.webhookEvents.markAbandonedPendingEventsBefore(cutoffIso);
+    if (abandoned === 0) return;
+    this.logger.warn({ abandoned, cutoffIso }, "Marked stale pending webhook events as abandoned at startup");
+    this.feed.publish({
+      level: "warn",
+      kind: "webhook",
+      status: "abandoned_events",
+      summary: `Startup: marked ${abandoned} stale pending webhook event(s) as abandoned`,
+      detail: "Processing was interrupted (crash/restart). State recovers via reconciliation; the rows stay archiveable for forensics.",
+    });
   }
 
   private scheduleEventRetention(delayMs = 24 * 60 * 60 * 1000): void {
