@@ -17,6 +17,32 @@ export type FactoryState =
   | "done"
   | "failed";
 
+/**
+ * Canonical value set for {@link FactoryState}. Used for read-side validation
+ * (row mappers throw on unknown values instead of lying via cast) — keep in
+ * sync with the union above; `satisfies` rejects values outside the union.
+ */
+const FACTORY_STATE_VALUES = [
+  "delegated",
+  "implementing",
+  "pr_open",
+  "changes_requested",
+  "repairing_ci",
+  "awaiting_queue",
+  "repairing_queue",
+  "deploying",
+  "awaiting_input",
+  "escalated",
+  "done",
+  "failed",
+] as const satisfies readonly FactoryState[];
+
+export const FACTORY_STATES: ReadonlySet<FactoryState> = new Set<FactoryState>(FACTORY_STATE_VALUES);
+
+export function isFactoryState(value: string): value is FactoryState {
+  return FACTORY_STATES.has(value as FactoryState);
+}
+
 /** What kind of Codex run to start. */
 export type RunType = "implementation" | "ci_repair" | "review_fix" | "branch_upkeep" | "queue_repair";
 

@@ -15,6 +15,8 @@ import { readLatestRequestedChangesReviewContext } from "./remote-pr-review.ts";
 import type { AppConfig } from "./types.ts";
 import type { PostRunFollowUp } from "./run-completion-policy.ts";
 
+const WRITER = "reactive-run-policy";
+
 const REACTIVE_SCOPE_RISK_PREFIXES = [
   ".github/workflows/",
   "scripts/bootstrap-worktree.",
@@ -335,9 +337,10 @@ export class ReactiveRunPolicy {
     params: Parameters<PatchRelayDatabase["upsertIssue"]>[0],
     context: string,
   ): IssueRecord | undefined {
-    const updated = this.withHeldLease(projectId, linearIssueId, (lease) =>
-      this.db.issueSessions.upsertIssueWithLease(lease, params)
-    );
+    const updated = this.withHeldLease(projectId, linearIssueId, (lease) => {
+      const commit = this.db.issueSessions.commitIssueState({ writer: WRITER, lease, update: params });
+      return commit.outcome === "applied" ? commit.issue : undefined;
+    });
     if (updated === undefined) {
       this.logger.warn({ projectId, linearIssueId, context }, "Skipping issue write after losing issue-session lease");
     }

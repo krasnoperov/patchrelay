@@ -5,7 +5,7 @@ import type {
   IssueDependencyRecord,
   IssueRecord,
 } from "../db-types.ts";
-import type { FactoryState, RunType } from "../factory-state.ts";
+import { FACTORY_STATES, isFactoryState, type FactoryState, type RunType } from "../factory-state.ts";
 import type { IssueSessionProjectionInvalidator } from "../issue-session-projection-invalidator.ts";
 import type { IssueClass, IssueClassSource } from "../issue-class.ts";
 import { buildInsertBindings, buildUpdateAssignments } from "./issue-upsert-columns.ts";
@@ -588,6 +588,15 @@ export class IssueStore {
 }
 
 export function mapIssueRow(row: Record<string, unknown>): IssueRecord {
+  const factoryState = String(row.factory_state ?? "delegated");
+  if (!isFactoryState(factoryState)) {
+    throw new Error(
+      `Invalid factory_state '${factoryState}' on issue row `
+      + `${String(row.project_id)}/${String(row.linear_issue_id)}`
+      + `${row.issue_key != null ? ` (${String(row.issue_key)})` : ""}; `
+      + "expected one of: " + [...FACTORY_STATES].join(", "),
+    );
+  }
   return {
     id: Number(row.id),
     projectId: String(row.project_id),
@@ -617,7 +626,7 @@ export function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.current_linear_state_type !== null && row.current_linear_state_type !== undefined
       ? { currentLinearStateType: String(row.current_linear_state_type) }
       : {}),
-    factoryState: String(row.factory_state ?? "delegated") as FactoryState,
+    factoryState,
     ...(row.pending_run_type !== null && row.pending_run_type !== undefined ? { pendingRunType: String(row.pending_run_type) as RunType } : {}),
     ...(row.pending_run_context_json !== null && row.pending_run_context_json !== undefined ? { pendingRunContextJson: String(row.pending_run_context_json) } : {}),
     ...(row.branch_name !== null ? { branchName: String(row.branch_name) } : {}),

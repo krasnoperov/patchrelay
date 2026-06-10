@@ -43,12 +43,16 @@ export class RunRecoveryService {
     if (params.isRequestedChangesRunType(runType)) {
       const updated = this.withHeldLease(fresh.projectId, fresh.linearIssueId, (lease) => {
         this.db.issueSessions.clearPendingIssueSessionEventsWithLease(lease);
-        this.db.issueSessions.upsertIssueWithLease(lease, {
-          projectId: fresh.projectId,
-          linearIssueId: fresh.linearIssueId,
-          pendingRunType: null,
-          pendingRunContextJson: null,
-          factoryState: "escalated",
+        this.db.issueSessions.commitIssueState({
+          writer: WRITER,
+          lease,
+          update: {
+            projectId: fresh.projectId,
+            linearIssueId: fresh.linearIssueId,
+            pendingRunType: null,
+            pendingRunContextJson: null,
+            factoryState: "escalated",
+          },
         });
         return true;
       });
@@ -73,12 +77,16 @@ export class RunRecoveryService {
 
     if (fresh.prState === "merged") {
       const updated = this.withHeldLease(fresh.projectId, fresh.linearIssueId, (lease) => {
-        this.db.issueSessions.upsertIssueWithLease(lease, {
-          projectId: fresh.projectId,
-          linearIssueId: fresh.linearIssueId,
-          factoryState: "done",
-          zombieRecoveryAttempts: 0,
-          lastZombieRecoveryAt: null,
+        this.db.issueSessions.commitIssueState({
+          writer: WRITER,
+          lease,
+          update: {
+            projectId: fresh.projectId,
+            linearIssueId: fresh.linearIssueId,
+            factoryState: "done",
+            zombieRecoveryAttempts: 0,
+            lastZombieRecoveryAt: null,
+          },
         });
         return true;
       });
@@ -95,10 +103,14 @@ export class RunRecoveryService {
     const attempts = fresh.zombieRecoveryAttempts + 1;
     if (attempts > DEFAULT_ZOMBIE_RECOVERY_BUDGET) {
       const updated = this.withHeldLease(fresh.projectId, fresh.linearIssueId, (lease) => {
-        this.db.issueSessions.upsertIssueWithLease(lease, {
-          projectId: fresh.projectId,
-          linearIssueId: fresh.linearIssueId,
-          factoryState: "escalated",
+        this.db.issueSessions.commitIssueState({
+          writer: WRITER,
+          lease,
+          update: {
+            projectId: fresh.projectId,
+            linearIssueId: fresh.linearIssueId,
+            factoryState: "escalated",
+          },
         });
         return true;
       });
@@ -139,13 +151,22 @@ export class RunRecoveryService {
     }
 
     const requeued = this.withHeldLease(fresh.projectId, fresh.linearIssueId, (lease) => {
-      this.db.issueSessions.upsertIssueWithLease(lease, {
+      // `attempts` is read-modify-write against the fresh row read above; on
+      // conflict recompute the counter from the current row.
+      const buildRequeueUpdate = (record: Pick<IssueRecord, "zombieRecoveryAttempts">) => ({
         projectId: fresh.projectId,
         linearIssueId: fresh.linearIssueId,
         pendingRunType: null,
         pendingRunContextJson: null,
-        zombieRecoveryAttempts: attempts,
+        zombieRecoveryAttempts: record.zombieRecoveryAttempts + 1,
         lastZombieRecoveryAt: new Date().toISOString(),
+      });
+      this.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        lease,
+        expectedVersion: fresh.version,
+        update: buildRequeueUpdate(fresh),
+        onConflict: (current) => buildRequeueUpdate(current),
       });
       return this.appendWakeEventWithLease(lease, fresh, runType, undefined, `recovery:${attempts}`);
     });
@@ -166,18 +187,26 @@ export class RunRecoveryService {
     const { issue, runType, reason } = params;
     this.logger.warn({ issueKey: issue.issueKey, runType, reason }, "Escalating to human");
     const escalated = this.withHeldLease(issue.projectId, issue.linearIssueId, (lease) => {
+      // Escalation is an operator-facing decision: the issue write and the
+      // run release ride in the held-lease transaction, with the run gated
+      // on the issue commit.
+      const commit = this.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        lease,
+        update: {
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          pendingRunType: null,
+          pendingRunContextJson: null,
+          activeRunId: null,
+          factoryState: "escalated",
+        },
+      });
+      if (commit.outcome !== "applied") return false;
       if (issue.activeRunId) {
-        this.db.issueSessions.finishRunWithLease(lease, issue.activeRunId, { status: "released" });
+        this.db.runs.finishRun(issue.activeRunId, { status: "released" });
       }
       this.db.issueSessions.clearPendingIssueSessionEventsWithLease(lease);
-      this.db.issueSessions.upsertIssueWithLease(lease, {
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        pendingRunType: null,
-        pendingRunContextJson: null,
-        activeRunId: null,
-        factoryState: "escalated",
-      });
       return true;
     });
     if (!escalated) {

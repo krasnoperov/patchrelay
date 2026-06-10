@@ -449,11 +449,13 @@ export class CliDataAccess extends CliOperatorApiClient {
           : `Operator closed issue as ${terminalState}`,
       });
     }
-    this.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+    // Operator CLI manual close — interactive, single-writer by construction
+    // (see the issue-write-door guard allowlist), so a raw upsert is fine.
+    this.db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       delegatedToPatchRelay: false,
-      factoryState: terminalState as never,
+      factoryState: terminalState,
       activeRunId: null,
       pendingRunType: null,
       pendingRunContextJson: null,

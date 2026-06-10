@@ -11,6 +11,8 @@ import {
 import { buildRequestedChangesWakeIdentity } from "./reactive-wake-keys.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
 
+const WRITER = "run-wake-planner";
+
 export interface PendingRunWake {
   runType: RunType;
   context?: Record<string, unknown> | undefined;
@@ -94,14 +96,18 @@ export class RunWakePlanner {
       ? JSON.parse(issue.pendingRunContextJson) as Record<string, unknown>
       : undefined;
     this.appendWakeEventWithLease(lease, issue, issue.pendingRunType, context, "legacy_pending");
-    const updated = this.db.issueSessions.upsertIssueWithLease(lease, {
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      pendingRunType: null,
-      pendingRunContextJson: null,
+    const commit = this.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      lease,
+      update: {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        pendingRunType: null,
+        pendingRunContextJson: null,
+      },
     });
-    if (!updated) return issue;
-    return this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+    if (commit.outcome !== "applied") return issue;
+    return commit.issue;
   }
 
   budgetExceeded(
@@ -131,27 +137,31 @@ export class RunWakePlanner {
     runType: RunType,
     isRequestedChangesRunType: (runType: RunType) => boolean,
   ): boolean {
-    if (runType === "ci_repair") {
-      return Boolean(this.db.issueSessions.upsertIssueWithLease(lease, {
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        ciRepairAttempts: issue.ciRepairAttempts + 1,
-      }));
-    }
-    if (runType === "queue_repair") {
-      return Boolean(this.db.issueSessions.upsertIssueWithLease(lease, {
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        queueRepairAttempts: issue.queueRepairAttempts + 1,
-      }));
-    }
-    if (isRequestedChangesRunType(runType)) {
-      return Boolean(this.db.issueSessions.upsertIssueWithLease(lease, {
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        reviewFixAttempts: issue.reviewFixAttempts + 1,
-      }));
-    }
-    return true;
+    // The increments are read-modify-write against the issue row (which may
+    // be stale by the time the launch path gets here); on conflict, recompute
+    // from the fresh row instead of writing a counter derived from the stale
+    // read.
+    const buildIncrement = (record: Pick<IssueRecord, "ciRepairAttempts" | "queueRepairAttempts" | "reviewFixAttempts">) => {
+      if (runType === "ci_repair") {
+        return { projectId: issue.projectId, linearIssueId: issue.linearIssueId, ciRepairAttempts: record.ciRepairAttempts + 1 };
+      }
+      if (runType === "queue_repair") {
+        return { projectId: issue.projectId, linearIssueId: issue.linearIssueId, queueRepairAttempts: record.queueRepairAttempts + 1 };
+      }
+      if (isRequestedChangesRunType(runType)) {
+        return { projectId: issue.projectId, linearIssueId: issue.linearIssueId, reviewFixAttempts: record.reviewFixAttempts + 1 };
+      }
+      return undefined;
+    };
+    const update = buildIncrement(issue);
+    if (!update) return true;
+    const commit = this.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      lease,
+      expectedVersion: issue.version,
+      update,
+      onConflict: (current) => buildIncrement(current),
+    });
+    return commit.outcome === "applied";
   }
 }

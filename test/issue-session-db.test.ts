@@ -316,15 +316,16 @@ test("lease-guarded writes reject stale issue-session leases", () => {
       true,
     );
 
-    const staleIssueWrite = db.issueSessions.upsertIssueWithLease(
-      { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId: "lease-1" },
-      {
+    const staleIssueWrite = db.issueSessions.commitIssueState({
+      writer: "test",
+      lease: { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId: "lease-1" },
+      update: {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         factoryState: "implementing",
       },
-    );
-    assert.equal(staleIssueWrite, undefined);
+    });
+    assert.equal(staleIssueWrite.outcome, "lease_denied");
     assert.equal(db.getIssue(issue.projectId, issue.linearIssueId)?.factoryState, "delegated");
 
     const staleRunFinish = db.issueSessions.finishRunWithLease(
@@ -335,16 +336,17 @@ test("lease-guarded writes reject stale issue-session leases", () => {
     assert.equal(staleRunFinish, false);
     assert.equal(db.runs.getRunById(run.id)?.status, "queued");
 
-    const freshIssueWrite = db.issueSessions.upsertIssueWithLease(
-      { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId: "lease-2" },
-      {
+    const freshIssueWrite = db.issueSessions.commitIssueState({
+      writer: "test",
+      lease: { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId: "lease-2" },
+      update: {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         factoryState: "implementing",
         activeRunId: run.id,
       },
-    );
-    assert.equal(freshIssueWrite?.factoryState, "implementing");
+    });
+    assert.equal(freshIssueWrite.outcome === "applied" ? freshIssueWrite.issue.factoryState : undefined, "implementing");
 
     const freshRunFinish = db.issueSessions.finishRunWithLease(
       { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId: "lease-2" },
@@ -450,12 +452,15 @@ test("active-lease-aware helpers use the current live lease for control writes",
       true,
     );
 
-    const issueWrite = db.issueSessions.upsertIssueRespectingActiveLease("usertold", "issue-active-lease", {
-      projectId: "usertold",
-      linearIssueId: "issue-active-lease",
-      factoryState: "implementing",
+    const issueWrite = db.issueSessions.commitIssueState({
+      writer: "test",
+      update: {
+        projectId: "usertold",
+        linearIssueId: "issue-active-lease",
+        factoryState: "implementing",
+      },
     });
-    assert.equal(issueWrite?.factoryState, "implementing");
+    assert.equal(issueWrite.outcome === "applied" ? issueWrite.issue.factoryState : undefined, "implementing");
 
     assert.equal(
       db.issueSessions.clearPendingIssueSessionEventsWithLease({

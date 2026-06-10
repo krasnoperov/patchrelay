@@ -14,11 +14,21 @@ export interface IssueSessionProjectionInvalidator {
   issueDependenciesChanged(projectId: string, linearIssueId: string): void;
   dependencyBlockerChanged(projectId: string, blockerLinearIssueId: string): void;
   issueSessionEventsChanged(projectId: string, linearIssueId: string): void;
+  /**
+   * Dev/test-only guard: reading the issue_sessions projection while a
+   * projection batch is open returns rows the deferred reprojection has not
+   * refreshed yet. Implementations throw outside production; no-op when
+   * absent or in production.
+   */
+  assertNotMidBatch?(context: string): void;
 }
 
 export class ImmediateIssueSessionProjectionInvalidator implements IssueSessionProjectionInvalidator {
   private batchDepth = 0;
   private readonly pendingProjections = new Map<string, PendingProjection>();
+  // Captured once: the guard must stay a single integer compare on the hot
+  // read path and be OFF in production.
+  private readonly strictMidBatchReads = process.env.NODE_ENV !== "production";
 
   constructor(
     private readonly deps: {
@@ -40,6 +50,15 @@ export class ImmediateIssueSessionProjectionInvalidator implements IssueSessionP
       if (this.batchDepth === 0) {
         this.flushPendingProjections();
       }
+    }
+  }
+
+  assertNotMidBatch(context: string): void {
+    if (this.batchDepth > 0 && this.strictMidBatchReads) {
+      throw new Error(
+        `Issue-session projection read mid-batch (${context}): the projection is stale until the `
+        + "batch flushes. Read it before batchIssueSessionProjections() or after it returns.",
+      );
     }
   }
 
