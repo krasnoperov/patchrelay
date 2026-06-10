@@ -1,5 +1,13 @@
 import type { DatabaseConnection } from "./shared.ts";
 
+/**
+ * Rows older than this that are still `pending` were abandoned by a crash or
+ * restart mid-processing. They are never replayed — recovery is re-derivation
+ * from GitHub/Linear via reconciliation — so the startup sweep marks them
+ * `abandoned`, which makes them archiveable like any other terminal status.
+ */
+export const ABANDONED_PENDING_WEBHOOK_AGE_MS = 15 * 60 * 1000;
+
 export interface WebhookEventArchiveRecord {
   id: number;
   webhookId: string;
@@ -54,6 +62,22 @@ export class WebhookEventStore {
 
   markWebhookProcessed(id: number, status: string): void {
     this.connection.prepare("UPDATE webhook_events SET processing_status = ? WHERE id = ?").run(status, id);
+  }
+
+  /**
+   * Startup maintenance (core simplification plan, phase C2): mark rows stuck
+   * at `pending` since before the cutoff as `abandoned` so the retention pass
+   * can archive them. Returns the number of rows marked — each one is a
+   * crash-interrupted processing attempt worth surfacing to the operator.
+   */
+  markAbandonedPendingEventsBefore(cutoffIso: string): number {
+    const result = this.connection.prepare(`
+      UPDATE webhook_events
+      SET processing_status = 'abandoned'
+      WHERE processing_status = 'pending'
+        AND received_at < ?
+    `).run(cutoffIso);
+    return Number(result.changes ?? 0);
   }
 
   assignWebhookProject(id: number, projectId: string): void {

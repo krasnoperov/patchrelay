@@ -183,6 +183,9 @@ export async function projectGitHubWebhookState(
   const freshIssue = deps.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
 
   if (event.triggerEvent === "pr_synchronize" && !freshIssue.activeRunId) {
+    // A push always resets the repair budgets and the CI snapshot for the new
+    // head; failure provenance is only cleared when the pushed head actually
+    // supersedes the recorded failure (mayClearFailureProvenance — phase C1).
     deps.db.issueSessions.commitIssueState({
       writer: WRITER,
       update: {
@@ -190,22 +193,12 @@ export async function projectGitHubWebhookState(
         linearIssueId: issue.linearIssueId,
         ciRepairAttempts: 0,
         queueRepairAttempts: 0,
-        lastGitHubFailureSource: null,
-        lastGitHubFailureHeadSha: null,
-        lastGitHubFailureSignature: null,
-        lastGitHubFailureCheckName: null,
-        lastGitHubFailureCheckUrl: null,
-        lastGitHubFailureContextJson: null,
-        lastGitHubFailureAt: null,
+        ...(canClearFailureProvenance(freshIssue, event, project) ? CLEARED_FAILURE_PROVENANCE : {}),
         lastGitHubCiSnapshotHeadSha: event.headSha ?? null,
         lastGitHubCiSnapshotGateCheckName: getPrimaryGateCheckName(project),
         lastGitHubCiSnapshotGateCheckStatus: "pending",
         lastGitHubCiSnapshotJson: null,
         lastGitHubCiSnapshotSettledAt: null,
-        lastQueueIncidentJson: null,
-        lastAttemptedFailureHeadSha: null,
-        lastAttemptedFailureSignature: null,
-        lastAttemptedFailureAt: null,
       },
     });
   }
@@ -468,7 +461,7 @@ async function updateGitHubFailureProvenance(
     || event.triggerEvent === "pr_synchronize"
     || event.triggerEvent === "pr_merged"
   ) {
-    if (event.triggerEvent === "check_passed" && !canClearFailureProvenance(issue, event, project)) {
+    if (!canClearFailureProvenance(issue, event, project)) {
       return;
     }
     deps.db.issueSessions.commitIssueState({

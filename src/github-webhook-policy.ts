@@ -1,9 +1,11 @@
 import type { IssueRecord } from "./db-types.ts";
-import { resolveFactoryStateFromGitHub, type FactoryState } from "./factory-state.ts";
+import type { FactoryState } from "./factory-state.ts";
+import { mayClearFailureProvenance } from "./failure-provenance.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
 import {
   resolveMergeQueueProtocol,
 } from "./merge-queue-protocol.ts";
+import { deriveFactoryStateFromPrFacts } from "./pr-facts-derivation.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
 
 const DEFAULT_GATE_CHECK_NAMES = ["verify", "tests"];
@@ -83,18 +85,36 @@ export function isSettledBranchFailure(
   return snapshot?.gateCheckStatus === "failure" && snapshot.headSha === event.headSha;
 }
 
+/**
+ * Webhook adapter over {@link mayClearFailureProvenance} — translates a
+ * normalized GitHub event into the evidence object the shared rule expects.
+ * Check events can arrive out of order, so their head SHA only clears
+ * provenance when the success covers the recorded failure head; a
+ * `pr_synchronize` carries the freshly pushed head, which IS current truth.
+ */
 export function canClearFailureProvenance(issue: IssueRecord, event: NormalizedGitHubEvent, project: ProjectConfig | undefined): boolean {
-  if (event.triggerEvent !== "check_passed") return true;
-  if (isQueueEvictionFailure(issue, event, project)) {
-    return !issue.lastGitHubFailureHeadSha || issue.lastGitHubFailureHeadSha === event.headSha;
-  }
-  if (!isGateCheckEvent(event, project)) {
+  if (event.triggerEvent === "pr_merged" || event.triggerEvent === "pr_closed") {
     return true;
   }
-  if (isStaleGateEvent(issue, event)) {
-    return false;
+  if (event.triggerEvent === "pr_synchronize") {
+    return mayClearFailureProvenance(issue, {
+      headSha: event.headSha,
+      headIsCurrentTruth: true,
+    });
   }
-  return !issue.lastGitHubFailureHeadSha || issue.lastGitHubFailureHeadSha === event.headSha;
+  if (event.triggerEvent !== "check_passed") {
+    return true;
+  }
+  if (isQueueEvictionFailure(issue, event, project)) {
+    return mayClearFailureProvenance(issue, {
+      headSha: event.headSha,
+      evictionCheckSucceeded: true,
+    });
+  }
+  return mayClearFailureProvenance(issue, {
+    headSha: event.headSha,
+    gateCheckStatus: "success",
+  });
 }
 
 export function resolveGitHubFactoryStateForEvent(
@@ -103,16 +123,6 @@ export function resolveGitHubFactoryStateForEvent(
   project: ProjectConfig | undefined,
   activeRun?: { runType?: string; sourceHeadSha?: string },
 ): FactoryState | undefined {
-  if (event.triggerEvent === "pr_closed") {
-    return undefined;
-  }
-
-  const effectiveCurrentState =
-    (issue.factoryState === "awaiting_input" || issue.factoryState === "delegated")
-    && (event.prState === "open" || event.prNumber !== undefined)
-      ? "pr_open"
-      : issue.factoryState;
-
   // Classify check_failed events so the rule table can route them.
   // The duplicate short-circuit that lived here before is gone — the
   // table now handles queue_eviction via failureSource (plan §4.3).
@@ -125,19 +135,22 @@ export function resolveGitHubFactoryStateForEvent(
     ? (event.reviewCommitId ?? event.headSha)
     : undefined;
 
-  const resolved = resolveFactoryStateFromGitHub(event.triggerEvent, effectiveCurrentState, {
-    prReviewState: issue.prReviewState,
-    activeRunId: issue.activeRunId,
-    failureSource,
-    ...(activeRun?.runType ? { activeRunType: activeRun.runType } : {}),
-    ...(activeRun?.sourceHeadSha ? { activeRunSourceHeadSha: activeRun.sourceHeadSha } : {}),
-    ...(approvalHeadSha ? { approvalHeadSha } : {}),
-  });
-  if (resolved !== undefined) {
-    return resolved;
-  }
-  if (effectiveCurrentState !== issue.factoryState) {
-    return effectiveCurrentState;
-  }
-  return undefined;
+  return deriveFactoryStateFromPrFacts(
+    {
+      source: "webhook",
+      triggerEvent: event.triggerEvent,
+      prState: event.prState,
+      prNumber: event.prNumber,
+      headSha: event.headSha,
+      failureSource,
+      ...(approvalHeadSha ? { approvalHeadSha } : {}),
+    },
+    {
+      factoryState: issue.factoryState,
+      prReviewState: issue.prReviewState,
+      activeRunId: issue.activeRunId,
+      ...(activeRun?.runType ? { activeRunType: activeRun.runType } : {}),
+      ...(activeRun?.sourceHeadSha ? { activeRunSourceHeadSha: activeRun.sourceHeadSha } : {}),
+    },
+  );
 }

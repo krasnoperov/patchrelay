@@ -354,12 +354,39 @@ PatchRelay uses SQLite. Current tables:
 - `issues` — one record per tracked issue: compatibility factory state, PR state, run pointers, repair counters
 - `issue_sessions` and `issue_session_events` — session state, waiting reason, lease, and wake-event inbox
 - `runs` — one record per Codex run (`implementation`, `review_fix`, `ci_repair`, `queue_repair`)
-- `webhook_events` — deduplication and processing status for Linear webhooks
+- `webhook_events` — deduplication and audit log for incoming webhooks (see below)
 - `run_thread_events` — per-run transcript of Codex thread events (when extended history is enabled)
 - `linear_installations` — OAuth credentials and installation metadata
 - `operator_feed_events` — event log for the operator CLI
 
 GitHub remains the source of truth for PR readiness, review, and merge state — PatchRelay stores derived state to correlate Linear issues with local workspaces and runs, not to duplicate GitHub.
+
+### Recovery doctrine: re-derivation, not replay
+
+There is one recovery mechanism for lost or unprocessed webhooks: **re-derivation
+from GitHub/Linear truth via reconciliation**. The idle reconciler polls the
+upstream state, builds the same normalized facts a webhook would have carried,
+and feeds them through the same derivation (`pr-facts-derivation.ts`) the
+webhook projector uses — so a dropped webhook converges to the same state the
+delivered webhook would have produced.
+
+`webhook_events` is therefore a **dedupe + forensics log, never a replay
+queue**:
+
+- a row exists so duplicate deliveries are dropped and operators can inspect
+  what arrived;
+- a row stuck at `processing_status = 'pending'` means a crash interrupted
+  processing — at startup such rows older than 15 minutes are marked
+  `'abandoned'` (counted and surfaced in the operator feed), and the missed
+  effect is recovered by reconciliation, not by re-processing the payload;
+- every non-`pending` row (`processed`, `failed`, `abandoned`, …) is eligible
+  for archiving by the retention pass, so the table cannot leak.
+
+Failure provenance follows the same doctrine: a recorded GitHub failure
+(`lastGitHubFailure*`) is only cleared when *newer* evidence supersedes it —
+the head advanced, the same check went green on the recorded failure head, or
+the PR merged/closed (`mayClearFailureProvenance` in `failure-provenance.ts`).
+A poll that merely "looks green" never swallows a pending repair.
 
 ## No-PR completion check
 
