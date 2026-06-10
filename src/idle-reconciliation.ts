@@ -656,6 +656,13 @@ export class IdleIssueReconciler {
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           ...buildPrStateUpdates(pr, gateCheckStatus, gateCheckNames[0] ?? "verify"),
+          // A newly observed head is the poll-side equivalent of a lost
+          // pr_synchronize: the webhook path resets the repair budgets for
+          // the fresh head, so re-derivation must too — otherwise the new
+          // head inherits the old head's consumed budget and escalates
+          // earlier. Provenance clearing stays governed by
+          // mayClearFailureProvenance at the advance sites below.
+          ...(headAdvanced ? { ciRepairAttempts: 0, queueRepairAttempts: 0 } : {}),
         },
       });
       // Continue the pass with the refreshed row so later version-checked
