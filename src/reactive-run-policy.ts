@@ -12,6 +12,7 @@ import {
 } from "./reactive-pr-state.ts";
 import { readReactivePublishDelta } from "./reactive-publish-delta.ts";
 import { readLatestRequestedChangesReviewContext } from "./remote-pr-review.ts";
+import type { RunContext } from "./run-context.ts";
 import type { AppConfig } from "./types.ts";
 import type { PostRunFollowUp } from "./run-completion-policy.ts";
 
@@ -222,8 +223,8 @@ export class ReactiveRunPolicy {
   async resolveRequestedChangesWakeContext(
     issue: IssueRecord,
     runType: RunType,
-    context: Record<string, unknown> | undefined,
-  ): Promise<Record<string, unknown> | undefined> {
+    context: RunContext | undefined,
+  ): Promise<RunContext | undefined> {
     if (runType === "branch_upkeep" || context?.branchUpkeepRequired === true) {
       return context;
     }
@@ -352,9 +353,9 @@ export class ReactiveRunPolicy {
     prNumber: number,
     repoFullName: string,
     headSha: string | undefined,
-    context: Record<string, unknown> | undefined,
-  ): Promise<Record<string, unknown> | undefined> {
-    const merged: Record<string, unknown> = { ...context };
+    context: RunContext | undefined,
+  ): Promise<RunContext | undefined> {
+    const merged: RunContext = { ...context };
     if (headSha) {
       merged.headSha = headSha;
       merged.currentPrHeadSha = headSha;

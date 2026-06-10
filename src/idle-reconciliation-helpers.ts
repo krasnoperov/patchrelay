@@ -2,6 +2,7 @@ import type { IssueRecord } from "./db-types.ts";
 import { parseGitHubFailureContext } from "./github-failure-context.ts";
 import type { GitHubStatusRollupEntry } from "./github-rollup.ts";
 import { parseStoredQueueRepairContext } from "./merge-queue-incident.ts";
+import type { RunContext } from "./run-context.ts";
 import type { AppConfig } from "./types.ts";
 
 export function isFailingCheckStatus(status: string | undefined): boolean {
@@ -25,7 +26,7 @@ export function buildBranchUpkeepContext(
   baseBranch: string,
   mergeStateStatus?: string,
   headSha?: string,
-): Record<string, unknown> {
+): RunContext {
   const promptContext = [
     `The requested code change may already be present, but GitHub still reports PR #${prNumber} as ${mergeStateStatus ?? "DIRTY"} against latest ${baseBranch}.`,
     `This turn is branch upkeep on the existing PR branch: update onto latest ${baseBranch}, resolve any conflicts, rerun the narrowest relevant verification, and push a newer head.`,
@@ -66,12 +67,10 @@ export function isDuplicateRepairAttempt(
     IssueRecord,
     "lastAttemptedFailureHeadSha" | "lastAttemptedFailureSignature" | "lastAttemptedFailureAt" | "lastGitHubFailureAt"
   >,
-  context: Record<string, unknown> | undefined,
+  context: RunContext | undefined,
 ): boolean {
-  const signature = typeof context?.failureSignature === "string" ? context.failureSignature : undefined;
-  const headSha = typeof context?.failureHeadSha === "string"
-    ? context.failureHeadSha
-    : typeof context?.headSha === "string" ? context.headSha : undefined;
+  const signature = context?.failureSignature;
+  const headSha = context?.failureHeadSha ?? context?.headSha;
   if (!signature) return false;
   if (issue.lastAttemptedFailureSignature !== signature) return false;
   if (headSha !== undefined && issue.lastAttemptedFailureHeadSha !== headSha) return false;
@@ -93,7 +92,7 @@ export type FailureContextIssue = Pick<
   | "lastQueueIncidentJson"
 >;
 
-export function buildFailureContext(issue: FailureContextIssue): Record<string, unknown> | undefined {
+export function buildFailureContext(issue: FailureContextIssue): RunContext | undefined {
   const storedFailureContext = parseGitHubFailureContext(issue.lastGitHubFailureContextJson);
   const queueRepairContext = issue.lastQueueIncidentJson
     ? parseStoredQueueRepairContext(issue.lastQueueIncidentJson)

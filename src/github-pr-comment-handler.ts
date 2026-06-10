@@ -1,5 +1,6 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
+import type { InputMessageEventPayload } from "./issue-session-events.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
@@ -59,7 +60,7 @@ export class GitHubPrCommentHandler {
 
     this.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
       eventType: "followup_comment",
-      eventJson: JSON.stringify({ body, author }),
+      eventJson: JSON.stringify({ body, author } satisfies InputMessageEventPayload),
     });
   }
 }

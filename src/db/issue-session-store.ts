@@ -5,6 +5,7 @@ import type { IssueStore, UpsertIssueParams } from "./issue-store.ts";
 import type { RunStore } from "./run-store.ts";
 import { deriveSessionWakePlan, isActionableIssueSessionEventType, type IssueSessionEventType } from "../issue-session-events.ts";
 import { mergeRequestedChangesEventJson, readRequestedChangesCoalesceKey } from "../reactive-wake-keys.ts";
+import type { RunContext } from "../run-context.ts";
 import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "../telemetry.ts";
 import { isoNow, type DatabaseConnection } from "./shared.ts";
 
@@ -257,7 +258,7 @@ export class IssueSessionStore {
   peekIssueSessionWake(projectId: string, linearIssueId: string): {
     eventIds: number[];
     runType: RunType;
-    context: Record<string, unknown>;
+    context: RunContext;
     wakeReason?: string | undefined;
     resumeThread: boolean;
   } | undefined {

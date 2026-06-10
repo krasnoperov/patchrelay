@@ -5,6 +5,7 @@ import { type CodexSessionSourceRecord, resolveCodexSessionSource } from "../cod
 import { extractCompletionCheck } from "../completion-check.ts";
 import { getThreadTurns } from "../codex-thread-utils.ts";
 import { PatchRelayDatabase } from "../db.ts";
+import type { OperatorClosedEventPayload } from "../issue-session-events.ts";
 import { buildManualRetryAttemptReset, resolveRetryTarget } from "../manual-issue-actions.ts";
 import { buildOperatorRetryEvent } from "../operator-retry-event.ts";
 import { WorktreeManager } from "../worktree-manager.ts";
@@ -437,7 +438,7 @@ export class CliDataAccess extends CliOperatorApiClient {
       eventJson: JSON.stringify({
         terminalState,
         ...(options?.reason ? { reason: options.reason } : {}),
-      }),
+      } satisfies OperatorClosedEventPayload),
       dedupeKey: `operator_closed:${issue.linearIssueId}:${terminalState}:${dbIssue.activeRunId ?? "no-run"}`,
     });
     this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);

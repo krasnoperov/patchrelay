@@ -6,6 +6,7 @@ import type { AppConfig } from "./types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
 import { buildRepairWakeDedupeKey } from "./reactive-wake-keys.ts";
+import { serializeRunContext, type RunContext } from "./run-context.ts";
 import { execCommand } from "./utils.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
@@ -25,7 +26,7 @@ export interface QueueHealthAdvancer {
     newState: FactoryState,
     options?: {
       pendingRunType?: RunType;
-      pendingRunContext?: Record<string, unknown>;
+      pendingRunContext?: RunContext;
       clearFailureProvenance?: boolean;
     },
   ): void;
@@ -34,10 +35,10 @@ export interface QueueHealthAdvancer {
 
 function isDuplicateProbe(
   issue: Pick<IssueRecord, "lastAttemptedFailureHeadSha" | "lastAttemptedFailureSignature">,
-  context: Record<string, unknown> | undefined,
+  context: RunContext | undefined,
 ): boolean {
-  const signature = typeof context?.failureSignature === "string" ? context.failureSignature : undefined;
-  const headSha = typeof context?.failureHeadSha === "string" ? context.failureHeadSha : undefined;
+  const signature = context?.failureSignature;
+  const headSha = context?.failureHeadSha;
   if (!signature) return false;
   if (context?.requiresFreshHead === true) return false;
   return issue.lastAttemptedFailureSignature === signature
@@ -180,7 +181,7 @@ export class QueueHealthMonitor {
       const signature = hasEvictionCheckRun
         ? `same_head_queue_eviction:${headRefOid}`
         : `preemptive_queue_conflict:${headRefOid}`;
-      const pendingRunContext: Record<string, unknown> = {
+      const pendingRunContext: RunContext = {
         source: "queue_health_monitor",
         failureReason: reason,
         failureHeadSha: headRefOid,
@@ -214,7 +215,7 @@ export class QueueHealthMonitor {
       const probed = probedCommit.outcome === "applied" ? probedCommit.issue : issue;
       this.advancer.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
         eventType: "merge_steward_incident",
-        eventJson: JSON.stringify(pendingRunContext),
+        eventJson: serializeRunContext(pendingRunContext, "queue health repair context"),
         dedupeKey: buildRepairWakeDedupeKey({
           scope: "queue_health",
           runType: "queue_repair",

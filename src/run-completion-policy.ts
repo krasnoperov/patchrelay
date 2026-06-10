@@ -7,11 +7,12 @@ import type { AppConfig } from "./types.ts";
 import { ImplementationOutcomePolicy } from "./implementation-outcome-policy.ts";
 import { ReactiveRunPolicy } from "./reactive-run-policy.ts";
 import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
+import type { RunContext } from "./run-context.ts";
 
 export interface PostRunFollowUp {
   pendingRunType: RunType;
   factoryState: FactoryState;
-  context?: Record<string, unknown> | undefined;
+  context?: RunContext | undefined;
   summary: string;
 }
 
@@ -109,8 +110,8 @@ export class RunCompletionPolicy {
   async resolveRequestedChangesWakeContext(
     issue: IssueRecord,
     runType: RunType,
-    context: Record<string, unknown> | undefined,
-  ): Promise<Record<string, unknown> | undefined> {
+    context: RunContext | undefined,
+  ): Promise<RunContext | undefined> {
     return await this.reactive.resolveRequestedChangesWakeContext(issue, runType, context);
   }
 

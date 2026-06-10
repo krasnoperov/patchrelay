@@ -3,6 +3,7 @@ import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { AgentInputService } from "./agent-input-service.ts";
 import type { IssueRecord } from "./db-types.ts";
+import type { OperatorClosedEventPayload } from "./issue-session-events.ts";
 import { buildOperatorRetryEvent } from "./operator-retry-event.ts";
 import { buildManualRetryAttemptReset, resolveRetryTarget } from "./manual-issue-actions.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
@@ -187,7 +188,7 @@ export class ServiceIssueActions {
       eventJson: JSON.stringify({
         terminalState,
         ...(options?.reason ? { reason: options.reason } : {}),
-      }),
+      } satisfies OperatorClosedEventPayload),
       dedupeKey: `operator_closed:${issue.linearIssueId}:${terminalState}:${issue.activeRunId ?? "no-run"}`,
     });
     this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);

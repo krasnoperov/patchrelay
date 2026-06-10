@@ -13,6 +13,7 @@ import { getRemainingZombieRecoveryDelayMs, getZombieRecoveryBudget } from "./ru
 import { resolvePostRunFactoryState } from "./run-completion-policy.ts";
 import type { RunCompletionPolicy } from "./run-completion-policy.ts";
 import { isRequestedChangesRunType } from "./reactive-pr-state.ts";
+import { serializeRunContext, type RunContext } from "./run-context.ts";
 import { settleRun } from "./run-settlement.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
 
@@ -48,7 +49,7 @@ function buildInterruptedAttemptRepairUpdate(
   };
 }
 
-function resolveRetryRunType(runType: RunType, context: Record<string, unknown> | undefined): "review_fix" | "branch_upkeep" {
+function resolveRetryRunType(runType: RunType, context: RunContext | undefined): "review_fix" | "branch_upkeep" {
   if (runType === "branch_upkeep") {
     return "branch_upkeep";
   }
@@ -491,7 +492,7 @@ export class RunFailurePolicy {
           projectId: run.projectId,
           linearIssueId: run.linearIssueId,
           pendingRunType: retryRunType,
-          pendingRunContextJson: retryContext ? JSON.stringify(retryContext) : null,
+          pendingRunContextJson: retryContext ? serializeRunContext(retryContext, "requested-changes retry context") : null,
         },
       });
       this.feed?.publish({

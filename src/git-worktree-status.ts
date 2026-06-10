@@ -71,13 +71,21 @@ export function isRepairRunType(runType: string): boolean {
   return runType === "review_fix" || runType === "branch_upkeep" || runType === "ci_repair" || runType === "queue_repair";
 }
 
-export function dirtyWorktreeEventPayload(status: GitWorktreeStatus): Record<string, unknown> | undefined {
+export interface DirtyWorktreeEventPayload {
+  dirtyWorktree: true;
+  mergeInProgress: boolean;
+  unmergedPaths: string[];
+  changedPaths: string[];
+  summary?: string | undefined;
+}
+
+export function dirtyWorktreeEventPayload(status: GitWorktreeStatus): DirtyWorktreeEventPayload | undefined {
   if (!status.dirty) return undefined;
   return {
     dirtyWorktree: true,
     mergeInProgress: status.mergeInProgress,
     unmergedPaths: status.unmergedPaths,
     changedPaths: status.changedPaths,
-    summary: status.summary,
+    ...(status.summary !== undefined ? { summary: status.summary } : {}),
   };
 }

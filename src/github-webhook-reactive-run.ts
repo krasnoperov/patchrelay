@@ -15,6 +15,7 @@ import {
 } from "./github-webhook-failure-context.ts";
 import { isQueueEvictionFailure, isSettledBranchFailure } from "./github-webhook-policy.ts";
 import { buildRequestedChangesWakeIdentity } from "./reactive-wake-keys.ts";
+import type { RunContext } from "./run-context.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
 const WRITER = "github-webhook-reactive-run";
@@ -133,7 +134,7 @@ async function handleCheckFailedEvent(params: {
       eventJson: JSON.stringify({
         ...queueRepairContext,
         ...failureContext,
-      }),
+      } satisfies RunContext),
       ...(failureContext.failureSignature ? { dedupeKey: failureContext.failureSignature } : {}),
     });
     logger.info({ issueKey: issue.issueKey, checkName: event.checkName }, "Queue eviction detected, enqueued queue repair");
@@ -195,7 +196,7 @@ async function handleCheckFailedEvent(params: {
       ...failureContext,
       checkClass: resolveGitHubCheckClass(failureContext.checkName ?? event.checkName, project),
       ...(snapshot ? { ciSnapshot: snapshot } : {}),
-    }),
+    } satisfies RunContext),
     ...(failureContext.failureSignature ? { dedupeKey: failureContext.failureSignature } : {}),
   });
   logger.info({ issueKey: issue.issueKey, checkName: failureContext.checkName ?? event.checkName }, "Enqueued CI repair run");
@@ -251,7 +252,7 @@ async function handleRequestedChangesEvent(params: {
       reviewUrl: buildGitHubReviewUrl(event.repoFullName, event.prNumber, event.reviewId),
       reviewerName: event.reviewerName,
       ...(reviewComments && reviewComments.length > 0 ? { reviewComments } : {}),
-    }),
+    } satisfies RunContext),
     dedupeKey: identity.dedupeKey,
   });
   logger.info(

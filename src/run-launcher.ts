@@ -16,6 +16,7 @@ import {
   resolvePromptLayers,
 } from "./prompting/patchrelay.ts";
 import type { PendingRunWake } from "./run-wake-planner.ts";
+import type { RunContext } from "./run-context.ts";
 import type { AppConfig, LinearAgentActivityContent } from "./types.ts";
 import type { WorktreeManager } from "./worktree-manager.ts";
 import { sanitizeDiagnosticText } from "./utils.ts";
@@ -30,8 +31,8 @@ function sanitizePathSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, "-");
 }
 
-function shouldCompactThread(issue: IssueRecord, threadGeneration: number | undefined, context?: Record<string, unknown>): boolean {
-  const followUpCount = typeof context?.followUpCount === "number" ? context.followUpCount : 0;
+function shouldCompactThread(issue: IssueRecord, threadGeneration: number | undefined, context?: RunContext): boolean {
+  const followUpCount = context?.followUpCount ?? 0;
   return issue.threadId !== undefined
     && (threadGeneration ?? 0) >= 4
     && followUpCount >= 4;
@@ -71,7 +72,7 @@ export function shouldReuseIssueThread(params: {
 
 export function shouldFreshenWorktreeBeforeLaunch(params: {
   runType: RunType;
-  effectiveContext?: Record<string, unknown>;
+  effectiveContext?: RunContext;
 }): boolean {
   if (shouldPreserveDirtyWorktreeBeforeLaunch(params)) {
     return false;
@@ -88,7 +89,7 @@ export function shouldFreshenWorktreeBeforeLaunch(params: {
 
 export function shouldPreserveDirtyWorktreeBeforeLaunch(params: {
   runType: RunType;
-  effectiveContext?: Record<string, unknown>;
+  effectiveContext?: RunContext;
 }): boolean {
   return params.effectiveContext?.preserveDirtyWorktree === true
     && (
@@ -112,7 +113,7 @@ export class RunLauncher {
     project: AppConfig["projects"][number];
     issue: IssueRecord;
     runType: RunType;
-    effectiveContext?: Record<string, unknown>;
+    effectiveContext?: RunContext;
   }): { prompt: string; branchName: string; worktreePath: string } {
     const repoPrompting = loadPatchRelayRepoPrompting({
       repoRoot: params.project.repoPath,
@@ -161,7 +162,7 @@ export class RunLauncher {
     runType: RunType;
     prompt: string;
     sourceHeadSha?: string;
-    effectiveContext?: Record<string, unknown>;
+    effectiveContext?: RunContext;
     materializeLegacyPendingWake: (
       issue: IssueRecord,
       lease: { projectId: string; linearIssueId: string; leaseId: string },
@@ -190,10 +191,8 @@ export class RunLauncher {
           ...(params.sourceHeadSha ? { sourceHeadSha: params.sourceHeadSha } : {}),
           promptText: params.prompt,
         });
-        const failureHeadSha = typeof params.effectiveContext?.failureHeadSha === "string"
-          ? params.effectiveContext.failureHeadSha
-          : typeof params.effectiveContext?.headSha === "string" ? params.effectiveContext.headSha : undefined;
-        const failureSignature = typeof params.effectiveContext?.failureSignature === "string" ? params.effectiveContext.failureSignature : undefined;
+        const failureHeadSha = params.effectiveContext?.failureHeadSha ?? params.effectiveContext?.headSha;
+        const failureSignature = params.effectiveContext?.failureSignature;
         const claimUpdate = {
           projectId: params.item.projectId,
           linearIssueId: params.item.issueId,
@@ -242,7 +241,7 @@ export class RunLauncher {
     branchName: string;
     worktreePath: string;
     resumeThread: boolean;
-    effectiveContext?: Record<string, unknown>;
+    effectiveContext?: RunContext;
     leaseId: string;
     botIdentity?: GitHubAppBotIdentity;
     assertLaunchLease: (run: Pick<RunRecord, "id" | "projectId" | "linearIssueId">, phase: string) => void;

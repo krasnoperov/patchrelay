@@ -3,6 +3,9 @@ import type { CompletionCheckExecution } from "./completion-check.ts";
 import type { CodexThreadSummary } from "./types.ts";
 import type { IssueRecord, IssueSessionEventRecord, RunRecord } from "./db-types.ts";
 import type { FactoryState } from "./factory-state.ts";
+import { parseIssueSessionEventOrWarn } from "./issue-session-events.ts";
+import type { RunContext } from "./run-context.ts";
+import { assertNever } from "./utils.ts";
 import { CLEARED_FAILURE_PROVENANCE } from "./failure-provenance.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { ReleaseIssueSessionLease, WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
@@ -25,16 +28,6 @@ type StageReport = ReturnType<typeof buildStageReport>;
 
 const WRITER = "run-finalizer";
 
-function parseEventJson(eventJson?: string): Record<string, unknown> | undefined {
-  if (!eventJson) return undefined;
-  try {
-    const parsed = JSON.parse(eventJson) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function buildRunSummaryJson(report: StageReport, outcomeSummary?: string): string {
   return JSON.stringify({
     latestAssistantMessage: report.assistantMessages.at(-1) ?? null,
@@ -51,12 +44,13 @@ function summarizePromptDeliveryEvents(
   let delivered = 0;
   let failed = 0;
   for (const event of events) {
-    if (event.eventType !== "prompt_delivered") continue;
-    const payload = parseEventJson(event.eventJson);
-    if (payload?.runId !== run.id) continue;
-    if (payload.status === "delivered") {
+    // Boundary over DB rows: a malformed payload degrades to "not counted".
+    const typed = parseIssueSessionEventOrWarn(event);
+    if (typed?.eventType !== "prompt_delivered") continue;
+    if (typed.payload?.runId !== run.id) continue;
+    if (typed.payload.status === "delivered") {
       delivered += 1;
-    } else if (payload.status === "delivery_failed") {
+    } else if (typed.payload.status === "delivery_failed") {
       failed += 1;
     }
   }
@@ -130,33 +124,60 @@ export class RunFinalizer {
     };
 
     const wakeEvent = this.resolveConsumedWakeEvent(params.run);
-    const payload = parseEventJson(wakeEvent?.eventJson);
-    if (!wakeEvent || !payload) {
+    if (!wakeEvent) {
+      return facts;
+    }
+    // Boundary over DB rows: a malformed wake payload degrades to bare facts.
+    const typed = parseIssueSessionEventOrWarn(
+      wakeEvent,
+      (message) => this.logger.warn({ runId: params.run.id, eventId: wakeEvent.id }, message),
+    );
+    if (!typed?.payload) {
       return facts;
     }
 
-    switch (wakeEvent.eventType) {
+    switch (typed.eventType) {
       case "review_changes_requested":
         return {
           ...facts,
-          ...(typeof payload.reviewerName === "string" ? { reviewerName: payload.reviewerName } : {}),
-          ...(typeof payload.reviewBody === "string" ? { reviewSummary: payload.reviewBody } : {}),
+          ...(typed.payload.reviewerName !== undefined ? { reviewerName: typed.payload.reviewerName } : {}),
+          ...(typed.payload.reviewBody !== undefined ? { reviewSummary: typed.payload.reviewBody } : {}),
         };
       case "settled_red_ci":
         return {
           ...facts,
-          ...(typeof payload.jobName === "string"
-            ? { failingCheckName: payload.jobName }
-            : typeof payload.checkName === "string" ? { failingCheckName: payload.checkName } : {}),
-          ...(typeof payload.summary === "string" ? { failureSummary: payload.summary } : {}),
+          ...(typed.payload.jobName !== undefined
+            ? { failingCheckName: typed.payload.jobName }
+            : typed.payload.checkName !== undefined ? { failingCheckName: typed.payload.checkName } : {}),
+          ...(typed.payload.summary !== undefined ? { failureSummary: typed.payload.summary } : {}),
         };
       case "merge_steward_incident":
         return {
           ...facts,
-          ...(typeof payload.incidentSummary === "string" ? { queueIncidentSummary: payload.incidentSummary } : {}),
+          ...(typed.payload.incidentSummary !== undefined ? { queueIncidentSummary: typed.payload.incidentSummary } : {}),
         };
-      default:
+      case "delegated":
+      case "delegation_observed":
+      case "child_changed":
+      case "child_delivered":
+      case "child_regressed":
+      case "direct_reply":
+      case "completion_check_continue":
+      case "followup_prompt":
+      case "followup_comment":
+      case "prompt_delivered":
+      case "self_comment":
+      case "operator_prompt":
+      case "stop_requested":
+      case "operator_closed":
+      case "undelegated":
+      case "issue_removed":
+      case "pr_closed":
+      case "pr_merged":
+      case "run_released_authority":
         return facts;
+      default:
+        return assertNever(typed, "Unhandled issue session event in run outcome facts");
     }
   }
 
@@ -408,10 +429,10 @@ export class RunFinalizer {
           runType: params.run.runType,
           summary: message,
           preserveDirtyWorktree: true,
-          dirtyWorktreeSummary: params.status.summary,
+          ...(params.status.summary !== undefined ? { dirtyWorktreeSummary: params.status.summary } : {}),
           dirtyWorktreeChangedPaths: params.status.changedPaths,
           dirtyWorktreeMergeInProgress: params.status.mergeInProgress,
-        }),
+        } satisfies RunContext),
         dedupeKey: `dirty_repair_continue:${params.run.id}`,
       }));
     });

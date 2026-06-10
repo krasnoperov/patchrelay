@@ -1,4 +1,5 @@
 import { readRemotePrState, type RemotePrState } from "./remote-pr-state.ts";
+import type { RunContext } from "./run-context.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
 import type { AppConfig } from "./types.ts";
 
@@ -40,8 +41,8 @@ export function buildReviewFixBranchUpkeepContext(
   prNumber: number,
   baseBranch: string,
   pr: RemotePrState,
-  context?: Record<string, unknown>,
-): Record<string, unknown> {
+  context?: RunContext,
+): RunContext {
   const promptContext = [
     `The requested code change may already be present, but GitHub still reports PR #${prNumber} as ${String(pr.mergeStateStatus)} against latest ${baseBranch}.`,
     `This turn is branch upkeep on the existing PR branch: update onto latest ${baseBranch}, resolve any conflicts, rerun the narrowest relevant verification, and push a newer head.`,

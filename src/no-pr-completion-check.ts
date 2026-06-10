@@ -7,6 +7,7 @@ import { CLEARED_FAILURE_PROVENANCE } from "./failure-provenance.ts";
 import type { WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import { buildCompletionCheckActivity } from "./linear-session-reporting.ts";
 import { wakeOrchestrationParentsForChildEvent } from "./orchestration-parent-wake.ts";
+import type { RunContext } from "./run-context.ts";
 import type { buildStageReport } from "./run-reporting.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
 
@@ -159,7 +160,7 @@ export async function handleNoPrCompletionCheck(params: {
         eventJson: JSON.stringify({
           runType: params.run.runType,
           summary: completionCheck.summary,
-        }),
+        } satisfies RunContext),
         dedupeKey: `completion_check_continue:${params.run.id}`,
       }));
     });
@@ -241,7 +242,7 @@ export async function handleNoPrCompletionCheck(params: {
           eventJson: JSON.stringify({
             runType: params.run.runType,
             summary: params.publishedOutcomeError,
-          }),
+          } satisfies RunContext),
           dedupeKey: `completion_check_continue:${params.run.id}`,
         }));
       });

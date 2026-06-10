@@ -3,6 +3,7 @@ import { computeOrchestrationSettleUntil as computeDefaultOrchestrationSettleUnt
 import { classifyIssue } from "../issue-class.ts";
 import type { IssueMetadata, IssueRecord } from "../types.ts";
 import type { RunType } from "../factory-state.ts";
+import type { RunContext } from "../run-context.ts";
 import type { TriggerEvent } from "../workflow-types.ts";
 import type { resolveLinkedPrAdoption } from "./linked-pr-adoption.ts";
 import {
@@ -44,7 +45,7 @@ export interface IssueWebhookWorkflowPlan {
   startupResume: {
     factoryState?: IssueRecord["factoryState"] | undefined;
     pendingRunType?: RunType | null | undefined;
-    pendingRunContext?: Record<string, unknown> | undefined;
+    pendingRunContext?: RunContext | undefined;
     source: "linked_pr_adoption" | "re_delegated";
   };
   effectiveRunRelease: ReturnType<typeof decideActiveRunRelease>;
