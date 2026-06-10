@@ -9,7 +9,6 @@ import type { OperatorEventFeed } from "./operator-feed.ts";
 import { extractTurnId, resolveRunCompletionStatus } from "./run-reporting.ts";
 import type { CodexThreadSummary } from "./types.ts";
 import type { RunFinalizer } from "./run-finalizer.ts";
-import { resolveRecoverablePostRunState } from "./interrupted-run-recovery.ts";
 import { resolveFailureFactoryState } from "./reactive-pr-state.ts";
 
 const WRITER = "run-notification-handler";
@@ -164,7 +163,6 @@ export class RunNotificationHandler {
       thread,
       threadId,
       ...(completedTurnId ? { completedTurnId } : {}),
-      resolveRecoverableRunState: resolveRecoverablePostRunState,
     });
     this.activeThreadId = undefined;
   }

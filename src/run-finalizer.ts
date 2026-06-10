@@ -14,7 +14,7 @@ import type { buildCompletionCheckActivity } from "./linear-session-reporting.ts
 import { buildRunCompletedActivity, buildRunFailureActivity } from "./linear-session-reporting.ts";
 import { handleNoPrCompletionCheck } from "./no-pr-completion-check.ts";
 import type { RunCompletionPolicy } from "./run-completion-policy.ts";
-import { resolveCompletedRunState } from "./run-completion-policy.ts";
+import { resolvePostRunFactoryState } from "./run-completion-policy.ts";
 import { computeChangeIdentityFromWorktree } from "./change-identity.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
 import { inspectGitWorktreeStatus, isRepairRunType, type GitWorktreeStatus } from "./git-worktree-status.ts";
@@ -445,7 +445,6 @@ export class RunFinalizer {
     thread: CodexThreadSummary;
     threadId: string;
     completedTurnId?: string;
-    resolveRecoverableRunState: (issue: IssueRecord) => FactoryState | undefined;
   }): Promise<void> {
     const { run, issue, thread, threadId } = params;
 
@@ -487,7 +486,9 @@ export class RunFinalizer {
 
     const verifiedRepairError = await this.completionPolicy.verifyReactiveRunAdvancedBranch(run, freshIssue);
     if (verifiedRepairError) {
-      const holdState = params.resolveRecoverableRunState(freshIssue) ?? "failed";
+      // The run failed verification — it did not do its work, so resolve
+      // the hold state from GitHub truth like any other recovery path.
+      const holdState = resolvePostRunFactoryState(freshIssue, run, { outcome: "recovered" }) ?? "failed";
       this.failRunAndClear(run, verifiedRepairError, holdState);
       this.syncFailureOutcome({
         run,
@@ -561,7 +562,7 @@ export class RunFinalizer {
     // any git error returns undefined and we leave the cache as-is.
     this.maybeUpdateLastPublishedIdentity(run, refreshedIssue);
     const postRunFollowUp = await this.completionPolicy.resolvePostRunFollowUp(run, refreshedIssue);
-    const postRunState = postRunFollowUp?.factoryState ?? resolveCompletedRunState(refreshedIssue, run);
+    const postRunState = postRunFollowUp?.factoryState ?? resolvePostRunFactoryState(refreshedIssue, run);
     const outcomeSummary = this.buildOutcomeSummary({
       run,
       issue: refreshedIssue,
@@ -576,7 +577,7 @@ export class RunFinalizer {
     // publish). settleRun also owns the slot clear (plan §B1): it refuses to
     // touch a slot that no longer points at this run.
     const buildCompletionUpdate = (record: IssueRecord) => {
-      const state = postRunFollowUp?.factoryState ?? resolveCompletedRunState(record, run);
+      const state = postRunFollowUp?.factoryState ?? resolvePostRunFactoryState(record, run);
       return {
         ...(state ? { factoryState: state } : {}),
         pendingRunType: null,

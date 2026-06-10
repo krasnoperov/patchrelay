@@ -165,7 +165,6 @@ test("repair run finalizer continues automatically with a preserved dirty worktr
       },
       threadId: "thread-1",
       completedTurnId: "turn-main",
-      resolveRecoverableRunState: () => undefined,
     });
 
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
@@ -231,7 +230,6 @@ test("run finalizer moves no-PR runs into awaiting_input when completion check n
       },
       threadId: "thread-1",
       completedTurnId: "turn-main",
-      resolveRecoverableRunState: () => undefined,
     });
 
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
@@ -288,7 +286,6 @@ test("run finalizer queues a same-thread follow-up when completion check says co
       },
       threadId: "thread-1",
       completedTurnId: "turn-main",
-      resolveRecoverableRunState: () => undefined,
     });
 
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
@@ -369,7 +366,6 @@ test("run finalizer re-enqueues a pending requested-changes wake after the activ
       },
       threadId: "thread-1",
       completedTurnId: "turn-main",
-      resolveRecoverableRunState: () => undefined,
     });
 
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
@@ -428,7 +424,6 @@ test("run finalizer continues automatically when no-PR done leaves local changes
       },
       threadId: "thread-1",
       completedTurnId: "turn-main",
-      resolveRecoverableRunState: () => undefined,
     });
 
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
@@ -490,7 +485,6 @@ test("run finalizer marks no-PR completion checks done when the fork confirms de
       },
       threadId: "thread-1",
       completedTurnId: "turn-main",
-      resolveRecoverableRunState: () => undefined,
     });
 
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
@@ -546,7 +540,6 @@ test("run finalizer fails no-PR completion checks when the fork says the run sto
       },
       threadId: "thread-1",
       completedTurnId: "turn-main",
-      resolveRecoverableRunState: () => undefined,
     });
 
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
@@ -743,7 +736,6 @@ test("run finalizer builds Linear-visible completion text without an extra recap
       },
       threadId: "thread-1",
       completedTurnId: "turn-main",
-      resolveRecoverableRunState: () => undefined,
     });
 
     const updatedRun = db.runs.getRunById(run.id)!;
