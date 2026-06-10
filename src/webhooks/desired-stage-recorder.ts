@@ -18,6 +18,7 @@ import { buildOperatorRetryEvent } from "../operator-retry-event.ts";
 import { planIssueWebhookWorkflow } from "./issue-webhook-workflow-planner.ts";
 import type { WakeDispatcher } from "../wake-dispatcher.ts";
 import { dirtyWorktreeEventPayload, inspectGitWorktreeStatus } from "../git-worktree-status.ts";
+import type { RunContext } from "../run-context.ts";
 
 const WRITER = "desired-stage-recorder";
 
@@ -240,7 +241,7 @@ export class DesiredStageRecorder {
           promptContext: params.normalized.agentSession?.promptContext?.trim()
             ?? (issue.issueKey ? `Linear issue ${issue.issueKey} was delegated to PatchRelay.` : undefined),
           promptBody: params.normalized.agentSession?.promptBody?.trim(),
-        }),
+        } satisfies RunContext),
         dedupeKey: `delegated:${normalizedIssue.id}`,
       });
     }

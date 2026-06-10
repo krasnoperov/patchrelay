@@ -1,4 +1,5 @@
 import type { Logger } from "pino";
+import type { RunContext } from "./run-context.ts";
 import type { LinearAgentActivitySnapshot, LinearClientProvider } from "./types.ts";
 
 const ACTIVITY_RECOVERY_LIMIT = 20;
@@ -11,22 +12,17 @@ function trimBounded(value: string, maxLength = MAX_ACTIVITY_TEXT_LENGTH): strin
   return `${normalized.slice(0, maxLength - 1).trimEnd()}...`;
 }
 
-function hasRecoveredContext(context?: Record<string, unknown>): boolean {
+function hasRecoveredContext(context?: RunContext): boolean {
   return typeof context?.linearAgentActivityContext === "string" && context.linearAgentActivityContext.trim().length > 0;
 }
 
-function hasLocalHumanContext(context?: Record<string, unknown>): boolean {
+function hasLocalHumanContext(context?: RunContext): boolean {
   if (hasRecoveredContext(context)) return true;
-  for (const key of ["promptContext", "promptBody", "operatorPrompt", "userComment"]) {
-    const value = context?.[key];
+  for (const value of [context?.promptContext, context?.promptBody, context?.operatorPrompt, context?.userComment]) {
     if (typeof value === "string" && value.trim().length > 0) return true;
   }
   if (!Array.isArray(context?.followUps)) return false;
-  return context.followUps.some((entry) => {
-    if (!entry || typeof entry !== "object") return false;
-    const text = (entry as Record<string, unknown>).text;
-    return typeof text === "string" && text.trim().length > 0;
-  });
+  return context.followUps.some((entry) => typeof entry.text === "string" && entry.text.trim().length > 0);
 }
 
 function activitySortKey(activity: LinearAgentActivitySnapshot): number {
@@ -53,7 +49,7 @@ function describeActivity(activity: LinearAgentActivitySnapshot): string | undef
 
 export function summarizeLinearAgentActivities(
   activities: LinearAgentActivitySnapshot[],
-): Record<string, unknown> | undefined {
+): RunContext | undefined {
   const lines = [...activities]
     .sort((left, right) => activitySortKey(left) - activitySortKey(right))
     .map(describeActivity)
@@ -71,10 +67,10 @@ export async function recoverLinearAgentActivityContext(params: {
   linearProvider: LinearClientProvider;
   projectId: string;
   agentSessionId?: string | undefined;
-  context?: Record<string, unknown> | undefined;
+  context?: RunContext | undefined;
   issueKey?: string | undefined;
   logger: Logger;
-}): Promise<Record<string, unknown> | undefined> {
+}): Promise<RunContext | undefined> {
   if (!params.agentSessionId || hasLocalHumanContext(params.context)) {
     return undefined;
   }

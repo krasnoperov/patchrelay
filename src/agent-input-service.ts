@@ -14,7 +14,12 @@ import type { OperatorEventFeed } from "./operator-feed.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import type { LinearAgentActivityContent, ProjectConfig } from "./types.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
-import { extractLatestAssistantSummary } from "./issue-session-events.ts";
+import {
+  extractLatestAssistantSummary,
+  type InputMessageEventPayload,
+  type PromptDeliveredEventPayload,
+  type StopRequestedEventPayload,
+} from "./issue-session-events.ts";
 import { dirtyWorktreeEventPayload, inspectGitWorktreeStatus } from "./git-worktree-status.ts";
 
 const WRITER = "agent-input-service";
@@ -74,7 +79,7 @@ export class AgentInputService {
       } else {
         this.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
           eventType: "stop_requested",
-          eventJson: JSON.stringify({ body, source: params.source, ...(params.author ? { author: params.author } : {}) }),
+          eventJson: JSON.stringify({ body, source: params.source, ...(params.author ? { author: params.author } : {}) } satisfies StopRequestedEventPayload),
         });
         this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
       }
@@ -276,7 +281,7 @@ export class AgentInputService {
               ...(previousIssue.prHeadSha ? { previousPrHeadSha: previousIssue.prHeadSha } : {}),
             }
           : {}),
-      }),
+      } satisfies InputMessageEventPayload),
     });
   }
 
@@ -349,7 +354,7 @@ export class AgentInputService {
     });
     this.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
       eventType: "stop_requested",
-      eventJson: JSON.stringify({ body, source, ...dirtyPayload }),
+      eventJson: JSON.stringify({ body, source, ...dirtyPayload } satisfies StopRequestedEventPayload),
     });
     this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
     this.db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(issue.projectId, issue.linearIssueId);
@@ -406,7 +411,7 @@ export class AgentInputService {
         ...(params.threadId ? { threadId: params.threadId } : {}),
         ...(params.turnId ? { turnId: params.turnId } : {}),
         ...(params.error ? { error: params.error } : {}),
-      }),
+      } satisfies PromptDeliveredEventPayload),
     });
   }
 }

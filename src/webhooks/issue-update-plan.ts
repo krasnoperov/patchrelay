@@ -1,4 +1,5 @@
 import type { FactoryState, RunType } from "../factory-state.ts";
+import { serializeRunContext, type RunContext } from "../run-context.ts";
 
 /**
  * The 14-conditional-spread cascade inside DesiredStageRecorder.record was
@@ -22,7 +23,7 @@ export interface IssueUpdatePlanInputs {
   startupResume: {
     factoryState?: FactoryState | undefined;
     pendingRunType?: RunType | null | undefined;
-    pendingRunContext?: Record<string, unknown> | undefined;
+    pendingRunContext?: RunContext | undefined;
   };
   /** Fresh run intent computed for a delegated issue. */
   desiredStage?: RunType | undefined;
@@ -95,7 +96,7 @@ function shouldClearPending(input: IssueUpdatePlanInputs): boolean {
 function buildStartupResumeContextJson(input: IssueUpdatePlanInputs): string | null | undefined {
   if (input.startupResume.pendingRunType === undefined) return undefined;
   return input.startupResume.pendingRunContext
-    ? JSON.stringify(input.startupResume.pendingRunContext)
+    ? serializeRunContext(input.startupResume.pendingRunContext, "startup resume context")
     : null;
 }
 

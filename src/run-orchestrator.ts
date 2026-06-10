@@ -31,6 +31,7 @@ import { RunLauncher } from "./run-launcher.ts";
 import { RunNotificationHandler } from "./run-notification-handler.ts";
 import { RunReconciler } from "./run-reconciler.ts";
 import { RunWakePlanner, type PendingRunWake } from "./run-wake-planner.ts";
+import type { RunContext } from "./run-context.ts";
 import { WakeDispatcher } from "./wake-dispatcher.ts";
 import { settleRun } from "./run-settlement.ts";
 import { getRemainingZombieRecoveryDelayMs } from "./run-budgets.ts";
@@ -248,7 +249,7 @@ export class RunOrchestrator {
       feed,
       telemetry,
     );
-    this.runWakePlanner = new RunWakePlanner(db);
+    this.runWakePlanner = new RunWakePlanner(db, logger);
     this.linearIssueProjection = new LinearIssueProjectionService(db, linearProvider, logger);
     this.runAdmission = new RunAdmissionController(db, this.linearIssueProjection);
     this.idleReconciler = new IdleIssueReconciler(
@@ -303,7 +304,7 @@ export class RunOrchestrator {
     lease: { projectId: string; linearIssueId: string; leaseId: string },
     issue: Pick<IssueRecord, "projectId" | "linearIssueId" | "prHeadSha" | "lastGitHubFailureSignature" | "lastGitHubFailureHeadSha">,
     runType: RunType,
-    context?: Record<string, unknown>,
+    context?: RunContext,
     dedupeScope?: string,
   ): boolean {
     return this.runWakePlanner.appendWakeEventWithLease(lease, issue, runType, context, dedupeScope);
@@ -316,7 +317,7 @@ export class RunOrchestrator {
     return this.runWakePlanner.materializeLegacyPendingWake(issue, lease);
   }
 
-  private buildRelatedIssueContext(issue: IssueRecord): Record<string, unknown> | undefined {
+  private buildRelatedIssueContext(issue: IssueRecord): RunContext | undefined {
     const unresolvedBlockers = this.db.issues
       .listIssueDependencies(issue.projectId, issue.linearIssueId)
       .filter((entry) => !isResolvedDependencyState(entry.blockerCurrentLinearStateType))
@@ -610,11 +611,9 @@ export class RunOrchestrator {
     const effectiveContext = coordinationContext
       ? { ...coordinationContext, ...baseContextWithRecoveredActivity }
       : baseContextWithRecoveredActivity;
-    const sourceHeadSha = typeof effectiveContext?.failureHeadSha === "string"
-      ? effectiveContext.failureHeadSha
-      : typeof effectiveContext?.headSha === "string"
-        ? effectiveContext.headSha
-        : issue.prHeadSha;
+    const sourceHeadSha = effectiveContext?.failureHeadSha
+      ?? effectiveContext?.headSha
+      ?? issue.prHeadSha;
     const budgetExceeded = this.runWakePlanner.budgetExceeded(issue, project, runType, isRequestedChangesRunType);
     if (budgetExceeded) {
       this.emitRunSkipped(item, "budget_exceeded", issue, { runType });
@@ -724,11 +723,11 @@ export class RunOrchestrator {
 
     // Emit Linear activity + plan
     const freshIssue = this.db.issues.getIssue(item.projectId, item.issueId) ?? issue;
-    const reviewComments = Array.isArray(effectiveContext?.reviewComments) ? effectiveContext.reviewComments : undefined;
+    const reviewComments = effectiveContext?.reviewComments;
     const reviewRoundActivity = runType === "review_fix"
       ? buildReviewRoundStartedActivity({
           round: Math.max(1, freshIssue.reviewFixAttempts),
-          ...(typeof effectiveContext?.reviewerName === "string" ? { reviewerName: effectiveContext.reviewerName } : {}),
+          ...(effectiveContext?.reviewerName !== undefined ? { reviewerName: effectiveContext.reviewerName } : {}),
           ...(reviewComments ? { commentCount: reviewComments.length } : {}),
           ...(typeof sourceHeadSha === "string" ? { headSha: sourceHeadSha } : {}),
         })
@@ -842,7 +841,7 @@ export class RunOrchestrator {
     newState: FactoryState,
     options?: {
       pendingRunType?: RunType;
-      pendingRunContext?: Record<string, unknown>;
+      pendingRunContext?: RunContext;
       clearFailureProvenance?: boolean;
     },
   ): void {
@@ -929,15 +928,15 @@ export class RunOrchestrator {
   private async resolveRequestedChangesWakeContext(
     issue: IssueRecord,
     runType: RunType,
-    context: Record<string, unknown> | undefined,
-  ): Promise<Record<string, unknown> | undefined> {
+    context: RunContext | undefined,
+  ): Promise<RunContext | undefined> {
     return await this.runCompletionPolicy.resolveRequestedChangesWakeContext(issue, runType, context);
   }
 
   private resolveInactiveRequestedChangesWakeReason(
     issue: IssueRecord,
     runType: RunType,
-    context: Record<string, unknown> | undefined,
+    context: RunContext | undefined,
   ): string | undefined {
     if (runType !== "review_fix" || context?.branchUpkeepRequired === true) {
       return undefined;

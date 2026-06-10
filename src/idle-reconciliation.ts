@@ -31,6 +31,7 @@ import {
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
 import { deriveGateCheckStatusFromRollup } from "./github-rollup.ts";
 import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
+import { serializeRunContext, type RunContext } from "./run-context.ts";
 import { buildClosedPrCleanupFields, resolveClosedPrDisposition } from "./pr-state.ts";
 import { getReviewFixBudget } from "./run-budgets.ts";
 import { queueSettledOrchestrationIssue } from "./orchestration-parent-wake.ts";
@@ -306,7 +307,7 @@ export class IdleIssueReconciler {
     newState: FactoryState,
     options?: {
       pendingRunType?: RunType;
-      pendingRunContext?: Record<string, unknown>;
+      pendingRunContext?: RunContext;
       clearFailureProvenance?: boolean;
     },
   ): "applied" | "noop" | "skipped" {
@@ -375,7 +376,7 @@ export class IdleIssueReconciler {
   private recordWakeEvent(
     issue: Pick<IssueRecord, "projectId" | "linearIssueId" | "prHeadSha" | "lastGitHubFailureHeadSha" | "lastGitHubFailureSignature">,
     runType: RunType,
-    context?: Record<string, unknown>,
+    context?: RunContext,
     dedupeScope = "idle_reconciliation",
   ): void {
     const eventType = reactiveWakeEventType(runType);
@@ -408,13 +409,13 @@ export class IdleIssueReconciler {
     this.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
       eventType,
       ...(context || requestedChangesIdentity ? {
-        eventJson: JSON.stringify({
+        eventJson: serializeRunContext({
           ...context,
           ...(requestedChangesIdentity ? {
             requestedChangesCoalesceKey: requestedChangesIdentity.coalesceKey,
             ...(requestedChangesIdentity.headSha ? { requestedChangesHeadSha: requestedChangesIdentity.headSha } : {}),
           } : {}),
-        }),
+        }, "reconciliation wake context"),
       } : {}),
       dedupeKey,
     });

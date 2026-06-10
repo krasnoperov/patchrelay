@@ -7,6 +7,7 @@ import type { LinearSessionSync } from "./linear-session-sync.ts";
 import { isResumablePausedLocalWork } from "./paused-issue-state.ts";
 import { buildRepairWakeDedupeKey, buildRequestedChangesWakeIdentity, reactiveWakeEventType } from "./reactive-wake-keys.ts";
 import { upsertLinearIssueProjection } from "./linear-issue-projection.ts";
+import type { RunContext } from "./run-context.ts";
 
 const WRITER = "service-startup-recovery";
 
@@ -338,7 +339,7 @@ export class ServiceStartupRecovery {
         eventJson: JSON.stringify({
           requestedChangesCoalesceKey: requestedChangesIdentity.coalesceKey,
           ...(requestedChangesIdentity.headSha ? { requestedChangesHeadSha: requestedChangesIdentity.headSha } : {}),
-        }),
+        } satisfies RunContext),
       } : {}),
       dedupeKey,
     });

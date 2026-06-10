@@ -2,6 +2,7 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
 import { classifyIssue } from "./issue-class.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
+import type { RunContext } from "./run-context.ts";
 
 const WRITER = "orchestration-parent-wake";
 
@@ -77,7 +78,7 @@ export function queueSettledOrchestrationIssue(params: {
       eventType: "delegated",
       eventJson: JSON.stringify({
         promptContext: params.promptContext ?? "The orchestration child set has settled enough to begin planning.",
-      }),
+      } satisfies RunContext),
       dedupeKey: `delegated:orchestration_settle:${params.issue.linearIssueId}`,
     },
   );
@@ -123,7 +124,7 @@ export function wakeOrchestrationParentsForChildEvent(params: {
         ...(params.child.prNumber !== undefined ? { prNumber: params.child.prNumber } : {}),
         ...(params.child.prState ? { prState: params.child.prState } : {}),
         ...(params.changeKind ? { changeKind: params.changeKind } : {}),
-      }),
+      } satisfies RunContext),
       dedupeKey: `${params.eventType}:${parent.linearIssueId}:${params.child.linearIssueId}:${params.child.factoryState}:${params.changeKind ?? params.child.prState ?? "no-pr"}`,
     });
     parentIds.push(parent.linearIssueId);

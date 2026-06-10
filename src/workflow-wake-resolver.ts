@@ -3,11 +3,12 @@ import type { IssueStore } from "./db/issue-store.ts";
 import type { IssueSessionStore } from "./db/issue-session-store.ts";
 import type { RunType } from "./factory-state.ts";
 import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
+import { tryParseRunContextValue, type RunContext } from "./run-context.ts";
 
 export interface WorkflowWake {
   eventIds: number[];
   runType: RunType;
-  context: Record<string, unknown>;
+  context: RunContext;
   wakeReason?: string | undefined;
   resumeThread: boolean;
 }
@@ -24,6 +25,17 @@ function parseObjectJson(raw: string | undefined): Record<string, unknown> | und
   }
 }
 
+// Boundary over reconciliation columns (failure context / queue incident /
+// CI snapshot JSON) merged into an implicit wake's run context. Degrading a
+// schema-rejected value to "no context" matches the pre-existing behavior of
+// parseObjectJson for malformed JSON; the persistence layer has no logger to
+// warn through.
+function parseRunContextColumn(raw: string | undefined): RunContext | undefined {
+  const value = parseObjectJson(raw);
+  if (!value) return undefined;
+  return tryParseRunContextValue(value);
+}
+
 function hasUnattemptedFailureSignature(issue: IssueRecord, fallbackHeadSha?: string): boolean {
   const signature = issue.lastGitHubFailureSignature;
   if (!signature) return false;
@@ -33,7 +45,7 @@ function hasUnattemptedFailureSignature(issue: IssueRecord, fallbackHeadSha?: st
 }
 
 export function deriveImplicitReactiveWake(issue: IssueRecord):
-  | { runType: RunType; wakeReason: string; context: Record<string, unknown> }
+  | { runType: RunType; wakeReason: string; context: RunContext }
   | undefined {
   const reactiveIntent = deriveIssueSessionReactiveIntent({
     delegatedToPatchRelay: issue.delegatedToPatchRelay,
@@ -47,11 +59,11 @@ export function deriveImplicitReactiveWake(issue: IssueRecord):
   if (!reactiveIntent) return undefined;
 
   if (reactiveIntent.runType === "ci_repair") {
-    const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson) ?? {};
-    const snapshot = parseObjectJson(issue.lastGitHubCiSnapshotJson);
-    const fallbackHeadSha = typeof failureContext.failureHeadSha === "string"
-      ? failureContext.failureHeadSha
-      : issue.lastGitHubFailureHeadSha ?? issue.prHeadSha;
+    const failureContext = parseRunContextColumn(issue.lastGitHubFailureContextJson) ?? {};
+    const snapshotValue = parseObjectJson(issue.lastGitHubCiSnapshotJson);
+    const snapshot = snapshotValue ? tryParseRunContextValue({ ciSnapshot: snapshotValue })?.ciSnapshot : undefined;
+    const fallbackHeadSha = failureContext.failureHeadSha
+      ?? issue.lastGitHubFailureHeadSha ?? issue.prHeadSha;
     const failureSignature = issue.lastGitHubFailureSignature
       ?? (fallbackHeadSha ? `implicit_branch_ci::${fallbackHeadSha}` : undefined);
     if (!failureSignature || issue.prState !== "open") return undefined;
@@ -75,11 +87,9 @@ export function deriveImplicitReactiveWake(issue: IssueRecord):
   }
 
   if (reactiveIntent.runType === "queue_repair") {
-    const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson) ?? {};
-    const incidentContext = parseObjectJson(issue.lastQueueIncidentJson) ?? {};
-    const fallbackHeadSha = typeof failureContext.failureHeadSha === "string"
-      ? failureContext.failureHeadSha
-      : undefined;
+    const failureContext = parseRunContextColumn(issue.lastGitHubFailureContextJson) ?? {};
+    const incidentContext = parseRunContextColumn(issue.lastQueueIncidentJson) ?? {};
+    const fallbackHeadSha = failureContext.failureHeadSha;
     if (!hasUnattemptedFailureSignature(issue, fallbackHeadSha)) return undefined;
     return {
       runType: reactiveIntent.runType,

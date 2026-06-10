@@ -4,6 +4,7 @@ import type { IssueRecord } from "../db-types.ts";
 import type { RunType } from "../factory-state.ts";
 import type { IssueClass } from "../issue-class.ts";
 import { derivePrDisplayContext } from "../pr-display-context.ts";
+import type { RunContext } from "../run-context.ts";
 import type { PatchRelayPromptingConfig, PromptCustomizationLayer } from "../types.ts";
 
 const WORKFLOW_FILES: Record<RunType, string> = {
@@ -42,7 +43,7 @@ export interface PatchRelayPromptBuildParams {
   issue: IssueRecord;
   runType: RunType;
   repoPath: string;
-  context?: Record<string, unknown>;
+  context?: RunContext;
   promptLayer?: PromptCustomizationLayer;
 }
 
@@ -152,15 +153,9 @@ function summarizeRelationEntries(
   return lines;
 }
 
-function buildIssueTopology(context?: Record<string, unknown>): string[] {
-  const unresolvedBlockers = Array.isArray(context?.unresolvedBlockers)
-    ? context.unresolvedBlockers.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
-    : [];
-  const childIssues = Array.isArray(context?.childIssues)
-    ? context.childIssues.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
-    : Array.isArray(context?.trackedDependents)
-      ? context.trackedDependents.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
-    : [];
+function buildIssueTopology(context?: RunContext): string[] {
+  const unresolvedBlockers = context?.unresolvedBlockers ?? [];
+  const childIssues = context?.childIssues ?? context?.trackedDependents ?? [];
 
   if (unresolvedBlockers.length === 0 && childIssues.length === 0) {
     return [];
@@ -181,7 +176,7 @@ function buildIssueTopology(context?: Record<string, unknown>): string[] {
   return lines;
 }
 
-function buildConstraints(issue: IssueRecord, context?: Record<string, unknown>): string {
+function buildConstraints(issue: IssueRecord, context?: RunContext): string {
   const description = issue.description?.trim();
   const scope = extractIssueSection(description, "Scope");
   const acceptance = extractIssueSection(description, "Acceptance criteria")
@@ -201,15 +196,9 @@ function buildConstraints(issue: IssueRecord, context?: Record<string, unknown>)
   ].join("\n");
 }
 
-function buildOrchestrationConstraints(context?: Record<string, unknown>): string {
-  const unresolvedBlockers = Array.isArray(context?.unresolvedBlockers)
-    ? context.unresolvedBlockers.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
-    : [];
-  const childIssues = Array.isArray(context?.childIssues)
-    ? context.childIssues.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
-    : Array.isArray(context?.trackedDependents)
-      ? context.trackedDependents.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
-    : [];
+function buildOrchestrationConstraints(context?: RunContext): string {
+  const unresolvedBlockers = context?.unresolvedBlockers ?? [];
+  const childIssues = context?.childIssues ?? context?.trackedDependents ?? [];
 
   return [
     "## Constraints",
@@ -239,14 +228,12 @@ function buildOrchestrationConstraints(context?: Record<string, unknown>): strin
   ].join("\n");
 }
 
-function buildHumanContextLines(context?: Record<string, unknown>): string[] {
-  const promptContext = typeof context?.promptContext === "string" ? context.promptContext.trim() : "";
-  const latestPrompt = typeof context?.promptBody === "string" ? context.promptBody.trim() : "";
-  const operatorPrompt = typeof context?.operatorPrompt === "string" ? context.operatorPrompt.trim() : "";
-  const userComment = typeof context?.userComment === "string" ? context.userComment.trim() : "";
-  const linearAgentActivityContext = typeof context?.linearAgentActivityContext === "string"
-    ? context.linearAgentActivityContext.trim()
-    : "";
+function buildHumanContextLines(context?: RunContext): string[] {
+  const promptContext = context?.promptContext?.trim() ?? "";
+  const latestPrompt = context?.promptBody?.trim() ?? "";
+  const operatorPrompt = context?.operatorPrompt?.trim() ?? "";
+  const userComment = context?.userComment?.trim() ?? "";
+  const linearAgentActivityContext = context?.linearAgentActivityContext?.trim() ?? "";
 
   const lines: string[] = [];
   if (promptContext) {
@@ -280,7 +267,7 @@ interface ReviewFixCommentContext {
 
 type RequestedChangesMode = "address_review_feedback" | "branch_upkeep";
 
-function resolveRequestedChangesMode(runType: RunType, context?: Record<string, unknown>): RequestedChangesMode {
+function resolveRequestedChangesMode(runType: RunType, context?: RunContext): RequestedChangesMode {
   if (runType === "branch_upkeep") {
     return "branch_upkeep";
   }
@@ -289,36 +276,29 @@ function resolveRequestedChangesMode(runType: RunType, context?: Record<string, 
     : "address_review_feedback";
 }
 
-function readReviewFixComments(context?: Record<string, unknown>): ReviewFixCommentContext[] {
-  const raw = context?.reviewComments;
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-
+function readReviewFixComments(context?: RunContext): ReviewFixCommentContext[] {
   const comments: ReviewFixCommentContext[] = [];
-  for (const entry of raw) {
-    if (!entry || typeof entry !== "object") continue;
-    const record = entry as Record<string, unknown>;
-    const body = typeof record.body === "string" ? record.body.trim() : "";
+  for (const record of context?.reviewComments ?? []) {
+    const body = record.body?.trim() ?? "";
     if (!body) continue;
     comments.push({
       body,
-      ...(typeof record.path === "string" ? { path: record.path } : {}),
-      ...(typeof record.line === "number" ? { line: record.line } : {}),
-      ...(typeof record.side === "string" ? { side: record.side } : {}),
-      ...(typeof record.startLine === "number" ? { startLine: record.startLine } : {}),
-      ...(typeof record.startSide === "string" ? { startSide: record.startSide } : {}),
-      ...(typeof record.url === "string" ? { url: record.url } : {}),
-      ...(typeof record.authorLogin === "string" ? { authorLogin: record.authorLogin } : {}),
+      ...(record.path !== undefined ? { path: record.path } : {}),
+      ...(record.line !== undefined ? { line: record.line } : {}),
+      ...(record.side !== undefined ? { side: record.side } : {}),
+      ...(record.startLine !== undefined ? { startLine: record.startLine } : {}),
+      ...(record.startSide !== undefined ? { startSide: record.startSide } : {}),
+      ...(record.url !== undefined ? { url: record.url } : {}),
+      ...(record.authorLogin !== undefined ? { authorLogin: record.authorLogin } : {}),
     });
   }
   return comments;
 }
 
-function buildStructuredReviewContext(context?: Record<string, unknown>): string | undefined {
-  const reviewId = typeof context?.reviewId === "number" ? context.reviewId : undefined;
-  const reviewCommitId = typeof context?.reviewCommitId === "string" ? context.reviewCommitId : undefined;
-  const reviewUrl = typeof context?.reviewUrl === "string" ? context.reviewUrl : undefined;
+function buildStructuredReviewContext(context?: RunContext): string | undefined {
+  const reviewId = context?.reviewId;
+  const reviewCommitId = context?.reviewCommitId;
+  const reviewUrl = context?.reviewUrl;
   const reviewComments = readReviewFixComments(context);
   const degraded = context?.reviewContextDegraded === true;
   if (!degraded && !reviewId && !reviewCommitId && !reviewUrl && reviewComments.length === 0) {
@@ -327,9 +307,8 @@ function buildStructuredReviewContext(context?: Record<string, unknown>): string
 
   const lines = ["## Structured Review Context", ""];
   if (degraded) {
-    const reason = typeof context?.reviewContextDegradedReason === "string" && context.reviewContextDegradedReason.trim()
-      ? context.reviewContextDegradedReason.trim()
-      : "GitHub requested-changes context could not be refreshed before launch.";
+    const reason = context?.reviewContextDegradedReason?.trim()
+      || "GitHub requested-changes context could not be refreshed before launch.";
     lines.push(
       "GitHub review context refresh: degraded",
       reason,
@@ -362,14 +341,14 @@ function buildStructuredReviewContext(context?: Record<string, unknown>): string
   return lines.join("\n");
 }
 
-function appendStructuredReviewContext(lines: string[], context?: Record<string, unknown>): void {
+function appendStructuredReviewContext(lines: string[], context?: RunContext): void {
   const structured = buildStructuredReviewContext(context);
   if (structured) {
     lines.push(structured, "");
   }
 }
 
-function buildRequestedChangesContext(runType: RunType, context?: Record<string, unknown>): string {
+function buildRequestedChangesContext(runType: RunType, context?: RunContext): string {
   const mode = resolveRequestedChangesMode(runType, context);
   const lines: string[] = [];
 
@@ -379,8 +358,8 @@ function buildRequestedChangesContext(runType: RunType, context?: Record<string,
       "Goal: restore merge readiness on the current branch. Push a newer head only when the work actually changes the diff against the base; do not republish a patch-id-equivalent head.",
     );
   } else {
-    const reviewer = typeof context?.reviewerName === "string" ? context.reviewerName : undefined;
-    const reviewBody = typeof context?.reviewBody === "string" ? context.reviewBody.trim() : "";
+    const reviewer = context?.reviewerName;
+    const reviewBody = context?.reviewBody?.trim() ?? "";
     lines.push(
       "Requested changes on the existing PR branch.",
       "Goal: restore review readiness on the current PR branch. Push a newer head only when the fix actually changes the diff; if the reviewer-pass produces only comments, test wording, or PR-body changes, edit the PR body via `gh pr edit` instead.",
@@ -395,15 +374,8 @@ function buildRequestedChangesContext(runType: RunType, context?: Record<string,
   return lines.join("\n").trim();
 }
 
-function buildCiRepairContext(context?: Record<string, unknown>): string {
-  const snapshot = context?.ciSnapshot && typeof context.ciSnapshot === "object"
-    ? context.ciSnapshot as {
-        gateCheckName?: string;
-        gateCheckStatus?: string;
-        settledAt?: string;
-        failedChecks?: Array<{ name?: string; summary?: string }>;
-      }
-    : undefined;
+function buildCiRepairContext(context?: RunContext): string {
+  const snapshot = context?.ciSnapshot;
 
   return [
     "Settled CI failure on the existing PR branch.",
@@ -429,34 +401,29 @@ function buildCiRepairContext(context?: Record<string, unknown>): string {
   ].filter(Boolean).join("\n");
 }
 
-function appendQueueRepairContext(lines: string[], context?: Record<string, unknown>): void {
-  const queueContext = context?.mergeQueueContext;
-  if (!queueContext || typeof queueContext !== "object") {
+function appendQueueRepairContext(lines: string[], context?: RunContext): void {
+  const record = context?.mergeQueueContext;
+  if (!record) {
     return;
   }
 
-  const record = queueContext as Record<string, unknown>;
-  const conflictingFiles = Array.isArray(record.conflictingFiles)
-    ? record.conflictingFiles.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    : [];
-  const operatorHints = Array.isArray(record.operatorHints)
-    ? record.operatorHints.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    : [];
+  const conflictingFiles = (record.conflictingFiles ?? []).filter((entry) => entry.trim().length > 0);
+  const operatorHints = (record.operatorHints ?? []).filter((entry) => entry.trim().length > 0);
 
   lines.push("## Merge Queue Context", "");
-  if (typeof record.baseBranch === "string") {
+  if (record.baseBranch !== undefined) {
     lines.push(`Base branch: ${record.baseBranch}`);
   }
-  if (typeof record.baseSha === "string") {
+  if (record.baseSha !== undefined) {
     lines.push(`Base SHA at eviction: ${record.baseSha}`);
   }
-  if (typeof record.mergeCommitSha === "string") {
+  if (record.mergeCommitSha !== undefined) {
     lines.push(`Synthetic merge commit SHA: ${record.mergeCommitSha}`);
   }
-  if (typeof record.checkRunUrl === "string") {
+  if (record.checkRunUrl !== undefined) {
     lines.push(`Steward check run: ${record.checkRunUrl}`);
   }
-  if (typeof record.incidentSummary === "string") {
+  if (record.incidentSummary !== undefined) {
     lines.push(`Steward summary: ${record.incidentSummary}`);
   }
   if (conflictingFiles.length > 0) {
@@ -470,7 +437,7 @@ function appendQueueRepairContext(lines: string[], context?: Record<string, unkn
   lines.push("");
 }
 
-function buildQueueRepairContext(context?: Record<string, unknown>): string {
+function buildQueueRepairContext(context?: RunContext): string {
   const lines: string[] = [];
   appendQueueRepairContext(lines, context);
   lines.push(
@@ -481,13 +448,11 @@ function buildQueueRepairContext(context?: Record<string, unknown>): string {
   return lines.filter(Boolean).join("\n");
 }
 
-function buildFollowUpContextLines(issue: IssueRecord, runType: RunType, context?: Record<string, unknown>): string[] {
+function buildFollowUpContextLines(issue: IssueRecord, runType: RunType, context?: RunContext): string[] {
   const prContext = derivePrDisplayContext(issue);
-  const wakeReason = typeof context?.wakeReason === "string" ? context.wakeReason : undefined;
-  const followUps = Array.isArray(context?.followUps) ? context.followUps : [];
-  const followUpLines = followUps
-    .filter((entry): entry is { type?: unknown; text?: unknown; author?: unknown } => Boolean(entry) && typeof entry === "object")
-    .map((entry) => `${String(entry.type ?? "follow_up")} from ${String(entry.author ?? "unknown")}: ${String(entry.text ?? "").trim()}`.trim())
+  const wakeReason = context?.wakeReason;
+  const followUpLines = (context?.followUps ?? [])
+    .map((entry) => `${entry.type ?? "follow_up"} from ${entry.author ?? "unknown"}: ${(entry.text ?? "").trim()}`.trim())
     .filter((line) => !line.endsWith(":"));
 
   const lines: string[] = [];
@@ -513,7 +478,7 @@ function buildFollowUpContextLines(issue: IssueRecord, runType: RunType, context
 
   lines.push(`Turn reason: ${turnReason}`);
 
-  if (wakeReason === "completion_check_continue" && typeof context?.completionCheckSummary === "string" && context.completionCheckSummary.trim()) {
+  if (wakeReason === "completion_check_continue" && context?.completionCheckSummary?.trim()) {
     lines.push(`Completion check summary: ${context.completionCheckSummary.trim()}`);
   }
 
@@ -524,12 +489,10 @@ function buildFollowUpContextLines(issue: IssueRecord, runType: RunType, context
       "PatchRelay detected that the previous repair turn ended with uncommitted changes in this worktree.",
       "Do not reset, clean, stash-drop, or otherwise discard the current worktree. Inspect the existing local diff, keep the intended in-scope repair, then commit and push a fresh PR head.",
     );
-    if (typeof context.dirtyWorktreeSummary === "string" && context.dirtyWorktreeSummary.trim()) {
+    if (context.dirtyWorktreeSummary?.trim()) {
       lines.push(`Dirty worktree summary: ${context.dirtyWorktreeSummary.trim()}`);
     }
-    const changedPaths = Array.isArray(context.dirtyWorktreeChangedPaths)
-      ? context.dirtyWorktreeChangedPaths.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-      : [];
+    const changedPaths = (context.dirtyWorktreeChangedPaths ?? []).filter((entry) => entry.trim().length > 0);
     if (changedPaths.length > 0) {
       lines.push("Changed paths:");
       changedPaths.slice(0, 12).forEach((entry) => lines.push(`- ${entry}`));
@@ -546,16 +509,16 @@ function buildFollowUpContextLines(issue: IssueRecord, runType: RunType, context
 
   if (context?.replacementPrRequired === true) {
     lines.push("", "Previous PR facts:");
-    if (typeof context.previousPrNumber === "number") {
+    if (context.previousPrNumber !== undefined) {
       lines.push(`Previous PR: #${context.previousPrNumber} (replacement PR needed)`);
     }
-    if (typeof context.previousPrUrl === "string") {
+    if (context.previousPrUrl !== undefined) {
       lines.push(`Previous PR URL: ${context.previousPrUrl}`);
     }
-    if (typeof context.previousPrState === "string") {
+    if (context.previousPrState !== undefined) {
       lines.push(`Previous PR state: ${context.previousPrState}`);
     }
-    if (typeof context.previousPrHeadSha === "string") {
+    if (context.previousPrHeadSha !== undefined) {
       lines.push(`Previous PR head SHA: ${context.previousPrHeadSha}`);
     }
     lines.push("Create a fresh replacement PR for the new requested changes; do not mutate or republish the completed PR.");
@@ -589,14 +552,14 @@ function buildFollowUpContextLines(issue: IssueRecord, runType: RunType, context
       prLine,
       issue.prHeadSha ? `Current relevant head SHA: ${issue.prHeadSha}` : "",
       issue.prReviewState ? `Current review state: ${issue.prReviewState}` : "",
-      typeof context?.mergeStateStatus === "string" ? `Merge state against ${String(context?.baseBranch ?? "main")}: ${String(context.mergeStateStatus)}` : "",
+      context?.mergeStateStatus !== undefined ? `Merge state against ${context?.baseBranch ?? "main"}: ${context.mergeStateStatus}` : "",
     );
   }
 
   return lines.filter(Boolean);
 }
 
-function buildCurrentContext(runType: RunType, issue: IssueRecord, context?: Record<string, unknown>, followUp = false): string | undefined {
+function buildCurrentContext(runType: RunType, issue: IssueRecord, context?: RunContext, followUp = false): string | undefined {
   const lines: string[] = [];
 
   if (followUp) {
@@ -687,7 +650,7 @@ function buildPrePushSelfReviewSection(target: "new_pr" | "existing_pr", runType
 function buildPublicationContract(
   runType: RunType,
   issueClass?: IssueClass,
-  context?: Record<string, unknown>,
+  context?: RunContext,
 ): string {
   if (issueClass === "orchestration") {
     return [
@@ -746,7 +709,7 @@ function buildSections(
   issue: IssueRecord,
   runType: RunType,
   repoPath: string,
-  context?: Record<string, unknown>,
+  context?: RunContext,
   followUp = false,
 ): PatchRelayPromptSection[] {
   const issueClass = issue.issueClass;
@@ -832,10 +795,10 @@ function renderPromptSections(sections: PatchRelayPromptSection[]): string {
     .join("\n\n");
 }
 
-function shouldBuildFollowUpPrompt(runType: RunType, context?: Record<string, unknown>): boolean {
+function shouldBuildFollowUpPrompt(runType: RunType, context?: RunContext): boolean {
   if (context?.followUpMode) return true;
   if (runType !== "implementation") return true;
-  const wakeReason = typeof context?.wakeReason === "string" ? context.wakeReason : undefined;
+  const wakeReason = context?.wakeReason;
   return Boolean(wakeReason && wakeReason !== "delegated");
 }
 

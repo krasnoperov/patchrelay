@@ -1,42 +1,60 @@
 import { extractCompletionCheck } from "./completion-check.ts";
 import type { IssueRecord, IssueSessionEventRecord, RunRecord } from "./db-types.ts";
-import { extractLatestAssistantSummary } from "./issue-session-events.ts";
+import { extractLatestAssistantSummary, parseIssueSessionEventOrWarn } from "./issue-session-events.ts";
 import { sanitizeOperatorFacingText } from "./presentation-text.ts";
+import { assertNever } from "./utils.ts";
 
 function clean(value: string | undefined): string | undefined {
   return sanitizeOperatorFacingText(value);
 }
 
+function dirtyWorktreeSummary(payload: { summary?: string | undefined; dirtyWorktree?: boolean | undefined } | undefined): string | undefined {
+  return payload?.dirtyWorktree === true ? payload.summary : undefined;
+}
+
 function eventStatusNote(event: IssueSessionEventRecord | undefined): string | undefined {
   if (!event) return undefined;
-  const payload = event.eventJson ? parseEventJson(event.eventJson) : undefined;
-  const dirtySummary = typeof payload?.summary === "string" && payload.dirtyWorktree === true
-    ? payload.summary
-    : undefined;
-  switch (event.eventType) {
-    case "stop_requested":
+  // Read-model boundary over possibly-old DB rows: degrade a bad payload to
+  // the payload-less note instead of failing the status view.
+  const typed = parseIssueSessionEventOrWarn(event);
+  if (!typed) return undefined;
+  switch (typed.eventType) {
+    case "stop_requested": {
+      const dirtySummary = dirtyWorktreeSummary(typed.payload);
       if (dirtySummary) return `Operator stopped the run with dirty worktree: ${dirtySummary}. Use retry or delegate again to resume.`;
       return "Operator stopped the run. Use retry or delegate again to resume.";
-    case "undelegated":
+    }
+    case "undelegated": {
+      const dirtySummary = dirtyWorktreeSummary(typed.payload);
       if (dirtySummary) return `Issue was un-delegated from PatchRelay with dirty worktree: ${dirtySummary}`;
       return "Issue was un-delegated from PatchRelay. Delegate it again to resume.";
+    }
     case "issue_removed":
       return "Issue was removed from Linear.";
     case "pr_closed":
       return "Pull request was closed without merging.";
     case "pr_merged":
       return "Pull request merged successfully.";
-    default:
+    case "delegated":
+    case "delegation_observed":
+    case "child_changed":
+    case "child_delivered":
+    case "child_regressed":
+    case "direct_reply":
+    case "completion_check_continue":
+    case "followup_prompt":
+    case "followup_comment":
+    case "prompt_delivered":
+    case "self_comment":
+    case "operator_prompt":
+    case "review_changes_requested":
+    case "settled_red_ci":
+    case "merge_steward_incident":
+    case "operator_closed":
+    case "run_released_authority":
       return undefined;
-  }
-}
-
-function parseEventJson(value: string): Record<string, unknown> | undefined {
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
-  } catch {
-    return undefined;
+    default:
+      return assertNever(typed, "Unhandled issue session event in status note");
   }
 }
 

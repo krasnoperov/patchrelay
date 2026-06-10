@@ -1,6 +1,7 @@
 import type { FactoryState, RunType } from "./factory-state.ts";
 import type { ProjectConfig } from "./types.ts";
 import type { RemotePrState } from "./remote-pr-state.ts";
+import type { RunContext } from "./run-context.ts";
 import { deriveGateCheckStatusFromRollup } from "./github-rollup.ts";
 import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
 import { buildClosedPrCleanupFields } from "./pr-state.ts";
@@ -13,7 +14,7 @@ import {
 export interface LinkedPrAdoptionOutcome {
   factoryState: FactoryState;
   pendingRunType: RunType | null;
-  pendingRunContext?: Record<string, unknown>;
+  pendingRunContext?: RunContext;
   issueUpdates: {
     branchName?: string;
     prNumber: number;
