@@ -9,6 +9,8 @@ import { hasTrustedNoPrCompletion } from "./trusted-no-pr-completion.ts";
 import type { LinearClientProvider } from "./types.ts";
 import { replaceIssueDependenciesFromLinearIssue } from "./linear-issue-projection.ts";
 
+const WRITER = "merged-linear-completion-reconciler";
+
 const COMPLETION_RECONCILE_WINDOW_MS = 60 * 60 * 1000;
 const COMPLETION_RECONCILE_SUCCESS_BACKOFF_MS = 60 * 60 * 1000;
 const COMPLETION_RECONCILE_FAILURE_BACKOFF_MS = 5 * 60 * 1000;
@@ -115,11 +117,14 @@ export class MergedLinearCompletionReconciler {
     }
 
     const updated = await linear.setIssueState(issue.linearIssueId, targetState);
-    this.db.issues.upsertIssue({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      ...(updated.stateName ? { currentLinearState: updated.stateName } : {}),
-      ...(updated.stateType ? { currentLinearStateType: updated.stateType } : {}),
+    this.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      update: {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        ...(updated.stateName ? { currentLinearState: updated.stateName } : {}),
+        ...(updated.stateType ? { currentLinearStateType: updated.stateType } : {}),
+      },
     });
   }
 
@@ -127,15 +132,30 @@ export class MergedLinearCompletionReconciler {
     issue: IssueRecord,
     liveIssue: Awaited<ReturnType<NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>["getIssue"]>>,
   ): void {
+    const buildReopenUpdate = (record: Parameters<typeof resolveOpenWorkflowState>[0]) => {
+      const restored = resolveOpenWorkflowState(record);
+      return {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
+        ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
+        ...(restored ? { factoryState: restored.factoryState } : {}),
+        ...(restored ? { pendingRunType: restored.pendingRunType } : {}),
+      };
+    };
     const restored = resolveOpenWorkflowState(issue);
-    this.db.issues.upsertIssue({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
-      ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
-      ...(restored ? { factoryState: restored.factoryState } : {}),
-      ...(restored ? { pendingRunType: restored.pendingRunType } : {}),
+    const commit = this.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      expectedVersion: issue.version,
+      update: buildReopenUpdate(issue),
+      // Reopening a local done state must be re-derived against the fresh
+      // row when something else wrote in between — and only if it is
+      // still done.
+      onConflict: (current) => (current.factoryState === "done" ? buildReopenUpdate(current) : undefined),
     });
+    if (commit.outcome !== "applied") {
+      return;
+    }
     this.logger.info(
       {
         issueKey: issue.issueKey,
@@ -154,11 +174,14 @@ export class MergedLinearCompletionReconciler {
     if (issue.currentLinearState === liveIssue.stateName && issue.currentLinearStateType === liveIssue.stateType) {
       return;
     }
-    this.db.issues.upsertIssue({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
-      ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
+    this.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      update: {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
+        ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
+      },
     });
   }
 
