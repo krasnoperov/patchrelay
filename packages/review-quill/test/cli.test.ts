@@ -187,7 +187,7 @@ test("service status --json reports systemd state and normalized local health", 
         assert.equal(status.service, "review-quill");
         assert.equal(status.unit, "review-quill.service");
         assert.equal((status.systemd as Record<string, unknown>).ActiveState, "active");
-        assert.deepEqual(status.health, { reachable: true, ok: true, status: 200 });
+        assert.deepEqual(status.health, { reachable: true, ok: true, status: 200, codexLimitedUntil: null });
       },
     );
   } finally {
@@ -264,7 +264,7 @@ test("service status --json surfaces degraded health from the local service", as
 
         assert.equal(code, 0);
         const status = JSON.parse(stdout.read()) as Record<string, unknown>;
-        assert.deepEqual(status.health, { reachable: true, ok: false, status: 200 });
+        assert.deepEqual(status.health, { reachable: true, ok: false, status: 200, codexLimitedUntil: null });
       },
     );
   } finally {

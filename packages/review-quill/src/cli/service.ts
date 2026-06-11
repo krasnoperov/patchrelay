@@ -96,7 +96,7 @@ export async function handleService(parsed: ParsedArgs, stdout: Output, runComma
         `Active: ${properties.ActiveState ?? "unknown"}${properties.SubState ? ` (${properties.SubState})` : ""}`,
         properties.ExecMainPID ? `Main PID: ${properties.ExecMainPID}` : undefined,
         health.reachable
-          ? `Health: ${health.ok ? "ok" : "unhealthy"} (HTTP ${health.status})`
+          ? `Health: ${health.ok ? "ok" : "unhealthy"} (HTTP ${health.status})${health.codexLimitedUntil ? ` — Codex usage limit until ${health.codexLimitedUntil}` : ""}`
           : `Health: not reachable (${health.error})`,
       ].filter(Boolean).join("\n") + "\n",
     );

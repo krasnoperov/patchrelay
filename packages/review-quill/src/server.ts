@@ -30,6 +30,10 @@ export interface ReviewQuillHealth {
   runtime: {
     lastReconcileOutcome: ReviewQuillRuntimeStatus["lastReconcileOutcome"];
     lastReconcileError: string | null;
+    /** ISO deadline of the active Codex capacity pause, null when reviews
+     *  run normally. While set, the service is degraded: it is reachable
+     *  but cannot review anything until the Codex usage limit resets. */
+    codexLimitedUntil: string | null;
   };
 }
 
@@ -40,7 +44,7 @@ export function buildReviewQuillHealth(params: {
 }): ReviewQuillHealth {
   const status = !params.authStatus.ready || params.runtime.lastReconcileOutcome === "failed"
     ? "failed"
-    : params.runtime.lastReconcileOutcome === "degraded"
+    : params.runtime.lastReconcileOutcome === "degraded" || params.runtime.codexLimitedUntil !== null
       ? "degraded"
       : "ok";
   return {
@@ -58,6 +62,7 @@ export function buildReviewQuillHealth(params: {
     runtime: {
       lastReconcileOutcome: params.runtime.lastReconcileOutcome,
       lastReconcileError: params.runtime.lastReconcileError,
+      codexLimitedUntil: params.runtime.codexLimitedUntil,
     },
   };
 }

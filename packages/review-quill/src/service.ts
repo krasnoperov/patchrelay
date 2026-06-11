@@ -13,6 +13,7 @@ import type {
 import type { SqliteStore } from "./db/sqlite-store.ts";
 import type { GitHubClient } from "./github-client.ts";
 import { ReviewRunInterruptedError, type ReviewRunner } from "./review-runner.ts";
+import { CodexCapacityError, CodexCapacityPause } from "./codex-capacity.ts";
 import { AttemptReconciler } from "./attempt-reconciler.ts";
 import { decorateAttempt } from "./attempt-state.ts";
 import { getLatestAttemptsByPullRequest } from "./attempt-summary.ts";
@@ -67,6 +68,19 @@ export class ReviewQuillService {
   private readonly inFlightReviewSignals = new Map<string, AbortController>();
   private readonly semaphore: ReviewSemaphore;
   private readonly reconciler: AttemptReconciler;
+  /**
+   * Service-wide gate that suspends ALL review dispatch while the Codex
+   * account is out of usage capacity. In-memory only by design: a restart
+   * mid-pause just retries on the next cycle and re-enters the pause on the
+   * first capacity error — Codex itself is the source of truth.
+   */
+  private codexCapacityPause = new CodexCapacityPause();
+  /**
+   * Indirection over buildReviewContext so tests can stub workspace
+   * materialization (it shells out to git) while still exercising the real
+   * executeReview success/failure handling.
+   */
+  private buildContext: typeof buildReviewContext = buildReviewContext;
   private readonly runtime: ReviewQuillRuntimeStatus = {
     lastReconcileStartedAt: null,
     lastReconcileCompletedAt: null,
@@ -75,6 +89,7 @@ export class ReviewQuillService {
     inFlightReviews: 0,
     repoLastReconciledAt: {},
     repoLastReconcileErrors: {},
+    codexLimitedUntil: null,
   };
 
   constructor(
@@ -163,7 +178,7 @@ export class ReviewQuillService {
         completedAttempts: latestAttempts.filter((attempt) => attempt.status === "completed").length,
         failedAttempts: latestAttempts.filter((attempt) => attempt.status === "failed").length,
       },
-      runtime: { ...this.runtime },
+      runtime: { ...this.runtime, codexLimitedUntil: this.codexCapacityPause.limitedUntil() },
       repos,
       attempts,
       recentWebhooks,
@@ -176,6 +191,8 @@ export class ReviewQuillService {
       ...this.runtime,
       repoLastReconciledAt: { ...this.runtime.repoLastReconciledAt },
       repoLastReconcileErrors: { ...this.runtime.repoLastReconcileErrors },
+      // Computed live so the pause auto-expires without needing a tick.
+      codexLimitedUntil: this.codexCapacityPause.limitedUntil(),
     };
   }
 
@@ -436,6 +453,20 @@ export class ReviewQuillService {
       await this.reconciler.dismissStaleDecisiveReviews(repo, pr, currentReviews);
 
       if (needsExecution) {
+        // While the Codex account is out of capacity, skip dispatch
+        // entirely — every attempt would burn a workspace + thread just to
+        // fail with the same account-level error. One warn was logged when
+        // the pause began; per-PR skips stay at debug. The pause expires by
+        // itself, so the next cycle past the deadline dispatches normally.
+        if (this.codexCapacityPause.isPaused()) {
+          this.logger.debug({
+            repo: repo.repoFullName,
+            prNumber: pr.number,
+            headSha: pr.headSha,
+            codexLimitedUntil: this.codexCapacityPause.limitedUntil(),
+          }, "Skipping review dispatch during Codex capacity pause");
+          continue;
+        }
         // Fire-and-forget. The discovery pass returns once all PRs have
         // been *evaluated*, not once their reviews are published — that
         // way one repo's long-running review never blocks discovery for
@@ -484,6 +515,18 @@ export class ReviewQuillService {
     signal?: AbortSignal,
   ): Promise<void> {
     this.throwIfReviewSuperseded(signal);
+    // A worker dispatched moments before a Codex capacity pause began may
+    // only reach the front of the semaphore queue after the pause is in
+    // effect — bail out before creating or touching any attempt state.
+    if (this.codexCapacityPause.isPaused()) {
+      this.logger.debug({
+        repo: repo.repoFullName,
+        prNumber: pr.number,
+        headSha: pr.headSha,
+        codexLimitedUntil: this.codexCapacityPause.limitedUntil(),
+      }, "Skipping review execution during Codex capacity pause");
+      return;
+    }
     // Plan §3.6: the publication policy below (inline-vs-body-only)
     // must match whatever materializeReviewWorkspaceWithMode actually
     // produced. buildReviewContext resolves surface mode straight from
@@ -569,7 +612,7 @@ export class ReviewQuillService {
 
       let prepared: Awaited<ReturnType<typeof buildReviewContext>>;
       try {
-        prepared = await buildReviewContext({
+        prepared = await this.buildContext({
           github: this.github,
           repo,
           pr,
@@ -747,6 +790,38 @@ export class ReviewQuillService {
           turnId: error.turnId,
           summary: error.message,
         }, "Review attempt interrupted after being superseded");
+        return;
+      }
+      if (error instanceof CodexCapacityError) {
+        const pause = this.codexCapacityPause.enter(error);
+        // Capacity exhaustion is an account-level condition, not a defect
+        // of this PR's review — exempt it from attempt accounting. Mark
+        // the attempt cancelled/skipped instead of failed/error so it does
+        // not count toward failed-attempt stats or read as a real review
+        // failure anywhere, while staying terminal-but-retryable: discovery
+        // re-dispatches cancelled attempts once the pause lifts.
+        this.store.updateAttempt(attempt.id, {
+          status: "cancelled",
+          conclusion: "skipped",
+          summary: `Codex usage limit; review deferred until ${pause.untilIso}. ${error.detail}`,
+          externalCheckRunId: null,
+          completedAt: new Date().toISOString(),
+        });
+        if (pause.entered) {
+          this.logger.warn({
+            codexLimitedUntil: pause.untilIso,
+            retryAtIso: error.retryAtIso ?? null,
+            detail: error.detail,
+            repo: repo.repoFullName,
+            prNumber: pr.number,
+          }, `Codex usage limit; pausing reviews until ${pause.untilIso}`);
+        } else {
+          this.logger.debug({
+            codexLimitedUntil: pause.untilIso,
+            repo: repo.repoFullName,
+            prNumber: pr.number,
+          }, "Review attempt hit the Codex usage limit during an active capacity pause");
+        }
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
