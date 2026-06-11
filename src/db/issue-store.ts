@@ -74,6 +74,7 @@ export interface UpsertIssueParams {
   reviewFixAttempts?: number;
   zombieRecoveryAttempts?: number;
   lastZombieRecoveryAt?: string | null;
+  capacityBackoffUntil?: string | null;
   orchestrationSettleUntil?: string | null;
   deployStartedAt?: string | null;
 }
@@ -718,6 +719,9 @@ export function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     reviewFixAttempts: Number(row.review_fix_attempts ?? 0),
     zombieRecoveryAttempts: Number(row.zombie_recovery_attempts ?? 0),
     ...(row.last_zombie_recovery_at !== null && row.last_zombie_recovery_at !== undefined ? { lastZombieRecoveryAt: String(row.last_zombie_recovery_at) } : {}),
+    ...(row.capacity_backoff_until !== null && row.capacity_backoff_until !== undefined
+      ? { capacityBackoffUntil: String(row.capacity_backoff_until) }
+      : {}),
     ...(row.orchestration_settle_until !== null && row.orchestration_settle_until !== undefined
       ? { orchestrationSettleUntil: String(row.orchestration_settle_until) }
       : {}),

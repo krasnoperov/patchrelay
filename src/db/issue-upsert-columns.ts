@@ -95,6 +95,7 @@ export const ISSUE_COLUMN_DEFS: Record<IssueColumnKey, IssueColumnDef> = {
   reviewFixAttempts: { column: "review_fix_attempts", insertDefault: 0 },
   zombieRecoveryAttempts: { column: "zombie_recovery_attempts", insertDefault: 0 },
   lastZombieRecoveryAt: { column: "last_zombie_recovery_at" },
+  capacityBackoffUntil: { column: "capacity_backoff_until" },
   orchestrationSettleUntil: { column: "orchestration_settle_until" },
   deployStartedAt: { column: "deploy_started_at" },
 };

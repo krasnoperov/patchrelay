@@ -6,8 +6,10 @@ import type { FactoryState } from "./factory-state.ts";
 import { buildRunFailureActivity } from "./linear-session-reporting.ts";
 import type { LinearSessionSync } from "./linear-session-sync.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
-import { extractTurnId, resolveRunCompletionStatus } from "./run-reporting.ts";
+import { buildFailedTurnFailureReason, extractTurnErrorMessage, extractTurnId, resolveRunCompletionStatus } from "./run-reporting.ts";
 import type { CodexThreadSummary } from "./types.ts";
+import { classifyCodexFailure } from "./codex-capacity.ts";
+import type { CapacityDeferralParams } from "./run-failure-policy.ts";
 import type { RunFinalizer } from "./run-finalizer.ts";
 import { resolveFailureFactoryState } from "./reactive-pr-state.ts";
 
@@ -18,6 +20,7 @@ const DEFAULT_PUBLISH_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 interface RunNotificationHandlerOptions {
   interruptTurn?: ((options: { threadId: string; turnId: string }) => Promise<void>) | undefined;
   publishCommandTimeoutMs?: number | undefined;
+  deferCapacityLimitedRun?: ((params: CapacityDeferralParams) => void) | undefined;
 }
 
 export class RunNotificationHandler {
@@ -93,7 +96,25 @@ export class RunNotificationHandler {
     const status = resolveRunCompletionStatus(notification.params);
 
     if (status === "failed") {
-      const failureReason = "Codex reported the turn completed in a failed state";
+      const turnErrorMessage = extractTurnErrorMessage(notification.params);
+      const failureReason = buildFailedTurnFailureReason(turnErrorMessage);
+      // A capacity outage (usage limit / rate limit / quota) is not evidence
+      // about the work: defer the same wake behind a backoff instead of
+      // consuming an attempt budget or escalating. Only an actual error
+      // message classifies — interrupted turns stay on their own path.
+      const capacity = classifyCodexFailure(turnErrorMessage);
+      if (capacity.kind === "capacity" && this.options.deferCapacityLimitedRun) {
+        this.options.deferCapacityLimitedRun({
+          run,
+          issue,
+          failureReason,
+          capacity,
+          threadId,
+          ...(completedTurnId ? { turnId: completedTurnId } : {}),
+        });
+        this.activeThreadId = undefined;
+        return;
+      }
       const recovered = await this.runFinalizer.recoverFailedImplementationRun({
         run,
         issue,

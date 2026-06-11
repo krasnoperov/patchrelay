@@ -104,6 +104,10 @@ export interface IssueRecord {
   reviewFixAttempts: number;
   zombieRecoveryAttempts: number;
   lastZombieRecoveryAt?: string | undefined;
+  /** Launches are deferred until this ISO timestamp after a Codex capacity
+   * failure (usage limit / rate limit / quota). Cleared on the next
+   * successful launch. */
+  capacityBackoffUntil?: string | undefined;
   orchestrationSettleUntil?: string | undefined;
   /** When the issue entered the post-merge `deploying` state (ISO). Used
    * by the deploy watcher to scope which deploy runs are relevant and to

@@ -386,6 +386,10 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   // Optimistic-concurrency counter for issue-state writes (core
   // simplification plan, phase A). Bumped on every UPDATE by upsertIssue.
   addColumnIfMissing(connection, "issues", "version", "INTEGER NOT NULL DEFAULT 0");
+
+  // Codex capacity backoff: launches are deferred until this timestamp
+  // after a usage-limit / rate-limit / quota failure.
+  addColumnIfMissing(connection, "issues", "capacity_backoff_until", "TEXT");
 }
 
 function addColumnIfMissing(connection: DatabaseConnection, table: string, column: string, definition: string): void {
