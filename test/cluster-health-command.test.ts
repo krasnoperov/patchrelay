@@ -1404,3 +1404,78 @@ test("cli cluster warns when active repo work overlaps on the same files", async
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("cli cluster surfaces a review-quill Codex capacity pause as a degraded service", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-review-quill-capacity-"));
+  const config = createConfig(baseDir, 19797);
+  mkdirSync(config.projects[0]!.repoPath, { recursive: true });
+  mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
+  const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+  db.runMigrations();
+  const server = await startPatchRelayHealthServer(config);
+
+  try {
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-use-90",
+      issueKey: "USE-90",
+      title: "PR waiting on review while Codex is out of capacity",
+      currentLinearState: "In Progress",
+      factoryState: "pr_open",
+      prNumber: 90,
+      prState: "open",
+      prCheckStatus: "success",
+    });
+    const staleTime = new Date(Date.now() - 300_000).toISOString();
+    backdateAllRows(db, staleTime);
+
+    const stdout = createBufferStream();
+    const stderr = createBufferStream();
+    const exitCode = await runCli(["cluster"], {
+      config,
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      runCommand: async (command, args) => {
+        if (command === "review-quill") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              service: "review-quill",
+              unit: "review-quill.service",
+              systemd: { ActiveState: "active" },
+              // The review-quill health body reports an active Codex
+              // capacity pause; `service status --json` passes it through.
+              health: { reachable: true, ok: false, status: 200, codexLimitedUntil: "2026-06-11T03:23:42.000Z" },
+            }),
+            stderr: "",
+          };
+        }
+        if (command === "gh" && args[0] === "pr" && args[1] === "view") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              state: "OPEN",
+              reviewDecision: "",
+              reviewRequests: [],
+              latestReviews: [],
+              statusCheckRollup: [],
+              mergeable: "MERGEABLE",
+              mergeStateStatus: "CLEAN",
+              headRefOid: "capacity-head",
+            }),
+            stderr: "",
+          };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    assert.equal(exitCode, 1);
+    assert.equal(stderr.read(), "");
+    const text = stdout.read();
+    assert.match(text, /FAIL \[service:review-quill\] review-quill degraded: Codex usage limit until 2026-06-11T03:23:42\.000Z/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

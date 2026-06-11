@@ -1,5 +1,6 @@
 import type { Logger } from "pino";
 import { CodexAppServerClient } from "./codex-app-server.ts";
+import { classifyCodexFailure, CodexCapacityError } from "./codex-capacity.ts";
 import { buildAgentChildEnv } from "./github-cli-auth.ts";
 import { renderCorrectivePrompt } from "./prompt-builder/index.ts";
 import { extractFirstJsonObject, forgivingJsonParse } from "./utils.ts";
@@ -67,6 +68,36 @@ function collectAssistantMessages(thread: { turns: Array<{ items: Array<{ type: 
     }
   }
   return messages;
+}
+
+// The error a Codex turn carried, preferring the turn we actually started
+// and falling back to the latest turn with an error. Used to surface the
+// REAL failure ("You've hit your usage limit ...") instead of the generic
+// "completed without an assistant message".
+function latestTurnErrorMessage(
+  thread: { turns: Array<{ id: string; error?: { message: string } }> },
+  turnId: string,
+): string | undefined {
+  const startedTurn = thread.turns.find((turn) => turn.id === turnId);
+  const startedTurnError = startedTurn?.error?.message.trim();
+  if (startedTurnError) return startedTurnError;
+  for (let index = thread.turns.length - 1; index >= 0; index -= 1) {
+    const message = thread.turns[index]?.error?.message.trim();
+    if (message) return message;
+  }
+  return undefined;
+}
+
+// Classify a turn error and throw the matching error type: a typed
+// CodexCapacityError for account-level capacity exhaustion (so the service
+// can pause ALL reviews instead of retrying per PR), or a generic Error
+// that carries the real Codex error text.
+function throwTurnError(turnError: string, fallbackContext: string): never {
+  const classified = classifyCodexFailure(turnError);
+  if (classified.kind === "capacity") {
+    throw new CodexCapacityError(classified.detail, classified.retryAtIso);
+  }
+  throw new Error(`${fallbackContext}: ${turnError}`);
 }
 
 function asString(value: unknown): string | undefined {
@@ -302,6 +333,14 @@ export class ReviewRunner {
     const completedThread = await this.waitForTurnCompletion(threadId, started.turnId, signal);
     const latestMessage = collectAssistantMessages(completedThread).at(-1);
     if (!latestMessage) {
+      // The turn "completed" but produced no message — the thread summary
+      // usually carries the real failure as a turn-level error event
+      // (account usage limits surface this way). Surface it, and throw the
+      // typed capacity error when it is a usage-limit/quota failure.
+      const turnError = latestTurnErrorMessage(completedThread, started.turnId);
+      if (turnError) {
+        throwTurnError(turnError, "Review run completed without an assistant message");
+      }
       throw new Error("Review run completed without an assistant message");
     }
     return { latestMessage, turnId: started.turnId };
@@ -398,6 +437,10 @@ export class ReviewRunner {
         }
         if (turn.status === "completed") return thread;
         if (turn.status === "failed" || turn.status === "interrupted" || turn.status === "cancelled") {
+          const turnError = turn.error?.message.trim();
+          if (turnError) {
+            throwTurnError(turnError, `Review turn ended with status ${turn.status}`);
+          }
           throw new Error(`Review turn ended with status ${turn.status}`);
         }
         await this.sleepUntilNextPoll(1_500, signal);

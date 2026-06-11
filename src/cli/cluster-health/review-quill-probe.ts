@@ -5,7 +5,7 @@ import { type JsonObject, safeJsonParse } from "./shared.ts";
 import type { IssueSnapshot, ReviewQuillAttemptOwnership } from "./types.ts";
 
 export interface ReviewQuillStatusJson extends JsonObject {
-  health?: { reachable?: boolean; ok?: boolean } | undefined;
+  health?: { reachable?: boolean; ok?: boolean; codexLimitedUntil?: string | null } | undefined;
   systemd?: { ActiveState?: string } | undefined;
   runtime?: { reconcileInProgress?: boolean } | undefined;
   repos?: unknown[] | undefined;

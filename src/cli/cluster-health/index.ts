@@ -96,9 +96,16 @@ export async function collectClusterHealth(
         },
         summarize: (payload) => {
           const parsed = payload as ReviewQuillStatusJson;
-          return parsed.health?.reachable === true && parsed.health?.ok === true
-            ? "Healthy"
-            : `Unhealthy (${parsed.health?.reachable === false ? "service not reachable" : "service health unavailable"})`;
+          if (parsed.health?.reachable === true && parsed.health?.ok === true) {
+            return "Healthy";
+          }
+          // The review-quill health body reports an active Codex capacity
+          // pause as runtime.codexLimitedUntil, which `review-quill service
+          // status --json` passes through as health.codexLimitedUntil.
+          if (parsed.health?.reachable === true && typeof parsed.health?.codexLimitedUntil === "string") {
+            return `review-quill degraded: Codex usage limit until ${parsed.health.codexLimitedUntil}`;
+          }
+          return `Unhealthy (${parsed.health?.reachable === false ? "service not reachable" : "service health unavailable"})`;
         },
       })
     : undefined;

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ReviewRunInterruptedError, ReviewRunner } from "../src/review-runner.ts";
+import { CodexCapacityError } from "../src/codex-capacity.ts";
 import type { ReviewQuillConfig } from "../src/types.ts";
 
 function minimalConfig(): ReviewQuillConfig {
@@ -325,4 +326,114 @@ test("ReviewRunner does not retry non-materialization app-server start failures"
   );
   assert.equal(startThreadCalls, 1);
   assert.deepEqual(sleeps, []);
+});
+
+const USAGE_LIMIT_MESSAGE = "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), "
+  + "visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 3:23 AM.";
+
+function runnerWithCompletedTurn(turn: Record<string, unknown>): ReviewRunner {
+  const fakeCodex = {
+    start: async () => {},
+    stop: async () => {},
+    startThread: async () => ({ id: "thread-1", turns: [] }),
+    startTurn: async () => ({ turnId: "turn-1", status: "running" }),
+    readThread: async () => ({ id: "thread-1", turns: [turn] }),
+  };
+  return new ReviewRunner(
+    minimalConfig(),
+    { warn: () => {}, child: () => ({}) } as never,
+    fakeCodex as never,
+    async () => {},
+  );
+}
+
+test("ReviewRunner throws a typed capacity error when the turn completed with a usage-limit error and no message", async () => {
+  const runner = runnerWithCompletedTurn({
+    id: "turn-1",
+    status: "completed",
+    items: [],
+    error: { message: USAGE_LIMIT_MESSAGE },
+  });
+
+  await assert.rejects(
+    () => runner.review({
+      prompt: "Review this PR.",
+      workspace: { worktreePath: "/tmp/review-quill-test" },
+    } as never),
+    (error: unknown) => {
+      assert.ok(error instanceof CodexCapacityError);
+      assert.equal(error.name, "CodexCapacityError");
+      assert.equal(error.detail, USAGE_LIMIT_MESSAGE);
+      assert.ok(error.retryAtIso, "retryAtIso must be parsed from the 'try again at' clause");
+      assert.match(error.message, /usage limit/i);
+      return true;
+    },
+  );
+});
+
+test("ReviewRunner surfaces the real turn error text when there is no assistant message", async () => {
+  const runner = runnerWithCompletedTurn({
+    id: "turn-1",
+    status: "completed",
+    items: [],
+    error: { message: "stream disconnected before completion" },
+  });
+
+  await assert.rejects(
+    () => runner.review({
+      prompt: "Review this PR.",
+      workspace: { worktreePath: "/tmp/review-quill-test" },
+    } as never),
+    /Review run completed without an assistant message: stream disconnected before completion/,
+  );
+});
+
+test("ReviewRunner keeps the generic message when the empty turn carries no error", async () => {
+  const runner = runnerWithCompletedTurn({
+    id: "turn-1",
+    status: "completed",
+    items: [],
+  });
+
+  await assert.rejects(
+    () => runner.review({
+      prompt: "Review this PR.",
+      workspace: { worktreePath: "/tmp/review-quill-test" },
+    } as never),
+    /Review run completed without an assistant message$/,
+  );
+});
+
+test("ReviewRunner classifies a failed turn carrying a usage-limit error as a capacity error", async () => {
+  const runner = runnerWithCompletedTurn({
+    id: "turn-1",
+    status: "failed",
+    items: [],
+    error: { message: USAGE_LIMIT_MESSAGE },
+  });
+
+  await assert.rejects(
+    () => runner.review({
+      prompt: "Review this PR.",
+      workspace: { worktreePath: "/tmp/review-quill-test" },
+    } as never),
+    (error: unknown) => error instanceof CodexCapacityError,
+  );
+});
+
+test("ReviewRunner includes the turn error text when a turn fails for non-capacity reasons", async () => {
+  const runner = runnerWithCompletedTurn({
+    id: "turn-1",
+    status: "failed",
+    items: [],
+    error: { message: "sandbox denied write access" },
+  });
+
+  await assert.rejects(
+    () => runner.review({
+      prompt: "Review this PR.",
+      workspace: { worktreePath: "/tmp/review-quill-test" },
+    } as never),
+    /Review turn ended with status failed: sandbox denied write access/,
+  );
 });

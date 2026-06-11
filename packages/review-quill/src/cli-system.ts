@@ -186,13 +186,14 @@ export async function fetchServiceHealth(): Promise<{
   runtime?: {
     lastReconcileOutcome?: string;
     lastReconcileError?: string | null;
+    codexLimitedUntil?: string | null;
   };
 }> {
   return await requestLocalJson("/health");
 }
 
 export async function fetchServiceHealthStatus(): Promise<
-  | { reachable: true; ok: boolean; status: number }
+  | { reachable: true; ok: boolean; status: number; codexLimitedUntil: string | null }
   | { reachable: false; error: string }
 > {
   try {
@@ -200,10 +201,17 @@ export async function fetchServiceHealthStatus(): Promise<
       signal: AbortSignal.timeout(2_000),
     });
     let ok = response.ok;
+    // Pass the Codex capacity pause deadline through so consumers of
+    // `service status --json` (e.g. patchrelay's `cluster` command) can
+    // surface "degraded: Codex usage limit until <time>".
+    let codexLimitedUntil: string | null = null;
     try {
-      const body = await response.json() as { ok?: unknown };
+      const body = await response.json() as { ok?: unknown; runtime?: { codexLimitedUntil?: unknown } };
       if (typeof body.ok === "boolean") {
         ok = response.ok && body.ok;
+      }
+      if (typeof body.runtime?.codexLimitedUntil === "string") {
+        codexLimitedUntil = body.runtime.codexLimitedUntil;
       }
     } catch {
       ok = response.ok;
@@ -212,6 +220,7 @@ export async function fetchServiceHealthStatus(): Promise<
       reachable: true,
       ok,
       status: response.status,
+      codexLimitedUntil,
     };
   } catch (error) {
     return {

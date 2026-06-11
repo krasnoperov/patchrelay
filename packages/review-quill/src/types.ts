@@ -338,6 +338,10 @@ export interface CodexTurnSummary {
   id: string;
   status: string;
   items: CodexThreadItem[];
+  /** Turn-level failure reported by the Codex app-server (e.g. account
+   *  usage-limit errors). Present even when the turn status is "completed" —
+   *  a turn can complete carrying an error event instead of a message. */
+  error?: { message: string };
 }
 
 export type CodexThreadItem =
@@ -374,6 +378,12 @@ export interface ReviewQuillRuntimeStatus {
    * successful discovery for that repo.
    */
   repoLastReconcileErrors: Record<string, string>;
+  /**
+   * ISO deadline of the active Codex capacity pause, or null when reviews
+   * are running normally. Set when a review attempt hits the account-level
+   * Codex usage limit; all review dispatch is suspended until it passes.
+   */
+  codexLimitedUntil: string | null;
 }
 
 export interface ReviewQuillRepoSummary {

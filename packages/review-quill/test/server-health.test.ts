@@ -25,6 +25,7 @@ function runtimeStatus(overrides: Partial<ReviewQuillRuntimeStatus> = {}): Revie
     inFlightReviews: 0,
     repoLastReconciledAt: {},
     repoLastReconcileErrors: {},
+    codexLimitedUntil: null,
     ...overrides,
   };
 }
@@ -70,4 +71,29 @@ test("health degrades when the current reconcile is partially failing", () => {
 
   assert.equal(health.ok, false);
   assert.equal(health.status, "degraded");
+});
+
+test("health degrades and exposes the deadline while a Codex capacity pause is active", () => {
+  const health = buildReviewQuillHealth({
+    repos: ["krasnoperov/blog"],
+    authStatus: authStatus(),
+    runtime: runtimeStatus({
+      codexLimitedUntil: "2026-06-11T03:23:42.000Z",
+    }),
+  });
+
+  assert.equal(health.ok, false);
+  assert.equal(health.status, "degraded");
+  assert.equal(health.runtime.codexLimitedUntil, "2026-06-11T03:23:42.000Z");
+});
+
+test("health reports a null codexLimitedUntil when reviews run normally", () => {
+  const health = buildReviewQuillHealth({
+    repos: ["krasnoperov/blog"],
+    authStatus: authStatus(),
+    runtime: runtimeStatus(),
+  });
+
+  assert.equal(health.ok, true);
+  assert.equal(health.runtime.codexLimitedUntil, null);
 });

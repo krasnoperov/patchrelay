@@ -200,10 +200,19 @@ export class CodexAppServerClient extends EventEmitter {
       id: String(thread.id),
       turns: turns.map((turn) => {
         const value = turn as Record<string, unknown>;
+        // Preserve the turn-level error so callers can surface the REAL
+        // failure (e.g. account usage-limit text) instead of a generic
+        // "no assistant message" error. Turns can carry an error event
+        // even when their status is "completed".
+        const rawError = value.error as { message?: unknown } | null | undefined;
+        const errorMessage = rawError && typeof rawError === "object" && typeof rawError.message === "string" && rawError.message.trim()
+          ? rawError.message
+          : undefined;
         return {
           id: String(value.id),
           status: String(value.status),
           items: Array.isArray(value.items) ? (value.items as CodexThreadItem[]) : [],
+          ...(errorMessage ? { error: { message: errorMessage } } : {}),
         };
       }),
     };
