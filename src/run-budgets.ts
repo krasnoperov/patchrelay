@@ -69,3 +69,37 @@ export function getRemainingZombieRecoveryDelayMs(
   const delay = getZombieRecoveryDelayMs(recoveryAttempts);
   return Math.max(0, recoveredAtMs + delay - now);
 }
+
+// ─── Codex capacity backoff ──────────────────────────────────────────
+//
+// A run that failed on a Codex capacity outage (usage limit / rate limit /
+// quota) is re-enqueued, not escalated, and never consumes a repair budget.
+// The retry waits until the provider-announced retry time when one was
+// parsed from the error (plus a small jitter so a fleet of issues does not
+// stampede the moment the limit resets), else this fixed backoff.
+
+export const CAPACITY_RETRY_BACKOFF_MS = 10 * 60_000;
+
+const CAPACITY_RETRY_JITTER_MS = 60_000;
+
+export function resolveCapacityBackoffUntil(
+  retryAtIso: string | undefined,
+  now = Date.now(),
+  jitterMs = Math.floor(Math.random() * CAPACITY_RETRY_JITTER_MS),
+): string {
+  const retryAtMs = retryAtIso !== undefined ? Date.parse(retryAtIso) : Number.NaN;
+  const untilMs = Number.isFinite(retryAtMs) && retryAtMs > now
+    ? retryAtMs + jitterMs
+    : now + CAPACITY_RETRY_BACKOFF_MS;
+  return new Date(untilMs).toISOString();
+}
+
+export function getRemainingCapacityBackoffMs(
+  capacityBackoffUntil: string | undefined,
+  now = Date.now(),
+): number {
+  if (!capacityBackoffUntil) return 0;
+  const untilMs = Date.parse(capacityBackoffUntil);
+  if (!Number.isFinite(untilMs)) return 0;
+  return Math.max(0, untilMs - now);
+}

@@ -34,7 +34,7 @@ import { RunWakePlanner, type PendingRunWake } from "./run-wake-planner.ts";
 import type { RunContext } from "./run-context.ts";
 import { WakeDispatcher } from "./wake-dispatcher.ts";
 import { settleRun } from "./run-settlement.ts";
-import { getRemainingZombieRecoveryDelayMs } from "./run-budgets.ts";
+import { getRemainingCapacityBackoffMs, getRemainingZombieRecoveryDelayMs } from "./run-budgets.ts";
 import { classifyIssue } from "./issue-class.ts";
 import { buildIssueTriageHash, IssueTriageService } from "./issue-triage.ts";
 import { loadConfig } from "./config.ts";
@@ -217,7 +217,11 @@ export class RunOrchestrator {
       this.leasePorts.heartbeatLease,
       this.leasePorts.releaseLease,
       feed,
-      { interruptTurn: (options) => codex.interruptTurn(options) },
+      {
+        interruptTurn: (options) => codex.interruptTurn(options),
+        // Lazy: the failure policy is constructed just below.
+        deferCapacityLimitedRun: (params) => this.runFailurePolicy.deferCapacityLimitedRun(params),
+      },
     );
     this.runFailurePolicy = new RunFailurePolicy(
       db,
@@ -231,6 +235,7 @@ export class RunOrchestrator {
       this.runCompletionPolicy,
       (projectId) => this.config.projects.find((project) => project.id === projectId),
       feed,
+      telemetry,
     );
     this.runReconciler = new RunReconciler(
       db,
@@ -544,6 +549,19 @@ export class RunOrchestrator {
       this.releaseIssueSessionLease(item.projectId, item.issueId);
       return;
     }
+    // Codex capacity outage backoff: a usage-limit/rate-limit failure left a
+    // pending wake behind; the wake stays queued (the idle reconciler keeps
+    // re-poking it) and the launch waits until the backoff elapses.
+    const remainingCapacityDelayMs = getRemainingCapacityBackoffMs(issue.capacityBackoffUntil);
+    if (remainingCapacityDelayMs > 0) {
+      this.emitRunSkipped(item, "capacity_backoff", issue, { runType, remainingDelayMs: remainingCapacityDelayMs });
+      this.logger.debug(
+        { issueKey: issue.issueKey, runType, remainingCapacityDelayMs },
+        "Deferring run launch until Codex capacity backoff elapses",
+      );
+      this.releaseIssueSessionLease(item.projectId, item.issueId);
+      return;
+    }
     const baseContext = isRequestedChangesRunType(runType)
       ? await this.runCompletionPolicy.resolveRequestedChangesWakeContext(issue, runType, context)
       : context;
@@ -699,8 +717,9 @@ export class RunOrchestrator {
       return;
     }
 
-    // Reset zombie recovery counter — this run started successfully
-    if (issue.zombieRecoveryAttempts > 0) {
+    // Reset zombie recovery counter and capacity backoff — this run
+    // started successfully
+    if (issue.zombieRecoveryAttempts > 0 || issue.capacityBackoffUntil !== undefined) {
       this.db.issueSessions.commitIssueState({
         writer: WRITER,
         lease: { projectId: item.projectId, linearIssueId: item.issueId, leaseId },
@@ -709,6 +728,7 @@ export class RunOrchestrator {
           linearIssueId: item.issueId,
           zombieRecoveryAttempts: 0,
           lastZombieRecoveryAt: null,
+          capacityBackoffUntil: null,
         },
       });
     }

@@ -9,6 +9,8 @@ import type { LinearSessionSync } from "./linear-session-sync.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { LinearClientProvider, CodexThreadSummary } from "./types.ts";
 import { getThreadTurns } from "./codex-thread-utils.ts";
+import { classifyCodexFailure } from "./codex-capacity.ts";
+import { buildFailedTurnFailureReason } from "./run-reporting.ts";
 import type { RunFailurePolicy } from "./run-failure-policy.ts";
 import type { RunFinalizer } from "./run-finalizer.ts";
 import type { ReleaseIssueSessionLease, WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
@@ -33,7 +35,7 @@ export class RunReconciler {
     private readonly logger: Logger,
     private readonly linearProvider: LinearClientProvider,
     private readonly linearSync: LinearSessionSync,
-    private readonly failurePolicy: Pick<RunFailurePolicy, "settleStrandedRunAndRecover" | "handleInterruptedRun">,
+    private readonly failurePolicy: Pick<RunFailurePolicy, "settleStrandedRunAndRecover" | "handleInterruptedRun" | "deferCapacityLimitedRun">,
     private readonly runFinalizer: RunFinalizer,
     private readonly withHeldLease: WithHeldIssueSessionLease,
     private readonly releaseLease: ReleaseIssueSessionLease,
@@ -237,6 +239,26 @@ export class RunReconciler {
     if (latestTurn?.status === "interrupted") {
       await this.failurePolicy.handleInterruptedRun(run, effectiveIssue);
       return;
+    }
+
+    // A failed turn found during reconciliation (the live notification was
+    // lost, e.g. across a restart) whose error is a Codex capacity outage:
+    // defer the same wake instead of leaving the run dangling or burning a
+    // budget. Non-capacity failed turns keep the existing behavior — the
+    // notification path owns live settlement.
+    if (latestTurn?.status === "failed") {
+      const capacity = classifyCodexFailure(latestTurn.error?.message ?? undefined);
+      if (capacity.kind === "capacity") {
+        this.failurePolicy.deferCapacityLimitedRun({
+          run,
+          issue: effectiveIssue,
+          failureReason: buildFailedTurnFailureReason(latestTurn.error?.message ?? undefined),
+          capacity,
+          threadId: run.threadId,
+          ...(latestTurn.id ? { turnId: latestTurn.id } : {}),
+        });
+        return;
+      }
     }
 
     if (latestTurn?.status === "completed") {

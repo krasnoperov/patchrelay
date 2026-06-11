@@ -9,7 +9,9 @@ import type { LinearSessionSync } from "./linear-session-sync.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { AppendWakeEventWithLease } from "./run-wake-planner.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
-import { getRemainingZombieRecoveryDelayMs, getZombieRecoveryBudget } from "./run-budgets.ts";
+import type { CodexCapacityFailure } from "./codex-capacity.ts";
+import { getRemainingZombieRecoveryDelayMs, getZombieRecoveryBudget, resolveCapacityBackoffUntil } from "./run-budgets.ts";
+import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
 import { resolvePostRunFactoryState } from "./run-completion-policy.ts";
 import type { RunCompletionPolicy } from "./run-completion-policy.ts";
 import { isRequestedChangesRunType } from "./reactive-pr-state.ts";
@@ -19,13 +21,24 @@ import type { ProjectConfig } from "./workflow-types.ts";
 
 const WRITER = "run-failure-policy";
 
-// Roll back the attempt counter consumed by the interrupted run and clear the
-// attempted-failure provenance for repair runs, as a single issue update so
-// the whole repair commits (and conflict-recomputes) atomically.
-function buildInterruptedAttemptRepairUpdate(
+type AttemptRefundFields = Partial<Pick<
+  UpsertIssueParams,
+  | "ciRepairAttempts"
+  | "queueRepairAttempts"
+  | "reviewFixAttempts"
+  | "lastAttemptedFailureHeadSha"
+  | "lastAttemptedFailureSignature"
+  | "lastAttemptedFailureAt"
+>>;
+
+// Roll back the attempt counter consumed at launch and clear the
+// attempted-failure provenance for repair runs, so a run that died without
+// evidence about the work (interrupted turn, capacity outage) neither burns
+// a budget unit nor blocks the same failure from re-deriving a wake.
+function buildAttemptRefundFields(
   runType: RunType,
-  issue: Pick<IssueRecord, "projectId" | "linearIssueId" | "ciRepairAttempts" | "queueRepairAttempts" | "reviewFixAttempts">,
-): UpsertIssueParams | undefined {
+  issue: Pick<IssueRecord, "ciRepairAttempts" | "queueRepairAttempts" | "reviewFixAttempts">,
+): AttemptRefundFields | undefined {
   const counter = runType === "ci_repair" && issue.ciRepairAttempts > 0
     ? { ciRepairAttempts: issue.ciRepairAttempts - 1 }
     : runType === "queue_repair" && issue.queueRepairAttempts > 0
@@ -41,12 +54,32 @@ function buildInterruptedAttemptRepairUpdate(
       }
     : undefined;
   if (!counter && !provenance) return undefined;
+  return { ...counter, ...provenance };
+}
+
+// The interrupted-run variant: same refund, committed as a single issue
+// update so the whole repair commits (and conflict-recomputes) atomically.
+function buildInterruptedAttemptRepairUpdate(
+  runType: RunType,
+  issue: Pick<IssueRecord, "projectId" | "linearIssueId" | "ciRepairAttempts" | "queueRepairAttempts" | "reviewFixAttempts">,
+): UpsertIssueParams | undefined {
+  const fields = buildAttemptRefundFields(runType, issue);
+  if (!fields) return undefined;
   return {
     projectId: issue.projectId,
     linearIssueId: issue.linearIssueId,
-    ...counter,
-    ...provenance,
+    ...fields,
   };
+}
+
+export interface CapacityDeferralParams {
+  run: RunRecord;
+  issue: IssueRecord;
+  /** Full persisted failure reason (generic prefix + real Codex error). */
+  failureReason: string;
+  capacity: CodexCapacityFailure;
+  threadId?: string | undefined;
+  turnId?: string | undefined;
 }
 
 function resolveRetryRunType(runType: RunType, context: RunContext | undefined): "review_fix" | "branch_upkeep" {
@@ -82,6 +115,7 @@ export class RunFailurePolicy {
     private readonly completionPolicy: RunCompletionPolicy,
     private readonly resolveProject: (projectId: string) => ProjectConfig | undefined,
     private readonly feed?: OperatorEventFeed,
+    private readonly telemetry: PatchRelayTelemetry = noopTelemetry,
   ) {}
 
   // ─── Stranded runs (zombie / stale thread) ───────────────────────
@@ -262,6 +296,70 @@ export class RunFailurePolicy {
     }
     this.wakeDispatcher.dispatchIfWakePending(fresh.projectId, fresh.linearIssueId);
     this.logger.info({ issueKey: fresh.issueKey, attempts, reason }, "Recovery: re-enqueued with backoff");
+  }
+
+  // ─── Capacity outages ────────────────────────────────────────────
+
+  /**
+   * A Codex capacity failure (usage limit / rate limit / quota) is not
+   * evidence that the work is impossible: settle the run as failed with the
+   * real error text, refund the attempt counter consumed at launch, return
+   * the issue to the state that routes the same work, and re-enqueue the
+   * same wake behind a capacity backoff — never a budget burn, never an
+   * escalation.
+   */
+  deferCapacityLimitedRun(params: CapacityDeferralParams): void {
+    const { run, capacity } = params;
+    const capacityBackoffUntil = resolveCapacityBackoffUntil(capacity.retryAtIso);
+    const deferred = this.withHeldLease(run.projectId, run.linearIssueId, (lease) => {
+      const settled = settleRun({
+        db: this.db,
+        run,
+        finish: {
+          status: "failed",
+          ...(params.threadId ? { threadId: params.threadId } : {}),
+          ...(params.turnId ? { turnId: params.turnId } : {}),
+          failureReason: params.failureReason,
+        },
+        lease,
+        buildIssueUpdate: (record) => ({
+          ...buildAttemptRefundFields(run.runType, record),
+          pendingRunType: null,
+          pendingRunContextJson: null,
+          // The hold state that routes this work again, resolved from fresh
+          // GitHub truth like the interrupted-run recovery path. Never a
+          // terminal state: an unresolvable hold keeps the current one.
+          factoryState: resolvePostRunFactoryState(record, run, { outcome: "recovered" })
+            ?? (run.runType === "implementation" ? "delegated" : record.factoryState),
+          capacityBackoffUntil,
+        }),
+      });
+      const wakeIssue = settled.issue ?? params.issue;
+      return this.appendWakeEventWithLease(lease, wakeIssue, run.runType, undefined, `capacity:${run.id}`);
+    });
+    this.linearSync.clearProgress(run.id);
+    if (!deferred) {
+      this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Skipping capacity deferral after losing issue-session lease");
+      this.releaseLease(run.projectId, run.linearIssueId);
+      return;
+    }
+    const issue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? params.issue;
+    this.logger.warn(
+      { issueKey: issue.issueKey, runType: run.runType, detail: capacity.detail, capacityBackoffUntil },
+      "Codex capacity limit - deferring retry without consuming budget",
+    );
+    emitTelemetry(this.telemetry, {
+      type: "run.capacity_deferred",
+      projectId: run.projectId,
+      linearIssueId: run.linearIssueId,
+      ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+      runId: run.id,
+      runType: run.runType,
+      detail: capacity.detail,
+      ...(capacity.retryAtIso ? { retryAtIso: capacity.retryAtIso } : {}),
+    });
+    void this.linearSync.syncSession(issue, { activeRunType: run.runType });
+    this.releaseLease(run.projectId, run.linearIssueId);
   }
 
   // ─── Terminal decisions ──────────────────────────────────────────

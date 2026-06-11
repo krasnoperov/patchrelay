@@ -195,6 +195,31 @@ export function extractTurnId(params: Record<string, unknown>): string | undefin
   return typeof id === "string" ? id : undefined;
 }
 
+export const FAILED_TURN_FAILURE_REASON = "Codex reported the turn completed in a failed state";
+
+// Keeps the generic prefix (existing queries and tests key on it) and appends
+// the real Codex error so a capacity outage is distinguishable from a genuine
+// failure in the persisted run record.
+export function buildFailedTurnFailureReason(errorMessage: string | undefined): string {
+  const trimmed = errorMessage?.trim();
+  return trimmed ? `${FAILED_TURN_FAILURE_REASON}: ${trimmed}` : FAILED_TURN_FAILURE_REASON;
+}
+
+export function extractTurnErrorMessage(params: Record<string, unknown>): string | undefined {
+  const turn = params.turn;
+  if (!turn || typeof turn !== "object") {
+    return undefined;
+  }
+
+  const error = (turn as Record<string, unknown>).error;
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+
+  const message = (error as Record<string, unknown>).message;
+  return typeof message === "string" && message.trim() ? message : undefined;
+}
+
 export function buildPendingMaterializationThread(
   stageRun: Pick<RunRecord, "threadId" | "turnId">,
   error: Error,

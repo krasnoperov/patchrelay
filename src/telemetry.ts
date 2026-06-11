@@ -37,6 +37,7 @@ export type RunSkipReason =
   | "blocked"
   | "dependency_refresh_failed"
   | "zombie_backoff"
+  | "capacity_backoff"
   | "inactive_requested_changes_wake"
   | "lease_lost_dismissing_inactive_requested_changes_wake"
   | "budget_exceeded"
@@ -117,6 +118,11 @@ export type PatchRelayTelemetryEvent =
     remainingDelayMs?: number | undefined;
   })
   | (PatchRelayTelemetryIds & { type: "run.claimed" | "run.started" | "run.completed" | "run.failed" | "run.released" | "run.superseded" })
+  | (PatchRelayTelemetryIds & {
+    type: "run.capacity_deferred";
+    detail: string;
+    retryAtIso?: string | undefined;
+  })
   | (PatchRelayTelemetryIds & {
     type: "state.write_conflict";
     writer: string;
@@ -225,6 +231,19 @@ export class OperatorFeedTelemetrySink implements PatchRelayTelemetry {
           };
         }
         return undefined;
+      case "run.capacity_deferred":
+        return {
+          level: "warn",
+          kind: "workflow",
+          ...(event.issueKey ? { issueKey: event.issueKey } : {}),
+          ...(event.projectId ? { projectId: event.projectId } : {}),
+          ...(event.runType ? { stage: event.runType } : {}),
+          status: "capacity_deferred",
+          summary: event.retryAtIso
+            ? `Codex capacity limit; retrying ${event.runType ?? "run"} at ${event.retryAtIso}`
+            : `Codex capacity limit; retrying ${event.runType ?? "run"} after backoff`,
+          detail: event.detail,
+        };
       case "state.write_conflict":
         return {
           level: "warn",
