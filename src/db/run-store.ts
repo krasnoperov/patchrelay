@@ -7,6 +7,18 @@ import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "../telem
 import type { IssueStore } from "./issue-store.ts";
 import { isoNow, type DatabaseConnection } from "./shared.ts";
 
+interface WorkflowObservationAppender {
+  appendObservation(params: {
+    projectId: string;
+    subjectId: string;
+    source: "runner";
+    type: string;
+    payloadJson?: string | undefined;
+    dedupeKey?: string | undefined;
+    observedAt?: string | undefined;
+  }): unknown;
+}
+
 export class RunStore {
   constructor(
     private readonly connection: DatabaseConnection,
@@ -14,10 +26,42 @@ export class RunStore {
     private readonly issues: IssueStore,
     private readonly issueSessionProjection: IssueSessionProjectionInvalidator,
     private readonly telemetry: PatchRelayTelemetry = noopTelemetry,
+    private readonly workflowObservations?: WorkflowObservationAppender | undefined,
   ) {}
 
   private projectIssueRun(issue: IssueRecord, options?: IssueSessionProjectionOptions): void {
     this.issueSessionProjection.issueRunChanged(issue, options);
+  }
+
+  private appendRunnerObservation(
+    type: string,
+    run: RunRecord,
+    payload: Record<string, unknown> = {},
+  ): void {
+    this.workflowObservations?.appendObservation({
+      projectId: run.projectId,
+      subjectId: run.linearIssueId,
+      source: "runner",
+      type,
+      payloadJson: JSON.stringify({
+        runId: run.id,
+        runType: run.runType,
+        status: run.status,
+        authorityEpoch: run.authorityEpoch,
+        ...(run.launchPhase ? { launchPhase: run.launchPhase } : {}),
+        ...(run.sourceHeadSha ? { sourceHeadSha: run.sourceHeadSha } : {}),
+        ...(run.threadId ? { threadId: run.threadId } : {}),
+        ...(run.turnId ? { turnId: run.turnId } : {}),
+        ...(run.parentThreadId ? { parentThreadId: run.parentThreadId } : {}),
+        ...(run.failureReason ? { failureReason: run.failureReason } : {}),
+        ...(run.shouldNotPublish ? { shouldNotPublish: true } : {}),
+        ...(run.leaseRevokedAt ? { leaseRevokedAt: run.leaseRevokedAt } : {}),
+        ...(run.leaseRevokeReason ? { leaseRevokeReason: run.leaseRevokeReason } : {}),
+        ...(run.endedAt ? { endedAt: run.endedAt } : {}),
+        ...payload,
+      }),
+      dedupeKey: `runner:${type}:${run.id}`,
+    });
   }
 
   createRun(params: {
@@ -27,11 +71,12 @@ export class RunStore {
     runType: RunType;
     sourceHeadSha?: string;
     promptText?: string;
+    authorityEpoch?: number;
   }): RunRecord {
     const now = isoNow();
     const result = this.connection.prepare(`
-      INSERT INTO runs (issue_id, project_id, linear_issue_id, run_type, status, launch_phase, source_head_sha, prompt_text, started_at)
-      VALUES (?, ?, ?, ?, 'queued', 'claimed', ?, ?, ?)
+      INSERT INTO runs (issue_id, project_id, linear_issue_id, run_type, status, launch_phase, source_head_sha, prompt_text, authority_epoch, started_at)
+      VALUES (?, ?, ?, ?, 'queued', 'claimed', ?, ?, ?, ?)
     `).run(
       params.issueId,
       params.projectId,
@@ -39,6 +84,7 @@ export class RunStore {
       params.runType,
       params.sourceHeadSha ?? null,
       params.promptText ?? null,
+      params.authorityEpoch ?? 0,
       now,
     );
     const run = this.getRunById(Number(result.lastInsertRowid))!;
@@ -54,6 +100,7 @@ export class RunStore {
       runType: run.runType,
       ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
     });
+    this.appendRunnerObservation("runner.run_claimed", run);
     return run;
   }
 
@@ -121,6 +168,7 @@ export class RunStore {
       runType: run.runType,
       ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
     });
+    this.appendRunnerObservation("runner.run_started", run);
   }
 
   updateRunTurnId(runId: number, turnId: string): void {
@@ -189,6 +237,7 @@ export class RunStore {
       runType: run.runType,
       ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
     });
+    this.appendRunnerObservation("runner.run_finished", run);
   }
 
   // Plan §4.4: flag a still-running run as superseded. We deliberately
@@ -217,6 +266,33 @@ export class RunStore {
         lastRunType: run.runType,
       });
     }
+    this.appendRunnerObservation("runner.run_superseded_requested", run, {
+      reason: params.reason,
+    });
+  }
+
+  revokeRunLease(runId: number, params: { reason: string; revokedAt?: string }): void {
+    this.connection.prepare(`
+      UPDATE runs SET
+        should_not_publish = 1,
+        lease_revoked_at = COALESCE(lease_revoked_at, ?),
+        lease_revoke_reason = COALESCE(lease_revoke_reason, ?),
+        failure_reason = COALESCE(failure_reason, ?)
+      WHERE id = ?
+        AND status IN ('queued', 'running')
+    `).run(params.revokedAt ?? isoNow(), params.reason, params.reason, runId);
+    const run = this.getRunById(runId);
+    if (!run) return;
+    const issue = this.issues.getIssue(run.projectId, run.linearIssueId);
+    if (issue) {
+      this.projectIssueRun(issue, {
+        summaryText: params.reason,
+        lastRunType: run.runType,
+      });
+    }
+    this.appendRunnerObservation("runner.run_revoked", run, {
+      reason: params.reason,
+    });
   }
 
   saveCompletionCheck(runId: number, params: CompletionCheckResult & {

@@ -181,6 +181,9 @@ export interface RunRecord {
   // released, the run-finalizer reads this flag and refuses to
   // invoke `git push` / `gh pr create` / `gh pr edit`.
   shouldNotPublish?: boolean | undefined;
+  authorityEpoch: number;
+  leaseRevokedAt?: string | undefined;
+  leaseRevokeReason?: string | undefined;
   startedAt: string;
   endedAt?: string | undefined;
 }
@@ -252,4 +255,37 @@ export interface ThreadEventRecord {
   method: string;
   eventJson: string;
   createdAt: string;
+}
+
+export type WorkflowObservationSource = "linear" | "github" | "git" | "runner" | "operator";
+
+export interface WorkflowObservationRecord {
+  id: number;
+  projectId: string;
+  subjectId: string;
+  source: WorkflowObservationSource;
+  type: string;
+  payloadJson?: string | undefined;
+  dedupeKey?: string | undefined;
+  observedAt: string;
+}
+
+export type WorkflowTaskStatus = "open" | "closed";
+
+export interface WorkflowTaskRecord {
+  id: number;
+  projectId: string;
+  subjectId: string;
+  taskId: string;
+  taskType: string;
+  runType?: RunType | undefined;
+  status: WorkflowTaskStatus;
+  reason: string;
+  requirementsJson?: string | undefined;
+  authorityEpoch: number;
+  gateAction: string;
+  gateReason?: string | undefined;
+  createdAt: string;
+  updatedAt: string;
+  closedAt?: string | undefined;
 }

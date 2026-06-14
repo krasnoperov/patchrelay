@@ -5,9 +5,8 @@ import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
 import type { AppConfig, LinearClientProvider, LinearIssueSnapshot, ProjectConfig } from "./types.ts";
 import type { LinearSessionSync } from "./linear-session-sync.ts";
 import { isResumablePausedLocalWork } from "./paused-issue-state.ts";
-import { buildRepairWakeDedupeKey, buildRequestedChangesWakeIdentity, reactiveWakeEventType } from "./reactive-wake-keys.ts";
 import { upsertLinearIssueProjection } from "./linear-issue-projection.ts";
-import type { RunContext } from "./run-context.ts";
+import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
 const WRITER = "service-startup-recovery";
 
@@ -87,6 +86,14 @@ export class ServiceStartupRecovery {
 
       const delegated = liveIssue.delegateId === installation.actorId;
       if (issue.delegatedToPatchRelay !== delegated) {
+        this.appendAuthorityObservation({
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          delegated,
+          actorId: installation.actorId,
+          observedDelegateId: liveIssue.delegateId,
+          reason: "startup_recovery_refreshed_linear_delegation",
+        });
         appendDelegationObservedEvent(this.db, {
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
@@ -106,7 +113,8 @@ export class ServiceStartupRecovery {
       }
       const unresolvedBlockers = this.db.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId);
       const latestRun = this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
-      const hasPendingWake = this.db.workflowWakes.peekIssueWake(issue.projectId, issue.linearIssueId) !== undefined;
+      const hasPendingWake = this.db.workflowWakes.peekIssueWake(issue.projectId, issue.linearIssueId) !== undefined
+        || this.db.workflowTasks.listOpenRunnableTasks(issue.projectId).some((task) => task.subjectId === issue.linearIssueId);
       const shouldRecoverPausedLocalWork =
         delegated
         && isResumablePausedLocalWork({
@@ -169,17 +177,7 @@ export class ServiceStartupRecovery {
       }
 
       if (unresolvedBlockers === 0) {
-        if (shouldRecoverReactivePrWork && reactiveIntent) {
-          this.appendReactiveWakeEvent(issue.projectId, issue.linearIssueId, issue, reactiveIntent.runType);
-        } else {
-          this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-            projectId: issue.projectId,
-            linearIssueId: issue.linearIssueId,
-            eventType: "delegated",
-            dedupeKey: `delegated:${issue.linearIssueId}`,
-          });
-        }
-        if (this.db.workflowWakes.peekIssueWake(issue.projectId, issue.linearIssueId)) {
+        if (this.reconcileAndFindRunnableTask(updated.projectId, updated.linearIssueId)) {
           this.enqueueIssue(issue.projectId, issue.linearIssueId);
         }
         this.logger.info(
@@ -277,19 +275,15 @@ export class ServiceStartupRecovery {
     if (commit.outcome !== "applied") return;
     const updated = commit.issue;
 
-    const hasPendingWake = this.db.workflowWakes.peekIssueWake(project.id, liveIssue.id) !== undefined;
+    this.appendAuthorityObservation({
+      projectId: project.id,
+      linearIssueId: liveIssue.id,
+      delegated: true,
+      observedDelegateId: liveIssue.delegateId,
+      reason: "startup_recovery_discovered_delegated_issue",
+    });
+
     const unresolvedBlockers = this.db.issues.countUnresolvedBlockers(project.id, liveIssue.id);
-    if (!hasPendingWake && unresolvedBlockers === 0) {
-      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, liveIssue.id, {
-        projectId: project.id,
-        linearIssueId: liveIssue.id,
-        eventType: "delegated",
-        dedupeKey: `delegated:${liveIssue.id}`,
-      });
-    }
-    if (this.db.workflowWakes.peekIssueWake(project.id, liveIssue.id)) {
-      this.enqueueIssue(project.id, liveIssue.id);
-    }
     this.logger.info(
       {
         issueKey: updated.issueKey,
@@ -297,51 +291,49 @@ export class ServiceStartupRecovery {
         unresolvedBlockers,
       },
       unresolvedBlockers === 0
-        ? "Discovered delegated Linear issue during startup recovery and queued implementation"
+        ? "Discovered delegated Linear issue during startup recovery"
         : "Discovered delegated blocked Linear issue during startup recovery",
     );
   }
 
-  private appendReactiveWakeEvent(
-    projectId: string,
-    linearIssueId: string,
-    issue: { prHeadSha?: string | undefined; lastGitHubFailureHeadSha?: string | undefined; lastGitHubFailureSignature?: string | undefined },
-    runType: "review_fix" | "branch_upkeep" | "ci_repair" | "queue_repair",
-  ): void {
-    const eventType = reactiveWakeEventType(runType);
-    const dedupeKey = runType === "queue_repair" || runType === "ci_repair"
-      ? buildRepairWakeDedupeKey({
-          scope: "startup_recovery",
-          runType,
-          linearIssueId,
-          signature: issue.lastGitHubFailureSignature,
-          prHeadSha: issue.prHeadSha,
-          failureHeadSha: issue.lastGitHubFailureHeadSha,
-        })
-      : buildRequestedChangesWakeIdentity({
-          linearIssueId,
-          runType,
-          headSha: issue.prHeadSha,
-        }).dedupeKey;
-    const requestedChangesIdentity = eventType === "review_changes_requested"
-      ? buildRequestedChangesWakeIdentity({
-          linearIssueId,
-          runType: runType === "branch_upkeep" ? "branch_upkeep" : "review_fix",
-          headSha: issue.prHeadSha,
-        })
-      : undefined;
-
-    this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(projectId, linearIssueId, {
-      projectId,
-      linearIssueId,
-      eventType,
-      ...(requestedChangesIdentity ? {
-        eventJson: JSON.stringify({
-          requestedChangesCoalesceKey: requestedChangesIdentity.coalesceKey,
-          ...(requestedChangesIdentity.headSha ? { requestedChangesHeadSha: requestedChangesIdentity.headSha } : {}),
-        } satisfies RunContext),
-      } : {}),
-      dedupeKey,
+  private appendAuthorityObservation(params: {
+    projectId: string;
+    linearIssueId: string;
+    delegated: boolean;
+    actorId?: string | undefined;
+    observedDelegateId?: string | undefined;
+    reason: string;
+  }): void {
+    this.db.workflowObservations.appendObservation({
+      projectId: params.projectId,
+      subjectId: params.linearIssueId,
+      source: "linear",
+      type: params.delegated ? "linear.delegated" : "linear.undelegated",
+      payloadJson: JSON.stringify({
+        source: "startup_recovery",
+        delegated: params.delegated,
+        issueId: params.linearIssueId,
+        actorId: params.actorId,
+        observedDelegateId: params.observedDelegateId,
+        reason: params.reason,
+      }),
+      dedupeKey: [
+        "startup_recovery",
+        "authority",
+        params.linearIssueId,
+        params.delegated ? "delegated" : "undelegated",
+        params.observedDelegateId ?? "",
+      ].join(":"),
     });
+  }
+
+  private reconcileAndFindRunnableTask(projectId: string, linearIssueId: string): boolean {
+    const issue = this.db.issues.getIssue(projectId, linearIssueId);
+    if (!issue) return false;
+    const reconciliation = reconcileWorkflowTasksForIssue(this.db, issue);
+    return [
+      ...reconciliation.result.opened,
+      ...reconciliation.result.updated,
+    ].some((task) => task.gateAction === "start" && task.runType);
   }
 }

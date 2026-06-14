@@ -59,7 +59,7 @@ export type PatchRelayTelemetryEvent =
   })
   | (PatchRelayTelemetryIds & {
     type: "wake.derived";
-    source: "session_event" | "implicit" | "legacy_pending_run_type";
+    source: "session_event" | "implicit" | "legacy_pending_run_type" | "workflow_task";
   })
   | (PatchRelayTelemetryIds & {
     type: "wake.suppressed";

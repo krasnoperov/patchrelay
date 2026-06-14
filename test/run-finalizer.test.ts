@@ -7,6 +7,8 @@ import test from "node:test";
 import pino from "pino";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { RunFinalizer } from "../src/run-finalizer.ts";
+import type { FactoryState } from "../src/factory-state.ts";
+import { reconcileWorkflowTasksForIssue } from "../src/workflow-task-reconciler.ts";
 import { createTestWakeDispatcher } from "./helpers/wake-dispatcher.ts";
 
 function createDb() {
@@ -38,7 +40,7 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
   publishedOutcomeError?: string | null;
   failedRecoveryError?: string | null;
   onEnqueue?: (projectId: string, issueId: string) => void;
-  failRunAndClear?: (runId: number, message: string) => void;
+  failRunAndClear?: (runId: number, message: string, nextState?: FactoryState) => void;
 }) {
   const feedEvents: Array<Record<string, unknown>> = [];
   const activities: Array<Record<string, unknown>> = [];
@@ -77,9 +79,9 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
     (_projectId, _linearIssueId, fn) => fn(lease as never),
     release,
     () => true,
-    (run, message) => {
+    (run, message, nextState) => {
       if (options?.failRunAndClear) {
-        options.failRunAndClear(run.id, message);
+        options.failRunAndClear(run.id, message, nextState);
         return;
       }
       throw new Error("failRunAndClear should not be called in completion-check tests");
@@ -239,6 +241,354 @@ test("run finalizer moves no-PR runs into awaiting_input when completion check n
     assert.equal(updatedRun.completionCheckOutcome, "needs_input");
     assert.equal(updatedRun.completionCheckQuestion, "Approve routing /v1/* through the worker?");
     assert.equal(feedEvents.at(-1)?.status, "completion_check_needs_input");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("run finalizer suppresses late completion after authority is revoked", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      issueKey: "USE-REVOKED",
+      title: "Do not publish after undelegation",
+      factoryState: "implementing",
+      delegatedToPatchRelay: false,
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+      authorityEpoch: 1,
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-1", turnId: "turn-main" });
+    db.issueSessions.commitIssueState({
+      writer: "run-finalizer-test",
+      update: {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        activeRunId: run.id,
+      },
+    });
+    db.workflowObservations.appendObservation({
+      projectId: issue.projectId,
+      subjectId: issue.linearIssueId,
+      source: "linear",
+      type: "linear.undelegated",
+      payloadJson: JSON.stringify({ delegated: false }),
+      observedAt: "2026-06-14T10:05:00.000Z",
+    });
+
+    const { finalizer, feedEvents } = createFinalizer(db, {
+      outcome: "done",
+      summary: "would have continued if authority were still present",
+    });
+
+    await finalizer.finalizeCompletedRun({
+      source: "notification",
+      run: db.runs.getRunById(run.id)!,
+      issue: db.getIssue(issue.projectId, issue.linearIssueId)!,
+      thread: {
+        id: "thread-1",
+        preview: "",
+        cwd: "/tmp/work",
+        status: "idle",
+        turns: [
+          {
+            id: "turn-main",
+            status: "completed",
+            items: [{ id: "msg-1", type: "agentMessage", text: "Done." }],
+          },
+        ],
+      },
+      threadId: "thread-1",
+      completedTurnId: "turn-main",
+    });
+
+    const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
+    const updatedRun = db.runs.getRunById(run.id)!;
+    assert.equal(updatedIssue.activeRunId, undefined);
+    assert.equal(updatedRun.status, "superseded");
+    assert.equal(updatedRun.failureReason, "authority revoked before run completion");
+    assert.equal(updatedRun.completionCheckOutcome, undefined);
+    assert.match(String(feedEvents.at(-1)?.summary ?? ""), /authority revoked before run completion/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("run finalizer blocks task-backed review fixes that do not advance the PR head", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      issueKey: "USE-111B",
+      title: "Fix requested review changes",
+      factoryState: "changes_requested",
+      delegatedToPatchRelay: true,
+      prNumber: 42,
+      prState: "open",
+      prReviewState: "changes_requested",
+      prHeadSha: "sha-blocked",
+      lastBlockingReviewHeadSha: "sha-blocked",
+    });
+    reconcileWorkflowTasksForIssue(db, issue);
+    const task = db.workflowTasks.getTask(issue.projectId, issue.linearIssueId, "run:review_fix");
+    assert.equal(task?.gateAction, "start");
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+      sourceHeadSha: "sha-blocked",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-1", turnId: "turn-main" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+    reconcileWorkflowTasksForIssue(db, db.getIssue(issue.projectId, issue.linearIssueId)!);
+
+    let failedMessage: string | undefined;
+    let failedNextState: FactoryState | undefined;
+    const { finalizer, feedEvents } = createFinalizer(db, {
+      outcome: "done",
+      summary: "unused",
+    }, {
+      publishedOutcomeError: null,
+      failRunAndClear: (runId, message, nextState) => {
+        failedMessage = message;
+        failedNextState = nextState;
+        db.runs.finishRun(runId, { status: "failed", failureReason: message });
+        db.upsertIssue({
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          activeRunId: null,
+          factoryState: nextState ?? "failed",
+        });
+      },
+    });
+
+    await finalizer.finalizeCompletedRun({
+      source: "notification",
+      run: db.runs.getRunById(run.id)!,
+      issue: db.getIssue(issue.projectId, issue.linearIssueId)!,
+      thread: {
+        id: "thread-1",
+        preview: "",
+        cwd: "/tmp/work",
+        status: "idle",
+        turns: [
+          {
+            id: "turn-main",
+            status: "completed",
+            items: [{ id: "msg-1", type: "agentMessage", text: "I addressed the review." }],
+          },
+        ],
+      },
+      threadId: "thread-1",
+      completedTurnId: "turn-main",
+    });
+
+    const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
+    const updatedRun = db.runs.getRunById(run.id)!;
+    assert.equal(failedMessage, "same_head_review_handoff_blocked");
+    assert.equal(failedNextState, "escalated");
+    assert.equal(updatedIssue.factoryState, "escalated");
+    assert.equal(updatedIssue.activeRunId, undefined);
+    assert.equal(updatedRun.status, "failed");
+    assert.equal(updatedRun.failureReason, "same_head_review_handoff_blocked");
+    assert.equal(updatedRun.completionCheckOutcome, undefined);
+    assert.equal(feedEvents.at(-1)?.status, "same_head_review_handoff_blocked");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("run finalizer blocks task-backed CI repairs that do not advance the failing head", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      issueKey: "USE-111C",
+      title: "Fix failing CI",
+      factoryState: "repairing_ci",
+      delegatedToPatchRelay: true,
+      prNumber: 42,
+      prState: "open",
+      prHeadSha: "sha-failing",
+      prCheckStatus: "failed",
+      lastGitHubFailureSource: "branch_ci",
+      lastGitHubFailureHeadSha: "sha-failing",
+      lastGitHubFailureSignature: "ci:verify",
+    });
+    reconcileWorkflowTasksForIssue(db, issue);
+    const task = db.workflowTasks.getTask(issue.projectId, issue.linearIssueId, "run:ci_repair");
+    assert.equal(task?.gateAction, "start");
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "ci_repair",
+      sourceHeadSha: "sha-failing",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-1", turnId: "turn-main" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+    reconcileWorkflowTasksForIssue(db, db.getIssue(issue.projectId, issue.linearIssueId)!);
+
+    let failedMessage: string | undefined;
+    let failedNextState: FactoryState | undefined;
+    const { finalizer, feedEvents } = createFinalizer(db, {
+      outcome: "done",
+      summary: "unused",
+    }, {
+      publishedOutcomeError: null,
+      failRunAndClear: (runId, message, nextState) => {
+        failedMessage = message;
+        failedNextState = nextState;
+        db.runs.finishRun(runId, { status: "failed", failureReason: message });
+        db.upsertIssue({
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          activeRunId: null,
+          factoryState: nextState ?? "failed",
+        });
+      },
+    });
+
+    await finalizer.finalizeCompletedRun({
+      source: "notification",
+      run: db.runs.getRunById(run.id)!,
+      issue: db.getIssue(issue.projectId, issue.linearIssueId)!,
+      thread: {
+        id: "thread-1",
+        preview: "",
+        cwd: "/tmp/work",
+        status: "idle",
+        turns: [
+          {
+            id: "turn-main",
+            status: "completed",
+            items: [{ id: "msg-1", type: "agentMessage", text: "I fixed CI." }],
+          },
+        ],
+      },
+      threadId: "thread-1",
+      completedTurnId: "turn-main",
+    });
+
+    const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
+    const updatedRun = db.runs.getRunById(run.id)!;
+    assert.equal(failedMessage, "same_head_repair_handoff_blocked");
+    assert.equal(failedNextState, "escalated");
+    assert.equal(updatedIssue.factoryState, "escalated");
+    assert.equal(updatedIssue.activeRunId, undefined);
+    assert.equal(updatedRun.status, "failed");
+    assert.equal(updatedRun.failureReason, "same_head_repair_handoff_blocked");
+    assert.equal(updatedRun.completionCheckOutcome, undefined);
+    assert.equal(feedEvents.at(-1)?.status, "same_head_repair_handoff_blocked");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("run finalizer blocks task-backed queue repairs that do not advance the failing head", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      issueKey: "USE-111Q",
+      title: "Recover from merge queue eviction",
+      factoryState: "repairing_ci",
+      delegatedToPatchRelay: true,
+      prNumber: 42,
+      prState: "open",
+      prHeadSha: "sha-failing",
+      prCheckStatus: "failed",
+      lastGitHubFailureSource: "queue_eviction",
+      lastGitHubFailureHeadSha: "sha-failing",
+      lastGitHubFailureSignature: "queue:evicted",
+    });
+    reconcileWorkflowTasksForIssue(db, issue);
+    const task = db.workflowTasks.getTask(issue.projectId, issue.linearIssueId, "run:queue_repair");
+    assert.equal(task?.gateAction, "start");
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "queue_repair",
+      sourceHeadSha: "sha-failing",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-1", turnId: "turn-main" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+    reconcileWorkflowTasksForIssue(db, db.getIssue(issue.projectId, issue.linearIssueId)!);
+
+    let failedMessage: string | undefined;
+    let failedNextState: FactoryState | undefined;
+    const { finalizer, feedEvents } = createFinalizer(db, {
+      outcome: "done",
+      summary: "unused",
+    }, {
+      publishedOutcomeError: null,
+      failRunAndClear: (runId, message, nextState) => {
+        failedMessage = message;
+        failedNextState = nextState;
+        db.runs.finishRun(runId, { status: "failed", failureReason: message });
+        db.upsertIssue({
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          activeRunId: null,
+          factoryState: nextState ?? "failed",
+        });
+      },
+    });
+
+    await finalizer.finalizeCompletedRun({
+      source: "notification",
+      run: db.runs.getRunById(run.id)!,
+      issue: db.getIssue(issue.projectId, issue.linearIssueId)!,
+      thread: {
+        id: "thread-1",
+        preview: "",
+        cwd: "/tmp/work",
+        status: "idle",
+        turns: [
+          {
+            id: "turn-main",
+            status: "completed",
+            items: [{ id: "msg-1", type: "agentMessage", text: "I fixed queue eviction." }],
+          },
+        ],
+      },
+      threadId: "thread-1",
+      completedTurnId: "turn-main",
+    });
+
+    const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
+    const updatedRun = db.runs.getRunById(run.id)!;
+    assert.equal(failedMessage, "same_head_repair_handoff_blocked");
+    assert.equal(failedNextState, "escalated");
+    assert.equal(updatedIssue.factoryState, "escalated");
+    assert.equal(updatedIssue.activeRunId, undefined);
+    assert.equal(updatedRun.status, "failed");
+    assert.equal(updatedRun.failureReason, "same_head_repair_handoff_blocked");
+    assert.equal(updatedRun.completionCheckOutcome, undefined);
+    assert.equal(feedEvents.at(-1)?.status, "same_head_repair_handoff_blocked");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

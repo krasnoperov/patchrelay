@@ -36,8 +36,8 @@ const followUpEntryShape = {
 };
 
 /** Inline review comment captured from GitHub. Produced by
- * github-webhook-reactive-run.ts fetchReviewCommentsForEvent and
- * reactive-run-policy.ts hydrateRequestedChangesContext (remote-pr-review.ts);
+ * github-review-context.ts and reactive-run-policy.ts
+ * hydrateRequestedChangesContext (remote-pr-review.ts);
  * consumed by prompting/patchrelay.ts readReviewFixComments and
  * run-orchestrator.ts (review round activity comment count). */
 const reviewCommentShape = {
@@ -80,8 +80,8 @@ const ciSnapshotCheckShape = {
 };
 
 /** Settled CI snapshot. Produced by github-failure-context.ts
- * buildCiSnapshotFromChecks (attached to settled_red_ci payloads by
- * github-webhook-reactive-run.ts and to implicit ci_repair wakes by
+ * buildCiSnapshotFromChecks (attached to workflow task payloads by
+ * workflow-runtime.ts and to implicit ci_repair wakes by
  * workflow-wake-resolver.ts); consumed by prompting/patchrelay.ts
  * buildCiRepairContext. */
 const ciSnapshotShape = {
@@ -210,7 +210,7 @@ const runContextShape = {
   // ── Requested-changes / review fix ────────────────────────────────
   /** Coalescing identity for review_changes_requested wakes. Produced by
    * buildRequestedChangesWakeIdentity callers (run-wake-planner.ts,
-   * github-webhook-reactive-run.ts, operator-retry-event.ts,
+   * github-review-context.ts, operator-retry-event.ts,
    * idle-reconciliation.ts); consumed by reactive-wake-keys.ts
    * readRequestedChangesCoalesceKey for event coalescing. */
   requestedChangesCoalesceKey: z.string().optional(),
@@ -225,7 +225,7 @@ const runContextShape = {
    * review_changes_requested payloads from operator-retry-event.ts and
    * deriveSessionWakePlan branch selection). */
   branchUpkeepRequired: z.boolean().optional(),
-  /** GitHub review id. Produced by github-webhook-reactive-run.ts and
+  /** GitHub review id. Produced by github-review-context.ts and
    * reactive-run-policy.ts hydrateRequestedChangesContext; consumed by
    * prompting/patchrelay.ts buildStructuredReviewContext. */
   reviewId: z.number().optional(),

@@ -18,7 +18,6 @@ import { buildOperatorRetryEvent } from "../operator-retry-event.ts";
 import { planIssueWebhookWorkflow } from "./issue-webhook-workflow-planner.ts";
 import type { WakeDispatcher } from "../wake-dispatcher.ts";
 import { dirtyWorktreeEventPayload, inspectGitWorktreeStatus } from "../git-worktree-status.ts";
-import type { RunContext } from "../run-context.ts";
 
 const WRITER = "desired-stage-recorder";
 
@@ -165,6 +164,9 @@ export class DesiredStageRecorder {
     const isResolved = isResolvedLinearState(issue.currentLinearStateType, issue.currentLinearState);
 
     if (workflowPlan.undelegation.factoryState) {
+      if (activeRun && releaseReason) {
+        this.db.runs.revokeRunLease(activeRun.id, { reason: releaseReason });
+      }
       if (activeRun?.threadId && activeRun.turnId) {
         await params.stopActiveRun(activeRun, "STOP: The issue was un-delegated from PatchRelay. Stop working immediately and exit.");
       }
@@ -224,25 +226,6 @@ export class DesiredStageRecorder {
         stage: issue.factoryState,
         status: "settling_children",
         summary: "Waiting briefly for child issues to settle before orchestration starts",
-      });
-    } else if (
-      !workflowPlan.startupResume.factoryState
-      && !workflowPlan.startupResume.pendingRunType
-      && workflowPlan.desiredStage === "implementation"
-      && params.normalized.triggerEvent !== "commentCreated"
-      && params.normalized.triggerEvent !== "commentUpdated"
-      && params.normalized.triggerEvent !== "agentPrompted"
-    ) {
-      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(params.project.id, normalizedIssue.id, {
-        projectId: params.project.id,
-        linearIssueId: normalizedIssue.id,
-        eventType: "delegated",
-        eventJson: JSON.stringify({
-          promptContext: params.normalized.agentSession?.promptContext?.trim()
-            ?? (issue.issueKey ? `Linear issue ${issue.issueKey} was delegated to PatchRelay.` : undefined),
-          promptBody: params.normalized.agentSession?.promptBody?.trim(),
-        } satisfies RunContext),
-        dedupeKey: `delegated:${normalizedIssue.id}`,
       });
     }
 

@@ -105,7 +105,7 @@ The pipeline is built around five rules that fall out of the four primitives. Ea
 |-|-|-|
 | Carry the verdict by `patch_id` | review-quill `service.ts` carry-forward gate | Re-review on rebase against fresh main |
 | Don't originate redundant pushes | patchrelay run-finalizer (`shouldNotPublish` + post-hoc `patch_id` detection) | Cosmetic re-pushes that dismiss approvals |
-| Branch CI is metadata once In Merge Queue | patchrelay state-machine table + reactive enqueue guard | `ci_repair` runs fired on flaky branch CI while the lander already has the PR |
+| Branch CI is metadata once In Merge Queue | patchrelay state-machine table + workflow-task derivation guard | `ci_repair` runs fired on flaky branch CI while the lander already has the PR |
 | Cancel a run when an approval lands on the run's source SHA | patchrelay `superseded` RunStatus + finalizer publication block | Mid-run race where a fresh approval is dismissed by a still-running review-fix push |
 | Test the integration tree, not the head | merge-steward speculative branch (`mq-spec-*`) | Green PR head that breaks main after fast-forward |
 

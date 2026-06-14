@@ -6,6 +6,8 @@ import type {
   IssueSessionRecord,
   RunRecord,
   RunStatus,
+  WorkflowObservationRecord,
+  WorkflowTaskRecord,
 } from "./db-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
 import {
@@ -18,6 +20,8 @@ import { OperatorFeedStore } from "./db/operator-feed-store.ts";
 import { RepositoryLinkStore } from "./db/repository-link-store.ts";
 import { RunStore } from "./db/run-store.ts";
 import { WebhookEventStore } from "./db/webhook-event-store.ts";
+import { WorkflowObservationStore } from "./db/workflow-observation-store.ts";
+import { WorkflowTaskStore } from "./db/workflow-task-store.ts";
 import { runPatchRelayMigrations } from "./db/migrations.ts";
 import { assertPatchRelaySchemaReady } from "./db/schema-guard.ts";
 import { SqliteConnection, type DatabaseConnection } from "./db/shared.ts";
@@ -26,6 +30,7 @@ import { syncIssueSessionFromIssue } from "./issue-session-projector.ts";
 import { noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
 import { TrackedIssueQuery } from "./tracked-issue-query.ts";
 import { WorkflowWakeResolver } from "./workflow-wake-resolver.ts";
+import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
 export class PatchRelayDatabase {
   private readonly connection: DatabaseConnection;
@@ -38,6 +43,8 @@ export class PatchRelayDatabase {
   readonly operatorFeed: OperatorFeedStore;
   readonly repositories: RepositoryLinkStore;
   readonly webhookEvents: WebhookEventStore;
+  readonly workflowObservations: WorkflowObservationStore;
+  readonly workflowTasks: WorkflowTaskStore;
   readonly issues: IssueStore;
   readonly issueSessions: IssueSessionStore;
   readonly workflowWakes: WorkflowWakeResolver;
@@ -59,6 +66,8 @@ export class PatchRelayDatabase {
     this.operatorFeed = new OperatorFeedStore(this.connection);
     this.repositories = new RepositoryLinkStore(this.connection);
     this.webhookEvents = new WebhookEventStore(this.connection);
+    this.workflowObservations = new WorkflowObservationStore(this.connection, mapWorkflowObservationRow);
+    this.workflowTasks = new WorkflowTaskStore(this.connection, mapWorkflowTaskRow);
     this.issueSessionProjection = new ImmediateIssueSessionProjectionInvalidator({
       getIssue: (projectId, linearIssueId) => this.issues.getIssue(projectId, linearIssueId),
       listDependents: (projectId, blockerLinearIssueId) => this.issues.listDependents(projectId, blockerLinearIssueId),
@@ -81,6 +90,7 @@ export class PatchRelayDatabase {
       this.issues,
       this.issueSessionProjection,
       this.telemetryProxy,
+      this.workflowObservations,
     );
     this.issueSessions = new IssueSessionStore(
       this.connection,
@@ -92,7 +102,11 @@ export class PatchRelayDatabase {
       this.telemetryProxy,
     );
     this.workflowWakes = new WorkflowWakeResolver(this.issues, this.issueSessions);
-    this.trackedIssues = new TrackedIssueQuery(this.issues, this.issueSessions, this.workflowWakes, this.runs);
+    this.trackedIssues = new TrackedIssueQuery(this.issues, this.issueSessions, {
+      hasPendingWake: (projectId, linearIssueId) =>
+        this.workflowWakes.hasPendingWake(projectId, linearIssueId)
+        || this.workflowTasks.listOpenRunnableTasks(projectId).some((task) => task.subjectId === linearIssueId),
+    }, this.runs);
   }
 
   private readonly databasePath: string;
@@ -216,7 +230,20 @@ export class PatchRelayDatabase {
   }
 
   listIssuesReadyForExecution(): Array<{ projectId: string; linearIssueId: string }> {
-    return this.trackedIssues.listIssuesReadyForExecution();
+    const ready = new Map<string, { projectId: string; linearIssueId: string }>();
+    for (const issue of this.issues.listIssues()) {
+      reconcileWorkflowTasksForIssue(this, issue);
+    }
+    for (const issue of this.trackedIssues.listIssuesReadyForExecution()) {
+      ready.set(`${issue.projectId}:${issue.linearIssueId}`, issue);
+    }
+    for (const task of this.workflowTasks.listOpenRunnableTasks()) {
+      ready.set(`${task.projectId}:${task.subjectId}`, {
+        projectId: task.projectId,
+        linearIssueId: task.subjectId,
+      });
+    }
+    return [...ready.values()];
   }
 
   /**
@@ -359,7 +386,43 @@ function mapRunRow(row: Record<string, unknown>): RunRecord {
     ...(row.report_json !== null ? { reportJson: String(row.report_json) } : {}),
     ...(row.failure_reason !== null ? { failureReason: String(row.failure_reason) } : {}),
     ...(row.should_not_publish === 1 || row.should_not_publish === true ? { shouldNotPublish: true } : {}),
+    authorityEpoch: Number(row.authority_epoch ?? 0),
+    ...(row.lease_revoked_at !== null ? { leaseRevokedAt: String(row.lease_revoked_at) } : {}),
+    ...(row.lease_revoke_reason !== null ? { leaseRevokeReason: String(row.lease_revoke_reason) } : {}),
     startedAt: String(row.started_at),
     ...(row.ended_at !== null ? { endedAt: String(row.ended_at) } : {}),
+  };
+}
+
+function mapWorkflowObservationRow(row: Record<string, unknown>): WorkflowObservationRecord {
+  return {
+    id: Number(row.id),
+    projectId: String(row.project_id),
+    subjectId: String(row.subject_id),
+    source: String(row.source) as WorkflowObservationRecord["source"],
+    type: String(row.type),
+    ...(row.payload_json !== null && row.payload_json !== undefined ? { payloadJson: String(row.payload_json) } : {}),
+    ...(row.dedupe_key !== null && row.dedupe_key !== undefined ? { dedupeKey: String(row.dedupe_key) } : {}),
+    observedAt: String(row.observed_at),
+  };
+}
+
+function mapWorkflowTaskRow(row: Record<string, unknown>): WorkflowTaskRecord {
+  return {
+    id: Number(row.id),
+    projectId: String(row.project_id),
+    subjectId: String(row.subject_id),
+    taskId: String(row.task_id),
+    taskType: String(row.task_type),
+    ...(row.run_type !== null && row.run_type !== undefined ? { runType: String(row.run_type) as WorkflowTaskRecord["runType"] } : {}),
+    status: String(row.status) as WorkflowTaskRecord["status"],
+    reason: String(row.reason),
+    ...(row.requirements_json !== null && row.requirements_json !== undefined ? { requirementsJson: String(row.requirements_json) } : {}),
+    authorityEpoch: Number(row.authority_epoch ?? 0),
+    gateAction: String(row.gate_action),
+    ...(row.gate_reason !== null && row.gate_reason !== undefined ? { gateReason: String(row.gate_reason) } : {}),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    ...(row.closed_at !== null && row.closed_at !== undefined ? { closedAt: String(row.closed_at) } : {}),
   };
 }

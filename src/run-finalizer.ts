@@ -23,10 +23,23 @@ import type { WakeDispatcher } from "./wake-dispatcher.ts";
 import { inspectGitWorktreeStatus, isRepairRunType, type GitWorktreeStatus } from "./git-worktree-status.ts";
 import { buildRunOutcomeSummary, type RunOutcomeFacts } from "./run-outcome-summary.ts";
 import { settleRun } from "./run-settlement.ts";
+import { evaluateTaskCompletion, projectWorkflowSnapshot, type WorkflowTask } from "./workflow-runtime.ts";
 
 type StageReport = ReturnType<typeof buildStageReport>;
 
 const WRITER = "run-finalizer";
+
+function parseObjectJson(raw: string | undefined): Record<string, unknown> | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function buildRunSummaryJson(report: StageReport, outcomeSummary?: string): string {
   return JSON.stringify({
@@ -257,24 +270,21 @@ export class RunFinalizer {
     });
   }
 
-  // Plan §4.4: finalize a run that was superseded mid-flight. The
-  // status row was already moved to `superseded` by the trigger
-  // observer; this just makes sure the issue's activeRunId is
-  // cleared, the lease is released, and the operator sees a
-  // clean recap event. No publication, no follow-up enqueue —
-  // the approval that triggered supersedure already advanced the
-  // factoryState.
-  private releaseSupersededRun(
+  // Finalize a run whose authority/premise was revoked mid-flight.
+  // No publication, no follow-up enqueue: the current external truth
+  // already superseded the run's right to act.
+  private releaseSuppressedRun(
     run: RunRecord,
     threadId: string,
     completedTurnId: string | undefined,
+    reason: string,
   ): void {
     this.withHeldLease(run.projectId, run.linearIssueId, () => {
       this.db.runs.finishRun(run.id, {
         status: "superseded",
         threadId,
         ...(completedTurnId ? { turnId: completedTurnId } : {}),
-        failureReason: run.failureReason ?? "approved on the same head; further publication suppressed",
+        failureReason: run.failureReason ?? reason,
       });
       this.db.issueSessions.commitIssueState({
         writer: WRITER,
@@ -291,9 +301,29 @@ export class RunFinalizer {
     this.feed?.publish({
       level: "info",
       kind: "agent",
-      summary: `Run #${run.id} superseded — publication suppressed (approved on the same head)`,
+      summary: `Run #${run.id} superseded — publication suppressed (${reason})`,
       ...(run.projectId ? { projectId: run.projectId } : {}),
     });
+  }
+
+  private resolveSuppressedRunReason(run: RunRecord, issue: IssueRecord): string | undefined {
+    if (run.shouldNotPublish || run.status === "superseded") {
+      return run.leaseRevokeReason ?? run.failureReason ?? "publication suppressed";
+    }
+
+    const workflowSnapshot = projectWorkflowSnapshot({
+      issue,
+      observations: this.db.workflowObservations.listObservations(issue.projectId, issue.linearIssueId),
+      blockerCount: this.db.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId),
+      childCount: this.db.issues.listCanonicalChildIssues(issue.projectId, issue.linearIssueId).length,
+    });
+    if (!workflowSnapshot.authority.delegated) {
+      return "authority revoked before run completion";
+    }
+    if (run.authorityEpoch > 0 && workflowSnapshot.authority.epoch > run.authorityEpoch) {
+      return `authority epoch changed from ${run.authorityEpoch} to ${workflowSnapshot.authority.epoch}`;
+    }
+    return undefined;
   }
 
 
@@ -373,6 +403,50 @@ export class RunFinalizer {
     const status = inspectGitWorktreeStatus(issue.worktreePath);
     if (!status.dirty) return undefined;
     return status;
+  }
+
+  private resolveWorkflowCompletionTask(run: RunRecord): WorkflowTask | undefined {
+    if (!isRepairRunType(run.runType)) return undefined;
+    const record = this.db.workflowTasks.getTask(run.projectId, run.linearIssueId, `run:${run.runType}`);
+    if (!record?.runType) return undefined;
+    const requirements = parseObjectJson(record.requirementsJson);
+    return {
+      id: record.taskId,
+      type: record.taskType as WorkflowTask["type"],
+      runType: record.runType,
+      reason: record.reason,
+      ...(requirements ? { requirements } : {}),
+    };
+  }
+
+  private evaluateWorkflowCompletionGate(
+    run: RunRecord,
+    issue: IssueRecord,
+  ): { message: string; nextState: FactoryState; status: string; level: "warn" | "error" } | undefined {
+    const task = this.resolveWorkflowCompletionTask(run);
+    if (!task) return undefined;
+    const snapshot = projectWorkflowSnapshot({
+      issue,
+      observations: this.db.workflowObservations.listObservations(issue.projectId, issue.linearIssueId),
+      blockerCount: this.db.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId),
+      childCount: this.db.issues.listCanonicalChildIssues(issue.projectId, issue.linearIssueId).length,
+    });
+    const decision = evaluateTaskCompletion(snapshot, task);
+    if (decision.action === "start") return undefined;
+    if (decision.action === "ask") {
+      return {
+        message: decision.question,
+        nextState: "awaiting_input",
+        status: decision.reason,
+        level: "warn",
+      };
+    }
+    return {
+      message: decision.reason,
+      nextState: "escalated",
+      status: decision.reason,
+      level: decision.action === "wait" ? "warn" : "error",
+    };
   }
 
   private continueDirtyRepairWorktree(params: {
@@ -468,18 +542,15 @@ export class RunFinalizer {
     completedTurnId?: string;
   }): Promise<void> {
     const { run, issue, thread, threadId } = params;
+    const freshIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
 
-    // Plan §4.4: a run flagged shouldNotPublish was deliberately
-    // superseded mid-flight (the PR was approved on the same head
-    // while a review_fix run was still producing output). The Codex
-    // turn may have completed; the finalizer must NOT run any of
-    // the publication-verification policies — they all assume the
-    // run was supposed to publish, and would either fail it
-    // spuriously (`verifyReviewFixAdvancedHead`) or open new
-    // follow-up work. Just record the supersedure outcome and
-    // release the lease.
-    if (run.shouldNotPublish || run.status === "superseded") {
-      this.releaseSupersededRun(run, threadId, params.completedTurnId);
+    // A run flagged shouldNotPublish, or whose authority epoch no
+    // longer matches current truth, must not enter publication or
+    // completion-verification paths. Those policies assume the run is
+    // still allowed to publish and may open follow-up work.
+    const suppressedReason = this.resolveSuppressedRunReason(run, freshIssue);
+    if (suppressedReason) {
+      this.releaseSuppressedRun(run, threadId, params.completedTurnId, suppressedReason);
       return;
     }
 
@@ -491,7 +562,6 @@ export class RunFinalizer {
       countEventMethods(this.db.runs.listThreadEvents(run.id)),
     );
 
-    const freshIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
     const dirtyRepairWorktree = this.inspectDirtyRepairWorktree(run, freshIssue);
     if (dirtyRepairWorktree) {
       this.continueDirtyRepairWorktree({
@@ -501,6 +571,20 @@ export class RunFinalizer {
         threadId,
         ...(params.completedTurnId ? { completedTurnId: params.completedTurnId } : {}),
         report,
+      });
+      return;
+    }
+
+    const workflowCompletionGate = this.evaluateWorkflowCompletionGate(run, freshIssue);
+    if (workflowCompletionGate) {
+      this.failRunAndClear(run, workflowCompletionGate.message, workflowCompletionGate.nextState);
+      this.syncFailureOutcome({
+        run,
+        fallbackIssue: freshIssue,
+        message: workflowCompletionGate.message,
+        level: workflowCompletionGate.level,
+        status: workflowCompletionGate.status,
+        summary: workflowCompletionGate.message,
       });
       return;
     }

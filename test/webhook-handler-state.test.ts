@@ -316,9 +316,11 @@ test("delegated blocked issue is tracked but does not queue implementation until
     await handler.processWebhookEvent(blockerDoneEvent.id);
 
     const unblockedIssue = db.getIssue("krasnoperov/mafia", "issue-maf-40");
-    const unblockedWake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-40");
+    const unblockedTask = db.workflowTasks.getTask("krasnoperov/mafia", "issue-maf-40", "run:implementation");
     assert.equal(unblockedIssue?.pendingRunType, undefined);
-    assert.equal(unblockedWake?.runType, "implementation");
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-40"), undefined);
+    assert.equal(unblockedTask?.runType, "implementation");
+    assert.equal(unblockedTask?.gateAction, "start");
     assert.deepEqual(db.listIssuesReadyForExecution(), [{ projectId: "krasnoperov/mafia", linearIssueId: "issue-maf-40" }]);
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-40" }]);
   } finally {
@@ -400,12 +402,14 @@ test("delegated issue with only completed blockers queues implementation immedia
     await handler.processWebhookEvent(event.id);
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-completed-blocker");
-    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-completed-blocker");
+    const workflowTask = db.workflowTasks.getTask("krasnoperov/mafia", "issue-maf-completed-blocker", "run:implementation");
     assert.equal(issue?.factoryState, "delegated");
     assert.equal(issue?.pendingRunType, undefined);
     assert.equal(db.listIssueDependencies("krasnoperov/mafia", "issue-maf-completed-blocker").length, 1);
     assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-completed-blocker"), 0);
-    assert.equal(wake?.runType, "implementation");
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-completed-blocker"), undefined);
+    assert.equal(workflowTask?.runType, "implementation");
+    assert.equal(workflowTask?.gateAction, "start");
     assert.deepEqual(db.listIssuesReadyForExecution(), [{ projectId: "krasnoperov/mafia", linearIssueId: "issue-maf-completed-blocker" }]);
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-completed-blocker" }]);
   } finally {
@@ -763,10 +767,12 @@ test("external blocker completion releases delegated dependents without tracking
     });
     await handler.processWebhookEvent(blockerDoneEvent.id);
 
-    const unblockedWake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-40");
+    const unblockedTask = db.workflowTasks.getTask("krasnoperov/mafia", "issue-maf-40", "run:implementation");
     assert.equal(db.getIssue("krasnoperov/mafia", "issue-maf-39"), undefined);
     assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-40"), 0);
-    assert.equal(unblockedWake?.runType, "implementation");
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-40"), undefined);
+    assert.equal(unblockedTask?.runType, "implementation");
+    assert.equal(unblockedTask?.gateAction, "start");
     assert.deepEqual(db.listIssuesReadyForExecution(), [{ projectId: "krasnoperov/mafia", linearIssueId: "issue-maf-40" }]);
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-40" }]);
   } finally {
@@ -842,10 +848,12 @@ test("delegated issue webhooks enqueue implementation wake immediately when the 
     await handler.processWebhookEvent(stored.id);
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-delegated");
-    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-delegated");
+    const workflowTask = db.workflowTasks.getTask("krasnoperov/mafia", "issue-maf-delegated", "run:implementation");
     assert.equal(issue?.factoryState, "delegated");
     assert.equal(issue?.pendingRunType, undefined);
-    assert.equal(wake?.runType, "implementation");
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-delegated"), undefined);
+    assert.equal(workflowTask?.runType, "implementation");
+    assert.equal(workflowTask?.gateAction, "start");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-delegated" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

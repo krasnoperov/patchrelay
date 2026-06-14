@@ -154,9 +154,12 @@ test("unblock while idle enqueues implementation and clears stale blocked read-m
 
     assert.deepEqual(readiness.reconcile("usertold", "issue-blocker"), ["issue-child"]);
     const listEntry = getListEntry(db, "USE-2");
+    const workflowTask = db.workflowTasks.getTask("usertold", "issue-child", "run:implementation");
 
     assert.equal(db.countUnresolvedBlockers("usertold", "issue-child"), 0);
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-child")?.runType, "implementation");
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-child"), undefined);
+    assert.equal(workflowTask?.runType, "implementation");
+    assert.equal(workflowTask?.gateAction, "start");
     assert.deepEqual(db.listIssuesReadyForExecution(), [{ projectId: "usertold", linearIssueId: "issue-child" }]);
     assert.deepEqual(enqueued, [{ projectId: "usertold", issueId: "issue-child" }]);
     assert.notEqual(db.issueSessions.getIssueSession("usertold", "issue-child")?.waitingReason, "Blocked by USE-1");
@@ -222,7 +225,11 @@ test("external blocker completion releases dependents without a blocker issue ro
     assert.equal(db.getIssue("usertold", "issue-blocker"), undefined);
     assert.deepEqual(readiness.reconcile("usertold", "issue-blocker"), ["issue-child"]);
     const listEntry = getListEntry(db, "USE-2");
+    const workflowTask = db.workflowTasks.getTask("usertold", "issue-child", "run:implementation");
     assert.equal(db.countUnresolvedBlockers("usertold", "issue-child"), 0);
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-child"), undefined);
+    assert.equal(workflowTask?.runType, "implementation");
+    assert.equal(workflowTask?.gateAction, "start");
     assert.deepEqual(enqueued, [{ projectId: "usertold", issueId: "issue-child" }]);
     assert.notEqual(db.issueSessions.getIssueSession("usertold", "issue-child")?.waitingReason, "Blocked by USE-1");
     assert.equal(listEntry?.readyForExecution, true);

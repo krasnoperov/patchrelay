@@ -78,6 +78,44 @@ export function upsertLinearIssueProjection(
   projectId: string,
   liveIssue: LinearIssueSnapshot,
 ): void {
+  db.workflowObservations.appendObservation({
+    projectId,
+    subjectId: liveIssue.id,
+    source: "linear",
+    type: "linear.issue_reconciled",
+    payloadJson: JSON.stringify({
+      issueId: liveIssue.id,
+      issueKey: liveIssue.identifier,
+      title: liveIssue.title,
+      stateName: liveIssue.stateName,
+      stateType: liveIssue.stateType,
+      delegateId: liveIssue.delegateId,
+      parentId: liveIssue.parentId,
+      blockedBy: liveIssue.blockedBy.map((blocker) => ({
+        id: blocker.id,
+        identifier: blocker.identifier,
+        title: blocker.title,
+        stateName: blocker.stateName,
+        stateType: blocker.stateType,
+      })),
+    }),
+    dedupeKey: [
+      "issue_reconciled",
+      liveIssue.id,
+      liveIssue.identifier ?? "",
+      liveIssue.stateName ?? "",
+      liveIssue.stateType ?? "",
+      liveIssue.delegateId ?? "",
+      liveIssue.parentId ?? "",
+      ...liveIssue.blockedBy.map((blocker) => [
+        blocker.id,
+        blocker.identifier ?? "",
+        blocker.stateName ?? "",
+        blocker.stateType ?? "",
+      ].join("/")),
+    ].join(":"),
+  });
+
   replaceIssueDependenciesFromLinearIssue(db, projectId, liveIssue);
 
   db.issues.replaceIssueParentLink({

@@ -12,7 +12,7 @@ export class TrackedIssueQuery {
   constructor(
     private readonly issues: IssueStore,
     private readonly issueSessions: IssueSessionStore,
-    private readonly workflowWakes: WorkflowWakeResolver,
+    private readonly workflowWakes: Pick<WorkflowWakeResolver, "hasPendingWake">,
     private readonly runs: RunStore,
   ) {}
 

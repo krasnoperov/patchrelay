@@ -16,11 +16,12 @@ import {
 import { resolveGitHubWebhookIssue } from "./github-webhook-issue-resolution.ts";
 import { maybeCloseLatePublishedImplementationPr } from "./github-webhook-late-publication-guard.ts";
 import { projectGitHubWebhookState } from "./github-webhook-state-projector.ts";
-import { maybeEnqueueGitHubReactiveRun } from "./github-webhook-reactive-run.ts";
+import { resolveGitHubRequestedChangesContext } from "./github-review-context.ts";
 import { maybeRunSequenceBackstop } from "./github-webhook-sequence-backstop.ts";
 import { maybeFanChildRebaseWakes } from "./github-webhook-stack-coordination.ts";
 import { handleGitHubTerminalPrEvent } from "./github-webhook-terminal-handler.ts";
 import { WakeDispatcher } from "./wake-dispatcher.ts";
+import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
 type FetchLike = typeof fetch;
 
@@ -171,17 +172,71 @@ export class GitHubWebhookHandler {
       project,
       resolved.linkedBy,
     );
-
-    await maybeEnqueueGitHubReactiveRun({
-      db: this.db,
-      logger: this.logger,
-      feed: this.feed,
-      wakeDispatcher: this.wakeDispatcher,
-      issue: freshIssue,
-      event,
-      project,
-      failureContextResolver: this.failureContextResolver,
-      fetchImpl: this.fetchImpl,
+    const requestedChangesContext = event.triggerEvent === "review_changes_requested"
+      ? await resolveGitHubRequestedChangesContext({
+          linearIssueId: freshIssue.linearIssueId,
+          event,
+          fetchImpl: this.fetchImpl,
+        }).catch((error) => {
+          this.logger.warn(
+            {
+              issueKey: freshIssue.issueKey,
+              prNumber: event.prNumber,
+              reviewId: event.reviewId,
+              error: error instanceof Error ? error.message : String(error),
+            },
+            "Failed to fetch inline review comments for requested-changes observation",
+          );
+          return resolveGitHubRequestedChangesContext({
+            linearIssueId: freshIssue.linearIssueId,
+            event,
+            fetchImpl: this.fetchImpl,
+            includeInlineComments: false,
+          });
+        })
+      : undefined;
+    this.db.workflowObservations.appendObservation({
+      projectId: freshIssue.projectId,
+      subjectId: freshIssue.linearIssueId,
+      source: "github",
+      type: `github.${event.triggerEvent}`,
+      payloadJson: JSON.stringify({
+        triggerEvent: event.triggerEvent,
+        repoFullName: event.repoFullName,
+        branchName: event.branchName,
+        headSha: event.headSha,
+        prNumber: event.prNumber,
+        prState: event.prState,
+        reviewState: event.reviewState,
+        reviewId: event.reviewId,
+        reviewCommitId: event.reviewCommitId,
+        reviewerName: event.reviewerName,
+        requestedChangesContext: requestedChangesContext?.context,
+        checkStatus: event.checkStatus,
+        checkName: event.checkName,
+        checkUrl: event.checkUrl,
+      }),
+      dedupeKey: requestedChangesContext?.dedupeKey ?? [
+        event.triggerEvent,
+        event.repoFullName,
+        event.prNumber ?? event.branchName,
+        event.headSha,
+        event.reviewId ?? event.checkName ?? "",
+        event.reviewState ?? event.checkStatus ?? event.prState ?? "",
+      ].join(":"),
+    });
+    const workflowReconciliation = reconcileWorkflowTasksForIssue(this.db, freshIssue);
+    const changedRunnableWorkflowTask = [
+      ...workflowReconciliation.result.opened,
+      ...workflowReconciliation.result.updated,
+    ].some((task) => task.gateAction === "start" && task.runType);
+    const shouldDispatchWorkflowTask = event.triggerEvent === "review_changes_requested"
+      || event.triggerEvent === "check_failed"
+      || event.triggerEvent === "pr_closed";
+    await this.wakeDispatcher.withTick(async () => {
+      if (shouldDispatchWorkflowTask && changedRunnableWorkflowTask) {
+        this.wakeDispatcher.dispatchIfWakePending(freshIssue.projectId, freshIssue.linearIssueId);
+      }
     });
 
     if (event.triggerEvent === "pr_opened") {

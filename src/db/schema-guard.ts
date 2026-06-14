@@ -5,6 +5,8 @@ const REQUIRED_PATCHRELAY_TABLES = [
   "runs",
   "issue_sessions",
   "issue_session_events",
+  "workflow_observations",
+  "workflow_tasks",
 ] as const;
 
 export function assertPatchRelaySchemaReady(connection: DatabaseConnection, databasePath: string): void {
@@ -21,4 +23,3 @@ export function assertPatchRelaySchemaReady(connection: DatabaseConnection, data
     `PatchRelay database is uninitialized or points at the wrong path: ${databasePath}. Missing required table(s): ${missing.join(", ")}`,
   );
 }
-

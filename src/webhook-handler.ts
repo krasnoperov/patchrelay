@@ -21,6 +21,7 @@ import { WakeDispatcher } from "./wake-dispatcher.ts";
 import { CodexFollowupIntentClassifier, type FollowupIntentClassifier } from "./followup-intent.ts";
 import { AgentInputService } from "./agent-input-service.ts";
 import { noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
+import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
 export interface IssueQueueItem {
   projectId: string;
@@ -176,6 +177,33 @@ export class WebhookHandler {
         stopActiveRun: (run, input) => this.stopActiveRun(run, input),
       });
       const trackedIssue = result.issue;
+      this.db.workflowObservations.appendObservation({
+        projectId: project.id,
+        subjectId: issue.id,
+        source: "linear",
+        type: hydrated.triggerEvent === "delegateChanged"
+          ? result.delegated ? "linear.delegated" : "linear.undelegated"
+          : `linear.${hydrated.triggerEvent}`,
+        payloadJson: JSON.stringify({
+          triggerEvent: hydrated.triggerEvent,
+          webhookId: hydrated.webhookId,
+          delegated: result.delegated,
+          issueId: issue.id,
+          issueKey: issue.identifier,
+          agentSessionId: hydrated.agentSession?.id,
+          promptContext: hydrated.agentSession?.promptContext?.trim(),
+          promptBody: hydrated.agentSession?.promptBody?.trim(),
+          actorId: hydrated.actor?.id,
+          actorName: hydrated.actor?.name,
+        }),
+        dedupeKey: hydrated.webhookId,
+      });
+      const observedIssue = this.db.getIssue(project.id, issue.id);
+      let openedRunnableWorkflowTask = false;
+      if (observedIssue) {
+        const workflowReconciliation = reconcileWorkflowTasksForIssue(this.db, observedIssue);
+        openedRunnableWorkflowTask = workflowReconciliation.result.opened.some((task) => task.gateAction === "start" && task.runType);
+      }
 
       const newlyReadyDependents = this.dependencyReadinessHandler.reconcile(project.id, issue.id);
 
@@ -218,36 +246,53 @@ export class WebhookHandler {
         || normalized.triggerEvent === "commentUpdated"
         || normalized.triggerEvent === "agentPrompted";
 
-      if (result.wakeRunType && !wakeAlreadyQueuedByFollowUpHandler) {
-        const queuedRunType = this.enqueuePendingSessionWake(project.id, issue.id);
-        this.feed?.publish({
-          level: "info",
-          kind: "stage",
-          issueKey: issue.identifier,
-          projectId: project.id,
-          stage: queuedRunType ?? result.wakeRunType,
-          status: "queued",
-          summary: `Queued ${(queuedRunType ?? result.wakeRunType)} workflow`,
-          detail: `Triggered by ${hydrated.triggerEvent}.`,
-        });
-      }
-      for (const dependentIssueId of newlyReadyDependents) {
-        // The dependency-readiness handler already dispatched via the
-        // wake dispatcher; here we just emit the operator-feed event so
-        // the dispatched run shows up in the timeline.
-        const dependent = this.db.getTrackedIssue(project.id, dependentIssueId);
-        const queuedRunType = this.peekPendingSessionWakeRunType(project.id, dependentIssueId);
-        this.feed?.publish({
-          level: "info",
-          kind: "stage",
-          issueKey: dependent?.issueKey,
-          projectId: project.id,
-          stage: queuedRunType ?? "implementation",
-          status: "queued",
-          summary: `Queued ${(queuedRunType ?? "implementation")} after blockers resolved`,
-          detail: `All blockers are now done for ${dependent?.issueKey ?? dependentIssueId}.`,
-        });
-      }
+      await this.wakeDispatcher.withTick(async () => {
+        if (result.wakeRunType && !wakeAlreadyQueuedByFollowUpHandler) {
+          const queuedRunType = this.enqueuePendingSessionWake(project.id, issue.id);
+          this.feed?.publish({
+            level: "info",
+            kind: "stage",
+            issueKey: issue.identifier,
+            projectId: project.id,
+            stage: queuedRunType ?? result.wakeRunType,
+            status: "queued",
+            summary: `Queued ${(queuedRunType ?? result.wakeRunType)} workflow`,
+            detail: `Triggered by ${hydrated.triggerEvent}.`,
+          });
+        }
+        if (openedRunnableWorkflowTask && !wakeAlreadyQueuedByFollowUpHandler) {
+          const workflowTaskRunType = this.enqueuePendingSessionWake(project.id, issue.id);
+          if (workflowTaskRunType && !result.wakeRunType) {
+            this.feed?.publish({
+              level: "info",
+              kind: "stage",
+              issueKey: issue.identifier,
+              projectId: project.id,
+              stage: workflowTaskRunType,
+              status: "queued",
+              summary: `Queued ${workflowTaskRunType} workflow`,
+              detail: `Derived after ${hydrated.triggerEvent}.`,
+            });
+          }
+        }
+        for (const dependentIssueId of newlyReadyDependents) {
+          // The dependency-readiness handler already dispatched via the
+          // wake dispatcher; here we just emit the operator-feed event so
+          // the dispatched run shows up in the timeline.
+          const dependent = this.db.getTrackedIssue(project.id, dependentIssueId);
+          const queuedRunType = this.peekPendingSessionWakeRunType(project.id, dependentIssueId);
+          this.feed?.publish({
+            level: "info",
+            kind: "stage",
+            issueKey: dependent?.issueKey,
+            projectId: project.id,
+            stage: queuedRunType ?? "implementation",
+            status: "queued",
+            summary: `Queued ${(queuedRunType ?? "implementation")} after blockers resolved`,
+            detail: `All blockers are now done for ${dependent?.issueKey ?? dependentIssueId}.`,
+          });
+        }
+      });
       for (const issueId of syncTargets) {
         const syncIssue = this.db.getIssue(project.id, issueId);
         if (!syncIssue) {

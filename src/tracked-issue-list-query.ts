@@ -134,8 +134,12 @@ export class TrackedIssueListQuery {
       );
       const blockedByCount = Number(row.blocked_by_count ?? 0);
       const hasPendingSessionEvents = Number(row.pending_session_event_count ?? 0) > 0;
+      const hasRunnableWorkflowTask = this.db.workflowTasks
+        .listOpenRunnableTasks(String(row.project_id))
+        .some((task) => task.subjectId === String(row.linear_issue_id));
       const hasPendingWake = hasPendingSessionEvents
-        || this.db.workflowWakes.peekIssueWake(String(row.project_id), String(row.linear_issue_id)) !== undefined;
+        || this.db.workflowWakes.peekIssueWake(String(row.project_id), String(row.linear_issue_id)) !== undefined
+        || hasRunnableWorkflowTask;
       const detachedActiveRun = hasDetachedActiveLatestRun({
         activeRunId: row.active_run_type !== null ? 1 : undefined,
         latestRun: row.latest_run_status !== null

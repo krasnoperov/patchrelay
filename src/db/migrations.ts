@@ -239,6 +239,36 @@ CREATE TABLE IF NOT EXISTS issue_children (
   PRIMARY KEY (project_id, parent_linear_issue_id, child_linear_issue_id)
 );
 
+CREATE TABLE IF NOT EXISTS workflow_observations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id TEXT NOT NULL,
+  subject_id TEXT NOT NULL,
+  source TEXT NOT NULL,
+  type TEXT NOT NULL,
+  payload_json TEXT,
+  dedupe_key TEXT,
+  observed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS workflow_tasks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id TEXT NOT NULL,
+  subject_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  task_type TEXT NOT NULL,
+  run_type TEXT,
+  status TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  requirements_json TEXT,
+  authority_epoch INTEGER NOT NULL DEFAULT 0,
+  gate_action TEXT NOT NULL,
+  gate_reason TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  closed_at TEXT,
+  UNIQUE(project_id, subject_id, task_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_issues_project ON issues(project_id, linear_issue_id);
 CREATE INDEX IF NOT EXISTS idx_issues_key ON issues(issue_key);
 CREATE INDEX IF NOT EXISTS idx_issues_ready ON issues(pending_run_type, active_run_id);
@@ -262,6 +292,13 @@ CREATE INDEX IF NOT EXISTS idx_issue_dependencies_issue ON issue_dependencies(pr
 CREATE INDEX IF NOT EXISTS idx_issue_dependencies_blocker ON issue_dependencies(project_id, blocker_linear_issue_id);
 CREATE INDEX IF NOT EXISTS idx_issue_children_parent ON issue_children(project_id, parent_linear_issue_id);
 CREATE INDEX IF NOT EXISTS idx_issue_children_child ON issue_children(project_id, child_linear_issue_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_observations_subject ON workflow_observations(project_id, subject_id, id);
+CREATE INDEX IF NOT EXISTS idx_workflow_observations_recent ON workflow_observations(observed_at, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_observations_dedupe
+  ON workflow_observations(project_id, subject_id, source, dedupe_key)
+  WHERE dedupe_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_workflow_tasks_subject ON workflow_tasks(project_id, subject_id, status, id);
+CREATE INDEX IF NOT EXISTS idx_workflow_tasks_open ON workflow_tasks(status, project_id, updated_at);
 `;
 
 export function runPatchRelayMigrations(connection: DatabaseConnection): void {
@@ -320,6 +357,12 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   // Plan §4.4: hard publication-suppression flag for the
   // mid-run-approval cancellation primitive.
   addColumnIfMissing(connection, "runs", "should_not_publish", "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(connection, "runs", "authority_epoch", "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(connection, "runs", "lease_revoked_at", "TEXT");
+  addColumnIfMissing(connection, "runs", "lease_revoke_reason", "TEXT");
+  addColumnIfMissing(connection, "workflow_tasks", "authority_epoch", "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(connection, "workflow_tasks", "gate_action", "TEXT NOT NULL DEFAULT 'wait'");
+  addColumnIfMissing(connection, "workflow_tasks", "gate_reason", "TEXT");
   addColumnIfMissing(connection, "issues", "last_blocking_review_head_sha", "TEXT");
 
   // Collapse awaiting_review into pr_open (state normalization)

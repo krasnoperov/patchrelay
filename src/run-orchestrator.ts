@@ -42,6 +42,7 @@ import { CodexThreadMaterializingError, isThreadMaterializingError } from "./cod
 import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry, type RunSkipReason } from "./telemetry.ts";
 import { LinearIssueProjectionService } from "./linear-issue-projection.ts";
 import { RunAdmissionController } from "./run-admission-controller.ts";
+import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
 const WRITER = "run-orchestrator";
 
@@ -629,6 +630,7 @@ export class RunOrchestrator {
     const sourceHeadSha = effectiveContext?.failureHeadSha
       ?? effectiveContext?.headSha
       ?? issue.prHeadSha;
+    const workflowSnapshot = reconcileWorkflowTasksForIssue(this.db, issue).snapshot;
     const budgetExceeded = this.runWakePlanner.budgetExceeded(issue, project, runType, isRequestedChangesRunType);
     if (budgetExceeded) {
       this.emitRunSkipped(item, "budget_exceeded", issue, { runType });
@@ -661,6 +663,7 @@ export class RunOrchestrator {
       runType,
       prompt,
       ...(sourceHeadSha ? { sourceHeadSha } : {}),
+      authorityEpoch: workflowSnapshot.authority.epoch,
       ...(effectiveContext ? { effectiveContext } : {}),
       materializeLegacyPendingWake: (targetIssue, lease) => this.materializeLegacyPendingWake(targetIssue, lease),
       resolveRunWake: (targetIssue) => this.resolveRunWake(targetIssue),
@@ -671,6 +674,10 @@ export class RunOrchestrator {
       this.emitRunSkipped(item, "claim_failed", issue, { runType });
       this.releaseIssueSessionLease(item.projectId, item.issueId);
       return;
+    }
+    const claimedIssue = this.db.issues.getIssue(item.projectId, item.issueId);
+    if (claimedIssue) {
+      reconcileWorkflowTasksForIssue(this.db, claimedIssue);
     }
 
     this.feed?.publish({

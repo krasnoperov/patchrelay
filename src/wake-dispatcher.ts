@@ -1,6 +1,6 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
-import type { RunRecord } from "./db-types.ts";
+import type { RunRecord, WorkflowTaskRecord } from "./db-types.ts";
 import type { RunType } from "./factory-state.ts";
 import type { ReleaseIssueSessionLease } from "./issue-session-lease-service.ts";
 import type { IssueSessionEventType } from "./issue-session-events.ts";
@@ -16,6 +16,13 @@ export interface DispatchableSessionEvent {
 export interface WakeDispatchResult {
   runType: RunType;
   wakeReason?: string | undefined;
+}
+
+interface DispatchableWake {
+  runType: RunType;
+  wakeReason?: string | undefined;
+  eventIds: number[];
+  source: "session_event" | "implicit" | "legacy_pending_run_type" | "workflow_task";
 }
 
 // Single owner of "append a session event and tell the orchestrator
@@ -46,6 +53,52 @@ export class WakeDispatcher {
     private readonly feed?: OperatorEventFeed,
     private readonly telemetry: PatchRelayTelemetry = noopTelemetry,
   ) {}
+
+  private peekRunnableWorkflowTask(projectId: string, linearIssueId: string): WorkflowTaskRecord | undefined {
+    return this.db.workflowTasks
+      .listOpenRunnableTasks(projectId)
+      .find((task) => task.subjectId === linearIssueId && task.runType !== undefined);
+  }
+
+  private resolveDispatchableWake(
+    projectId: string,
+    linearIssueId: string,
+    issue: { pendingRunType?: RunType | undefined },
+  ): DispatchableWake | undefined {
+    const sessionWake = this.db.issueSessions.peekIssueSessionWake(projectId, linearIssueId);
+    if (sessionWake) {
+      return {
+        runType: sessionWake.runType,
+        ...(sessionWake.wakeReason ? { wakeReason: sessionWake.wakeReason } : {}),
+        eventIds: sessionWake.eventIds,
+        source: "session_event",
+      };
+    }
+    const workflowTask = this.peekRunnableWorkflowTask(projectId, linearIssueId);
+    if (workflowTask?.runType) {
+      return {
+        runType: workflowTask.runType,
+        wakeReason: workflowTask.taskId,
+        eventIds: [],
+        source: "workflow_task",
+      };
+    }
+    if (issue.pendingRunType) {
+      return {
+        runType: issue.pendingRunType,
+        eventIds: [],
+        source: "legacy_pending_run_type",
+      };
+    }
+    const implicitWake = this.db.workflowWakes.peekIssueWake(projectId, linearIssueId);
+    if (!implicitWake) return undefined;
+    return {
+      runType: implicitWake.runType,
+      ...(implicitWake.wakeReason ? { wakeReason: implicitWake.wakeReason } : {}),
+      eventIds: implicitWake.eventIds,
+      source: "implicit",
+    };
+  }
 
   // Scope the next enqueue calls inside `fn` to a single dedupe Set.
   // Nested ticks reuse the outermost Set so deeply nested helpers do
@@ -172,12 +225,8 @@ export class WakeDispatcher {
       }
       return undefined;
     }
-    const wake = this.db.workflowWakes.peekIssueWake(projectId, linearIssueId);
-    // Fall back to the legacy pending_run_type column. The orchestrator
-    // materializes it into a real event at run time, but the poke still
-    // needs to happen now so the orchestrator gets called at all.
-    const runType = wake?.runType ?? issue.pendingRunType;
-    if (!runType) {
+    const dispatchable = this.resolveDispatchableWake(projectId, linearIssueId, issue);
+    if (!dispatchable) {
       emitTelemetry(this.telemetry, {
         type: "wake.suppressed",
         projectId,
@@ -203,10 +252,10 @@ export class WakeDispatcher {
       projectId,
       linearIssueId,
       ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
-      runType,
-      ...(wake?.wakeReason ? { wakeReason: wake.wakeReason } : {}),
-      ...(wake?.eventIds ? { eventIds: wake.eventIds } : {}),
-      source: wake ? (wake.eventIds.length > 0 ? "session_event" : "implicit") : "legacy_pending_run_type",
+      runType: dispatchable.runType,
+      ...(dispatchable.wakeReason ? { wakeReason: dispatchable.wakeReason } : {}),
+      eventIds: dispatchable.eventIds,
+      source: dispatchable.source,
     });
     const tick = options?.enqueuedThisTick ?? this.currentTick;
     const key = `${projectId}:${linearIssueId}`;
@@ -216,18 +265,18 @@ export class WakeDispatcher {
         projectId,
         linearIssueId,
         ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
-        runType,
-        ...(wake?.wakeReason ? { wakeReason: wake.wakeReason } : {}),
-        ...(wake?.eventIds ? { eventIds: wake.eventIds } : {}),
+        runType: dispatchable.runType,
+        ...(dispatchable.wakeReason ? { wakeReason: dispatchable.wakeReason } : {}),
+        eventIds: dispatchable.eventIds,
       });
       emitTelemetry(this.telemetry, {
         type: "queue.deduped",
         projectId,
         linearIssueId,
         ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
-        runType,
+        runType: dispatchable.runType,
       });
-      return runType;
+      return dispatchable.runType;
     }
     tick?.add(key);
     this.enqueueIssue(projectId, linearIssueId);
@@ -236,18 +285,18 @@ export class WakeDispatcher {
       projectId,
       linearIssueId,
       ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
-      runType,
-      ...(wake?.wakeReason ? { wakeReason: wake.wakeReason } : {}),
-      ...(wake?.eventIds ? { eventIds: wake.eventIds } : {}),
+      runType: dispatchable.runType,
+      ...(dispatchable.wakeReason ? { wakeReason: dispatchable.wakeReason } : {}),
+      eventIds: dispatchable.eventIds,
     });
     emitTelemetry(this.telemetry, {
       type: "queue.enqueued",
       projectId,
       linearIssueId,
       ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
-      runType,
+      runType: dispatchable.runType,
     });
-    return runType;
+    return dispatchable.runType;
   }
 
   // Release the lease for a finished run, then drain any wake that
@@ -274,10 +323,12 @@ export class WakeDispatcher {
       runId: params.run.id,
       runType: params.run.runType,
     });
-    const wake = this.db.workflowWakes.peekIssueWake(
+    const issue = this.db.issues.getIssue(params.run.projectId, params.run.linearIssueId);
+    const wake = issue ? this.resolveDispatchableWake(
       params.run.projectId,
       params.run.linearIssueId,
-    );
+      issue,
+    ) : undefined;
     if (!wake) {
       emitTelemetry(this.telemetry, {
         type: "wake.suppressed",

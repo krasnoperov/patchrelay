@@ -162,6 +162,7 @@ export class RunLauncher {
     runType: RunType;
     prompt: string;
     sourceHeadSha?: string;
+    authorityEpoch?: number;
     effectiveContext?: RunContext;
     materializeLegacyPendingWake: (
       issue: IssueRecord,
@@ -189,6 +190,7 @@ export class RunLauncher {
           linearIssueId: params.item.issueId,
           runType: params.runType,
           ...(params.sourceHeadSha ? { sourceHeadSha: params.sourceHeadSha } : {}),
+          ...(params.authorityEpoch !== undefined ? { authorityEpoch: params.authorityEpoch } : {}),
           promptText: params.prompt,
         });
         const failureHeadSha = params.effectiveContext?.failureHeadSha ?? params.effectiveContext?.headSha;

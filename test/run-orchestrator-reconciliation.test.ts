@@ -366,6 +366,17 @@ test("implementation launch refreshes Linear blockers before claiming a run", as
     assert.equal(db.runs.listRunsForIssue(issue.projectId, issue.linearIssueId).length, 0);
     assert.equal(db.countUnresolvedBlockers(issue.projectId, issue.linearIssueId), 1);
     assert.equal(db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId), undefined);
+    const observation = db.workflowObservations
+      .listObservations(issue.projectId, issue.linearIssueId)
+      .find((entry) => entry.type === "linear.issue_reconciled");
+    assert.ok(observation, "launch-time Linear refresh should persist the fresh blocker truth as a workflow observation");
+    assert.deepEqual(JSON.parse(observation.payloadJson ?? "{}").blockedBy, [{
+      id: "issue-live-blocker",
+      identifier: "USE-LIVE-BLOCKER",
+      title: "Still running blocker",
+      stateName: "Implementing",
+      stateType: "started",
+    }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

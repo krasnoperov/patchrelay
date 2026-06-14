@@ -189,7 +189,8 @@ export class IssueOverviewQuery {
         delegatedToPatchRelay: issueRecord?.delegatedToPatchRelay,
         ...(activeRun ? { activeRunId: activeRun.id } : {}),
         blockedByCount: unresolvedBlockedBy.length,
-        hasPendingWake: this.db.workflowWakes.peekIssueWake(session.projectId, session.linearIssueId) !== undefined,
+        hasPendingWake: this.db.workflowWakes.peekIssueWake(session.projectId, session.linearIssueId) !== undefined
+          || this.db.workflowTasks.listOpenRunnableTasks(session.projectId).some((task) => task.subjectId === session.linearIssueId),
         hasLegacyPendingRun: issueRecord?.pendingRunType !== undefined,
         orchestrationSettleUntil: issueRecord?.orchestrationSettleUntil,
         ...(session.prNumber !== undefined ? { prNumber: session.prNumber } : {}),

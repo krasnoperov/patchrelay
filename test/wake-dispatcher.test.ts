@@ -6,6 +6,7 @@ import test from "node:test";
 import pino from "pino";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { WakeDispatcher } from "../src/wake-dispatcher.ts";
+import { reconcileWorkflowTasksForIssue } from "../src/workflow-task-reconciler.ts";
 
 function withDb<T>(fn: (db: PatchRelayDatabase, baseDir: string) => Promise<T>): Promise<T> {
   return (async () => {
@@ -241,5 +242,33 @@ test("dispatchIfWakePending falls back to legacy pendingRunType when no event ex
 
     assert.equal(runType, "branch_upkeep");
     assert.deepEqual(enqueueCalls, [["proj", "issue-1"]]);
+  });
+});
+
+test("dispatchIfWakePending enqueues an already materialized runnable workflow task", async () => {
+  await withDb(async (db) => {
+    const issue = db.upsertIssue({
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      issueKey: "PRJ-1",
+      branchName: "feat/x",
+      delegatedToPatchRelay: true,
+      factoryState: "delegated",
+    });
+    reconcileWorkflowTasksForIssue(db, issue);
+
+    const enqueueCalls: Array<[string, string]> = [];
+    const dispatcher = new WakeDispatcher(
+      db,
+      (p, i) => enqueueCalls.push([p, i]),
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    const runType = dispatcher.dispatchIfWakePending("proj", "issue-1");
+
+    assert.equal(runType, "implementation");
+    assert.deepEqual(enqueueCalls, [["proj", "issue-1"]]);
+    assert.equal(db.issueSessions.listIssueSessionEvents("proj", "issue-1", { pendingOnly: true }).length, 0);
   });
 });

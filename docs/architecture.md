@@ -336,7 +336,7 @@ That keeps operator-facing state truthful without letting PatchRelay continue wr
 
 ### Failure-source classification
 
-The `factoryState` rule table and the reactive-run enqueue path both consult a `failureSource` field on incoming `check_failed` events:
+The `factoryState` rule table and the workflow-task projector both consult a `failureSource` field on incoming `check_failed` events:
 
 | `failureSource` | Source | Routes to |
 |-|-|-|
@@ -345,7 +345,7 @@ The `factoryState` rule table and the reactive-run enqueue path both consult a `
 
 While the issue is **In Deploy** (`factoryState === "awaiting_queue"`), `branch_ci` failures are metadata only — no `ci_repair` run is launched, no `settled_red_ci` wake is appended. The lander owns the integration tree on a different SHA; branch CI on the PR head does not block landing. The only signal that returns the issue to In Progress in this window is the `queue_eviction` source.
 
-Classification happens in `resolveGitHubFactoryStateForEvent` (which calls `isQueueEvictionFailure` once and forwards the result) and is enforced again in `src/github-webhook-reactive-run.ts:handleCheckFailedEvent()` so the state-machine table and the reactive enqueue path cannot drift.
+Classification happens in `resolveGitHubFactoryStateForEvent` (which calls `isQueueEvictionFailure` once and forwards the result) and is enforced again in `src/workflow-runtime.ts` task derivation so the state-machine table and the workflow-task enqueue path cannot drift.
 
 ## State storage
 

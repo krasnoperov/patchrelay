@@ -2,6 +2,7 @@ import type { PatchRelayDatabase } from "../db.ts";
 import type { RunType } from "../factory-state.ts";
 import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "../telemetry.ts";
 import type { WakeDispatcher } from "../wake-dispatcher.ts";
+import { reconcileWorkflowTasksForIssue } from "../workflow-task-reconciler.ts";
 
 const WRITER = "dependency-readiness-handler";
 
@@ -62,9 +63,28 @@ export class DependencyReadinessHandler {
         continue;
       }
 
+      const workflowReconciliation = reconcileWorkflowTasksForIssue(this.db, issue);
+      const hasRunnableWorkflowTask = [
+        ...workflowReconciliation.result.opened,
+        ...workflowReconciliation.result.updated,
+      ].some((task) => task.gateAction === "start" && task.runType);
       const pendingWakeRunType = this.db.workflowWakes.peekIssueWake(projectId, dependent.linearIssueId)?.runType
         ?? issue.pendingRunType;
       if (pendingWakeRunType) {
+        const dispatchedRunType = this.wakeDispatcher.dispatchIfWakePending(projectId, dependent.linearIssueId);
+        emitTelemetry(this.telemetry, {
+          type: "dependency.dependent_unblocked",
+          projectId,
+          linearIssueId: dependent.linearIssueId,
+          ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+          blockerLinearIssueId,
+          ...(dispatchedRunType ? { dispatchedRunType } : {}),
+        });
+        newlyReady.push(dependent.linearIssueId);
+        continue;
+      }
+
+      if (hasRunnableWorkflowTask) {
         const dispatchedRunType = this.wakeDispatcher.dispatchIfWakePending(projectId, dependent.linearIssueId);
         emitTelemetry(this.telemetry, {
           type: "dependency.dependent_unblocked",
@@ -93,19 +113,6 @@ export class DependencyReadinessHandler {
           },
         });
       }
-      const dispatchedRunType = this.wakeDispatcher.recordEventAndDispatch(projectId, dependent.linearIssueId, {
-        eventType: "delegated",
-        dedupeKey: `delegated:${dependent.linearIssueId}`,
-      });
-      emitTelemetry(this.telemetry, {
-        type: "dependency.dependent_unblocked",
-        projectId,
-        linearIssueId: dependent.linearIssueId,
-        ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
-        blockerLinearIssueId,
-        ...(dispatchedRunType ? { dispatchedRunType } : {}),
-      });
-      newlyReady.push(dependent.linearIssueId);
     }
 
     return newlyReady;

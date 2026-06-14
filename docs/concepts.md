@@ -197,7 +197,7 @@ The only signal that returns the issue to Implementing is the eviction `check_ru
 | Reviewing | Required checks block admission | Re-run if flaky (`gh run rerun`); push a fix if real |
 | In Merge Queue | Metadata only | Wait. Either the spec hits it (eviction) or it was a flake (lands clean) |
 
-This rule is enforced both at the state-machine table (`failureSource === "branch_ci" && state !== "awaiting_queue"`) and in the reactive enqueue path. See [architecture.md](./architecture.md#failure-taxonomy).
+This rule is enforced both at the state-machine table (`failureSource === "branch_ci" && state !== "awaiting_queue"`) and in workflow-task derivation. See [architecture.md](./architecture.md#failure-taxonomy).
 
 ## Sequencing — three tiers for predictable conflicts
 

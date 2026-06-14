@@ -38,6 +38,7 @@ import { queueSettledOrchestrationIssue } from "./orchestration-parent-wake.ts";
 import { fetchPullRequestSnapshot } from "./reconcile-pr-fetch.ts";
 import { buildPrStateUpdates } from "./reconcile-pr-state-updates.ts";
 import { buildRepairWakeDedupeKey, buildRequestedChangesWakeIdentity, reactiveWakeEventType } from "./reactive-wake-keys.ts";
+import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 import { execCommand } from "./utils.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
 import { LinearIssueProjectionService } from "./linear-issue-projection.ts";
@@ -638,6 +639,29 @@ export class IdleIssueReconciler {
         headAdvanced,
         ...(prState === "closed" ? { closedPrDisposition: resolveClosedPrDisposition(issue) } : {}),
       };
+      this.db.workflowObservations.appendObservation({
+        projectId: issue.projectId,
+        subjectId: issue.linearIssueId,
+        source: "github",
+        type: "github.pr_reconciled",
+        payloadJson: JSON.stringify({
+          ...observed,
+          repoFullName: project.github.repoFullName,
+          mergeable: pr.mergeable,
+          mergeStateStatus: pr.mergeStateStatus,
+        }),
+        dedupeKey: [
+          "pr_reconciled",
+          project.github.repoFullName,
+          prNumber,
+          prState,
+          pr.headRefOid ?? "",
+          pr.reviewDecision ?? "",
+          gateCheckStatus ?? "",
+          pr.mergeable ?? "",
+          pr.mergeStateStatus ?? "",
+        ].join(":"),
+      });
       const currentFacts = (record: IssueRecord): CurrentIssueFacts => ({
         factoryState: record.factoryState,
         prReviewState: record.prReviewState,
@@ -830,7 +854,6 @@ export class IdleIssueReconciler {
       if (
         issue.delegatedToPatchRelay
         && reactiveIntent?.runType === "review_fix"
-        && this.db.workflowWakes.peekIssueWake(issue.projectId, issue.linearIssueId) === undefined
       ) {
         this.logger.info(
           {
@@ -841,10 +864,18 @@ export class IdleIssueReconciler {
           },
           "Reconciliation: re-queued requested-changes follow-up from GitHub truth",
         );
-        this.advanceIdleIssue(issue, reactiveIntent.compatibilityFactoryState, {
-          pendingRunType: reactiveIntent.runType,
-          ...(mayClearFailureProvenance(issue, provenanceEvidence) ? { clearFailureProvenance: true } : {}),
-        });
+        this.advanceIdleIssue(
+          issue,
+          reactiveIntent.compatibilityFactoryState,
+          mayClearFailureProvenance(issue, provenanceEvidence)
+            ? { clearFailureProvenance: true }
+            : undefined,
+        );
+        const currentIssue = this.db.issues.getIssue(issue.projectId, issue.linearIssueId);
+        if (currentIssue) {
+          reconcileWorkflowTasksForIssue(this.db, currentIssue);
+          this.wakeDispatcher.dispatchIfWakePending(currentIssue.projectId, currentIssue.linearIssueId);
+        }
         this.feed?.publish({
           level: "warn",
           kind: "github",

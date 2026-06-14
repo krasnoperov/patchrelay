@@ -136,8 +136,13 @@ test("startup recovery repairs re-delegated paused local work even without an ag
     const issue = db.getIssue("usertold", "issue-redelegated");
     assert.equal(issue?.delegatedToPatchRelay, true);
     assert.equal(issue?.factoryState, "delegated");
-    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-redelegated");
-    assert.equal(wake?.runType, "implementation");
+    const task = db.workflowTasks.getTask("usertold", "issue-redelegated", "run:implementation");
+    const authorityObservation = db.workflowObservations.listObservations("usertold", "issue-redelegated")
+      .find((observation) => observation.type === "linear.delegated");
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-redelegated"), undefined);
+    assert.equal(task?.runType, "implementation");
+    assert.equal(task?.gateAction, "start");
+    assert.ok(authorityObservation, "startup recovery should persist the live Linear delegation as workflow authority");
     assert.deepEqual(enqueued, [{ projectId: "usertold", issueId: "issue-redelegated" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -219,8 +224,10 @@ test("startup recovery discovers delegated Linear issues missing from the local 
     assert.equal(issue?.issueKey, "USE-MISSED");
     assert.equal(issue?.delegatedToPatchRelay, true);
     assert.equal(issue?.factoryState, "delegated");
-    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-missed");
-    assert.equal(wake?.runType, "implementation");
+    const task = db.workflowTasks.getTask("usertold", "issue-missed", "run:implementation");
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-missed"), undefined);
+    assert.equal(task?.runType, "implementation");
+    assert.equal(task?.gateAction, "start");
     assert.deepEqual(enqueued, [{ projectId: "usertold", issueId: "issue-missed" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -291,10 +298,12 @@ test("startup recovery re-queues delegated requested-changes work after a restar
     await recovery.recoverDelegatedIssueStateFromLinear();
 
     const issue = db.getIssue("usertold", "issue-reactive-review");
-    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-reactive-review");
+    const task = db.workflowTasks.getTask("usertold", "issue-reactive-review", "run:review_fix");
     assert.equal(issue?.delegatedToPatchRelay, true);
     assert.equal(issue?.factoryState, "changes_requested");
-    assert.equal(wake?.runType, "review_fix");
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-reactive-review"), undefined);
+    assert.equal(task?.runType, "review_fix");
+    assert.equal(task?.gateAction, "start");
     assert.deepEqual(enqueued, [{ projectId: "usertold", issueId: "issue-reactive-review" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

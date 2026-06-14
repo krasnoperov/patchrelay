@@ -7,6 +7,7 @@ import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { GitHubWebhookHandler } from "../src/github-webhook-handler.ts";
 import type { GitHubCiSnapshotResolver, GitHubFailureContextResolver } from "../src/github-failure-context.ts";
+import { RunWakePlanner } from "../src/run-wake-planner.ts";
 import type { AppConfig } from "../src/types.ts";
 
 function createConfig(baseDir: string, options?: { gateChecks?: string[] }): AppConfig {
@@ -143,6 +144,12 @@ function buildCheckRunPayload(params: {
   }), "utf8");
 }
 
+function resolveRuntimeWake(db: PatchRelayDatabase, projectId: string, issueId: string) {
+  const issue = db.getIssue(projectId, issueId);
+  assert.ok(issue);
+  return new RunWakePlanner(db).resolveRunWake(issue);
+}
+
 test("queue eviction check_run queues queue_repair with explicit provenance", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-queue-"));
   try {
@@ -151,8 +158,10 @@ test("queue eviction check_run queues queue_repair with explicit provenance", as
       projectId: "usertold",
       linearIssueId: "issue-1",
       issueKey: "USE-1",
+      delegatedToPatchRelay: true,
       branchName: "feat-queue",
       prNumber: 42,
+      prHeadSha: "sha-42",
       prState: "open",
       factoryState: "awaiting_queue",
     });
@@ -183,9 +192,11 @@ test("queue eviction check_run queues queue_repair with explicit provenance", as
     });
 
     const issue = db.getIssue("usertold", "issue-1");
-    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-1");
+    const wake = resolveRuntimeWake(db, "usertold", "issue-1");
     assert.equal(issue?.factoryState, "repairing_queue");
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-1"), undefined);
     assert.equal(wake?.runType, "queue_repair");
+    assert.equal(wake?.wakeReason, "run:queue_repair");
     const pending = wake?.context ?? {};
     assert.equal(pending.failureReason, "queue_eviction");
     assert.equal(pending.checkName, "merge-steward/queue");
@@ -286,8 +297,10 @@ test("default gate fallback recognizes verify and enqueues CI repair", async () 
       projectId: "usertold",
       linearIssueId: "issue-verify",
       issueKey: "USE-VERIFY",
+      delegatedToPatchRelay: true,
       branchName: "feat-verify",
       prNumber: 44,
+      prHeadSha: "sha-verify",
       prState: "open",
       prAuthorLogin: "patchrelay[bot]",
       factoryState: "pr_open",
@@ -306,9 +319,10 @@ test("default gate fallback recognizes verify and enqueues CI repair", async () 
       }).toString("utf8"),
     });
 
-    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-verify");
+    const wake = resolveRuntimeWake(db, "usertold", "issue-verify");
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-verify"), undefined);
     assert.equal(wake?.runType, "ci_repair");
-    assert.equal(wake?.wakeReason, "settled_red_ci");
+    assert.equal(wake?.wakeReason, "run:ci_repair");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -322,8 +336,10 @@ test("queue eviction falls back to minimal context when incident payload is malf
       projectId: "usertold",
       linearIssueId: "issue-3",
       issueKey: "USE-3",
+      delegatedToPatchRelay: true,
       branchName: "feat-malformed",
       prNumber: 43,
+      prHeadSha: "sha-43",
       prState: "open",
       factoryState: "awaiting_queue",
     });
@@ -342,7 +358,8 @@ test("queue eviction falls back to minimal context when incident payload is malf
       }).toString("utf8"),
     });
 
-    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-3");
+    const wake = resolveRuntimeWake(db, "usertold", "issue-3");
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-3"), undefined);
     assert.equal(wake?.runType, "queue_repair");
     const pending = wake?.context ?? {};
     assert.equal(pending.failureReason, "queue_eviction");
@@ -495,8 +512,10 @@ test("branch CI failures persist enriched Actions context in pending repair prom
       projectId: "usertold",
       linearIssueId: "issue-5",
       issueKey: "USE-5",
+      delegatedToPatchRelay: true,
       branchName: "feat-ci-context",
       prNumber: 45,
+      prHeadSha: "sha-45",
       prState: "open",
       factoryState: "pr_open",
     });
@@ -513,9 +532,10 @@ test("branch CI failures persist enriched Actions context in pending repair prom
     });
 
     const issue = db.getIssue("usertold", "issue-5");
-    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-5");
+    const wake = resolveRuntimeWake(db, "usertold", "issue-5");
     const pending = wake?.context ?? {};
     assert.equal(resolvedCheckName, "Checks");
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-5"), undefined);
     assert.equal(wake?.runType, "ci_repair");
     assert.equal(issue?.lastGitHubFailureSignature, "branch_ci::sha-45::Checks::npx tsgo --noEmit");
     assert.equal(issue?.lastGitHubFailureHeadSha, "sha-45");

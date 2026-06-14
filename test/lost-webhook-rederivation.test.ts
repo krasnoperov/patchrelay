@@ -14,6 +14,7 @@ import type { GitHubTriggerEvent } from "../src/github-types.ts";
 import { GitHubWebhookHandler } from "../src/github-webhook-handler.ts";
 import { IdleIssueReconciler } from "../src/idle-reconciliation.ts";
 import { QueueHealthMonitor } from "../src/queue-health-monitor.ts";
+import { RunWakePlanner } from "../src/run-wake-planner.ts";
 import type { UpsertIssueParams } from "../src/db/issue-store.ts";
 import type { AppConfig } from "../src/types.ts";
 import { WakeDispatcher } from "../src/wake-dispatcher.ts";
@@ -24,7 +25,7 @@ import { WakeDispatcher } from "../src/wake-dispatcher.ts";
 // run over identical seed state:
 //
 //   - world A (delivered): the normalized webhook goes through the real
-//     `GitHubWebhookHandler` pipeline (projector + reactive-run + terminal
+//     `GitHubWebhookHandler` pipeline (projector + workflow-task reconciliation + terminal
 //     handler), then reconciliation passes run as they would in production;
 //   - world B (lost): the webhook never arrives; the SAME reconciliation
 //     passes run against the polled PR snapshot GitHub would return after
@@ -237,6 +238,8 @@ async function runReconciliationPass(world: World): Promise<void> {
 function captureConvergedFacts(world: World) {
   const issue = world.db.getIssue(PROJECT, ISSUE);
   assert.ok(issue, `${world.name}: issue row must exist`);
+  const wake = new RunWakePlanner(world.db).resolveRunWake(issue)
+    ?? world.db.workflowWakes.peekIssueWake(PROJECT, ISSUE);
   return {
     factoryState: issue.factoryState,
     prState: issue.prState ?? null,
@@ -245,7 +248,7 @@ function captureConvergedFacts(world: World) {
     prCheckStatus: issue.prCheckStatus ?? null,
     failureSource: issue.lastGitHubFailureSource ?? null,
     failureHeadSha: issue.lastGitHubFailureHeadSha ?? null,
-    wakeRunType: world.db.workflowWakes.peekIssueWake(PROJECT, ISSUE)?.runType ?? null,
+    wakeRunType: wake?.runType ?? null,
   };
 }
 
@@ -468,8 +471,12 @@ test("lost review_changes_requested: poll converges to changes_requested with th
     // Documented asymmetry (cosmetic, not behavior-driving): the webhook
     // carries the review body for the run prompt; the poll only knows the
     // review decision. Both wakes still dispatch the same review_fix run.
-    const deliveredWake = pair.delivered.db.workflowWakes.peekIssueWake(PROJECT, ISSUE);
-    const lostWake = pair.lost.db.workflowWakes.peekIssueWake(PROJECT, ISSUE);
+    const deliveredIssue = pair.delivered.db.getIssue(PROJECT, ISSUE);
+    const lostIssue = pair.lost.db.getIssue(PROJECT, ISSUE);
+    assert.ok(deliveredIssue);
+    assert.ok(lostIssue);
+    const deliveredWake = new RunWakePlanner(pair.delivered.db).resolveRunWake(deliveredIssue);
+    const lostWake = new RunWakePlanner(pair.lost.db).resolveRunWake(lostIssue);
     assert.equal(deliveredWake?.context.reviewBody, "Please tighten this up.");
     assert.equal(lostWake?.context.reviewBody, undefined);
   } finally {
@@ -646,6 +653,22 @@ test("lost check_failed (branch_ci): poll records equivalent failure provenance 
     // source + head, which both worlds agree on.
     assert.equal(pair.delivered.db.getIssue(PROJECT, ISSUE)?.lastGitHubFailureSignature, "branch_ci::sha-red1::verify");
     assert.equal(pair.lost.db.getIssue(PROJECT, ISSUE)?.lastGitHubFailureSignature, undefined);
+    const pollObservation = pair.lost.db.workflowObservations
+      .listObservations(PROJECT, ISSUE)
+      .find((observation) => observation.type === "github.pr_reconciled");
+    assert.ok(pollObservation, "lost-webhook recovery should persist the polled GitHub truth as a workflow observation");
+    assert.deepEqual(JSON.parse(pollObservation.payloadJson ?? "{}"), {
+      source: "poll",
+      prState: "open",
+      prNumber: 14,
+      reviewDecision: "REVIEW_REQUIRED",
+      gateCheckStatus: "failure",
+      headSha: "sha-red1",
+      headAdvanced: false,
+      repoFullName: "owner/repo",
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "BLOCKED",
+    });
   } finally {
     pair.close();
     restoreGh();

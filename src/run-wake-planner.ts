@@ -10,7 +10,7 @@ import {
   getReviewFixBudget,
 } from "./run-budgets.ts";
 import { buildRequestedChangesWakeIdentity } from "./reactive-wake-keys.ts";
-import { parseRunContextOrWarn, serializeRunContext, type RunContext } from "./run-context.ts";
+import { parseRunContextOrWarn, serializeRunContext, tryParseRunContextValue, type RunContext } from "./run-context.ts";
 import { assertNever } from "./utils.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
 
@@ -32,6 +32,18 @@ export type AppendWakeEventWithLease = (
   dedupeScope?: string,
 ) => boolean;
 
+function parseObjectJson(raw: string | undefined): Record<string, unknown> | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export class RunWakePlanner {
   constructor(
     private readonly db: PatchRelayDatabase,
@@ -39,14 +51,53 @@ export class RunWakePlanner {
   ) {}
 
   resolveRunWake(issue: IssueRecord): PendingRunWake | undefined {
-    const sessionWake = this.db.workflowWakes.peekIssueWake(issue.projectId, issue.linearIssueId);
-    if (!sessionWake) return undefined;
+    if (this.db.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId) > 0) {
+      return undefined;
+    }
+
+    const sessionWake = this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    if (sessionWake) {
+      return {
+        runType: sessionWake.runType,
+        context: sessionWake.context,
+        wakeReason: sessionWake.wakeReason,
+        resumeThread: sessionWake.resumeThread,
+        eventIds: sessionWake.eventIds,
+      };
+    }
+
+    const workflowTaskWake = this.resolveWorkflowTaskWake(issue);
+    if (workflowTaskWake) return workflowTaskWake;
+
+    const implicitWake = this.db.workflowWakes.peekIssueWake(issue.projectId, issue.linearIssueId);
+    if (!implicitWake) return undefined;
     return {
-      runType: sessionWake.runType,
-      context: sessionWake.context,
-      wakeReason: sessionWake.wakeReason,
-      resumeThread: sessionWake.resumeThread,
-      eventIds: sessionWake.eventIds,
+      runType: implicitWake.runType,
+      context: implicitWake.context,
+      wakeReason: implicitWake.wakeReason,
+      resumeThread: implicitWake.resumeThread,
+      eventIds: implicitWake.eventIds,
+    };
+  }
+
+  private resolveWorkflowTaskWake(issue: IssueRecord): PendingRunWake | undefined {
+    const task = this.db.workflowTasks
+      .listOpenRunnableTasks(issue.projectId)
+      .find((entry) => entry.subjectId === issue.linearIssueId);
+    if (!task?.runType) return undefined;
+    const runType = task.runType;
+    const rawRequirements = parseObjectJson(task.requirementsJson);
+    const context = tryParseRunContextValue({
+      ...rawRequirements,
+      ...(rawRequirements?.blockingHeadSha ? { requestedChangesHeadSha: rawRequirements.blockingHeadSha } : {}),
+      source: "workflow_task",
+    }) ?? { source: "workflow_task" };
+    return {
+      runType,
+      ...(Object.keys(context).length > 0 ? { context } : {}),
+      wakeReason: task.taskId,
+      resumeThread: runType !== "implementation",
+      eventIds: [],
     };
   }
 
