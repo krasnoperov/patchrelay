@@ -29,6 +29,21 @@ test("deriveSessionWakePlan keeps a still-valid run type from the delegated payl
   assert.equal(plan?.runType, "ci_repair");
 });
 
+test("deriveSessionWakePlan ignores stale requested-changes events after the PR head advances", () => {
+  const issue = {
+    issueClass: "implementation",
+    prHeadSha: "new-head",
+  } as IssueRecord;
+  const plan = deriveSessionWakePlan(issue, [
+    event("review_changes_requested", JSON.stringify({
+      requestedChangesHeadSha: "old-reviewed-head",
+      reviewCommitId: "old-reviewed-head",
+      reviewerName: "alv",
+    })),
+  ]);
+  assert.equal(plan, undefined);
+});
+
 // ─── D2 parse boundary: typed payload union ────────────────────────────
 
 import {

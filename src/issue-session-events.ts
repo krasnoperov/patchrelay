@@ -342,6 +342,9 @@ export function deriveSessionWakePlan(
         }
         break;
       case "review_changes_requested":
+        if (isStaleRequestedChangesEvent(issue, typed.payload)) {
+          break;
+        }
         if (runType !== "queue_repair" && runType !== "ci_repair") {
           runType = typed.payload?.branchUpkeepRequired === true ? "branch_upkeep" : "review_fix";
           wakeReason = typed.payload?.branchUpkeepRequired === true ? "branch_upkeep" : "review_changes_requested";
@@ -466,6 +469,16 @@ export function deriveSessionWakePlan(
   }
 
   return { eventIds, runType, wakeReason, resumeThread, context };
+}
+
+function isStaleRequestedChangesEvent(
+  issue: Pick<IssueRecord, "prHeadSha">,
+  payload: RunContext | undefined,
+): boolean {
+  if (payload?.branchUpkeepRequired === true) return false;
+  const requestedChangesHeadSha = payload?.requestedChangesHeadSha;
+  if (!requestedChangesHeadSha || !issue.prHeadSha) return false;
+  return requestedChangesHeadSha !== issue.prHeadSha;
 }
 
 export function isActionableIssueSessionEventType(eventType: IssueSessionEventType): boolean {
