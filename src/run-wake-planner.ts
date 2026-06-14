@@ -9,6 +9,7 @@ import {
   getQueueRepairBudget,
   getReviewFixBudget,
 } from "./run-budgets.ts";
+import { isTerminalLinearState } from "./pr-state.ts";
 import { buildRequestedChangesWakeIdentity } from "./reactive-wake-keys.ts";
 import { parseRunContextOrWarn, serializeRunContext, tryParseRunContextValue, type RunContext } from "./run-context.ts";
 import { assertNever } from "./utils.ts";
@@ -53,6 +54,12 @@ export class RunWakePlanner {
 
   resolveRunWake(issue: IssueRecord): PendingRunWake | undefined {
     const freshIssue = this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+    if (
+      freshIssue.factoryState === "done"
+      || isTerminalLinearState(freshIssue.currentLinearStateType, freshIssue.currentLinearState)
+    ) {
+      return undefined;
+    }
     if (this.db.issues.countUnresolvedBlockers(freshIssue.projectId, freshIssue.linearIssueId) > 0) {
       return undefined;
     }

@@ -950,6 +950,31 @@ test("workflow wait tasks suppress legacy delegated session wakes", () => {
   }
 });
 
+test("terminal Linear truth suppresses stale delegated session wakes", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const issue = makeIssue(db, {
+      linearIssueId: "issue-linear-done",
+      issueKey: "USE-DONE",
+      currentLinearState: "Done",
+      currentLinearStateType: "completed",
+      factoryState: "delegated",
+      pendingRunType: "implementation",
+    });
+    db.issueSessions.appendIssueSessionEvent({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "delegated",
+      dedupeKey: "delegated:issue-linear-done",
+    });
+
+    assert.equal(db.workflowWakes.peekIssueWake(issue.projectId, issue.linearIssueId)?.runType, "implementation");
+    assert.equal(new RunWakePlanner(db).resolveRunWake(issue), undefined);
+  } finally {
+    cleanup();
+  }
+});
+
 test("runs persist the authority epoch they were claimed under", () => {
   const { db, cleanup } = createDb();
   try {
