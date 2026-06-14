@@ -124,6 +124,22 @@ export class PatchRelayDatabase {
     assertPatchRelaySchemaReady(this.connection, this.databasePath);
   }
 
+  describeSchema(): Record<string, unknown> {
+    const tableRows = this.connection.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name IN ('issues', 'issue_sessions', 'runs')
+      ORDER BY name
+    `).all();
+    const issueColumns = tableRows.some((row) => row.name === "issues")
+      ? this.connection.prepare("PRAGMA table_info(issues)").all().map((row) => row.name)
+      : [];
+    return {
+      databasePath: this.databasePath,
+      tables: tableRows.map((row) => row.name),
+      issuesVersionColumnPresent: issueColumns.includes("version"),
+    };
+  }
+
   transaction<T>(fn: () => T): T {
     return this.connection.transaction(fn)();
   }

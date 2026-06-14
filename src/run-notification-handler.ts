@@ -274,7 +274,14 @@ export class RunNotificationHandler {
       this.linearSync.maybeEmitProgress(notification, run);
     } catch (error) {
       this.logger.warn(
-        { runId: run.id, projectId: run.projectId, issueId: run.linearIssueId, method: notification.method, error: formatError(error) },
+        {
+          runId: run.id,
+          projectId: run.projectId,
+          issueId: run.linearIssueId,
+          method: notification.method,
+          error: formatError(error),
+          storage: this.safeStorageDiagnostics(),
+        },
         "Linear progress reporting failed",
       );
     }
@@ -305,6 +312,14 @@ export class RunNotificationHandler {
         { runId: run.id, issueKey: issue.issueKey, projectId: run.projectId, issueId: run.linearIssueId, method: notification.method, error: formatError(error) },
         "Linear plan sync failed",
       );
+    }
+  }
+
+  private safeStorageDiagnostics(): Record<string, unknown> | undefined {
+    try {
+      return this.db.describeSchema();
+    } catch {
+      return undefined;
     }
   }
 }

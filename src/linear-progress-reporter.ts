@@ -1,6 +1,7 @@
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import { deriveLinearProgressFact } from "./linear-progress-facts.ts";
+import { isSqliteSchemaReadError } from "./sqlite-errors.ts";
 import type { LinearAgentActivityContent } from "./types.ts";
 
 interface ProgressPublicationState {
@@ -30,7 +31,7 @@ export class LinearProgressReporter {
   ) {}
 
   maybeEmitProgress(notification: { method: string; params: Record<string, unknown> }, run: RunRecord): void {
-    const issue = this.db.getIssue(run.projectId, run.linearIssueId);
+    const issue = this.getIssueWithSchemaRetry(run);
     if (!issue) {
       return;
     }
@@ -100,7 +101,7 @@ export class LinearProgressReporter {
       return;
     }
 
-    const issue = this.db.getIssue(run.projectId, run.linearIssueId);
+    const issue = this.getIssueWithSchemaRetry(run);
     if (!issue) {
       return;
     }
@@ -134,6 +135,18 @@ export class LinearProgressReporter {
 
   private now(): number {
     return this.options.now?.() ?? Date.now();
+  }
+
+  private getIssueWithSchemaRetry(run: RunRecord): IssueRecord | undefined {
+    try {
+      return this.db.getIssue(run.projectId, run.linearIssueId);
+    } catch (error) {
+      if (!isSqliteSchemaReadError(error)) {
+        throw error;
+      }
+      this.db.assertSchemaReady();
+      return this.db.getIssue(run.projectId, run.linearIssueId);
+    }
   }
 
   private clearFailedPublication(

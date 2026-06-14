@@ -2,6 +2,7 @@ import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import { SerialWorkQueue } from "./service-queue.ts";
 import { retrySqliteLockedQueueFailure } from "./queue-failure-policy.ts";
+import { isSqliteSchemaReadError } from "./sqlite-errors.ts";
 
 const ISSUE_KEY_DELIMITER = "::";
 const DEFAULT_RECONCILE_INTERVAL_MS = 5_000;
@@ -37,6 +38,8 @@ export interface ServiceRuntimeOptions {
   reconcileTimeoutMs?: number;
   maxActiveIssueRuns?: number;
   issueRunCapacityRetryDelayMs?: number;
+  assertStorageReady?: () => void;
+  describeStorage?: () => Record<string, unknown>;
 }
 
 function makeIssueQueueKey(item: RuntimeIssueQueueItem): string {
@@ -179,11 +182,7 @@ export class ServiceRuntime {
 
     this.reconcileInProgress = true;
     try {
-      await promiseWithTimeout(
-        this.runReconciler.reconcileActiveRuns(),
-        this.options.reconcileTimeoutMs ?? DEFAULT_RECONCILE_TIMEOUT_MS,
-        "Background active-run reconciliation",
-      );
+      await this.reconcileActiveRunsWithSchemaRetry();
       // Pick up issues that became ready outside the webhook path
       // (e.g. CLI retry, manual DB edits) without requiring a restart.
       for (const issue of this.readyIssueSource.listIssuesReadyForExecution()) {
@@ -191,7 +190,10 @@ export class ServiceRuntime {
       }
     } catch (error) {
       this.logger.warn(
-        { error: error instanceof Error ? error.message : String(error) },
+        {
+          error: error instanceof Error ? error.message : String(error),
+          storage: this.safeStorageDiagnostics(),
+        },
         "Background active-run reconciliation failed",
       );
     } finally {
@@ -199,6 +201,35 @@ export class ServiceRuntime {
       if (this.ready) {
         this.scheduleBackgroundReconcile();
       }
+    }
+  }
+
+  private async reconcileActiveRunsWithSchemaRetry(): Promise<void> {
+    try {
+      await this.reconcileActiveRunsOnce();
+    } catch (error) {
+      if (!isSqliteSchemaReadError(error) || !this.options.assertStorageReady) {
+        throw error;
+      }
+      this.options.assertStorageReady();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await this.reconcileActiveRunsOnce();
+    }
+  }
+
+  private async reconcileActiveRunsOnce(): Promise<void> {
+    await promiseWithTimeout(
+      this.runReconciler.reconcileActiveRuns(),
+      this.options.reconcileTimeoutMs ?? DEFAULT_RECONCILE_TIMEOUT_MS,
+      "Background active-run reconciliation",
+    );
+  }
+
+  private safeStorageDiagnostics(): Record<string, unknown> | undefined {
+    try {
+      return this.options.describeStorage?.();
+    } catch {
+      return undefined;
     }
   }
 

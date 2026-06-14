@@ -142,6 +142,10 @@ export class PatchRelayService {
           await this.orchestrator.run(item);
         },
       },
+      {
+        assertStorageReady: () => db.assertSchemaReady(),
+        describeStorage: () => db.describeSchema(),
+      },
     );
     enqueueIssue = (projectId, issueId) => runtime.enqueueIssue(projectId, issueId);
 
