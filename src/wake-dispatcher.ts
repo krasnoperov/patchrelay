@@ -1,11 +1,12 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
-import type { RunRecord, WorkflowTaskRecord } from "./db-types.ts";
+import type { IssueRecord, RunRecord, WorkflowTaskRecord } from "./db-types.ts";
 import type { RunType } from "./factory-state.ts";
 import type { ReleaseIssueSessionLease } from "./issue-session-lease-service.ts";
 import type { IssueSessionEventType } from "./issue-session-events.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
+import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
 export interface DispatchableSessionEvent {
   eventType: IssueSessionEventType;
@@ -54,27 +55,100 @@ export class WakeDispatcher {
     private readonly telemetry: PatchRelayTelemetry = noopTelemetry,
   ) {}
 
-  private peekRunnableWorkflowTask(projectId: string, linearIssueId: string): WorkflowTaskRecord | undefined {
-    return this.db.workflowTasks
-      .listOpenRunnableTasks(projectId)
-      .find((task) => task.subjectId === linearIssueId && task.runType !== undefined);
+  private listOpenWorkflowTasks(projectId: string, linearIssueId: string): WorkflowTaskRecord[] {
+    return this.db.workflowTasks.listOpenTasks(projectId, linearIssueId);
+  }
+
+  private reconcileOpenWorkflowTasks(
+    issue: IssueRecord,
+    options?: { ignoreDetachedActiveRuns?: boolean | undefined },
+  ): WorkflowTaskRecord[] {
+    try {
+      return reconcileWorkflowTasksForIssue(this.db, issue, options).result.open;
+    } catch (error) {
+      this.logger.warn(
+        {
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "Workflow task reconciliation failed while resolving wake",
+      );
+      return this.listOpenWorkflowTasks(issue.projectId, issue.linearIssueId);
+    }
+  }
+
+  private peekRunnableWorkflowTask(projectId: string, linearIssueId: string, openTasks?: WorkflowTaskRecord[]): WorkflowTaskRecord | undefined {
+    return (openTasks ?? this.db.workflowTasks.listOpenRunnableTasks(projectId))
+      .find((task) => (
+        task.subjectId === linearIssueId
+        && task.taskType === "run"
+        && task.gateAction === "start"
+        && task.runType !== undefined
+      ));
+  }
+
+  private workflowAuthorityObserved(projectId: string, linearIssueId: string): boolean {
+    return this.db.workflowObservations
+      .listObservations(projectId, linearIssueId)
+      .some((observation) => (
+        observation.type === "linear.delegated"
+        || observation.type === "linear.undelegated"
+        || observation.type === "operator.authority_changed"
+      ));
+  }
+
+  private sessionWakeCanAnswerInputWait(openTasks: WorkflowTaskRecord[], wakeReason: string | undefined): boolean {
+    if (openTasks.length === 0 || !openTasks.every((task) => task.taskId === "wait:input")) {
+      return false;
+    }
+    return wakeReason === "direct_reply"
+      || wakeReason === "followup_prompt"
+      || wakeReason === "followup_comment"
+      || wakeReason === "human_instruction"
+      || wakeReason === "operator_prompt"
+      || wakeReason === "completion_check_continue";
+  }
+
+  private workflowTasksSuppressSessionWake(openTasks: WorkflowTaskRecord[], wakeReason: string | undefined): boolean {
+    if (openTasks.length === 0) return false;
+    if (this.peekRunnableWorkflowTask(openTasks[0]!.projectId, openTasks[0]!.subjectId, openTasks)) return false;
+    if (!openTasks.some((task) => this.isBlockingWorkflowGate(task))) return false;
+    return !this.sessionWakeCanAnswerInputWait(openTasks, wakeReason);
+  }
+
+  private isBlockingWorkflowGate(task: WorkflowTaskRecord): boolean {
+    if (task.taskId === "wait:input") return true;
+    if (task.taskId === "wait:children" || task.taskId === "wait:blockers" || task.taskId.startsWith("wait:active-run:")) {
+      return true;
+    }
+    if (task.taskId === "wait:authority") {
+      return this.workflowAuthorityObserved(task.projectId, task.subjectId);
+    }
+    return task.taskType === "verify" || task.taskType === "ask" || task.taskType === "escalate" || task.taskType === "publish";
   }
 
   private resolveDispatchableWake(
     projectId: string,
     linearIssueId: string,
-    issue: { pendingRunType?: RunType | undefined },
+    issue: IssueRecord,
+    options?: { ignoreDetachedActiveRuns?: boolean | undefined },
   ): DispatchableWake | undefined {
-    const sessionWake = this.db.issueSessions.peekIssueSessionWake(projectId, linearIssueId);
-    if (sessionWake) {
+    const existingWorkflowTasks = this.listOpenWorkflowTasks(projectId, linearIssueId);
+    const existingWorkflowTask = this.peekRunnableWorkflowTask(projectId, linearIssueId, existingWorkflowTasks);
+    if (existingWorkflowTask?.runType) {
       return {
-        runType: sessionWake.runType,
-        ...(sessionWake.wakeReason ? { wakeReason: sessionWake.wakeReason } : {}),
-        eventIds: sessionWake.eventIds,
-        source: "session_event",
+        runType: existingWorkflowTask.runType,
+        wakeReason: existingWorkflowTask.taskId,
+        eventIds: [],
+        source: "workflow_task",
       };
     }
-    const workflowTask = this.peekRunnableWorkflowTask(projectId, linearIssueId);
+
+    const freshIssue = this.db.issues.getIssue(projectId, linearIssueId) ?? issue;
+    const openWorkflowTasks = this.reconcileOpenWorkflowTasks(freshIssue, options);
+    const workflowTask = this.peekRunnableWorkflowTask(projectId, linearIssueId, openWorkflowTasks);
     if (workflowTask?.runType) {
       return {
         runType: workflowTask.runType,
@@ -82,6 +156,22 @@ export class WakeDispatcher {
         eventIds: [],
         source: "workflow_task",
       };
+    }
+
+    const sessionWake = this.db.issueSessions.peekIssueSessionWake(projectId, linearIssueId);
+    if (sessionWake) {
+      if (this.workflowTasksSuppressSessionWake(openWorkflowTasks, sessionWake.wakeReason)) {
+        return undefined;
+      }
+      return {
+        runType: sessionWake.runType,
+        ...(sessionWake.wakeReason ? { wakeReason: sessionWake.wakeReason } : {}),
+        eventIds: sessionWake.eventIds,
+        source: "session_event",
+      };
+    }
+    if (this.workflowTasksSuppressSessionWake(openWorkflowTasks, undefined)) {
+      return undefined;
     }
     if (issue.pendingRunType) {
       return {
@@ -324,10 +414,21 @@ export class WakeDispatcher {
       runType: params.run.runType,
     });
     const issue = this.db.issues.getIssue(params.run.projectId, params.run.linearIssueId);
+    if (issue?.factoryState === "done" || issue?.factoryState === "failed" || issue?.factoryState === "escalated" || issue?.prState === "merged") {
+      emitTelemetry(this.telemetry, {
+        type: "wake.suppressed",
+        projectId: params.run.projectId,
+        linearIssueId: params.run.linearIssueId,
+        ...(params.issueKey ? { issueKey: params.issueKey } : {}),
+        reason: "terminal_event",
+      });
+      return undefined;
+    }
     const wake = issue ? this.resolveDispatchableWake(
       params.run.projectId,
       params.run.linearIssueId,
       issue,
+      { ignoreDetachedActiveRuns: true },
     ) : undefined;
     if (!wake) {
       emitTelemetry(this.telemetry, {

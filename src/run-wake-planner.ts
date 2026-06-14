@@ -1,6 +1,6 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
-import type { IssueRecord } from "./db-types.ts";
+import type { IssueRecord, WorkflowTaskRecord } from "./db-types.ts";
 import type { RunType } from "./factory-state.ts";
 import type { IssueSessionLease } from "./issue-session-lease-service.ts";
 import type { IssueSessionEventType } from "./issue-session-events.ts";
@@ -13,6 +13,7 @@ import { buildRequestedChangesWakeIdentity } from "./reactive-wake-keys.ts";
 import { parseRunContextOrWarn, serializeRunContext, tryParseRunContextValue, type RunContext } from "./run-context.ts";
 import { assertNever } from "./utils.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
+import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
 const WRITER = "run-wake-planner";
 
@@ -51,12 +52,24 @@ export class RunWakePlanner {
   ) {}
 
   resolveRunWake(issue: IssueRecord): PendingRunWake | undefined {
-    if (this.db.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId) > 0) {
+    const freshIssue = this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+    if (this.db.issues.countUnresolvedBlockers(freshIssue.projectId, freshIssue.linearIssueId) > 0) {
       return undefined;
     }
 
-    const sessionWake = this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    const existingWorkflowTaskWake = this.resolveWorkflowTaskWake(freshIssue);
+    if (existingWorkflowTaskWake) return existingWorkflowTaskWake;
+
+    this.reconcileWorkflowTasks(freshIssue);
+
+    const workflowTaskWake = this.resolveWorkflowTaskWake(freshIssue);
+    if (workflowTaskWake) return workflowTaskWake;
+
+    const sessionWake = this.db.issueSessions.peekIssueSessionWake(freshIssue.projectId, freshIssue.linearIssueId);
     if (sessionWake) {
+      if (this.workflowTasksSuppressSessionWake(freshIssue, sessionWake.wakeReason)) {
+        return undefined;
+      }
       return {
         runType: sessionWake.runType,
         context: sessionWake.context,
@@ -66,10 +79,11 @@ export class RunWakePlanner {
       };
     }
 
-    const workflowTaskWake = this.resolveWorkflowTaskWake(issue);
-    if (workflowTaskWake) return workflowTaskWake;
+    if (this.workflowTasksSuppressSessionWake(freshIssue, undefined)) {
+      return undefined;
+    }
 
-    const implicitWake = this.db.workflowWakes.peekIssueWake(issue.projectId, issue.linearIssueId);
+    const implicitWake = this.db.workflowWakes.peekIssueWake(freshIssue.projectId, freshIssue.linearIssueId);
     if (!implicitWake) return undefined;
     return {
       runType: implicitWake.runType,
@@ -99,6 +113,61 @@ export class RunWakePlanner {
       resumeThread: runType !== "implementation",
       eventIds: [],
     };
+  }
+
+  private reconcileWorkflowTasks(issue: IssueRecord): void {
+    try {
+      reconcileWorkflowTasksForIssue(this.db, issue);
+    } catch (error) {
+      this.logger?.warn(
+        {
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "Workflow task reconciliation failed while planning run wake",
+      );
+    }
+  }
+
+  private workflowTasksSuppressSessionWake(issue: IssueRecord, wakeReason: string | undefined): boolean {
+    const openTasks = this.db.workflowTasks.listOpenTasks(issue.projectId, issue.linearIssueId);
+    if (openTasks.length === 0) return false;
+    if (openTasks.some((task) => task.taskType === "run" && task.gateAction === "start" && task.runType !== undefined)) {
+      return false;
+    }
+    if (!openTasks.some((task) => this.isBlockingWorkflowGate(task))) return false;
+    if (!openTasks.every((task) => task.taskId === "wait:input")) {
+      return true;
+    }
+    return wakeReason !== "direct_reply"
+      && wakeReason !== "followup_prompt"
+      && wakeReason !== "followup_comment"
+      && wakeReason !== "human_instruction"
+      && wakeReason !== "operator_prompt"
+      && wakeReason !== "completion_check_continue";
+  }
+
+  private isBlockingWorkflowGate(task: WorkflowTaskRecord): boolean {
+    if (task.taskId === "wait:input") return true;
+    if (task.taskId === "wait:children" || task.taskId === "wait:blockers" || task.taskId.startsWith("wait:active-run:")) {
+      return true;
+    }
+    if (task.taskId === "wait:authority") {
+      return this.workflowAuthorityObserved(task.projectId, task.subjectId);
+    }
+    return task.taskType === "verify" || task.taskType === "ask" || task.taskType === "escalate" || task.taskType === "publish";
+  }
+
+  private workflowAuthorityObserved(projectId: string, linearIssueId: string): boolean {
+    return this.db.workflowObservations
+      .listObservations(projectId, linearIssueId)
+      .some((observation) => (
+        observation.type === "linear.delegated"
+        || observation.type === "linear.undelegated"
+        || observation.type === "operator.authority_changed"
+      ));
   }
 
   appendWakeEventWithLease(

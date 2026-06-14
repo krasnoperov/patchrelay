@@ -286,6 +286,9 @@ export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks"
   if (snapshot.status === "done") {
     return [];
   }
+  if (snapshot.status === "failed") {
+    return [];
+  }
   if (snapshot.activeRun) {
     return [{
       id: `wait:active-run:${snapshot.activeRun.id}`,

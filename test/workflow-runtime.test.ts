@@ -818,6 +818,56 @@ test("orchestration child changes cannot bypass a wait-children workflow task", 
   }
 });
 
+test("workflow wait tasks suppress legacy delegated session wakes", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const parent = makeIssue(db, {
+      linearIssueId: "parent-1",
+      issueKey: "USE-100",
+      title: "Coordinate child work",
+      issueClass: "orchestration",
+    });
+    makeIssue(db, {
+      linearIssueId: "child-1",
+      issueKey: "USE-101",
+      title: "Child task",
+      factoryState: "delegated",
+      currentLinearState: "Start",
+      currentLinearStateType: "unstarted",
+    });
+    db.replaceIssueParentLink({
+      projectId: parent.projectId,
+      parentLinearIssueId: parent.linearIssueId,
+      childLinearIssueId: "child-1",
+    });
+    reconcileWorkflowTasksForIssue(db, db.getIssue(parent.projectId, parent.linearIssueId)!);
+    db.issueSessions.appendIssueSessionEvent({
+      projectId: parent.projectId,
+      linearIssueId: parent.linearIssueId,
+      eventType: "delegated",
+      dedupeKey: "delegated:parent-1",
+    });
+
+    const enqueueCalls: Array<[string, string]> = [];
+    const dispatcher = new WakeDispatcher(
+      db,
+      (projectId, issueId) => enqueueCalls.push([projectId, issueId]),
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    assert.equal(dispatcher.dispatchIfWakePending(parent.projectId, parent.linearIssueId), undefined);
+    assert.deepEqual(enqueueCalls, []);
+    assert.equal(new RunWakePlanner(db).resolveRunWake(db.getIssue(parent.projectId, parent.linearIssueId)!), undefined);
+    assert.deepEqual(
+      db.workflowTasks.listOpenTasks(parent.projectId, parent.linearIssueId).map((task) => [task.taskId, task.taskType, task.gateAction]),
+      [["wait:children", "wait", "wait"]],
+    );
+  } finally {
+    cleanup();
+  }
+});
+
 test("runs persist the authority epoch they were claimed under", () => {
   const { db, cleanup } = createDb();
   try {

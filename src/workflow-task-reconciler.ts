@@ -14,11 +14,19 @@ function isActiveRun(run: Pick<RunRecord, "status">): boolean {
 function resolveActiveRunSnapshot(
   db: PatchRelayDatabase,
   issue: IssueRecord,
+  options?: { ignoreDetachedActiveRuns?: boolean | undefined },
 ): WorkflowSnapshot["activeRun"] {
   const pinnedRun = issue.activeRunId !== undefined ? db.runs.getRunById(issue.activeRunId) : undefined;
-  const run = pinnedRun && isActiveRun(pinnedRun)
-    ? pinnedRun
-    : db.runs.listRunsForIssue(issue.projectId, issue.linearIssueId)
+  if (pinnedRun && isActiveRun(pinnedRun)) {
+    return {
+      id: pinnedRun.id,
+      runType: pinnedRun.runType,
+      authorityEpoch: pinnedRun.authorityEpoch,
+      status: pinnedRun.status,
+    };
+  }
+  if (options?.ignoreDetachedActiveRuns) return undefined;
+  const run = db.runs.listRunsForIssue(issue.projectId, issue.linearIssueId)
       .filter(isActiveRun)
       .at(-1);
   if (!run) return undefined;
@@ -55,8 +63,9 @@ function readinessForTask(snapshot: WorkflowSnapshot, task: WorkflowTask): GateD
 export function buildWorkflowSnapshotForIssue(
   db: PatchRelayDatabase,
   issue: IssueRecord,
+  options?: { ignoreDetachedActiveRuns?: boolean | undefined },
 ): WorkflowSnapshot {
-  const activeRun = resolveActiveRunSnapshot(db, issue);
+  const activeRun = resolveActiveRunSnapshot(db, issue, options);
   return projectWorkflowSnapshot({
     issue,
     observations: db.workflowObservations.listObservations(issue.projectId, issue.linearIssueId),
@@ -70,8 +79,9 @@ export function buildWorkflowSnapshotForIssue(
 export function reconcileWorkflowTasksForIssue(
   db: PatchRelayDatabase,
   issue: IssueRecord,
+  options?: { ignoreDetachedActiveRuns?: boolean | undefined },
 ): WorkflowTaskReconciliation {
-  const snapshot = buildWorkflowSnapshotForIssue(db, issue);
+  const snapshot = buildWorkflowSnapshotForIssue(db, issue, options);
   const result = db.workflowTasks.reconcileTasks({
     projectId: issue.projectId,
     subjectId: issue.linearIssueId,
