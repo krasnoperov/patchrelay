@@ -153,6 +153,40 @@ test("service runtime caps issue run fanout", async () => {
   ]);
 });
 
+test("service runtime defaults to one active issue run", async () => {
+  const codex = new FakeCodexClient();
+  const processedIssues: RuntimeIssueQueueItem[] = [];
+  let activeRuns = 1;
+
+  const runtime = new ServiceRuntime(
+    codex as never,
+    pino({ enabled: false }),
+    { async reconcileActiveRuns() {} },
+    {
+      listIssuesReadyForExecution: () => [],
+      countActiveIssueRuns: () => activeRuns,
+    },
+    { async processWebhookEvent() {} },
+    {
+      async processIssue(item) {
+        processedIssues.push(item);
+        activeRuns += 1;
+      },
+    },
+    { issueRunCapacityRetryDelayMs: 20 },
+  );
+
+  runtime.enqueueIssue("app", "issue-1");
+  await flushQueue();
+
+  assert.deepEqual(processedIssues, []);
+
+  activeRuns = 0;
+  await delay(60);
+
+  assert.deepEqual(processedIssues, [{ projectId: "app", issueId: "issue-1" }]);
+});
+
 test("service runtime retries issue queue items that hit a transient SQLite lock", async () => {
   const codex = new FakeCodexClient();
   const processedIssues: RuntimeIssueQueueItem[] = [];
