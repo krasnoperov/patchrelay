@@ -3,6 +3,7 @@ import type { IssueRecord } from "./db-types.ts";
 import { classifyIssue } from "./issue-class.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
 import type { RunContext } from "./run-context.ts";
+import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
 const WRITER = "orchestration-parent-wake";
 
@@ -38,6 +39,18 @@ function resolveParentIssueIds(
     parentIds.push(blocker.blockerLinearIssueId);
   }
   return unique(parentIds);
+}
+
+function parentHasRunnableWorkflowTask(
+  db: PatchRelayDatabase,
+  parent: IssueRecord,
+): boolean {
+  const reconciliation = reconcileWorkflowTasksForIssue(db, parent);
+  return reconciliation.result.open.some((task) => (
+    task.taskType === "run"
+    && task.runType !== undefined
+    && task.gateAction === "start"
+  ));
 }
 
 export function startOrchestrationSettleWindow(
@@ -109,6 +122,11 @@ export function wakeOrchestrationParentsForChildEvent(params: {
     // child-set changes into the settle window instead of launching too early.
     if (!parent.threadId && parent.activeRunId === undefined && parent.orchestrationSettleUntil) {
       startOrchestrationSettleWindow(params.db, parent, params.now);
+      parentIds.push(parent.linearIssueId);
+      continue;
+    }
+
+    if (!parentHasRunnableWorkflowTask(params.db, parent)) {
       parentIds.push(parent.linearIssueId);
       continue;
     }

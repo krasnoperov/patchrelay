@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import pino from "pino";
 import { PatchRelayDatabase } from "../src/db.ts";
 import type { IssueRecord } from "../src/db-types.ts";
 import {
@@ -12,6 +13,8 @@ import {
 } from "../src/workflow-runtime.ts";
 import { reconcileWorkflowTasksForIssue } from "../src/workflow-task-reconciler.ts";
 import { RunWakePlanner } from "../src/run-wake-planner.ts";
+import { WakeDispatcher } from "../src/wake-dispatcher.ts";
+import { wakeOrchestrationParentsForChildEvent } from "../src/orchestration-parent-wake.ts";
 
 function createDb(): { db: PatchRelayDatabase; cleanup: () => void } {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-v2-runtime-"));
@@ -757,6 +760,59 @@ test("umbrella workflows with completed children derive verification, not implem
       [["verify:children_complete", "verify", "start"]],
     );
     assert.equal(db.workflowTasks.listOpenRunnableTasks(parent.projectId).some((task) => task.subjectId === parent.linearIssueId), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test("orchestration child changes cannot bypass a wait-children workflow task", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const parent = makeIssue(db, {
+      linearIssueId: "parent-1",
+      issueKey: "USE-100",
+      title: "Coordinate child work",
+      issueClass: "orchestration",
+    });
+    const child = makeIssue(db, {
+      linearIssueId: "child-1",
+      issueKey: "USE-101",
+      title: "Child task",
+      factoryState: "delegated",
+      currentLinearState: "Start",
+      currentLinearStateType: "unstarted",
+      parentLinearIssueId: parent.linearIssueId,
+      parentIssueKey: parent.issueKey,
+    });
+    db.replaceIssueParentLink({
+      projectId: parent.projectId,
+      parentLinearIssueId: parent.linearIssueId,
+      childLinearIssueId: child.linearIssueId,
+    });
+
+    const enqueueCalls: Array<[string, string]> = [];
+    const dispatcher = new WakeDispatcher(
+      db,
+      (projectId, issueId) => enqueueCalls.push([projectId, issueId]),
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    const parentIds = wakeOrchestrationParentsForChildEvent({
+      db,
+      child,
+      eventType: "child_changed",
+      changeKind: "attached",
+      wakeDispatcher: dispatcher,
+    });
+
+    assert.deepEqual(parentIds, [parent.linearIssueId]);
+    assert.deepEqual(enqueueCalls, []);
+    assert.equal(db.issueSessions.peekIssueSessionWake(parent.projectId, parent.linearIssueId), undefined);
+    assert.deepEqual(
+      db.workflowTasks.listOpenTasks(parent.projectId, parent.linearIssueId).map((task) => [task.taskId, task.taskType, task.gateAction]),
+      [["wait:children", "wait", "wait"]],
+    );
   } finally {
     cleanup();
   }
