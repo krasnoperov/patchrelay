@@ -1,6 +1,6 @@
 {
   "name": "patchrelay",
-  "version": "0.83.4",
+  "version": "0.84.0",
   "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@10.28.2",
