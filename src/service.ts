@@ -287,6 +287,7 @@ export class PatchRelayService {
         logger: this.logger,
       });
     }
+    this.startupRecovery.reconcileKnownWorkflowTasks();
     await this.runtime.start();
     this.scheduleEventRetention(60_000);
     void this.startupRecovery.recoverDelegatedIssueStateFromLinear().catch((error) => {

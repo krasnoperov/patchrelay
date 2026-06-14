@@ -99,6 +99,8 @@ function renderStatusComment(
     : undefined;
   const waitingReason = trackedIssue?.waitingReason ?? derivePatchRelayWaitingReason({
     delegatedToPatchRelay: issue.delegatedToPatchRelay,
+    currentLinearState: issue.currentLinearState,
+    currentLinearStateType: issue.currentLinearStateType,
     ...(activeRunType ? { activeRunType } : {}),
     ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
     factoryState: issue.factoryState,

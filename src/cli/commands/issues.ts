@@ -5,7 +5,7 @@ import type { InteractiveRunner, Output, ParsedArgs } from "../command-types.ts"
 import type { CliDataAccess } from "../data.ts";
 import { CliUsageError } from "../errors.ts";
 import { formatJson } from "../formatters/json.ts";
-import { formatAudit, formatClose, formatInspect, formatList, formatLive, formatOpen, formatPrompt, formatRetry, formatSessionHistory, formatTranscriptSource, formatWorktree } from "../formatters/text.ts";
+import { formatAudit, formatClose, formatInspect, formatList, formatLive, formatOpen, formatPrompt, formatRetry, formatSessionHistory, formatTrace, formatTranscriptSource, formatWorktree } from "../formatters/text.ts";
 import { buildOpenCommand } from "../interactive.ts";
 import { writeOutput } from "../output.ts";
 
@@ -54,6 +54,8 @@ export async function handleIssueCommand(params: IssueCommandParams): Promise<nu
       return await handleSessionsCommand(nested);
     case "audit":
       return await handleAuditCommand(nested);
+    case "trace":
+      return await handleTraceCommand(nested);
     case "transcript-source":
       return await handleTranscriptSourceCommand(nested);
     case "prompt":
@@ -207,6 +209,21 @@ export async function handleAuditCommand(params: IssueCommandParams): Promise<nu
   }
 
   writeOutput(params.stdout, params.json ? formatJson(result) : formatAudit(result));
+  return 0;
+}
+
+export async function handleTraceCommand(params: IssueCommandParams): Promise<number> {
+  const issueKey = params.commandArgs[0];
+  if (!issueKey) {
+    throw new Error("trace requires <issueKey>.");
+  }
+
+  const result = params.data.trace(issueKey);
+  if (!result) {
+    throw new Error(`Issue not found: ${issueKey}`);
+  }
+
+  writeOutput(params.stdout, params.json ? formatJson(result) : formatTrace(result));
   return 0;
 }
 

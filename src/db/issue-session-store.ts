@@ -549,7 +549,7 @@ export class IssueSessionStore {
       .prepare(
         `SELECT
           s.project_id, s.linear_issue_id, s.issue_key, i.title,
-          i.current_linear_state, i.factory_state, i.delegated_to_patchrelay, s.session_state, s.waiting_reason, s.summary_text, s.display_updated_at,
+          i.current_linear_state, i.current_linear_state_type, i.factory_state, i.delegated_to_patchrelay, s.session_state, s.waiting_reason, s.summary_text, s.display_updated_at,
           i.pending_run_type,
           i.orchestration_settle_until,
           i.pr_number, i.pr_state, i.pr_head_sha, i.pr_review_state, i.pr_check_status, i.last_blocking_review_head_sha,

@@ -89,6 +89,9 @@ export function deriveIssueStatusNote(params: {
   const latestEventNote = clean(eventStatusNote(params.latestEvent));
   const failureSummary = clean(params.failureSummary);
   const waitingReason = clean(params.waitingReason);
+  if (params.issue.factoryState !== "done" && waitingReason === "PatchRelay work is complete") {
+    return undefined;
+  }
 
   let note: string | undefined;
   if (completionCheckActive) {

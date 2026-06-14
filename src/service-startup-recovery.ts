@@ -58,6 +58,21 @@ export class ServiceStartupRecovery {
     }
   }
 
+  reconcileKnownWorkflowTasks(): void {
+    let opened = 0;
+    let updated = 0;
+    let closed = 0;
+    for (const issue of this.db.issues.listIssues()) {
+      const reconciliation = reconcileWorkflowTasksForIssue(this.db, issue);
+      opened += reconciliation.result.opened.length;
+      updated += reconciliation.result.updated.length;
+      closed += reconciliation.result.closed.length;
+    }
+    if (opened > 0 || updated > 0 || closed > 0) {
+      this.logger.info({ opened, updated, closed }, "Reconciled durable workflow tasks from local issue truth");
+    }
+  }
+
   async recoverDelegatedIssueStateFromLinear(): Promise<void> {
     await this.discoverDelegatedIssuesFromLinear();
 
@@ -204,6 +219,7 @@ export class ServiceStartupRecovery {
         );
       }
     }
+    this.reconcileKnownWorkflowTasks();
   }
 
   private async discoverDelegatedIssuesFromLinear(): Promise<void> {

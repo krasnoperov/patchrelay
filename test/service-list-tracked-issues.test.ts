@@ -827,3 +827,43 @@ test("listTrackedIssues does not treat closed PRs on done issues as awaiting ext
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("listTrackedIssues treats completed Linear state as terminal even before factoryState catches up", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-list-linear-terminal-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const service = new PatchRelayService(
+      config,
+      db,
+      {
+        on: () => undefined,
+        readThread: async () => ({ id: "thread-1", turns: [] }),
+      } as never,
+      undefined,
+      pino({ enabled: false }),
+    );
+
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-linear-done",
+      issueKey: "USE-LINEAR-DONE",
+      title: "Closed in Linear before local state caught up",
+      delegatedToPatchRelay: true,
+      currentLinearState: "Done",
+      currentLinearStateType: "completed",
+      factoryState: "delegated",
+      pendingRunType: "implementation",
+    });
+
+    const tracked = service.listTrackedIssues().find((entry) => entry.issueKey === "USE-LINEAR-DONE");
+    assert.ok(tracked);
+    assert.equal(tracked.factoryState, "delegated");
+    assert.equal(tracked.waitingReason, "PatchRelay work is complete");
+    assert.equal(tracked.statusNote, undefined);
+    assert.equal(tracked.readyForExecution, false);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

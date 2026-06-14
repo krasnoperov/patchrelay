@@ -1,5 +1,5 @@
 import type { IssueRecord, RunRecord } from "./db-types.ts";
-import { hasOpenPr } from "./pr-state.ts";
+import { hasOpenPr, isCanceledLinearState, isCompletedLinearState } from "./pr-state.ts";
 
 /**
  * D3 (core simplification plan): the single derived answer to "why is this
@@ -71,6 +71,8 @@ export type IssueExecutionState =
 export interface IssueExecutionStateInput {
   delegatedToPatchRelay?: boolean | undefined;
   factoryState?: string | undefined;
+  currentLinearState?: string | undefined;
+  currentLinearStateType?: string | undefined;
   activeRunId?: number | undefined;
   activeRunType?: string | undefined;
   /** Status of the run `activeRunId` points at, when the caller resolved the record. */
@@ -96,6 +98,13 @@ const ACTIVE_RUN_STATUSES: ReadonlySet<string> = new Set(["queued", "running"]);
 
 export function deriveIssueExecutionState(params: IssueExecutionStateInput): IssueExecutionState {
   const factoryState = params.factoryState;
+
+  if (isCompletedLinearState(params.currentLinearStateType, params.currentLinearState)) {
+    return { kind: "terminal", outcome: "done" };
+  }
+  if (isCanceledLinearState(params.currentLinearStateType, params.currentLinearState)) {
+    return { kind: "terminal", outcome: "failed" };
+  }
 
   // Undelegation pauses automation for any non-finished issue and outranks
   // every other answer (including an active run, which keeps executing but
@@ -226,6 +235,8 @@ export function issueExecutionStateInputFromRecords(
     IssueRecord,
     | "delegatedToPatchRelay"
     | "factoryState"
+    | "currentLinearState"
+    | "currentLinearStateType"
     | "activeRunId"
     | "pendingRunType"
     | "orchestrationSettleUntil"
@@ -246,6 +257,8 @@ export function issueExecutionStateInputFromRecords(
   return {
     delegatedToPatchRelay: issue.delegatedToPatchRelay,
     factoryState: issue.factoryState,
+    currentLinearState: issue.currentLinearState,
+    currentLinearStateType: issue.currentLinearStateType,
     activeRunId: issue.activeRunId,
     activeRunType: extras?.activeRun?.runType,
     activeRunStatus: extras?.activeRun?.status,

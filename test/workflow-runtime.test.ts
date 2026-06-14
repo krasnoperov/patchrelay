@@ -800,6 +800,53 @@ test("umbrella workflows with completed children derive verification, not implem
   }
 });
 
+test("terminal Linear parent state closes umbrella verification tasks", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const parent = makeIssue(db, {
+      linearIssueId: "parent-1",
+      issueKey: "USE-100",
+      title: "Coordinate child work",
+    });
+    makeIssue(db, {
+      linearIssueId: "child-1",
+      issueKey: "USE-101",
+      title: "Child task",
+      factoryState: "done",
+      currentLinearStateType: "completed",
+    });
+    db.replaceIssueParentLink({
+      projectId: parent.projectId,
+      parentLinearIssueId: parent.linearIssueId,
+      childLinearIssueId: "child-1",
+    });
+
+    const initial = reconcileWorkflowTasksForIssue(db, db.getIssue(parent.projectId, parent.linearIssueId)!);
+    assert.deepEqual(
+      initial.result.open.map((task) => [task.taskId, task.taskType, task.gateAction]),
+      [["verify:children_complete", "verify", "start"]],
+    );
+
+    db.upsertIssue({
+      projectId: parent.projectId,
+      linearIssueId: parent.linearIssueId,
+      currentLinearState: "Done",
+      currentLinearStateType: "completed",
+    });
+    const reconciled = reconcileWorkflowTasksForIssue(db, db.getIssue(parent.projectId, parent.linearIssueId)!);
+
+    assert.equal(reconciled.snapshot.status, "done");
+    assert.deepEqual(reconciled.snapshot.openTasks, []);
+    assert.deepEqual(
+      db.workflowTasks.listOpenTasks(parent.projectId, parent.linearIssueId),
+      [],
+    );
+    assert.equal(db.listIssuesReadyForExecution().some((entry) => entry.linearIssueId === parent.linearIssueId), false);
+  } finally {
+    cleanup();
+  }
+});
+
 test("orchestration child changes cannot bypass a wait-children workflow task", () => {
   const { db, cleanup } = createDb();
   try {

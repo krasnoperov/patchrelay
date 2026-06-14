@@ -156,6 +156,8 @@ export class TrackedIssueListQuery {
           ? { sessionState: detachedActiveRun ? "running" as never : String(row.session_state) as never }
           : {}),
         factoryState: String(row.factory_state ?? "delegated") as never,
+        ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
+        ...(row.current_linear_state_type !== null ? { currentLinearStateType: String(row.current_linear_state_type) } : {}),
         ...(row.delegated_to_patchrelay !== null ? { delegatedToPatchRelay: Number(row.delegated_to_patchrelay) !== 0 } : {}),
         ...((row.active_run_type !== null || detachedActiveRun) ? { activeRunId: 1 } : {}),
         blockedByCount,
@@ -177,6 +179,8 @@ export class TrackedIssueListQuery {
         : undefined;
       const derivedWaitingReason = derivePatchRelayWaitingReason({
         ...(row.delegated_to_patchrelay !== null ? { delegatedToPatchRelay: Number(row.delegated_to_patchrelay) !== 0 } : {}),
+        ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
+        ...(row.current_linear_state_type !== null ? { currentLinearStateType: String(row.current_linear_state_type) } : {}),
         ...((row.active_run_type !== null || detachedActiveRun) ? { activeRunId: 1 } : {}),
         blockedByKeys,
         factoryState: String(row.factory_state ?? "delegated"),
@@ -215,7 +219,7 @@ export class TrackedIssueListQuery {
           }
         : undefined;
       const latestEvent = this.db.issueSessions.listIssueSessionEvents(String(row.project_id), String(row.linear_issue_id), { limit: 1 }).at(-1);
-      const statusNoteCandidate = deriveIssueStatusNote({
+      const derivedStatusNote = deriveIssueStatusNote({
         issue: { factoryState: String(row.factory_state ?? "delegated") } as never,
         sessionSummary,
         latestRun: latestRun as never,
@@ -223,7 +227,9 @@ export class TrackedIssueListQuery {
         failureSummary,
         blockedByKeys,
         waitingReason,
-      }) ?? waitingReason;
+      });
+      const statusNoteCandidate = derivedStatusNote
+        ?? (waitingReason === "PatchRelay work is complete" ? undefined : waitingReason);
       const statusNoteForReturn = shouldSuppressStatusNote({
         activeRunType: effectiveActiveRunType,
         sessionState: detachedActiveRun ? "running" : row.session_state as string | null | undefined,

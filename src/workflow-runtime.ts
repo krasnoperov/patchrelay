@@ -1,6 +1,7 @@
 import type { GitHubFailureSource, IssueRecord, WorkflowObservationRecord } from "./db-types.ts";
 import { buildFailureContext } from "./idle-reconciliation-helpers.ts";
 import { isCurrentHeadRequestedChanges } from "./issue-session.ts";
+import { isCanceledLinearState, isCompletedLinearState } from "./pr-state.ts";
 import type { RunType } from "./factory-state.ts";
 import { tryParseRunContextValue, type RunContext } from "./run-context.ts";
 
@@ -126,8 +127,13 @@ function deriveAuthority(
 }
 
 function issueStatus(issue: IssueRecord, blockerCount: number): WorkflowSnapshot["status"] {
-  if (issue.factoryState === "done" || issue.prState === "merged") return "done";
+  if (
+    issue.factoryState === "done"
+    || issue.prState === "merged"
+    || isCompletedLinearState(issue.currentLinearStateType, issue.currentLinearState)
+  ) return "done";
   if (issue.factoryState === "failed" || issue.factoryState === "escalated") return "failed";
+  if (isCanceledLinearState(issue.currentLinearStateType, issue.currentLinearState)) return "failed";
   if (issue.activeRunId !== undefined) return "running";
   if (!issue.delegatedToPatchRelay || blockerCount > 0 || issue.factoryState === "awaiting_input") return "waiting";
   return "idle";

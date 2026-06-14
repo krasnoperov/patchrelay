@@ -40,6 +40,8 @@ export function buildTrackedIssueRecord(params: {
   });
   const waitingReason = derivePatchRelayWaitingReason({
     delegatedToPatchRelay: params.issue.delegatedToPatchRelay,
+    currentLinearState: params.issue.currentLinearState,
+    currentLinearStateType: params.issue.currentLinearStateType,
     ...(effectiveActiveRun ? { activeRunId: effectiveActiveRun.id } : {}),
     blockedByKeys,
     factoryState: params.issue.factoryState,
@@ -90,6 +92,8 @@ export function buildTrackedIssueRecord(params: {
     readyForExecution: isIssueSessionReadyForExecution({
       sessionState: params.session?.sessionState,
       factoryState: params.issue.factoryState,
+      currentLinearState: params.issue.currentLinearState,
+      currentLinearStateType: params.issue.currentLinearStateType,
       delegatedToPatchRelay: params.issue.delegatedToPatchRelay,
       ...(effectiveActiveRun ? { activeRunId: effectiveActiveRun.id } : {}),
       blockedByCount: unresolvedBlockedBy.length,

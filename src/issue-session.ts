@@ -1,4 +1,5 @@
 import type { FactoryState, RunType } from "./factory-state.ts";
+import { isTerminalLinearState } from "./pr-state.ts";
 
 export type IssueSessionState = "idle" | "running" | "waiting_input" | "done" | "failed";
 
@@ -45,6 +46,8 @@ export interface IssueSessionReactiveIntent {
 export interface IssueSessionReadyInput {
   sessionState?: IssueSessionState | undefined;
   factoryState: FactoryState;
+  currentLinearState?: string | undefined;
+  currentLinearStateType?: string | undefined;
   delegatedToPatchRelay?: boolean | undefined;
   activeRunId?: number | undefined;
   blockedByCount: number;
@@ -139,6 +142,7 @@ export function deriveIssueSessionReactiveIntent(
 
 export function isIssueSessionReadyForExecution(params: IssueSessionReadyInput): boolean {
   if (params.delegatedToPatchRelay === false) return false;
+  if (isTerminalLinearState(params.currentLinearStateType, params.currentLinearState)) return false;
   if (params.activeRunId !== undefined) return false;
   if (params.blockedByCount > 0) return false;
   if (params.orchestrationSettleUntil) {

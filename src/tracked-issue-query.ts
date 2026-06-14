@@ -24,6 +24,8 @@ export class TrackedIssueQuery {
           activeRunId: issue.activeRunId,
           factoryState: issue.factoryState,
         }),
+        currentLinearState: issue.currentLinearState,
+        currentLinearStateType: issue.currentLinearStateType,
         activeRunId: issue.activeRunId,
         blockedByCount: this.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId),
         hasPendingWake: this.workflowWakes.hasPendingWake(issue.projectId, issue.linearIssueId),

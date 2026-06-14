@@ -3,6 +3,7 @@ import type {
   CloseResult,
   InspectResult,
   IssueSessionHistoryResult,
+  IssueTraceResult,
   IssueTranscriptSourceResult,
   ListResultItem,
   LiveResult,
@@ -22,6 +23,11 @@ function truncateLine(input: string | undefined): string | undefined {
   }
   const normalized = input.replace(/\s+/g, " ").trim();
   return normalized.length > 240 ? `${normalized.slice(0, 237)}...` : normalized;
+}
+
+function formatRecord(record: Record<string, unknown> | undefined): string | undefined {
+  if (!record || Object.keys(record).length === 0) return undefined;
+  return truncateLine(JSON.stringify(record));
 }
 
 export function formatInspect(result: InspectResult): string {
@@ -146,6 +152,65 @@ export function formatAudit(result: IssueAuditResult): string {
       lines.push(Object.entries(event.details)
         .map(([key, value]) => `${key}=${value === undefined ? "-" : typeof value === "string" ? value : JSON.stringify(value)}`)
         .join(" "));
+    }
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+export function formatTrace(result: IssueTraceResult): string {
+  const lines = [
+    `${result.issue.issueKey ?? result.issue.linearIssueId}${result.issue.currentLinearState ? `  ${result.issue.currentLinearState}` : ""}`,
+    value("Workflow status", result.snapshot.status),
+    value("Authority", `${result.snapshot.authority.delegated ? "delegated" : "revoked"} epoch=${result.snapshot.authority.epoch}`),
+    value("Blockers", result.snapshot.blockerCount),
+    value("Children", `${result.snapshot.openChildCount}/${result.snapshot.childCount} open`),
+  ];
+
+  if (result.snapshot.artifacts.length > 0) {
+    lines.push("");
+    lines.push("Artifacts");
+    for (const artifact of result.snapshot.artifacts) {
+      lines.push([
+        `- ${artifact.type}`,
+        artifact.ref,
+        artifact.state ? `state=${artifact.state}` : undefined,
+        formatRecord(artifact.metadata),
+      ].filter(Boolean).join("  "));
+    }
+  }
+
+  lines.push("");
+  lines.push("Workflow tasks");
+  if (result.tasks.length === 0) {
+    lines.push("- none");
+  } else {
+    for (const task of result.tasks) {
+      lines.push([
+        `- ${task.status}`,
+        task.taskId,
+        task.taskType,
+        task.runType ? `run=${task.runType}` : undefined,
+        `gate=${task.gateAction}`,
+        `epoch=${task.authorityEpoch}`,
+        task.gateReason ? `reason=${truncateLine(task.gateReason)}` : undefined,
+      ].filter(Boolean).join("  "));
+    }
+  }
+
+  lines.push("");
+  lines.push("Observations");
+  if (result.observations.length === 0) {
+    lines.push("- none");
+  } else {
+    for (const observation of result.observations.slice(-20)) {
+      lines.push([
+        `- #${observation.id}`,
+        observation.observedAt,
+        `${observation.source}:${observation.type}`,
+        observation.dedupeKey ? `dedupe=${observation.dedupeKey}` : undefined,
+        formatRecord(observation.payload),
+      ].filter(Boolean).join("  "));
     }
   }
 

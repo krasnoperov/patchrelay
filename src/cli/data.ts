@@ -8,6 +8,8 @@ import { PatchRelayDatabase } from "../db.ts";
 import type { OperatorClosedEventPayload } from "../issue-session-events.ts";
 import { buildManualRetryAttemptReset, resolveRetryTarget } from "../manual-issue-actions.ts";
 import { buildOperatorRetryEvent } from "../operator-retry-event.ts";
+import { buildWorkflowSnapshotForIssue } from "../workflow-task-reconciler.ts";
+import type { WorkflowSnapshot } from "../workflow-runtime.ts";
 import { WorktreeManager } from "../worktree-manager.ts";
 import { parseDelegationObservedPayload, parseRunReleasedAuthorityPayload } from "../delegation-audit.ts";
 import { CliOperatorApiClient } from "./operator-client.ts";
@@ -22,6 +24,8 @@ import type {
   StageReport,
   RunRecord,
   TrackedIssueRecord,
+  WorkflowObservationRecord,
+  WorkflowTaskRecord,
 } from "../types.ts";
 export type {
   CliOperatorDataAccess,
@@ -92,6 +96,21 @@ export interface IssueAuditItem {
 export interface IssueAuditResult {
   issue: TrackedIssueRecord;
   events: IssueAuditItem[];
+}
+
+export interface IssueTraceObservation extends Omit<WorkflowObservationRecord, "payloadJson"> {
+  payload?: Record<string, unknown> | undefined;
+}
+
+export interface IssueTraceTask extends Omit<WorkflowTaskRecord, "requirementsJson"> {
+  requirements?: Record<string, unknown> | undefined;
+}
+
+export interface IssueTraceResult {
+  issue: TrackedIssueRecord;
+  snapshot: WorkflowSnapshot;
+  tasks: IssueTraceTask[];
+  observations: IssueTraceObservation[];
 }
 
 export interface CloseResult {
@@ -521,6 +540,53 @@ export class CliDataAccess extends CliOperatorApiClient {
     return { issue, events };
   }
 
+  trace(issueKey: string): IssueTraceResult | undefined {
+    const issue = this.db.getTrackedIssueByKey(issueKey);
+    if (!issue) return undefined;
+
+    const dbIssue = this.db.issues.getIssueByKey(issueKey)!;
+    const snapshot = buildWorkflowSnapshotForIssue(this.db, dbIssue);
+    const observations = this.db.workflowObservations
+      .listObservations(issue.projectId, issue.linearIssueId)
+      .map((observation): IssueTraceObservation => {
+        const payload = safeJsonParse(observation.payloadJson);
+        return {
+          id: observation.id,
+          projectId: observation.projectId,
+          subjectId: observation.subjectId,
+          source: observation.source,
+          type: observation.type,
+          ...(observation.dedupeKey ? { dedupeKey: observation.dedupeKey } : {}),
+          observedAt: observation.observedAt,
+          ...(payload ? { payload } : {}),
+        };
+      });
+    const tasks = this.db.workflowTasks
+      .listTasks(issue.projectId, issue.linearIssueId)
+      .map((task): IssueTraceTask => {
+        const requirements = safeJsonParse(task.requirementsJson);
+        return {
+          id: task.id,
+          projectId: task.projectId,
+          subjectId: task.subjectId,
+          taskId: task.taskId,
+          taskType: task.taskType,
+          ...(task.runType ? { runType: task.runType } : {}),
+          status: task.status,
+          reason: task.reason,
+          authorityEpoch: task.authorityEpoch,
+          gateAction: task.gateAction,
+          ...(task.gateReason ? { gateReason: task.gateReason } : {}),
+          createdAt: task.createdAt,
+          updatedAt: task.updatedAt,
+          ...(task.closedAt ? { closedAt: task.closedAt } : {}),
+          ...(requirements ? { requirements } : {}),
+        };
+      });
+
+    return { issue, snapshot, tasks, observations };
+  }
+
   transcriptSource(issueKey: string, runId?: number): IssueTranscriptSourceResult | undefined {
     const issue = this.db.getTrackedIssueByKey(issueKey);
     if (!issue) return undefined;
@@ -602,9 +668,11 @@ export class CliDataAccess extends CliOperatorApiClient {
           : undefined;
       const waitingReason = detachedActiveRun
         ? derivePatchRelayWaitingReason({
-            activeRunId: 1,
-            factoryState: String(row.factory_state ?? "delegated"),
-          })
+          activeRunId: 1,
+          factoryState: String(row.factory_state ?? "delegated"),
+          ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
+          ...(row.current_linear_state_type !== null ? { currentLinearStateType: String(row.current_linear_state_type) } : {}),
+        })
         : row.waiting_reason !== null
           ? String(row.waiting_reason)
           : undefined;

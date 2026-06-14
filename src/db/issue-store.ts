@@ -563,6 +563,7 @@ export class IssueStore {
           i.issue_key,
           i.title,
           i.current_linear_state,
+          i.current_linear_state_type,
           i.factory_state,
           i.updated_at,
           s.session_state,

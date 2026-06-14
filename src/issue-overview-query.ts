@@ -152,6 +152,8 @@ export class IssueOverviewQuery {
 
     const derivedWaitingReason = derivePatchRelayWaitingReason({
       delegatedToPatchRelay: issueRecord?.delegatedToPatchRelay,
+      currentLinearState: issueRecord?.currentLinearState,
+      currentLinearStateType: issueRecord?.currentLinearStateType,
       ...(activeRun ? { activeRunType: activeRun.runType } : {}),
       blockedByKeys,
       factoryState: issueRecord?.factoryState ?? "delegated",
@@ -186,6 +188,8 @@ export class IssueOverviewQuery {
       readyForExecution: isIssueSessionReadyForExecution({
         sessionState: session.sessionState,
         factoryState: issueRecord?.factoryState ?? "delegated",
+        currentLinearState: issueRecord?.currentLinearState,
+        currentLinearStateType: issueRecord?.currentLinearStateType,
         delegatedToPatchRelay: issueRecord?.delegatedToPatchRelay,
         ...(activeRun ? { activeRunId: activeRun.id } : {}),
         blockedByCount: unresolvedBlockedBy.length,
