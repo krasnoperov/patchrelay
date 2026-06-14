@@ -113,8 +113,10 @@ export function deriveLinkedPrAdoptionOutcome(
     delegatedToPatchRelay: true,
     prNumber,
     prState,
+    prHeadSha: remote.headRefOid,
     prReviewState: reviewState,
     prCheckStatus: gateCheckStatus,
+    lastBlockingReviewHeadSha: reviewState === "changes_requested" ? remote.headRefOid : undefined,
     mergeConflictDetected,
     downstreamOwned,
   });

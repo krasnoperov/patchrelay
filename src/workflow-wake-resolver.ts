@@ -52,8 +52,10 @@ export function deriveImplicitReactiveWake(issue: IssueRecord):
     activeRunId: issue.activeRunId,
     prNumber: issue.prNumber,
     prState: issue.prState,
+    prHeadSha: issue.prHeadSha,
     prReviewState: issue.prReviewState,
     prCheckStatus: issue.prCheckStatus,
+    lastBlockingReviewHeadSha: issue.lastBlockingReviewHeadSha,
     latestFailureSource: issue.lastGitHubFailureSource,
   });
   if (!reactiveIntent) return undefined;

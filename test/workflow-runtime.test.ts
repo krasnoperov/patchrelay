@@ -235,6 +235,41 @@ test("review fix task preserves requested-changes observation context", () => {
   }
 });
 
+test("stale requested-changes aggregate waits after review fix pushed a new head", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const issue = makeIssue(db, {
+      prNumber: 42,
+      prState: "open",
+      prHeadSha: "new-head",
+      prReviewState: "changes_requested",
+      lastBlockingReviewHeadSha: "old-reviewed-head",
+    });
+    db.workflowObservations.appendObservation({
+      projectId: issue.projectId,
+      subjectId: issue.linearIssueId,
+      source: "github",
+      type: "github.review_changes_requested",
+      payloadJson: JSON.stringify({
+        requestedChangesContext: {
+          requestedChangesHeadSha: "old-reviewed-head",
+          reviewId: 901,
+          reviewCommitId: "old-reviewed-head",
+        },
+      }),
+    });
+
+    const snapshot = projectWorkflowSnapshot({
+      issue,
+      observations: db.workflowObservations.listObservations(issue.projectId, issue.linearIssueId),
+    });
+
+    assert.equal(snapshot.openTasks.some((task) => task.id === "run:review_fix"), false);
+  } finally {
+    cleanup();
+  }
+});
+
 test("settled PR check failure derives a CI repair task", () => {
   const { db, cleanup } = createDb();
   try {

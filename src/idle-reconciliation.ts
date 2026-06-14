@@ -434,8 +434,10 @@ export class IdleIssueReconciler {
     const reactiveIntent = deriveIssueSessionReactiveIntent({
       prNumber: issue.prNumber,
       prState: issue.prState,
+      prHeadSha: issue.prHeadSha,
       prReviewState: issue.prReviewState,
       prCheckStatus: issue.prCheckStatus,
+      lastBlockingReviewHeadSha: issue.lastBlockingReviewHeadSha,
       latestFailureSource: issue.lastGitHubFailureSource,
     });
 
@@ -802,8 +804,10 @@ export class IdleIssueReconciler {
       const reactiveIntent = deriveIssueSessionReactiveIntent({
         prNumber: refreshedIssue.prNumber,
         prState: refreshedIssue.prState,
+        prHeadSha: refreshedIssue.prHeadSha,
         prReviewState: refreshedIssue.prReviewState,
         prCheckStatus: refreshedIssue.prCheckStatus,
+        lastBlockingReviewHeadSha: refreshedIssue.lastBlockingReviewHeadSha,
         latestFailureSource: refreshedIssue.lastGitHubFailureSource,
         mergeConflictDetected,
         downstreamOwned,

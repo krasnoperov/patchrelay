@@ -131,8 +131,10 @@ export class ServiceStartupRecovery {
             prNumber: issue.prNumber,
             prState: issue.prState,
             prIsDraft: issue.prIsDraft,
+            prHeadSha: issue.prHeadSha,
             prReviewState: issue.prReviewState,
             prCheckStatus: issue.prCheckStatus,
+            lastBlockingReviewHeadSha: issue.lastBlockingReviewHeadSha,
             latestFailureSource: issue.lastGitHubFailureSource,
           })
         : undefined;

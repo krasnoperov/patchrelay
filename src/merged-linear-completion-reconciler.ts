@@ -255,14 +255,25 @@ function isTerminalLinearState(
 }
 
 function resolveOpenWorkflowState(
-  issue: Pick<IssueRecord, "delegatedToPatchRelay" | "prNumber" | "prState" | "prReviewState" | "prCheckStatus" | "lastGitHubFailureSource">,
+  issue: Pick<IssueRecord,
+    | "delegatedToPatchRelay"
+    | "prNumber"
+    | "prState"
+    | "prHeadSha"
+    | "prReviewState"
+    | "prCheckStatus"
+    | "lastBlockingReviewHeadSha"
+    | "lastGitHubFailureSource"
+  >,
 ): { factoryState: FactoryState; pendingRunType: RunType | null } | undefined {
   const reactiveIntent = deriveIssueSessionReactiveIntent({
     delegatedToPatchRelay: issue.delegatedToPatchRelay,
     prNumber: issue.prNumber,
     prState: issue.prState,
+    prHeadSha: issue.prHeadSha,
     prReviewState: issue.prReviewState,
     prCheckStatus: issue.prCheckStatus,
+    lastBlockingReviewHeadSha: issue.lastBlockingReviewHeadSha,
     latestFailureSource: issue.lastGitHubFailureSource,
   });
   if (reactiveIntent) {

@@ -14,8 +14,10 @@ export interface IssueSessionWakeReasonInput {
   orchestrationSettleUntil?: string | undefined;
   prNumber?: number | undefined;
   prState?: string | undefined;
+  prHeadSha?: string | undefined;
   prReviewState?: string | undefined;
   prCheckStatus?: string | undefined;
+  lastBlockingReviewHeadSha?: string | undefined;
   latestFailureSource?: string | undefined;
 }
 
@@ -25,8 +27,10 @@ export interface IssueSessionReactiveIntentInput {
   prNumber?: number | undefined;
   prState?: string | undefined;
   prIsDraft?: boolean | undefined;
+  prHeadSha?: string | undefined;
   prReviewState?: string | undefined;
   prCheckStatus?: string | undefined;
+  lastBlockingReviewHeadSha?: string | undefined;
   latestFailureSource?: string | undefined;
   mergeConflictDetected?: boolean | undefined;
   downstreamOwned?: boolean | undefined;
@@ -49,8 +53,10 @@ export interface IssueSessionReadyInput {
   orchestrationSettleUntil?: string | undefined;
   prNumber?: number | undefined;
   prState?: string | undefined;
+  prHeadSha?: string | undefined;
   prReviewState?: string | undefined;
   prCheckStatus?: string | undefined;
+  lastBlockingReviewHeadSha?: string | undefined;
   latestFailureSource?: string | undefined;
 }
 
@@ -74,8 +80,10 @@ export function deriveIssueSessionWakeReason(params: IssueSessionWakeReasonInput
     delegatedToPatchRelay: params.delegatedToPatchRelay,
     prNumber: params.prNumber,
     prState: params.prState,
+    prHeadSha: params.prHeadSha,
     prReviewState: params.prReviewState,
     prCheckStatus: params.prCheckStatus,
+    lastBlockingReviewHeadSha: params.lastBlockingReviewHeadSha,
     latestFailureSource: params.latestFailureSource,
   });
   if (reactiveIntent) return reactiveIntent.wakeReason;
@@ -107,7 +115,11 @@ export function deriveIssueSessionReactiveIntent(
     };
   }
 
-  if (params.prReviewState === "changes_requested") {
+  if (isCurrentHeadRequestedChanges({
+    prReviewState: params.prReviewState,
+    prHeadSha: params.prHeadSha,
+    lastBlockingReviewHeadSha: params.lastBlockingReviewHeadSha,
+  })) {
     if (params.mergeConflictDetected) {
       return {
         runType: "branch_upkeep",
@@ -152,8 +164,10 @@ export function isIssueSessionReadyForExecution(params: IssueSessionReadyInput):
       delegatedToPatchRelay: params.delegatedToPatchRelay,
       prNumber: params.prNumber,
       prState: params.prState,
+      prHeadSha: params.prHeadSha,
       prReviewState: params.prReviewState,
       prCheckStatus: params.prCheckStatus,
+      lastBlockingReviewHeadSha: params.lastBlockingReviewHeadSha,
       latestFailureSource: params.latestFailureSource,
     }) === undefined
   ) {
@@ -169,4 +183,14 @@ export function isIssueSessionReadyForExecution(params: IssueSessionReadyInput):
     return false;
   }
   return true;
+}
+
+export function isCurrentHeadRequestedChanges(params: {
+  prReviewState?: string | undefined;
+  prHeadSha?: string | undefined;
+  lastBlockingReviewHeadSha?: string | undefined;
+}): boolean {
+  if (params.prReviewState !== "changes_requested") return false;
+  if (!params.lastBlockingReviewHeadSha || !params.prHeadSha) return true;
+  return params.lastBlockingReviewHeadSha === params.prHeadSha;
 }

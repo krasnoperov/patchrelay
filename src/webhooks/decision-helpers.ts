@@ -62,8 +62,10 @@ export function resolveReDelegationResume(p: {
   prNumber?: number | undefined;
   prState?: string | undefined;
   prIsDraft?: boolean | undefined;
+  prHeadSha?: string | undefined;
   prReviewState?: string | undefined;
   prCheckStatus?: string | undefined;
+  lastBlockingReviewHeadSha?: string | undefined;
   latestFailureSource?: string | undefined;
 }): { factoryState?: FactoryState | undefined; pendingRunType?: RunType | null } {
   if (!p.delegated || p.previouslyDelegated !== false) {
@@ -86,8 +88,10 @@ export function resolveReDelegationResume(p: {
     prNumber: p.prNumber,
     prState: p.prState,
     prIsDraft: p.prIsDraft,
+    prHeadSha: p.prHeadSha,
     prReviewState: p.prReviewState,
     prCheckStatus: p.prCheckStatus,
+    lastBlockingReviewHeadSha: p.lastBlockingReviewHeadSha,
     latestFailureSource: p.latestFailureSource,
   });
   if (reactiveIntent) {

@@ -860,7 +860,9 @@ test("reactive intent is derived from GitHub truth instead of compatibility stag
     deriveIssueSessionReactiveIntent({
       prNumber: 18,
       prState: "open",
+      prHeadSha: "reviewed-head",
       prReviewState: "changes_requested",
+      lastBlockingReviewHeadSha: "reviewed-head",
     }),
     {
       runType: "review_fix",
@@ -884,13 +886,28 @@ test("reactive intent is derived from GitHub truth instead of compatibility stag
   );
 });
 
+test("reactive intent does not repeat requested-changes work after the PR head advances", () => {
+  assert.equal(
+    deriveIssueSessionReactiveIntent({
+      prNumber: 18,
+      prState: "open",
+      prHeadSha: "new-head",
+      prReviewState: "changes_requested",
+      lastBlockingReviewHeadSha: "old-reviewed-head",
+    }),
+    undefined,
+  );
+});
+
 test("wake reason falls back to reactive GitHub truth", () => {
   assert.equal(
     deriveIssueSessionWakeReason({
       factoryState: "pr_open",
       prNumber: 20,
       prState: "open",
+      prHeadSha: "reviewed-head",
       prReviewState: "changes_requested",
+      lastBlockingReviewHeadSha: "reviewed-head",
     }),
     "review_changes_requested",
   );

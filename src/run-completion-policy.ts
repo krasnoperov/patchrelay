@@ -21,7 +21,14 @@ export type PostRunOutcome = "completed" | "recovered";
 
 export type PostRunStateIssue = Pick<
   IssueRecord,
-  "factoryState" | "prNumber" | "prState" | "prReviewState" | "prCheckStatus" | "lastGitHubFailureSource"
+  "factoryState"
+    | "prNumber"
+    | "prState"
+    | "prHeadSha"
+    | "prReviewState"
+    | "prCheckStatus"
+    | "lastBlockingReviewHeadSha"
+    | "lastGitHubFailureSource"
 >;
 
 // Plan §B3: the one post-run factory-state resolver. Unifies the former
@@ -60,8 +67,10 @@ export function resolvePostRunFactoryState(
       const reactiveIntent = deriveIssueSessionReactiveIntent({
         prNumber: issue.prNumber,
         prState: issue.prState,
+        prHeadSha: issue.prHeadSha,
         prReviewState: issue.prReviewState,
         prCheckStatus: issue.prCheckStatus,
+        lastBlockingReviewHeadSha: issue.lastBlockingReviewHeadSha,
         latestFailureSource: issue.lastGitHubFailureSource,
       });
       if (reactiveIntent) return reactiveIntent.compatibilityFactoryState;

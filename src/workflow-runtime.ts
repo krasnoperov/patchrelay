@@ -1,5 +1,6 @@
 import type { GitHubFailureSource, IssueRecord, WorkflowObservationRecord } from "./db-types.ts";
 import { buildFailureContext } from "./idle-reconciliation-helpers.ts";
+import { isCurrentHeadRequestedChanges } from "./issue-session.ts";
 import type { RunType } from "./factory-state.ts";
 import { tryParseRunContextValue, type RunContext } from "./run-context.ts";
 
@@ -338,7 +339,11 @@ export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks"
     }];
   }
 
-  if (prState === "open" && prReviewState === "changes_requested") {
+  if (prState === "open" && isCurrentHeadRequestedChanges({
+    prReviewState: typeof prReviewState === "string" ? prReviewState : undefined,
+    prHeadSha: typeof prHeadSha === "string" ? prHeadSha : undefined,
+    lastBlockingReviewHeadSha: issue.lastBlockingReviewHeadSha,
+  })) {
     tasks.push({
       id: "run:review_fix",
       type: "run",
