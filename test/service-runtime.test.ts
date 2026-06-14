@@ -153,10 +153,10 @@ test("service runtime caps issue run fanout", async () => {
   ]);
 });
 
-test("service runtime defaults to one active issue run", async () => {
+test("service runtime defaults to four active issue runs", async () => {
   const codex = new FakeCodexClient();
   const processedIssues: RuntimeIssueQueueItem[] = [];
-  let activeRuns = 1;
+  let activeRuns = 4;
 
   const runtime = new ServiceRuntime(
     codex as never,

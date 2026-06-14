@@ -21,7 +21,7 @@ import {
   deriveSessionStatusSigningSecret,
   verifySessionStatusToken,
 } from "./public-agent-session-status.ts";
-import { ServiceRuntime } from "./service-runtime.ts";
+import { ServiceRuntime, type ServiceRuntimeOptions } from "./service-runtime.ts";
 import { ServiceIssueActions } from "./service-issue-actions.ts";
 import { ServiceStartupRecovery } from "./service-startup-recovery.ts";
 import { WakeDispatcher } from "./wake-dispatcher.ts";
@@ -34,6 +34,14 @@ import { parseStringArray, TrackedIssueListQuery } from "./tracked-issue-list-qu
 import { AgentInputService } from "./agent-input-service.ts";
 import { CodexFollowupIntentClassifier } from "./followup-intent.ts";
 import { FanoutPatchRelayTelemetry, LoggerTelemetrySink, OperatorFeedTelemetrySink } from "./telemetry.ts";
+
+function readPositiveIntegerEnv(name: string): number | undefined {
+  const raw = process.env[name]?.trim();
+  if (!raw) return undefined;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 1) return undefined;
+  return Math.floor(value);
+}
 
 export class PatchRelayService {
   readonly linearProvider: LinearClientProvider;
@@ -128,6 +136,18 @@ export class PatchRelayService {
       dispatcher,
       logger, codex, this.feed,
     );
+    const runtimeOptions: ServiceRuntimeOptions = {
+      assertStorageReady: () => db.assertSchemaReady(),
+      describeStorage: () => db.describeSchema(),
+    };
+    const maxActiveIssueRuns = readPositiveIntegerEnv("PATCHRELAY_MAX_ACTIVE_ISSUE_RUNS");
+    if (maxActiveIssueRuns !== undefined) {
+      runtimeOptions.maxActiveIssueRuns = maxActiveIssueRuns;
+    }
+    const issueRunCapacityRetryDelayMs = readPositiveIntegerEnv("PATCHRELAY_ISSUE_RUN_CAPACITY_RETRY_DELAY_MS");
+    if (issueRunCapacityRetryDelayMs !== undefined) {
+      runtimeOptions.issueRunCapacityRetryDelayMs = issueRunCapacityRetryDelayMs;
+    }
     const runtime = new ServiceRuntime(
       codex,
       logger,
@@ -142,10 +162,7 @@ export class PatchRelayService {
           await this.orchestrator.run(item);
         },
       },
-      {
-        assertStorageReady: () => db.assertSchemaReady(),
-        describeStorage: () => db.describeSchema(),
-      },
+      runtimeOptions,
     );
     enqueueIssue = (projectId, issueId) => runtime.enqueueIssue(projectId, issueId);
 
