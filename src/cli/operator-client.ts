@@ -1,4 +1,5 @@
 import type { AppConfig } from "../types.ts";
+import { normalizeLocalServiceHost } from "./local-service-url.ts";
 
 export interface InstallationListResult {
   installations: Array<{
@@ -150,21 +151,8 @@ export class CliOperatorApiClient implements CliOperatorDataAccess {
   }
 
   private getOperatorBaseUrl(): string {
-    const host = this.normalizeLocalHost(this.config.server.bind);
+    const host = normalizeLocalServiceHost(this.config.server.bind);
     return `http://${host}:${this.config.server.port}/`;
-  }
-
-  private normalizeLocalHost(bind: string): string {
-    if (bind === "0.0.0.0") {
-      return "127.0.0.1";
-    }
-    if (bind === "::") {
-      return "[::1]";
-    }
-    if (bind.includes(":") && !bind.startsWith("[")) {
-      return `[${bind}]`;
-    }
-    return bind;
   }
 
   private async requestJson<T>(

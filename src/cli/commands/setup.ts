@@ -7,6 +7,7 @@ import { parsePositiveIntegerFlag } from "../args.ts";
 import type { CommandRunner, InteractiveRunner, Output, ParsedArgs } from "../command-types.ts";
 import { CliUsageError } from "../errors.ts";
 import { formatJson } from "../formatters/json.ts";
+import { fetchLocalService, localServiceBaseUrl } from "../local-service-url.ts";
 import { writeOutput } from "../output.ts";
 import { installServiceCommands, runServiceCommands, runSystemctl, tryManageService } from "../service-commands.ts";
 
@@ -206,11 +207,7 @@ async function readPatchRelayHealth(): Promise<
 > {
   try {
     const config = loadConfig(undefined, { profile: "doctor" });
-    const host = config.server.bind === "0.0.0.0" ? "127.0.0.1" : config.server.bind;
-    const response = await fetch(
-      `http://${host}:${config.server.port}${config.server.healthPath}`,
-      { signal: AbortSignal.timeout(2000) },
-    );
+    const response = await fetchLocalService(`${localServiceBaseUrl(config)}${config.server.healthPath}`);
     let ok = response.ok;
     try {
       const body = await response.json() as Record<string, unknown>;
@@ -236,8 +233,7 @@ async function readPatchRelayHealth(): Promise<
 
 function getPatchRelayServiceUrl(): { baseUrl: string; healthPath: string; codexStatusPath: string } {
   const config = loadConfig(undefined, { profile: "doctor" });
-  const host = config.server.bind === "0.0.0.0" ? "127.0.0.1" : config.server.bind;
-  const baseUrl = `http://${host}:${config.server.port}`;
+  const baseUrl = localServiceBaseUrl(config);
   return {
     baseUrl,
     healthPath: `${baseUrl}${config.server.healthPath}`,
@@ -250,7 +246,7 @@ async function readPatchRelayCodexStatus(): Promise<
 > {
   const { codexStatusPath } = getPatchRelayServiceUrl();
   try {
-    const response = await fetch(codexStatusPath, { signal: AbortSignal.timeout(2_000) });
+    const response = await fetchLocalService(codexStatusPath);
     const payload = await response.json() as PatchRelayCodexStatusResponse;
     return {
       reachable: true,

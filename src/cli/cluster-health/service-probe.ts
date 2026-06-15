@@ -1,16 +1,17 @@
 import type { AppConfig } from "../../types.ts";
 import type { CommandRunner, CommandRunnerResult } from "../command-types.ts";
+import { fetchLocalService, localServiceBaseUrl } from "../local-service-url.ts";
 import { type JsonObject, safeJsonParse } from "./shared.ts";
 import type { ServiceProbeResult } from "./types.ts";
 
 export async function probePatchRelayService(config: AppConfig): Promise<ServiceProbeResult> {
-  const host = config.server.bind === "0.0.0.0" ? "127.0.0.1" : config.server.bind;
-  const healthUrl = `http://${host}:${config.server.port}${config.server.healthPath}`;
-  const readyUrl = `http://${host}:${config.server.port}${config.server.readinessPath}`;
+  const baseUrl = localServiceBaseUrl(config);
+  const healthUrl = `${baseUrl}${config.server.healthPath}`;
+  const readyUrl = `${baseUrl}${config.server.readinessPath}`;
   try {
     const [healthResponse, readyResponse] = await Promise.all([
-      fetch(healthUrl, { signal: AbortSignal.timeout(2_000) }),
-      fetch(readyUrl, { signal: AbortSignal.timeout(2_000) }),
+      fetchLocalService(healthUrl),
+      fetchLocalService(readyUrl),
     ]);
     const healthBody = await healthResponse.json() as { ok?: boolean; version?: string };
     const readyBody = await readyResponse.json() as { ready?: boolean; codexStarted?: boolean; linearConnected?: boolean };
