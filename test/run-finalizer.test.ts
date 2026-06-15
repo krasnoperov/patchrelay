@@ -39,6 +39,7 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
 }, options?: {
   publishedOutcomeError?: string | null;
   failedRecoveryError?: string | null;
+  reactiveAdvanceError?: string | null;
   onEnqueue?: (projectId: string, issueId: string) => void;
   failRunAndClear?: (runId: number, message: string, nextState?: FactoryState) => void;
 }) {
@@ -87,7 +88,9 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
       throw new Error("failRunAndClear should not be called in completion-check tests");
     },
     {
-      verifyReactiveRunAdvancedBranch: async () => undefined,
+      verifyReactiveRunAdvancedBranch: async () => options && "reactiveAdvanceError" in options
+        ? options.reactiveAdvanceError ?? undefined
+        : undefined,
       verifyReviewFixAdvancedHead: async () => undefined,
       verifyReactiveRunStayedInScope: async () => undefined,
       verifyPublishedRunOutcome: async () => options && "publishedOutcomeError" in options
@@ -410,7 +413,7 @@ test("run finalizer blocks task-backed review fixes that do not advance the PR h
   }
 });
 
-test("run finalizer blocks task-backed CI repairs that do not advance the failing head", async () => {
+test("run finalizer requeues task-backed CI repairs that do not advance the failing head", async () => {
   const { baseDir, db } = createDb();
   try {
     const issue = db.upsertIssue({
@@ -448,11 +451,12 @@ test("run finalizer blocks task-backed CI repairs that do not advance the failin
 
     let failedMessage: string | undefined;
     let failedNextState: FactoryState | undefined;
-    const { finalizer, feedEvents } = createFinalizer(db, {
+    const { finalizer, feedEvents, enqueueCalls } = createFinalizer(db, {
       outcome: "done",
       summary: "unused",
     }, {
       publishedOutcomeError: null,
+      reactiveAdvanceError: "Repair finished but PR #42 is still on failing head sha-fail",
       failRunAndClear: (runId, message, nextState) => {
         failedMessage = message;
         failedNextState = nextState;
@@ -489,20 +493,25 @@ test("run finalizer blocks task-backed CI repairs that do not advance the failin
 
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
     const updatedRun = db.runs.getRunById(run.id)!;
-    assert.equal(failedMessage, "same_head_repair_handoff_blocked");
-    assert.equal(failedNextState, "escalated");
-    assert.equal(updatedIssue.factoryState, "escalated");
+    const retryTask = db.workflowTasks.getTask(issue.projectId, issue.linearIssueId, "run:ci_repair");
+    assert.equal(failedMessage, undefined);
+    assert.equal(failedNextState, undefined);
+    assert.equal(updatedIssue.factoryState, "repairing_ci");
     assert.equal(updatedIssue.activeRunId, undefined);
+    assert.equal(updatedIssue.lastAttemptedFailureHeadSha, undefined);
+    assert.equal(updatedIssue.lastAttemptedFailureSignature, undefined);
     assert.equal(updatedRun.status, "failed");
-    assert.equal(updatedRun.failureReason, "same_head_repair_handoff_blocked");
+    assert.equal(updatedRun.failureReason, "Repair finished but PR #42 is still on failing head sha-fail");
     assert.equal(updatedRun.completionCheckOutcome, undefined);
-    assert.equal(feedEvents.at(-1)?.status, "same_head_repair_handoff_blocked");
+    assert.equal(feedEvents.at(-1)?.status, "branch_not_advanced");
+    assert.equal(retryTask?.gateAction, "start");
+    assert.deepEqual(enqueueCalls, [{ projectId: issue.projectId, issueId: issue.linearIssueId }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("run finalizer blocks task-backed queue repairs that do not advance the failing head", async () => {
+test("run finalizer requeues task-backed queue repairs that do not advance the failing head", async () => {
   const { baseDir, db } = createDb();
   try {
     const issue = db.upsertIssue({
@@ -540,11 +549,12 @@ test("run finalizer blocks task-backed queue repairs that do not advance the fai
 
     let failedMessage: string | undefined;
     let failedNextState: FactoryState | undefined;
-    const { finalizer, feedEvents } = createFinalizer(db, {
+    const { finalizer, feedEvents, enqueueCalls } = createFinalizer(db, {
       outcome: "done",
       summary: "unused",
     }, {
       publishedOutcomeError: null,
+      reactiveAdvanceError: "Repair finished but PR #42 is still on failing head sha-fail",
       failRunAndClear: (runId, message, nextState) => {
         failedMessage = message;
         failedNextState = nextState;
@@ -581,14 +591,19 @@ test("run finalizer blocks task-backed queue repairs that do not advance the fai
 
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
     const updatedRun = db.runs.getRunById(run.id)!;
-    assert.equal(failedMessage, "same_head_repair_handoff_blocked");
-    assert.equal(failedNextState, "escalated");
-    assert.equal(updatedIssue.factoryState, "escalated");
+    const retryTask = db.workflowTasks.getTask(issue.projectId, issue.linearIssueId, "run:queue_repair");
+    assert.equal(failedMessage, undefined);
+    assert.equal(failedNextState, undefined);
+    assert.equal(updatedIssue.factoryState, "repairing_queue");
     assert.equal(updatedIssue.activeRunId, undefined);
+    assert.equal(updatedIssue.lastAttemptedFailureHeadSha, undefined);
+    assert.equal(updatedIssue.lastAttemptedFailureSignature, undefined);
     assert.equal(updatedRun.status, "failed");
-    assert.equal(updatedRun.failureReason, "same_head_repair_handoff_blocked");
+    assert.equal(updatedRun.failureReason, "Repair finished but PR #42 is still on failing head sha-fail");
     assert.equal(updatedRun.completionCheckOutcome, undefined);
-    assert.equal(feedEvents.at(-1)?.status, "same_head_repair_handoff_blocked");
+    assert.equal(feedEvents.at(-1)?.status, "branch_not_advanced");
+    assert.equal(retryTask?.gateAction, "start");
+    assert.deepEqual(enqueueCalls, [{ projectId: issue.projectId, issueId: issue.linearIssueId }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

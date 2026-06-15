@@ -3,6 +3,9 @@ export interface GitHubStatusRollupEntry {
   name?: string;
   status?: string;
   conclusion?: string;
+  startedAt?: string;
+  completedAt?: string;
+  detailsUrl?: string;
 }
 
 export type GateCheckStatus = "pending" | "success" | "failure";
@@ -60,4 +63,41 @@ export function deriveGateCheckStatusFromRollup(
   if (normalized.some((status) => status === "pending")) return "pending";
   if (normalized.some((status) => status === "failure")) return "failure";
   return "success";
+}
+
+export function hasFreshSuccessfulGateCheck(
+  statusCheckRollup: GitHubStatusRollupEntry[] | undefined,
+  gateCheckNames: string[],
+  notBeforeIso: string,
+): boolean {
+  const notBeforeMs = Date.parse(notBeforeIso);
+  if (!Number.isFinite(notBeforeMs)) return false;
+  return matchingGateChecks(statusCheckRollup, gateCheckNames).some((entry) => {
+    if (normalizeGateStatus(entry) !== "success") return false;
+    const completedAtMs = Date.parse(entry.completedAt ?? "");
+    if (Number.isFinite(completedAtMs)) return completedAtMs >= notBeforeMs;
+    const startedAtMs = Date.parse(entry.startedAt ?? "");
+    return Number.isFinite(startedAtMs) && startedAtMs >= notBeforeMs;
+  });
+}
+
+function matchingGateChecks(
+  statusCheckRollup: GitHubStatusRollupEntry[] | undefined,
+  gateCheckNames: string[],
+): GitHubStatusRollupEntry[] {
+  if (!Array.isArray(statusCheckRollup) || statusCheckRollup.length === 0) {
+    return [];
+  }
+
+  const expectedNames = gateCheckNames
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  if (expectedNames.length === 0) {
+    return [];
+  }
+
+  return statusCheckRollup.filter((entry) => {
+    if (typeof entry?.name !== "string" || !entry.name.trim()) return false;
+    return expectedNames.includes(entry.name.trim().toLowerCase());
+  });
 }

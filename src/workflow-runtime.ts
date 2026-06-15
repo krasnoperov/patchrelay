@@ -486,9 +486,6 @@ export function evaluateTaskCompletion(snapshot: WorkflowSnapshot, task: Workflo
     if (typeof currentHeadSha !== "string") {
       return { action: "escalate", reason: "repair_completed_without_pr_head" };
     }
-    if (currentHeadSha === failureHeadSha) {
-      return { action: "escalate", reason: "same_head_repair_handoff_blocked" };
-    }
   }
   return { action: "start" };
 }

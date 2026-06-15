@@ -449,6 +449,70 @@ export class RunFinalizer {
     };
   }
 
+  private buildSameHeadRepairRetryContext(
+    run: Pick<RunRecord, "runType">,
+    issue: Pick<IssueRecord, "lastGitHubFailureContextJson">,
+    message: string,
+  ): RunContext {
+    const previousContext = parseObjectJson(issue.lastGitHubFailureContextJson) as Partial<RunContext> | undefined;
+    const instruction = run.runType === "queue_repair"
+      ? [
+          "PatchRelay is retrying because the previous queue repair completed without publishing a newer PR head or proving the queue incident self-resolved.",
+          "Before finishing, either publish a newer head on the existing PR branch or verify that GitHub no longer reports the PR as dirty against the queue/base truth.",
+        ].join(" ")
+      : [
+          "PatchRelay is retrying because the previous CI repair completed without publishing a newer PR head or proving a fresh successful gate on the failing head.",
+          "Before finishing, either push a scoped commit/new head that addresses the failure, or rerun the gate and wait until GitHub shows a successful gate run completed after this repair started.",
+        ].join(" ");
+    return {
+      ...previousContext,
+      source: "same_head_repair_retry",
+      promptContext: [
+        previousContext?.promptContext,
+        instruction,
+        `Previous verification failure: ${message}`,
+      ].filter(Boolean).join("\n\n"),
+    };
+  }
+
+  private requeueReactiveRepairAfterVerificationFailure(params: {
+    run: RunRecord;
+    issue: IssueRecord;
+    message: string;
+  }): boolean {
+    if (params.run.runType !== "ci_repair" && params.run.runType !== "queue_repair") {
+      return false;
+    }
+    const nextState = resolvePostRunFactoryState(params.issue, params.run, { outcome: "recovered" });
+    if (!nextState || nextState === "failed" || nextState === "escalated" || nextState === "done") {
+      return false;
+    }
+    const context = this.buildSameHeadRepairRetryContext(params.run, params.issue, params.message);
+    return Boolean(this.withHeldLease(params.run.projectId, params.run.linearIssueId, (lease) => {
+      settleRun({
+        db: this.db,
+        run: params.run,
+        finish: { status: "failed", failureReason: params.message },
+        lease,
+        buildIssueUpdate: () => ({
+          factoryState: nextState,
+          pendingRunType: null,
+          pendingRunContextJson: null,
+          lastAttemptedFailureHeadSha: null,
+          lastAttemptedFailureSignature: null,
+          lastAttemptedFailureAt: null,
+        }),
+      });
+      return this.appendWakeEventWithLease(
+        lease,
+        params.issue,
+        params.run.runType,
+        context,
+        `same_head_repair:${params.run.id}`,
+      );
+    }));
+  }
+
   private continueDirtyRepairWorktree(params: {
     run: RunRecord;
     issue: IssueRecord;
@@ -593,8 +657,15 @@ export class RunFinalizer {
     if (verifiedRepairError) {
       // The run failed verification — it did not do its work, so resolve
       // the hold state from GitHub truth like any other recovery path.
-      const holdState = resolvePostRunFactoryState(freshIssue, run, { outcome: "recovered" }) ?? "failed";
-      this.failRunAndClear(run, verifiedRepairError, holdState);
+      const requeued = this.requeueReactiveRepairAfterVerificationFailure({
+        run,
+        issue: freshIssue,
+        message: verifiedRepairError,
+      });
+      if (!requeued) {
+        const holdState = resolvePostRunFactoryState(freshIssue, run, { outcome: "recovered" }) ?? "failed";
+        this.failRunAndClear(run, verifiedRepairError, holdState);
+      }
       this.syncFailureOutcome({
         run,
         fallbackIssue: freshIssue,

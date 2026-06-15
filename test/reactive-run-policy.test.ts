@@ -197,6 +197,43 @@ test("verifyReactiveRunAdvancedBranch keeps failing ci_repair when head did not 
   }
 });
 
+test("verifyReactiveRunAdvancedBranch accepts ci_repair same head after fresh successful gate", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reactive-noop-ci-green-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = stubGh(baseDir, { prViewJson: JSON.stringify({
+      headRefOid: "sha-pr",
+      state: "OPEN",
+      reviewDecision: "APPROVED",
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "CLEAN",
+      statusCheckRollup: [{
+        __typename: "CheckRun",
+        name: "verify",
+        status: "COMPLETED",
+        conclusion: "SUCCESS",
+        completedAt: "2999-01-01T00:00:00.000Z",
+      }],
+    }) });
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, policy } = setupPolicy(baseDir);
+    const issue = db.upsertIssue({ ...baseIssue(), factoryState: "repairing_ci", lastGitHubFailureSource: "branch_ci" });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "ci_repair",
+    });
+
+    const result = await policy.verifyReactiveRunAdvancedBranch(run, issue);
+    assert.equal(result, undefined);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("verifyReviewFixAdvancedHead blocks returning the blocking review head to review", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-review-blocking-head-"));
   const oldPath = process.env.PATH;

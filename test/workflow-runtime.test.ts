@@ -325,7 +325,7 @@ test("settled PR check failure derives a CI repair task", () => {
   }
 });
 
-test("CI repair completion blocks handing off the failing head again", () => {
+test("CI repair completion defers same-head judgment to remote verification", () => {
   const { db, cleanup } = createDb();
   try {
     const issue = makeIssue(db, {
@@ -340,10 +340,7 @@ test("CI repair completion blocks handing off the failing head again", () => {
     const task = snapshot.openTasks[0];
 
     assert.equal(task?.id, "run:ci_repair");
-    assert.deepEqual(evaluateTaskCompletion(snapshot, task!), {
-      action: "escalate",
-      reason: "same_head_repair_handoff_blocked",
-    });
+    assert.deepEqual(evaluateTaskCompletion(snapshot, task!), { action: "start" });
   } finally {
     cleanup();
   }

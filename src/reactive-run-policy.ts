@@ -12,6 +12,7 @@ import {
 } from "./reactive-pr-state.ts";
 import { readReactivePublishDelta } from "./reactive-publish-delta.ts";
 import { readLatestRequestedChangesReviewContext } from "./remote-pr-review.ts";
+import { hasFreshSuccessfulGateCheck } from "./github-rollup.ts";
 import type { RunContext } from "./run-context.ts";
 import type { AppConfig } from "./types.ts";
 import type { PostRunFollowUp } from "./run-completion-policy.ts";
@@ -54,6 +55,9 @@ export class ReactiveRunPolicy {
       const snapshot = await readReactivePrSnapshot(this.config, run.projectId, issue.prNumber);
       if (!snapshot || snapshot.prState !== "open") return undefined;
       if (!snapshot.headSha || snapshot.headSha !== issue.lastGitHubFailureHeadSha) return undefined;
+      if (run.runType === "ci_repair" && this.hasFreshSuccessfulCiGate(snapshot.projectId, snapshot.gateCheckName, snapshot.pr.statusCheckRollup, run.startedAt)) {
+        return undefined;
+      }
       // For queue repairs, the agent's no-op is legitimate when the incident has
       // already self-resolved: GitHub reports the PR as mergeable, so there is no
       // conflict left to push. Only flag as failed when the merge state is still
@@ -70,6 +74,21 @@ export class ReactiveRunPolicy {
       }, "Failed to verify PR head advancement after repair");
       return undefined;
     }
+  }
+
+  private hasFreshSuccessfulCiGate(
+    projectId: string,
+    fallbackGateCheckName: string,
+    statusCheckRollup: Parameters<typeof hasFreshSuccessfulGateCheck>[0],
+    notBeforeIso: string,
+  ): boolean {
+    const project = this.config.projects.find((entry) => entry.id === projectId);
+    const gateCheckNames = project?.gateChecks?.filter((entry) => entry.trim().length > 0);
+    return hasFreshSuccessfulGateCheck(
+      statusCheckRollup,
+      gateCheckNames && gateCheckNames.length > 0 ? gateCheckNames : [fallbackGateCheckName],
+      notBeforeIso,
+    );
   }
 
   async verifyReviewFixAdvancedHead(run: RunRecord, issue: IssueRecord): Promise<string | undefined> {
@@ -182,6 +201,9 @@ export class ReactiveRunPolicy {
       }
 
       const headAdvanced = Boolean(snapshot.headSha && snapshot.headSha !== issue.lastGitHubFailureHeadSha);
+      const freshCiGateSucceeded = run.runType === "ci_repair"
+        && Boolean(snapshot.headSha && snapshot.headSha === issue.lastGitHubFailureHeadSha)
+        && this.hasFreshSuccessfulCiGate(snapshot.projectId, snapshot.gateCheckName, snapshot.pr.statusCheckRollup, run.startedAt);
       const blockingReviewHeadSha = resolveRequestedChangesBlockingHead(run, issue);
       const reviewFixHeadAdvanced = isRequestedChangesRunType(run.runType)
         && Boolean(snapshot.headSha && blockingReviewHeadSha && snapshot.headSha !== blockingReviewHeadSha);
@@ -195,15 +217,16 @@ export class ReactiveRunPolicy {
           ...(snapshot.prState ? { prState: snapshot.prState } : {}),
           ...(snapshot.headSha ? { prHeadSha: snapshot.headSha } : {}),
           ...(snapshot.reviewState ? { prReviewState: snapshot.reviewState } : {}),
-          ...((headAdvanced || reviewFixHeadAdvanced)
+          ...(freshCiGateSucceeded ? { prCheckStatus: "success" } : {}),
+          ...((headAdvanced || reviewFixHeadAdvanced || freshCiGateSucceeded)
             ? {
-                prCheckStatus: "pending",
+                prCheckStatus: freshCiGateSucceeded ? "success" : "pending",
                 ...CLEARED_FAILURE_PROVENANCE,
                 lastGitHubCiSnapshotHeadSha: snapshot.headSha ?? null,
                 lastGitHubCiSnapshotGateCheckName: snapshot.gateCheckName,
-                lastGitHubCiSnapshotGateCheckStatus: "pending",
+                lastGitHubCiSnapshotGateCheckStatus: freshCiGateSucceeded ? "success" : "pending",
                 lastGitHubCiSnapshotJson: null,
-                lastGitHubCiSnapshotSettledAt: null,
+                lastGitHubCiSnapshotSettledAt: freshCiGateSucceeded ? new Date().toISOString() : null,
               }
             : {}),
         },
