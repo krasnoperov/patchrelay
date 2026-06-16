@@ -16,7 +16,10 @@ export type { ReconcileContext } from "./reconciler-core.ts";
 
 export async function reconcile(ctx: ReconcileContext): Promise<void> {
   const allActive = ctx.store.listActive(ctx.repoId);
-  if (allActive.length === 0) return;
+  // Note: do NOT early-return when the active queue is empty. A drained queue
+  // can still hold merged entries whose post-merge verification is unresolved
+  // (e.g. an externally-merged PR), and verifyMergedEntriesPostPush below is
+  // the only thing that advances them. depth=0 simply skips the active loop.
 
   // Process up to speculativeDepth entries. GitHub truth checks are
   // bounded by this window — we never scan the full queue.
@@ -104,9 +107,10 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
 }
 
 async function verifyMergedEntriesPostPush(ctx: ReconcileContext): Promise<void> {
-  const mergedEntries = ctx.store.listAll(ctx.repoId).filter((entry) => entry.status === "merged");
+  // Targeted query (not listAll) so an idle repo with a large merged history
+  // doesn't scan every terminal row each tick — only the unresolved ones.
+  const mergedEntries = ctx.store.listPostMergePending(ctx.repoId);
   for (const entry of mergedEntries) {
-    if (entry.postMergeStatus === "pass" || entry.postMergeStatus === "fail") continue;
     const postMergeSha = entry.postMergeSha ?? entry.specSha ?? entry.headSha;
     if (!postMergeSha) {
       continue;

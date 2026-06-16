@@ -155,6 +155,16 @@ export class SqliteStore implements QueueStore {
     return rows.map(mapEntry);
   }
 
+  listPostMergePending(repoId: string): QueueEntry[] {
+    const rows = this.conn.prepare(
+      `SELECT * FROM queue_entries
+       WHERE repo_id = ? AND status = 'merged'
+         AND (post_merge_status IS NULL OR post_merge_status NOT IN ('pass', 'fail'))
+       ORDER BY position ASC`,
+    ).all(repoId);
+    return rows.map(mapEntry);
+  }
+
   insert(entry: QueueEntry): void {
     this.conn.transaction(() => {
       this.conn.prepare(
