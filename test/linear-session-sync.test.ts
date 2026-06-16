@@ -1297,7 +1297,7 @@ test("syncSession maps a pending review-quill verdict to Reviewing", async () =>
   }
 });
 
-test("maybeEmitProgress keeps routine plan and command progress out of Linear", async () => {
+test("maybeEmitProgress surfaces routine plan steps but keeps command chatter out of Linear", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-progress-"));
   try {
     const config = createConfig(baseDir);
@@ -1341,10 +1341,13 @@ test("maybeEmitProgress keeps routine plan and command progress out of Linear", 
       pino({ enabled: false }),
     );
 
+    // A routine in-progress plan step is now surfaced as a "Working on" action
+    // (ephemeral + durable) so the Linear trail shows what Codex is doing.
     sync.maybeEmitProgress({
       method: "turn/plan/updated",
       params: { plan: [{ step: "Audit the mobile Study form controls", status: "inProgress" }] },
     }, run);
+    // Raw command execution remains chatter and stays out.
     sync.maybeEmitProgress({
       method: "item/started",
       params: { item: { type: "commandExecution", command: "/bin/bash -lc 'npm run check'" } },
@@ -1352,7 +1355,10 @@ test("maybeEmitProgress keeps routine plan and command progress out of Linear", 
 
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    assert.equal(activities.length, 0);
+    assert.equal(activities.length, 2, "the plan step surfaces; the command does not");
+    const serialized = JSON.stringify(activities);
+    assert.ok(serialized.includes("Working on"), "plan step surfaces as a 'Working on' action");
+    assert.ok(serialized.includes("Audit the mobile Study form controls"), "the step text is included verbatim");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
