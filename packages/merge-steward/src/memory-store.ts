@@ -53,6 +53,14 @@ export class MemoryStore implements QueueStore {
       .map((e) => ({ ...e }));
   }
 
+  listPostMergePending(repoId: string): QueueEntry[] {
+    return [...this.entries.values()]
+      .filter((e) => e.repoId === repoId && e.status === "merged"
+        && e.postMergeStatus !== "pass" && e.postMergeStatus !== "fail")
+      .sort((a, b) => a.position - b.position)
+      .map((e) => ({ ...e }));
+  }
+
   listAll(repoId: string): QueueEntry[] {
     return [...this.entries.values()]
       .filter((e) => e.repoId === repoId)

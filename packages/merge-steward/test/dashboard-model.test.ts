@@ -104,7 +104,7 @@ test("PR token color matches glyph color across queue kinds", () => {
   assert.equal(byPr.get(4)?.glyph, "\u26a0");
 });
 
-test("running entries come first then queued then decided newest-first", () => {
+test("active entries come first in queue order, then decided newest-first", () => {
   const snapshot = makeSnapshot([
     makeEntry({ prNumber: 10, position: 1, status: "merged", postMergeStatus: "pass", updatedAt: minutesAgo(90) }),
     makeEntry({ prNumber: 11, position: 2, status: "merged", postMergeStatus: "pass", updatedAt: minutesAgo(60) }),
@@ -112,10 +112,37 @@ test("running entries come first then queued then decided newest-first", () => {
     makeEntry({ prNumber: 13, position: 4, status: "validating", updatedAt: minutesAgo(5) }),
   ]);
   const model = buildDashboard([makeRepo(snapshot)], { now: NOW });
+  // Active entries (12 then 13) lead in queue/position order so a stack reads
+  // top-to-bottom; the decided ones follow newest-first.
   assert.deepEqual(
     model.repos[0]?.tokens.map((t) => t.prNumber),
-    [13, 12, 11, 10],
+    [12, 13, 11, 10],
   );
+});
+
+test("a speculatively stacked entry resolves its parent PR and orders behind it", () => {
+  const head = makeEntry({ prNumber: 70, position: 1, status: "merging" });
+  const stacked = makeEntry({
+    prNumber: 71,
+    position: 2,
+    status: "validating",
+    specBranch: "mq-spec-71",
+    specBasedOn: head.id,
+  });
+  // Pass them out of queue order to prove ordering comes from position, not input.
+  const model = buildDashboard([makeRepo(makeSnapshot([stacked, head]))], { now: NOW });
+  const entries = model.repos[0]?.entries ?? [];
+  assert.deepEqual(entries.map((e) => e.prNumber), [70, 71]);
+  assert.equal(entries.find((e) => e.prNumber === 70)?.stackedOnPr, null);
+  assert.equal(entries.find((e) => e.prNumber === 71)?.stackedOnPr, 70);
+});
+
+test("stack link is dropped once the parent is no longer active", () => {
+  const parent = makeEntry({ prNumber: 80, position: 1, status: "merged", postMergeStatus: "pass", updatedAt: minutesAgo(5) });
+  const child = makeEntry({ prNumber: 81, position: 2, status: "validating", specBranch: "mq-spec-81", specBasedOn: parent.id });
+  const model = buildDashboard([makeRepo(makeSnapshot([parent, child]))], { now: NOW });
+  const child81 = model.repos[0]?.entries.find((e) => e.prNumber === 81);
+  assert.equal(child81?.stackedOnPr, null);
 });
 
 test("decided PRs older than the time window are dropped", () => {

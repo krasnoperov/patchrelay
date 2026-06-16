@@ -18,6 +18,8 @@ export interface QueueStore {
   getEntryByPR(repoId: string, prNumber: number): QueueEntry | undefined;
   listActive(repoId: string): QueueEntry[];
   listAll(repoId: string): QueueEntry[];
+  /** Merged entries whose post-merge verification is unresolved (not pass/fail). */
+  listPostMergePending(repoId: string): QueueEntry[];
 
   // === Mutations (each appends a queue_event in the same transaction) ===
   insert(entry: QueueEntry): void;
