@@ -15,6 +15,9 @@ export class PublicAgentSessionStatusQuery {
 
     const issueRecord = this.db.issues.getIssueByKey(issueKey);
     const latestRunReport = parseStageReport(overview.latestRun?.reportJson, overview.latestRun?.status ?? "unknown");
+    const latestRunSupersededByDownstream =
+      overview.issue.factoryState === "awaiting_queue"
+      && (overview.latestRun?.status === "failed" || overview.latestRun?.status === "superseded");
     const runs = (overview.runs ?? this.overviewQuery.buildRuns(overview.issue.projectId, overview.issue.linearIssueId)).map((run) => ({
       run: {
         id: run.id,
@@ -44,9 +47,9 @@ export class PublicAgentSessionStatusQuery {
         ...(overview.session?.lastWakeReason ? { lastWakeReason: overview.session.lastWakeReason } : {}),
       },
       ...(overview.activeRun ? { activeRun: overview.activeRun } : {}),
-      ...(overview.latestRun ? { latestRun: overview.latestRun } : {}),
+      ...(overview.latestRun && !latestRunSupersededByDownstream ? { latestRun: overview.latestRun } : {}),
       ...(overview.liveThread ? { liveThread: summarizeCurrentThread(overview.liveThread) } : {}),
-      ...(latestRunReport ? { latestReportSummary: extractStageSummary(latestRunReport) } : {}),
+      ...(latestRunReport && !latestRunSupersededByDownstream ? { latestReportSummary: extractStageSummary(latestRunReport) } : {}),
       runs,
       generatedAt: new Date().toISOString(),
     };
