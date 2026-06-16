@@ -44,6 +44,53 @@ test("deriveSessionWakePlan ignores stale requested-changes events after the PR 
   assert.equal(plan, undefined);
 });
 
+test("deriveSessionWakePlan downgrades a delegated review_fix payload to implementation when the PR is no longer changes_requested", () => {
+  // A delegated event carrying a stale review_fix run type must not produce a
+  // review_fix wake the orchestrator would reject as inactive (and then fail
+  // to clear, since the triggering event is not a review_changes_requested
+  // event) — it would strand the issue in an enqueue→skip loop.
+  const issue = { issueClass: "implementation", prReviewState: "approved" } as IssueRecord;
+  const plan = deriveSessionWakePlan(issue, [delegatedEvent("review_fix")]);
+  assert.equal(plan?.runType, "implementation");
+});
+
+test("deriveSessionWakePlan keeps a delegated review_fix payload when the PR is still changes_requested", () => {
+  const issue = { issueClass: "implementation", prReviewState: "changes_requested" } as IssueRecord;
+  const plan = deriveSessionWakePlan(issue, [delegatedEvent("review_fix")]);
+  assert.equal(plan?.runType, "review_fix");
+});
+
+test("deriveSessionWakePlan preserves a branch_upkeep payload regardless of review state", () => {
+  // branch_upkeep is exempt from the orchestrator's inactive-requested-changes
+  // guard and is valid branch maintenance even when not changes_requested, so
+  // it must NOT be downgraded.
+  const issue = { issueClass: "implementation", prReviewState: "approved" } as IssueRecord;
+  const plan = deriveSessionWakePlan(issue, [delegatedEvent("branch_upkeep")]);
+  assert.equal(plan?.runType, "branch_upkeep");
+});
+
+test("deriveSessionWakePlan downgrades a completion_check_continue review_fix to implementation when the PR is no longer changes_requested", () => {
+  // A review_fix run that finished and asked to continue carries runType
+  // review_fix in its payload. If the PR review is no longer
+  // changes_requested (dismissed/approved/commented), continuing as review_fix
+  // would be rejected by the orchestrator as an inactive requested-changes
+  // wake and strand the issue — so it must resolve to implementation instead.
+  const issue = { issueClass: "implementation", prReviewState: "commented" } as IssueRecord;
+  const plan = deriveSessionWakePlan(issue, [
+    event("completion_check_continue", JSON.stringify({ runType: "review_fix", summary: "continue" })),
+  ]);
+  assert.equal(plan?.runType, "implementation");
+  assert.equal(plan?.wakeReason, "completion_check_continue");
+});
+
+test("deriveSessionWakePlan keeps a completion_check_continue review_fix when the PR is still changes_requested", () => {
+  const issue = { issueClass: "implementation", prReviewState: "changes_requested" } as IssueRecord;
+  const plan = deriveSessionWakePlan(issue, [
+    event("completion_check_continue", JSON.stringify({ runType: "review_fix", summary: "continue" })),
+  ]);
+  assert.equal(plan?.runType, "review_fix");
+});
+
 // ─── D2 parse boundary: typed payload union ────────────────────────────
 
 import {
