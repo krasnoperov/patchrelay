@@ -245,6 +245,36 @@ export class IssueStore {
     return rows.map(mapIssueRow);
   }
 
+  // Terminal, run-free issues the terminal-wake reconciler must evaluate:
+  // those with a pending run type, or with an unprocessed *actionable* session
+  // event. Iterating the whole table every tick to find these few was wasteful
+  // (non-actionable events like self_comment/delegation_observed accumulate on
+  // done issues and would otherwise be re-checked forever). `nonActionable` is
+  // passed from NON_ACTIONABLE_SESSION_EVENTS so the actionable definition has
+  // one home; the caller keeps its exact JS guards as the source of truth.
+  listTerminalIssuesWithPendingWake(nonActionable: readonly string[]): IssueRecord[] {
+    const placeholders = nonActionable.map(() => "?").join(", ");
+    const exclusion = placeholders ? `AND e.event_type NOT IN (${placeholders})` : "";
+    const rows = this.connection
+      .prepare(
+        `SELECT * FROM issues AS i
+         WHERE i.active_run_id IS NULL
+           AND i.factory_state IN ('done', 'escalated', 'failed', 'awaiting_input')
+           AND (
+             i.pending_run_type IS NOT NULL
+             OR EXISTS (
+                  SELECT 1 FROM issue_session_events e
+                  WHERE e.project_id = i.project_id
+                    AND e.linear_issue_id = i.linear_issue_id
+                    AND e.processed_at IS NULL
+                    ${exclusion}
+                )
+           )`,
+      )
+      .all(...nonActionable) as Array<Record<string, unknown>>;
+    return rows.map(mapIssueRow);
+  }
+
   // Issues that currently pin an active run. Used by restart recovery to
   // re-sync agent sessions without loading the whole (mostly terminal) table.
   listIssuesWithActiveRun(): IssueRecord[] {

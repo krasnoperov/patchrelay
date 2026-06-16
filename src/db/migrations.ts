@@ -273,6 +273,9 @@ CREATE INDEX IF NOT EXISTS idx_issues_project ON issues(project_id, linear_issue
 CREATE INDEX IF NOT EXISTS idx_issues_key ON issues(issue_key);
 CREATE INDEX IF NOT EXISTS idx_issues_ready ON issues(pending_run_type, active_run_id);
 CREATE INDEX IF NOT EXISTS idx_issues_branch ON issues(branch_name);
+-- getIssueByPrNumber() runs on the GitHub webhook hot path; without this it
+-- full-scanned the issues table for every inbound PR/review/comment event.
+CREATE INDEX IF NOT EXISTS idx_issues_pr_number ON issues(pr_number);
 -- Reconcilers filter the issue set by lifecycle state (most issues are
 -- terminal 'done' and never need re-scanning); this composite lets those
 -- filtered passes seek instead of full-scanning the issues table.
