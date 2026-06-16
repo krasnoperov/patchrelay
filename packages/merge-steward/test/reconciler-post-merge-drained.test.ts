@@ -76,6 +76,20 @@ test("post-merge verification still runs when the active queue is empty", async 
   assert.equal(resolved?.postMergeSummary, "all required checks passed");
 });
 
+test("decidedAt is stamped on the first terminal transition and never bumped", () => {
+  const store = new MemoryStore();
+  store.insert(mergedPendingEntry({ id: "e", status: "queued", decidedAt: null }));
+  assert.equal(store.getEntry("e")?.decidedAt, null);
+
+  store.transition("e", "merged");
+  const firstDecidedAt = store.getEntry("e")?.decidedAt;
+  assert.ok(firstDecidedAt, "decidedAt set when the entry first becomes terminal");
+
+  // A post-merge re-check transitions to "merged" again; decidedAt must hold.
+  store.transition("e", "merged", { postMergeCheckedAt: new Date().toISOString() });
+  assert.equal(store.getEntry("e")?.decidedAt, firstDecidedAt);
+});
+
 test("listPostMergePending returns only unresolved merged entries", () => {
   const store = new MemoryStore();
   store.insert(mergedPendingEntry({ id: "pending", prNumber: 10, postMergeStatus: "pending" }));

@@ -88,6 +88,7 @@ export class MergeStewardQueueCommands {
       specTreeId: null,
       prTitle: params.prTitle ?? null,
       baseRefName: params.baseRefName ?? null,
+      decidedAt: null,
       enqueuedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };

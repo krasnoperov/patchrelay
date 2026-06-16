@@ -84,6 +84,14 @@ export interface QueueEntry {
   specTreeId: string | null;
   enqueuedAt: string;
   updatedAt: string;
+  /**
+   * Set once, when the entry first reaches a terminal status
+   * (merged/evicted/dequeued), and never bumped afterward — unlike
+   * updatedAt, which post-merge re-verification keeps moving. Lets the
+   * dashboard report an accurate "how long it took" (decidedAt - enqueuedAt)
+   * and "how long ago" (now - decidedAt). Null while still in flight.
+   */
+  decidedAt: string | null;
 }
 
 export type FailureClass =

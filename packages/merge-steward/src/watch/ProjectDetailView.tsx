@@ -1,7 +1,8 @@
 import { Box, Text, useStdout } from "ink";
 import { RepoRow } from "./OverviewView.tsx";
 import { clipSummary, type DashboardModel, type DashboardPrEntry, type DashboardRepo } from "./dashboard-model.ts";
-import { formatTokenAge } from "./format.ts";
+import { relativeTime } from "./format.ts";
+import { formatDurationMs } from "../runtime-format.ts";
 
 interface ProjectDetailViewProps {
   model: DashboardModel;
@@ -14,7 +15,13 @@ interface ProjectDetailViewProps {
 const PR_ID_WIDTH = 7;
 const PR_PHRASE_WIDTH = 20;
 const SUMMARY_INDENT = 9;
-const AGE_WIDTH = 4;
+const TIMING_WIDTH = 22;
+
+// "took 7m · 3m ago" for a finished entry; "running 12m" while in flight.
+function timingLabel(entry: DashboardPrEntry): string {
+  const duration = formatDurationMs(entry.durationMs);
+  return entry.recencyAt != null ? `took ${duration} · ${relativeTime(entry.recencyAt)} ago` : `running ${duration}`;
+}
 
 type ContentLine =
   | { kind: "blank" }
@@ -52,8 +59,8 @@ export function buildContentLines(repo: DashboardRepo, width: number): ContentLi
 function EntryHeaderRow({ entry, width }: { entry: DashboardPrEntry; width: number }): React.JSX.Element {
   const idText = `#${entry.prNumber}`.padEnd(PR_ID_WIDTH, " ");
   const paddedPhrase = entry.phrase.padEnd(PR_PHRASE_WIDTH, " ");
-  const age = formatTokenAge(entry.eventAt);
-  const titleSpace = Math.max(0, width - (PR_ID_WIDTH + 3 + PR_PHRASE_WIDTH + 3 + AGE_WIDTH));
+  const timing = timingLabel(entry).padEnd(TIMING_WIDTH, " ");
+  const titleSpace = Math.max(0, width - (PR_ID_WIDTH + 3 + PR_PHRASE_WIDTH + 3 + TIMING_WIDTH));
   const title = entry.title && entry.title !== entry.phrase && titleSpace >= 8
     ? truncate(entry.title, titleSpace)
     : "";
@@ -62,7 +69,7 @@ function EntryHeaderRow({ entry, width }: { entry: DashboardPrEntry; width: numb
       <Text color={entry.color}>{idText}</Text>
       <Text color={entry.color}>{entry.glyph}</Text>
       <Text>{`  ${paddedPhrase}`}</Text>
-      <Text dimColor>{`  ${age}`}</Text>
+      <Text dimColor>{`  ${timing}`}</Text>
       {title ? <Text dimColor>{`  ${title}`}</Text> : null}
     </Box>
   );

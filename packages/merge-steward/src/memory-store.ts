@@ -84,6 +84,10 @@ export class MemoryStore implements QueueStore {
     const from = entry.status;
     entry.status = to;
     entry.updatedAt = isoNow();
+    // Stamp decidedAt once, on the first transition into a terminal status.
+    if (TERMINAL_STATUSES.includes(to) && (entry.decidedAt === null || entry.decidedAt === undefined)) {
+      entry.decidedAt = entry.updatedAt;
+    }
     if (patch) {
       if (patch.headSha !== undefined) entry.headSha = patch.headSha;
       if (patch.baseSha !== undefined) entry.baseSha = patch.baseSha;

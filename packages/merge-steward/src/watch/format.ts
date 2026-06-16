@@ -1,4 +1,5 @@
 import type { CheckResult, PostMergeStatus, QueueBlockState, QueueEntryStatus, QueueEventRecord, QueueEventSummary, QueueRuntimeStatus } from "../types.ts";
+import { formatDurationMs } from "../runtime-format.ts";
 
 const QUEUE_SYMBOLS = {
   inProgress: "\u25cf",
@@ -57,11 +58,23 @@ export function formatTokenAge(eventAt: number): string {
   return relativeTime(eventAt).padStart(4, " ");
 }
 
-export function formatRepoTokenText(token: { prNumber: number; glyph: string; eventAt: number; stackedOnPr?: number | null }): string {
+export function formatRepoTokenText(token: {
+  prNumber: number;
+  glyph: string;
+  eventAt: number;
+  stackedOnPr?: number | null;
+  durationMs?: number | null;
+  recencyAt?: number | null;
+}): string {
   // A leading connector marks an entry whose spec is speculatively stacked on
   // the PR shown just before it, so the queue order reads as a stack.
   const stackMark = token.stackedOnPr != null ? "↳" : "";
-  return `${stackMark}#${token.prNumber} ${token.glyph} ${relativeTime(token.eventAt)}`;
+  // Two times: how long it took (duration) and, for finished entries, how long
+  // ago it finished (recency), joined as "took·ago" e.g. "7m·3m". In-flight
+  // entries show only the running duration.
+  const duration = token.durationMs != null ? formatDurationMs(token.durationMs) : relativeTime(token.eventAt);
+  const timing = token.recencyAt != null ? `${duration}·${relativeTime(token.recencyAt)}` : duration;
+  return `${stackMark}#${token.prNumber} ${token.glyph} ${timing}`;
 }
 
 export function mergeWaitState(entry: { status: QueueEntryStatus; waitDetail?: string | null | undefined } | undefined): "approval" | "main" | null {

@@ -40,6 +40,7 @@ function makeEntry(overrides: Partial<QueueEntry> & { prNumber: number; position
     baseRefName: null,
     headPatchId: null,
     specTreeId: null,
+    decidedAt: null,
     enqueuedAt: minutesAgo(10),
     updatedAt: minutesAgo(5),
     ...overrides,
@@ -143,6 +144,26 @@ test("stack link is dropped once the parent is no longer active", () => {
   const model = buildDashboard([makeRepo(makeSnapshot([parent, child]))], { now: NOW });
   const child81 = model.repos[0]?.entries.find((e) => e.prNumber === 81);
   assert.equal(child81?.stackedOnPr, null);
+});
+
+test("duration measures enqueue->decided and recency ages from decidedAt, ignoring later updatedAt bumps", () => {
+  const snapshot = makeSnapshot([
+    // Decided 8m ago after 12m in queue; updatedAt bumped 2m ago by a
+    // post-merge re-check, which must NOT affect duration or recency.
+    makeEntry({ prNumber: 90, position: 1, status: "merged", postMergeStatus: "pass", enqueuedAt: minutesAgo(20), decidedAt: minutesAgo(8), updatedAt: minutesAgo(2) }),
+  ]);
+  const entry = buildDashboard([makeRepo(snapshot)], { now: NOW }).repos[0]?.entries[0];
+  assert.equal(entry?.durationMs, 12 * 60_000);
+  assert.equal(entry?.recencyAt, NOW - 8 * 60_000);
+});
+
+test("an in-flight entry reports running duration and no recency", () => {
+  const snapshot = makeSnapshot([
+    makeEntry({ prNumber: 91, position: 1, status: "validating", enqueuedAt: minutesAgo(5) }),
+  ]);
+  const entry = buildDashboard([makeRepo(snapshot)], { now: NOW }).repos[0]?.entries[0];
+  assert.equal(entry?.durationMs, 5 * 60_000);
+  assert.equal(entry?.recencyAt, null);
 });
 
 test("decided PRs older than the time window are dropped", () => {
