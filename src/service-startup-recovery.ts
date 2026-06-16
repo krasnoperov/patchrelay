@@ -21,7 +21,7 @@ export class ServiceStartupRecovery {
   ) {}
 
   async syncKnownAgentSessions(): Promise<void> {
-    for (const issue of this.db.issues.listIssues()) {
+    for (const issue of this.db.issues.listIssuesWithActiveRun()) {
       if (issue.factoryState === "done") {
         continue;
       }
@@ -62,7 +62,7 @@ export class ServiceStartupRecovery {
     let opened = 0;
     let updated = 0;
     let closed = 0;
-    for (const issue of this.db.issues.listIssues()) {
+    for (const issue of this.db.issues.listWorkflowTaskReconcileCandidates()) {
       const reconciliation = reconcileWorkflowTasksForIssue(this.db, issue);
       opened += reconciliation.result.opened.length;
       updated += reconciliation.result.updated.length;

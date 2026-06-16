@@ -41,7 +41,8 @@ export class MergedLinearCompletionReconciler {
       this.globalRetryAfter = undefined;
     }
 
-    const candidates = this.db.issues.listIssues()
+    const candidates = this.db.issues
+      .listRecentCompletionCandidates(new Date(now - COMPLETION_RECONCILE_WINDOW_MS).toISOString())
       .filter((issue) => this.isRecentCompletionCandidate(issue, now))
       .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
     this.pruneRetryBackoff(candidates, now);

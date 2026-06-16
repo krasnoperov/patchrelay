@@ -273,9 +273,17 @@ CREATE INDEX IF NOT EXISTS idx_issues_project ON issues(project_id, linear_issue
 CREATE INDEX IF NOT EXISTS idx_issues_key ON issues(issue_key);
 CREATE INDEX IF NOT EXISTS idx_issues_ready ON issues(pending_run_type, active_run_id);
 CREATE INDEX IF NOT EXISTS idx_issues_branch ON issues(branch_name);
+-- Reconcilers filter the issue set by lifecycle state (most issues are
+-- terminal 'done' and never need re-scanning); this composite lets those
+-- filtered passes seek instead of full-scanning the issues table.
+CREATE INDEX IF NOT EXISTS idx_issues_factory_state ON issues(factory_state, updated_at);
 CREATE INDEX IF NOT EXISTS idx_runs_issue ON runs(issue_id);
 CREATE INDEX IF NOT EXISTS idx_runs_active ON runs(status, project_id, linear_issue_id);
 CREATE INDEX IF NOT EXISTS idx_runs_thread ON runs(thread_id);
+-- getLatestRunForIssue() filters runs by (project_id, linear_issue_id) with
+-- no status constraint, so idx_runs_active (status-led) cannot serve it and it
+-- full-scanned the (large) runs table once per issue. This makes it a seek.
+CREATE INDEX IF NOT EXISTS idx_runs_issue_latest ON runs(project_id, linear_issue_id, id);
 CREATE INDEX IF NOT EXISTS idx_issue_sessions_issue ON issue_sessions(project_id, linear_issue_id);
 CREATE INDEX IF NOT EXISTS idx_issue_sessions_key ON issue_sessions(issue_key);
 CREATE INDEX IF NOT EXISTS idx_issue_sessions_lease ON issue_sessions(leased_until, session_state);

@@ -37,7 +37,8 @@ import { settleRun } from "./run-settlement.ts";
 import { getRemainingCapacityBackoffMs, getRemainingZombieRecoveryDelayMs } from "./run-budgets.ts";
 import { classifyIssue } from "./issue-class.ts";
 import { buildIssueTriageHash, IssueTriageService } from "./issue-triage.ts";
-import { loadConfig } from "./config.ts";
+import { statSync } from "node:fs";
+import { getAdjacentEnvFilePaths, loadConfig } from "./config.ts";
 import { CodexThreadMaterializingError, isThreadMaterializingError } from "./codex-thread-errors.ts";
 import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry, type RunSkipReason } from "./telemetry.ts";
 import { LinearIssueProjectionService } from "./linear-issue-projection.ts";
@@ -111,6 +112,11 @@ export class RunOrchestrator {
   private readonly linearIssueProjection: LinearIssueProjectionService;
   private readonly runAdmission: RunAdmissionController;
   private codexRuntimeConfig: AppConfig["runner"]["codex"];
+  // mtime fingerprint of the config inputs at the last successful reload.
+  // run() is called per dequeued issue; reloading the full config (+ secrets
+  // + every project.json) each time starved the event loop during recovery
+  // bursts. We only re-read when a config input actually changed on disk.
+  private lastConfigLoadSignature: string | undefined;
   private readonly threadPorts: RunThreadPorts = {
     readThreadWithRetry: (threadId, maxRetries) => this.readThreadWithRetry(threadId, maxRetries),
   };
@@ -277,8 +283,17 @@ export class RunOrchestrator {
       return;
     }
 
+    // Skip the disk read entirely when no config input changed since the last
+    // load. mtime of the config file plus its adjacent env files is a cheap,
+    // accurate change signal (codex model/provider/effort derive from these).
+    const signature = this.computeConfigLoadSignature(this.configPath);
+    if (signature !== undefined && signature === this.lastConfigLoadSignature) {
+      return;
+    }
+
     try {
       const freshConfig = loadConfig(this.configPath, { profile: "service" });
+      this.lastConfigLoadSignature = signature;
       if (
         this.codexRuntimeConfig.model === freshConfig.runner.codex.model &&
         this.codexRuntimeConfig.modelProvider === freshConfig.runner.codex.modelProvider &&
@@ -296,6 +311,28 @@ export class RunOrchestrator {
         },
         "Failed to reload patchrelay runtime config before run; using previous codex configuration",
       );
+    }
+  }
+
+  // Fingerprint the config inputs by mtime. Returns undefined if any file
+  // cannot be stat'd, which forces a reload (the safe default) rather than
+  // caching a stale result.
+  private computeConfigLoadSignature(configPath: string): string | undefined {
+    try {
+      const { runtimeEnvPath, serviceEnvPath } = getAdjacentEnvFilePaths(configPath);
+      const parts: string[] = [];
+      for (const file of [configPath, runtimeEnvPath, serviceEnvPath]) {
+        try {
+          parts.push(`${file}:${statSync(file).mtimeMs}`);
+        } catch {
+          // Missing env files are valid (config may rely on defaults); record
+          // their absence so creating one later still busts the cache.
+          parts.push(`${file}:absent`);
+        }
+      }
+      return parts.join("|");
+    } catch {
+      return undefined;
     }
   }
 
