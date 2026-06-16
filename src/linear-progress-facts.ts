@@ -3,7 +3,7 @@ import { sanitizeOperatorFacingText } from "./presentation-text.ts";
 import type { LinearAgentActivityContent } from "./types.ts";
 
 export interface LinearProgressFact {
-  kind: "root_cause_found" | "verification_started" | "publishing_started";
+  kind: "root_cause_found" | "verification_started" | "publishing_started" | "plan_step";
   meaningKey: string;
   ephemeralContent: LinearAgentActivityContent;
   historyContent: LinearAgentActivityContent;
@@ -124,7 +124,25 @@ function deriveProgressFactFromPlan(
     };
   }
 
-  return undefined;
+  // Any other active step: surface it verbatim so the Linear trail shows
+  // what Codex is actually working on right now, not just the few
+  // verification/publishing milestones. Deduplicated by meaning key, so it
+  // posts once per step transition (a plan is only a handful of steps).
+  const stepParameter = summarizePlanStep(activeStep.step, "the next step");
+  return {
+    kind: "plan_step",
+    meaningKey: `step:${normalizeMeaningKey(activeStep.step)}`,
+    ephemeralContent: {
+      type: "action",
+      action: "Working on",
+      parameter: stepParameter,
+    },
+    historyContent: {
+      type: "action",
+      action: "Working on",
+      parameter: stepParameter,
+    },
+  };
 }
 
 function normalizePlanEntry(rawEntry: unknown): { step: string; status: "pending" | "in_progress" | "completed" } | undefined {
