@@ -2,6 +2,10 @@
   "server": {
     "public_base_url": "https://patchrelay.example.com"
   },
+  "maintenance": {
+    "worktree_retention_hours": 24,
+    "worktree_cleanup_interval_minutes": 1440
+  },
   "runner": {
     "git_bin": "git",
     "codex": {

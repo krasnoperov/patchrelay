@@ -29,6 +29,7 @@ import { WebhookHandler } from "./webhook-handler.ts";
 import { acceptIncomingWebhook } from "./service-webhooks.ts";
 import { ABANDONED_PENDING_WEBHOOK_AGE_MS } from "./db/webhook-event-store.ts";
 import { runWebhookEventRetention } from "./event-retention.ts";
+import { runTerminalWorktreeCleanup } from "./worktree-cleanup.ts";
 import type { AppConfig, LinearClient, LinearClientProvider } from "./types.ts";
 import { parseStringArray, TrackedIssueListQuery } from "./tracked-issue-list-query.ts";
 import { AgentInputService } from "./agent-input-service.ts";
@@ -57,6 +58,7 @@ export class PatchRelayService {
   private readonly startupRecovery: ServiceStartupRecovery;
   private readonly trackedIssueListQuery: TrackedIssueListQuery;
   private eventRetentionTimer: ReturnType<typeof setTimeout> | undefined;
+  private worktreeCleanupTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     readonly config: AppConfig,
@@ -290,6 +292,7 @@ export class PatchRelayService {
     this.startupRecovery.reconcileKnownWorkflowTasks();
     await this.runtime.start();
     this.scheduleEventRetention(60_000);
+    this.scheduleWorktreeCleanup(60_000);
     void this.startupRecovery.recoverDelegatedIssueStateFromLinear().catch((error) => {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.warn({ error: msg }, "Background delegated issue recovery failed");
@@ -304,6 +307,10 @@ export class PatchRelayService {
     if (this.eventRetentionTimer !== undefined) {
       clearTimeout(this.eventRetentionTimer);
       this.eventRetentionTimer = undefined;
+    }
+    if (this.worktreeCleanupTimer !== undefined) {
+      clearTimeout(this.worktreeCleanupTimer);
+      this.worktreeCleanupTimer = undefined;
     }
     this.githubAppTokenManager?.stop();
     await this.runtime.stop();
@@ -455,6 +462,37 @@ export class PatchRelayService {
       );
     } finally {
       this.scheduleEventRetention();
+    }
+  }
+
+  private scheduleWorktreeCleanup(delayMs = this.config.maintenance.worktreeCleanupIntervalMinutes * 60 * 1000): void {
+    if (this.worktreeCleanupTimer !== undefined) {
+      clearTimeout(this.worktreeCleanupTimer);
+    }
+    const timer = setTimeout(() => {
+      void this.runWorktreeCleanupMaintenance();
+    }, delayMs);
+    timer.unref?.();
+    this.worktreeCleanupTimer = timer;
+  }
+
+  private async runWorktreeCleanupMaintenance(): Promise<void> {
+    try {
+      const result = await runTerminalWorktreeCleanup({
+        db: this.db,
+        config: this.config,
+        logger: this.logger,
+      });
+      if (result.deleted > 0 || result.skippedDirty > 0 || result.failed > 0 || result.missing > 0) {
+        this.logger.info(result, "Terminal worktree cleanup completed");
+      }
+    } catch (error) {
+      this.logger.warn(
+        { error: error instanceof Error ? error.message : String(error) },
+        "Terminal worktree cleanup failed",
+      );
+    } finally {
+      this.scheduleWorktreeCleanup();
     }
   }
 

@@ -44,7 +44,7 @@ function summarizeImplementation(postRunState: FactoryState | undefined): string
 }
 
 function summarizeReviewFix(facts: RunOutcomeFacts): string {
-  const concern = summarizeKnownConcern(facts.reviewSummary);
+  const concern = summarizeKnownConcern(extractReviewConcern(facts.reviewSummary));
   return concern ? rewriteConcernAsOutcome(concern) : "Review feedback addressed.";
 }
 
@@ -81,6 +81,32 @@ function summarizeKnownConcern(value: string | undefined): string | undefined {
     return undefined;
   }
   return stripped.length <= 80 ? stripped : `${stripped.slice(0, 80).trimEnd()}...`;
+}
+
+function extractReviewConcern(value: string | undefined): string | undefined {
+  const sanitized = sanitizeOperatorFacingText(value)?.trim();
+  if (!sanitized) {
+    return undefined;
+  }
+
+  const verdictReason = sanitized.match(/\*\*Verdict:[^—\n]*—\s*([^\n]+)/i)?.[1]?.trim();
+  if (verdictReason) {
+    return stripReviewLeadingPhrase(verdictReason);
+  }
+
+  const finding = sanitized.match(/^-+\s*(?:[^\w`]*\s*)?`?([^`\n]+?)`?\s*(?:—|-)\s*([^\n]+)/m);
+  if (finding?.[2]) {
+    return stripReviewLeadingPhrase(finding[2]);
+  }
+
+  return sanitized;
+}
+
+function stripReviewLeadingPhrase(value: string): string {
+  return value
+    .replace(/^request changes because\s+/i, "")
+    .replace(/^the pr\s+/i, "")
+    .trim();
 }
 
 function rewriteConcernAsOutcome(concern: string): string {

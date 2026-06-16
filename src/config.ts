@@ -153,6 +153,13 @@ const configSchema = z.object({
     archive_old_events: z.boolean().default(false),
     archive_path: z.string().min(1).optional(),
   }),
+  maintenance: z.object({
+    worktree_retention_hours: z.number().int().nonnegative().default(24),
+    worktree_cleanup_interval_minutes: z.number().int().positive().default(24 * 60),
+  }).default({
+    worktree_retention_hours: 24,
+    worktree_cleanup_interval_minutes: 24 * 60,
+  }),
   linear: z.object({
     webhook_secret_env: z.string().default("LINEAR_WEBHOOK_SECRET"),
     graphql_url: z.string().url().default("https://api.linear.app/graphql"),
@@ -658,6 +665,10 @@ export function loadConfig(
       eventRetentionDays: parsed.database.event_retention_days,
       archiveOldEvents: parsed.database.archive_old_events,
       archivePath: ensureAbsolutePath(parsed.database.archive_path ?? path.join(path.dirname(env.PATCHRELAY_DB_PATH ?? parsed.database.path), "archive")),
+    },
+    maintenance: {
+      worktreeRetentionHours: parsed.maintenance.worktree_retention_hours,
+      worktreeCleanupIntervalMinutes: parsed.maintenance.worktree_cleanup_interval_minutes,
     },
     linear: {
       webhookSecret: webhookSecret ?? "",

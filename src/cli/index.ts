@@ -105,6 +105,10 @@ function validateFlags(command: string, commandArgs: string[], parsed: ReturnTyp
         assertKnownFlags(parsed, command, ["json", "dry-run", "archive", "discard", "retention-days", "batch-size"]);
         return;
       }
+      if (commandArgs[0] === "prune-worktrees") {
+        assertKnownFlags(parsed, command, ["json", "dry-run", "retention-hours", "retention-days"]);
+        return;
+      }
       assertKnownFlags(parsed, command, []);
       return;
     case "sequence-check":
