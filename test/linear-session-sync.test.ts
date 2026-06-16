@@ -268,7 +268,7 @@ test("syncSession collapses an existing durable status comment during active del
 
     assert.equal(commentUpdates.length, 1);
     assert.equal(commentUpdates[0]?.commentId, "comment-collapse-active");
-    assert.match(String(commentUpdates[0]?.body), /Live status is in the agent session and activity feed/);
+    assert.match(String(commentUpdates[0]?.body), /No human action needed/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -468,7 +468,7 @@ test("syncSession collapses paused undelegated PR-backed status comments when an
 
     assert.equal(commentUpdates.length, 1);
     assert.equal(commentUpdates[0]?.commentId, "comment-paused-pr");
-    assert.match(String(commentUpdates[0]?.body), /Live status is in the agent session and activity feed/);
+    assert.match(String(commentUpdates[0]?.body), /No human action needed/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

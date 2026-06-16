@@ -92,6 +92,9 @@ export function deriveIssueStatusNote(params: {
   if (params.issue.factoryState !== "done" && waitingReason === "PatchRelay work is complete") {
     return undefined;
   }
+  if (params.issue.factoryState === "awaiting_queue") {
+    return undefined;
+  }
 
   let note: string | undefined;
   if (completionCheckActive) {

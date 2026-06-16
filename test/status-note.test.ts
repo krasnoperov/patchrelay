@@ -118,3 +118,23 @@ test("deriveIssueStatusNote prefers completion-check questions for awaiting-inpu
 
   assert.equal(note, "Approve routing /v1/* through the worker?");
 });
+
+test("deriveIssueStatusNote suppresses stale repair summaries after downstream handoff", () => {
+  const note = deriveIssueStatusNote({
+    issue: { factoryState: "awaiting_queue" },
+    sessionSummary: "same_head_review_handoff_blocked",
+    latestRun: {
+      id: 1,
+      issueId: 1,
+      projectId: "project",
+      linearIssueId: "issue-1",
+      runType: "review_fix",
+      status: "failed",
+      startedAt: "2026-06-16T22:41:08.000Z",
+      failureReason: "same_head_review_handoff_blocked",
+    } as never,
+    waitingReason: "PatchRelay work is done; waiting on downstream review/merge automation",
+  });
+
+  assert.equal(note, undefined);
+});

@@ -180,7 +180,7 @@ function renderCollapsedStatusComment(): string {
   return [
     "## PatchRelay status",
     "",
-    "Live status is in the agent session and activity feed. This comment is reused only when PatchRelay needs human input or intervention.",
+    "No human action needed. PatchRelay is updating the Linear agent session activity feed; this placeholder will be reused if human input is needed later.",
   ].join("\n");
 }
 
