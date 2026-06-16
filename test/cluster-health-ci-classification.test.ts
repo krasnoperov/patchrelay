@@ -25,10 +25,10 @@ function baseOwnerParams(overrides: Partial<CiOwnerParams> = {}): CiOwnerParams 
   };
 }
 
-test("getGateCheckNames falls back to verify when none configured", () => {
-  assert.deepEqual(getGateCheckNames(undefined), ["verify"]);
-  assert.deepEqual(getGateCheckNames({ gateChecks: [] } as never), ["verify"]);
-  assert.deepEqual(getGateCheckNames({ gateChecks: ["  ", ""] } as never), ["verify"]);
+test("getGateCheckNames falls back to common gate names when none configured", () => {
+  assert.deepEqual(getGateCheckNames(undefined), ["Tests", "verify"]);
+  assert.deepEqual(getGateCheckNames({ gateChecks: [] } as never), ["Tests", "verify"]);
+  assert.deepEqual(getGateCheckNames({ gateChecks: ["  ", ""] } as never), ["Tests", "verify"]);
 });
 
 test("getGateCheckNames trims and preserves configured names", () => {
@@ -86,6 +86,17 @@ test("deriveCiOwner returns paused for undelegated failing CI", () => {
 test("deriveCiOwner returns unknown for failed gate CI when no repair run is active", () => {
   assert.equal(
     deriveCiOwner(baseOwnerParams({ gateCheckStatus: "failure", factoryState: "pr_open" })),
+    "unknown",
+  );
+});
+
+test("deriveCiOwner does not hand off approved PRs with failed gate CI downstream", () => {
+  assert.equal(
+    deriveCiOwner(baseOwnerParams({
+      gateCheckStatus: "failure",
+      factoryState: "awaiting_queue",
+      reviewDecision: "APPROVED",
+    })),
     "unknown",
   );
 });

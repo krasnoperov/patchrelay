@@ -80,10 +80,10 @@ test("hasCompletedReviewQuillVerdict checks for the verdict check name and statu
   assert.equal(hasCompletedReviewQuillVerdict([]), false);
 });
 
-test("getGateCheckNames falls back to ['verify'] and trims configured names", () => {
-  assert.deepEqual(getGateCheckNames(undefined), ["verify"]);
-  assert.deepEqual(getGateCheckNames({ gateChecks: [] } as never), ["verify"]);
-  assert.deepEqual(getGateCheckNames({ gateChecks: ["  "] } as never), ["verify"]);
+test("getGateCheckNames falls back to common gate names and trims configured names", () => {
+  assert.deepEqual(getGateCheckNames(undefined), ["Tests", "verify"]);
+  assert.deepEqual(getGateCheckNames({ gateChecks: [] } as never), ["Tests", "verify"]);
+  assert.deepEqual(getGateCheckNames({ gateChecks: ["  "] } as never), ["Tests", "verify"]);
   assert.deepEqual(getGateCheckNames({ gateChecks: [" verify ", "lint"] } as never), ["verify", "lint"]);
 });
 

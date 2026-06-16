@@ -8,7 +8,7 @@ import {
 import { deriveFactoryStateFromPrFacts } from "./pr-facts-derivation.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
 
-const DEFAULT_GATE_CHECK_NAMES = ["verify", "tests"];
+const DEFAULT_GATE_CHECK_NAMES = ["Tests", "verify"];
 
 /**
  * GitHub sends both check_run and check_suite completion events.
