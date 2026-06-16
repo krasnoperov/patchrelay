@@ -22,6 +22,7 @@ function makeEntry(overrides: Partial<QueueEntry> & { prNumber: number; position
     specBranch: null,
     specSha: null,
     specBasedOn: null,
+    decidedAt: null,
     enqueuedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     ...overrides,

@@ -36,6 +36,7 @@ function makeEntry(): QueueEntry {
     prTitle: "Feature",
     headPatchId: null,
     specTreeId: null,
+    decidedAt: null,
     enqueuedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };

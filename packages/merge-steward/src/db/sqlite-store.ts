@@ -44,6 +44,7 @@ function mapEntry(row: Record<string, unknown>): QueueEntry {
     baseRefName: row.base_ref_name === null || row.base_ref_name === undefined ? null : String(row.base_ref_name),
     headPatchId: row.head_patch_id === null || row.head_patch_id === undefined ? null : String(row.head_patch_id),
     specTreeId: row.spec_tree_id === null || row.spec_tree_id === undefined ? null : String(row.spec_tree_id),
+    decidedAt: row.decided_at === null || row.decided_at === undefined ? null : String(row.decided_at),
     enqueuedAt: String(row.enqueued_at),
     updatedAt: String(row.updated_at),
   };
@@ -173,9 +174,9 @@ export class SqliteStore implements QueueStore {
           priority, generation, ci_run_id, ci_retries, retry_attempts,
           max_retries, last_failed_base_sha, issue_key, wait_detail,
           post_merge_status, post_merge_sha, post_merge_summary, post_merge_checked_at,
-          pr_title, base_ref_name,
+          pr_title, base_ref_name, decided_at,
           enqueued_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         entry.id, entry.repoId, entry.prNumber, entry.branch,
         entry.headSha, entry.baseSha, entry.status, entry.position,
@@ -189,6 +190,7 @@ export class SqliteStore implements QueueStore {
         entry.postMergeCheckedAt ?? null,
         entry.prTitle ?? null,
         entry.baseRefName ?? null,
+        entry.decidedAt ?? null,
         entry.enqueuedAt, entry.updatedAt,
       );
       this.writeEvent(entry.id, null, entry.status);
@@ -210,12 +212,19 @@ export class SqliteStore implements QueueStore {
     detail?: string,
   ): void {
     this.conn.transaction(() => {
-      const current = this.conn.prepare("SELECT status FROM queue_entries WHERE id = ?").get(entryId);
+      const current = this.conn.prepare("SELECT status, decided_at FROM queue_entries WHERE id = ?").get(entryId);
       if (!current) return;
       const from = String(current.status) as QueueEntryStatus;
 
+      const now = isoNow();
       const sets: string[] = ["status = ?", "updated_at = ?"];
-      const values: unknown[] = [to, isoNow()];
+      const values: unknown[] = [to, now];
+      // Stamp decidedAt the first time the entry becomes terminal; never move it
+      // afterward (post-merge re-verification keeps transitioning to 'merged').
+      if (TERMINAL_STATUSES.includes(to) && (current.decided_at === null || current.decided_at === undefined)) {
+        sets.push("decided_at = ?");
+        values.push(now);
+      }
       if (patch?.headSha !== undefined) { sets.push("head_sha = ?"); values.push(patch.headSha); }
       if (patch?.baseSha !== undefined) { sets.push("base_sha = ?"); values.push(patch.baseSha); }
       if (patch?.ciRunId !== undefined) { sets.push("ci_run_id = ?"); values.push(patch.ciRunId); }

@@ -31,6 +31,7 @@ export function ensureSchema(connection: DatabaseConnection): void {
       post_merge_sha TEXT,
       post_merge_summary TEXT,
       post_merge_checked_at TEXT,
+      decided_at TEXT,
       enqueued_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
@@ -86,11 +87,20 @@ export function ensureSchema(connection: DatabaseConnection): void {
   // Plan §5.3: cached identity for patch-id-aware updateHead.
   ensureColumn(connection, "queue_entries", "head_patch_id", "TEXT");
   ensureColumn(connection, "queue_entries", "spec_tree_id", "TEXT");
+  ensureColumn(connection, "queue_entries", "decided_at", "TEXT");
   connection.exec(`
     UPDATE queue_entries
        SET post_merge_status = 'pending'
      WHERE status = 'merged'
        AND post_merge_status IS NULL
+  `);
+  // Backfill decided_at for already-terminal rows so historic entries show a
+  // sensible duration/age; updated_at is the best estimate we have for them.
+  connection.exec(`
+    UPDATE queue_entries
+       SET decided_at = updated_at
+     WHERE decided_at IS NULL
+       AND status IN ('merged', 'evicted', 'dequeued')
   `);
 
   // Must match TERMINAL_STATUSES in types.ts: merged, evicted, dequeued

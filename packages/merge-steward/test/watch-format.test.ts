@@ -8,6 +8,14 @@ test("summary token marks a speculatively stacked entry with a connector", () =>
   assert.ok(formatRepoTokenText({ ...base, prNumber: 1806, stackedOnPr: 1805 }).startsWith("↳"), "stacked entry leads with the connector");
 });
 
+test("summary token shows duration·recency for finished and duration-only while in flight", () => {
+  const eventAt = Date.now();
+  const finished = formatRepoTokenText({ prNumber: 10, glyph: "✓", eventAt, durationMs: 7 * 60_000, recencyAt: Date.now() - 3 * 60_000 });
+  assert.match(finished, /#10 ✓ 7m·\d/, "finished entry shows took·ago");
+  const running = formatRepoTokenText({ prNumber: 11, glyph: "●", eventAt, durationMs: 2 * 60_000, recencyAt: null });
+  assert.equal(running, "#11 ● 2m", "in-flight entry shows only running duration");
+});
+
 test("merge wait detail renders approval-blocked merging clearly", () => {
   const entry = {
     lastFailedBaseSha: null,

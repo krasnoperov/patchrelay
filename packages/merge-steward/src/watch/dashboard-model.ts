@@ -40,6 +40,10 @@ export interface DashboardToken {
   active: boolean;
   /** PR number this entry's speculative spec is stacked on, when that parent is still active. */
   stackedOnPr: number | null;
+  /** How long the queue processing took: enqueue -> decided (terminal) or enqueue -> now (active). */
+  durationMs: number;
+  /** Completion instant (decidedAt) the views age against; null while in flight. */
+  recencyAt: number | null;
 }
 
 export interface DashboardPrEntry extends DashboardToken {
@@ -192,6 +196,7 @@ function overrideKind(kind: DashboardTokenKind, override: "main_broken" | null):
 function repoEntriesFromSnapshot(
   snapshot: QueueWatchSnapshot,
   cutoff: number,
+  now: number,
 ): DashboardPrEntry[] {
   const latest = pickLatestPerPR(snapshot.entries);
   const head = latest
@@ -220,16 +225,24 @@ function repoEntriesFromSnapshot(
     const phrase = entryPhrase(entry, { isHead, queueBlocked });
     const parent = entry.specBasedOn ? idToEntry.get(entry.specBasedOn) ?? null : null;
     const stackedOnPr = parent && isActive(parent.status) ? parent.prNumber : null;
+    // decidedAt is the terminal-transition time (never bumped by post-merge
+    // re-checks). Duration = enqueue -> decided (or -> now while in flight);
+    // recencyAt = the completion instant the views age against.
+    const enqueuedAt = timestamp(entry.enqueuedAt);
+    const decidedAt = active ? null : timestamp(entry.decidedAt) || timestamp(entry.updatedAt);
+    const durationMs = Math.max(0, (decidedAt ?? now) - enqueuedAt);
     const item: DashboardPrEntry = {
       prNumber: entry.prNumber,
       glyph,
       color,
       kind,
       phrase,
-      eventAt: timestamp(entry.updatedAt),
+      eventAt: decidedAt ?? timestamp(entry.updatedAt),
       position: entry.position,
       active,
       stackedOnPr,
+      durationMs,
+      recencyAt: decidedAt,
     };
     const summary = entrySummary(entry);
     if (summary) item.summary = summary;
@@ -280,12 +293,12 @@ export function buildDashboard(
         offlineMessage: message,
       };
     }
-    const entries = repoEntriesFromSnapshot(snapshot, cutoff);
+    const entries = repoEntriesFromSnapshot(snapshot, cutoff, now);
     const latestActivityAt = entries.reduce((max, entry) => Math.max(max, entry.eventAt), 0);
     return {
       repoId: repo.repoId,
       repoFullName: repo.repoFullName,
-      tokens: entries.map(({ prNumber, glyph, color, kind, eventAt, position, active, stackedOnPr }) => ({ prNumber, glyph, color, kind, eventAt, position, active, stackedOnPr })),
+      tokens: entries.map(({ prNumber, glyph, color, kind, eventAt, position, active, stackedOnPr, durationMs, recencyAt }) => ({ prNumber, glyph, color, kind, eventAt, position, active, stackedOnPr, durationMs, recencyAt })),
       entries,
       latestActivityAt,
       hasActivity: entries.length > 0,
