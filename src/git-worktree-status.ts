@@ -49,7 +49,15 @@ export function inspectGitWorktreeStatus(worktreePath: string): GitWorktreeStatu
     || hasGitPath(worktreePath, "CHERRY_PICK_HEAD")
     || hasGitPath(worktreePath, "REVERT_HEAD");
 
-  const dirty = lines.length > 0 || mergeInProgress;
+  // A worktree is only actionably dirty when `git status` reports something —
+  // staged/unstaged/untracked changes, or unmerged (conflicted) paths. A
+  // lingering MERGE_HEAD/REBASE_HEAD marker over an OTHERWISE-CLEAN tree (zero
+  // porcelain lines) is a vestigial in-progress flag with no work behind it
+  // (e.g. a merge that produced no content change but never cleared its head).
+  // Treating that as dirty triggered a spurious "continue to publish" loop, so
+  // a real merge-in-progress with conflicts still surfaces here via its
+  // unmerged porcelain lines, while an empty marker does not.
+  const dirty = lines.length > 0;
   const summary = dirty
     ? unmergedPaths.length > 0
       ? `Worktree has unresolved merge conflicts: ${unmergedPaths.join(", ")}`

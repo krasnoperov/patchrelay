@@ -299,6 +299,27 @@ function parseRunType(value: unknown): RunType | undefined {
   return typeof value === "string" && RUN_TYPES.has(value as RunType) ? value as RunType : undefined;
 }
 
+// A run type carried in a wake payload (a `delegated` or `completion_check_continue`
+// event recording the run that was in flight) can go stale: if it names a
+// review_fix but the PR is no longer in changes_requested (the review was
+// dismissed, approved, or only commented), there is nothing to "fix". Carrying
+// it forward would produce a review_fix wake the orchestrator rejects as an
+// inactive requested-changes wake — and if the triggering event is not itself a
+// review_changes_requested event, that rejection cannot clear it, stranding the
+// issue in an enqueue→skip loop. Downgrade such a stale fix to a plain
+// implementation run so it can publish/finish instead.
+//
+// branch_upkeep is intentionally NOT downgraded: it is exempt from the
+// orchestrator's inactive-requested-changes guard (so it never livelocks) and is
+// a legitimate continuation (branch maintenance) regardless of review state.
+function resolvePayloadRunType(payloadRunType: unknown, issue: Pick<IssueRecord, "prReviewState">): RunType | undefined {
+  const parsed = parseRunType(payloadRunType);
+  if (parsed === "review_fix" && issue.prReviewState !== "changes_requested") {
+    return "implementation";
+  }
+  return parsed;
+}
+
 export function deriveSessionWakePlan(
   issue: IssueRecord,
   events: IssueSessionEventRecord[],
@@ -354,7 +375,7 @@ export function deriveSessionWakePlan(
         break;
       case "delegated":
         if (!runType) {
-          runType = parseRunType(typed.payload?.runType) ?? "implementation";
+          runType = resolvePayloadRunType(typed.payload?.runType, issue) ?? "implementation";
           wakeReason = issue.issueClass === "orchestration" ? "initial_delegate" : "delegated";
           eventIds = [event.id];
         } else {
@@ -397,7 +418,11 @@ export function deriveSessionWakePlan(
       }
       case "completion_check_continue": {
         if (!runType) {
-          runType = parseRunType(typed.payload?.runType)
+          // Resume the same kind of work the finished run was doing, but
+          // downgrade a now-stale requested-changes fix to implementation
+          // (see resolvePayloadRunType). Falls back to the state-appropriate
+          // type when the payload carried no run type.
+          runType = resolvePayloadRunType(typed.payload?.runType, issue)
             ?? (issue.prReviewState === "changes_requested" ? "review_fix" : "implementation");
           wakeReason = "completion_check_continue";
           eventIds = [event.id];
