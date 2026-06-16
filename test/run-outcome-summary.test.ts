@@ -41,3 +41,22 @@ test("run outcome summary uses structured wake facts for repair outcomes", () =>
     "test / unit fixed.",
   );
 });
+
+test("run outcome summary extracts the operator-facing blocker from review-quill bodies", () => {
+  assert.equal(
+    buildRunOutcomeSummary({
+      runType: "review_fix",
+      facts: {
+        prNumber: 45,
+        reviewerName: "review-quill[bot]",
+        reviewSummary: [
+          "**Verdict: 🛑 Request changes** — Request changes because website video generation currently records usage against the image billing meter.",
+          "",
+          "## Context",
+          "The prior blocker appears resolved.",
+        ].join("\n"),
+      },
+    }),
+    "Website video generation currently records usage against the image billing meter.",
+  );
+});

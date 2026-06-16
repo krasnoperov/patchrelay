@@ -413,6 +413,110 @@ test("run finalizer blocks task-backed review fixes that do not advance the PR h
   }
 });
 
+test("run finalizer summarizes task-backed review blocker in Linear activity", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      issueKey: "USE-111R",
+      title: "Fix requested review changes",
+      factoryState: "changes_requested",
+      delegatedToPatchRelay: true,
+      prNumber: 42,
+      prState: "open",
+      prReviewState: "changes_requested",
+      prHeadSha: "sha-blocked",
+      lastBlockingReviewHeadSha: "sha-blocked",
+    });
+    db.workflowTasks.reconcileTasks({
+      projectId: issue.projectId,
+      subjectId: issue.linearIssueId,
+      tasks: [{
+        task: {
+          id: "run:review_fix",
+          type: "run",
+          runType: "review_fix",
+          reason: "PR has requested changes",
+          requirements: {
+            blockingHeadSha: "sha-blocked",
+            requestedChangesHeadSha: "sha-blocked",
+            reviewerName: "review-quill[bot]",
+            reviewBody: "**Verdict: 🛑 Request changes** — Request changes because website video generation currently records usage against the image billing meter.",
+          },
+        },
+        authorityEpoch: 0,
+        gateAction: "start",
+      }],
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+      sourceHeadSha: "sha-blocked",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-1", turnId: "turn-main" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+      prHeadSha: "sha-fixed",
+    });
+    db.workflowTasks.reconcileTasks({
+      projectId: issue.projectId,
+      subjectId: issue.linearIssueId,
+      tasks: [],
+    });
+
+    const { finalizer, activities } = createFinalizer(db, {
+      outcome: "done",
+      summary: "unused",
+    }, {
+      publishedOutcomeError: null,
+    });
+
+    await finalizer.finalizeCompletedRun({
+      source: "notification",
+      run: db.runs.getRunById(run.id)!,
+      issue: db.getIssue(issue.projectId, issue.linearIssueId)!,
+      thread: {
+        id: "thread-1",
+        preview: "",
+        cwd: "/tmp/work",
+        status: "idle",
+        turns: [
+          {
+            id: "turn-main",
+            status: "completed",
+            items: [{ id: "msg-1", type: "agentMessage", text: "I fixed the review blocker." }],
+          },
+        ],
+      },
+      threadId: "thread-1",
+      completedTurnId: "turn-main",
+    });
+
+    const updatedRun = db.runs.getRunById(run.id)!;
+    const parsedSummary = JSON.parse(updatedRun.summaryJson ?? "{}") as Record<string, unknown>;
+    assert.equal(
+      parsedSummary.outcomeSummary,
+      "Website video generation currently records usage against the image billing meter.",
+    );
+    assert.equal(
+      activities.at(-1)?.body,
+      [
+        "Review round 1 completed.",
+        "",
+        "Addressed:",
+        "- Website video generation currently records usage against the image billing meter.",
+      ].join("\n"),
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("run finalizer requeues task-backed CI repairs that do not advance the failing head", async () => {
   const { baseDir, db } = createDb();
   try {

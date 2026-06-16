@@ -1,7 +1,7 @@
 import type { Logger } from "pino";
 import type { CompletionCheckExecution } from "./completion-check.ts";
 import type { CodexThreadSummary } from "./types.ts";
-import type { IssueRecord, IssueSessionEventRecord, RunRecord } from "./db-types.ts";
+import type { IssueRecord, IssueSessionEventRecord, RunRecord, WorkflowTaskRecord } from "./db-types.ts";
 import type { FactoryState } from "./factory-state.ts";
 import { parseIssueSessionEventOrWarn } from "./issue-session-events.ts";
 import type { RunContext } from "./run-context.ts";
@@ -123,7 +123,7 @@ export class RunFinalizer {
   }
 
   private resolveRunOutcomeFacts(params: {
-    run: Pick<RunRecord, "id" | "projectId" | "linearIssueId">;
+    run: Pick<RunRecord, "id" | "projectId" | "linearIssueId" | "runType" | "sourceHeadSha">;
     issue: Pick<IssueRecord, "prNumber">;
     postRunState?: FactoryState | undefined;
     latestAssistantSummary?: string | undefined;
@@ -138,7 +138,7 @@ export class RunFinalizer {
 
     const wakeEvent = this.resolveConsumedWakeEvent(params.run);
     if (!wakeEvent) {
-      return facts;
+      return this.resolveWorkflowTaskOutcomeFacts(params.run, facts);
     }
     // Boundary over DB rows: a malformed wake payload degrades to bare facts.
     const typed = parseIssueSessionEventOrWarn(
@@ -146,7 +146,7 @@ export class RunFinalizer {
       (message) => this.logger.warn({ runId: params.run.id, eventId: wakeEvent.id }, message),
     );
     if (!typed?.payload) {
-      return facts;
+      return this.resolveWorkflowTaskOutcomeFacts(params.run, facts);
     }
 
     switch (typed.eventType) {
@@ -188,10 +188,70 @@ export class RunFinalizer {
       case "pr_closed":
       case "pr_merged":
       case "run_released_authority":
-        return facts;
+        return this.resolveWorkflowTaskOutcomeFacts(params.run, facts);
       default:
         return assertNever(typed, "Unhandled issue session event in run outcome facts");
     }
+  }
+
+  private resolveWorkflowTaskOutcomeFacts(
+    run: Pick<RunRecord, "projectId" | "linearIssueId" | "runType" | "sourceHeadSha">,
+    facts: RunOutcomeFacts,
+  ): RunOutcomeFacts {
+    const task = this.resolveMatchingWorkflowTask(run);
+    const payload = parseObjectJson(task?.requirementsJson);
+    if (!payload) {
+      return facts;
+    }
+
+    switch (run.runType) {
+      case "review_fix":
+        return {
+          ...facts,
+          ...(typeof payload.reviewerName === "string" ? { reviewerName: payload.reviewerName } : {}),
+          ...(typeof payload.reviewBody === "string" ? { reviewSummary: payload.reviewBody } : {}),
+        };
+      case "ci_repair":
+        return {
+          ...facts,
+          ...(typeof payload.jobName === "string"
+            ? { failingCheckName: payload.jobName }
+            : typeof payload.checkName === "string" ? { failingCheckName: payload.checkName } : {}),
+          ...(typeof payload.summary === "string" ? { failureSummary: payload.summary } : {}),
+        };
+      case "queue_repair":
+        return {
+          ...facts,
+          ...(typeof payload.incidentSummary === "string"
+            ? { queueIncidentSummary: payload.incidentSummary }
+            : typeof payload.summary === "string" ? { queueIncidentSummary: payload.summary } : {}),
+        };
+      default:
+        return facts;
+    }
+  }
+
+  private resolveMatchingWorkflowTask(
+    run: Pick<RunRecord, "projectId" | "linearIssueId" | "runType" | "sourceHeadSha">,
+  ): WorkflowTaskRecord | undefined {
+    const tasks = this.db.workflowTasks
+      .listTasks(run.projectId, run.linearIssueId)
+      .filter((task) => task.runType === run.runType)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || right.id - left.id);
+
+    if (!run.sourceHeadSha) {
+      return tasks.at(0);
+    }
+
+    return tasks.find((task) => {
+      const payload = parseObjectJson(task.requirementsJson);
+      return payload && [
+        payload.blockingHeadSha,
+        payload.requestedChangesHeadSha,
+        payload.failureHeadSha,
+        payload.headSha,
+      ].some((value) => value === run.sourceHeadSha);
+    }) ?? tasks.at(0);
   }
 
   private buildOutcomeSummary(params: {

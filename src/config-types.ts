@@ -72,6 +72,10 @@ export interface AppConfig {
     archiveOldEvents?: boolean;
     archivePath?: string;
   };
+  maintenance: {
+    worktreeRetentionHours: number;
+    worktreeCleanupIntervalMinutes: number;
+  };
   linear: {
     webhookSecret: string;
     graphqlUrl: string;
