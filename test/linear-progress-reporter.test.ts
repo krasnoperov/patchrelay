@@ -248,6 +248,74 @@ test("progress reporter emits verification and publishing history alongside acti
   }
 });
 
+test("progress reporter surfaces generic active plan steps as 'Working on' updates", async () => {
+  const { baseDir, db } = createDatabase();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "project-1",
+      linearIssueId: "issue-steps",
+      issueKey: "TST-STEPS",
+      factoryState: "implementing",
+      delegatedToPatchRelay: true,
+      agentSessionId: "session-steps",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+
+    const emitted: Array<{ content: LinearAgentActivityContent; options?: { ephemeral?: boolean } }> = [];
+    const reporter = new LinearProgressReporter(
+      db,
+      async (_issue, content, options) => {
+        emitted.push({ content, options });
+      },
+    );
+
+    // First step becomes active → one ephemeral + one durable update.
+    reporter.maybeEmitProgress({
+      method: "turn/plan/updated",
+      params: {
+        plan: [
+          { step: "Add the issues factory_state index", status: "in_progress" },
+          { step: "Wire the reconciler to the new query", status: "pending" },
+        ],
+      },
+    }, run);
+    // Same active step again → deduped, no new updates.
+    reporter.maybeEmitProgress({
+      method: "turn/plan/updated",
+      params: {
+        plan: [
+          { step: "Add the issues factory_state index", status: "completed" },
+          { step: "Add the issues factory_state index", status: "in_progress" },
+        ],
+      },
+    }, run);
+    // Second step becomes active → another ephemeral + durable pair.
+    reporter.maybeEmitProgress({
+      method: "turn/plan/updated",
+      params: {
+        plan: [
+          { step: "Wire the reconciler to the new query", status: "in_progress" },
+        ],
+      },
+    }, run);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(emitted, [
+      { content: { type: "action", action: "Working on", parameter: "Add the issues factory_state index" }, options: { ephemeral: true } },
+      { content: { type: "action", action: "Working on", parameter: "Add the issues factory_state index" }, options: undefined },
+      { content: { type: "action", action: "Working on", parameter: "Wire the reconciler to the new query" }, options: { ephemeral: true } },
+      { content: { type: "action", action: "Working on", parameter: "Wire the reconciler to the new query" }, options: undefined },
+    ]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("progress reporter ignores raw command chatter", async () => {
   const { baseDir, db } = createDatabase();
   try {
