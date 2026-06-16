@@ -283,7 +283,7 @@ const TERMINAL_SESSION_EVENTS = new Set<IssueSessionEventType>([
   "pr_merged",
 ]);
 
-const NON_ACTIONABLE_SESSION_EVENTS = new Set<IssueSessionEventType>([
+export const NON_ACTIONABLE_SESSION_EVENTS = new Set<IssueSessionEventType>([
   "delegation_observed",
   "prompt_delivered",
   "self_comment",

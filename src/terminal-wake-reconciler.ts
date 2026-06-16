@@ -1,6 +1,7 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import { TERMINAL_STATES } from "./factory-state.ts";
+import { NON_ACTIONABLE_SESSION_EVENTS } from "./issue-session-events.ts";
 
 export class TerminalWakeReconciler {
   constructor(
@@ -9,7 +10,7 @@ export class TerminalWakeReconciler {
   ) {}
 
   reconcile(): void {
-    for (const issue of this.db.issues.listIssues()) {
+    for (const issue of this.db.issues.listTerminalIssuesWithPendingWake([...NON_ACTIONABLE_SESSION_EVENTS])) {
       if (!TERMINAL_STATES.has(issue.factoryState) || issue.activeRunId !== undefined) {
         continue;
       }

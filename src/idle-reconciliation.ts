@@ -126,7 +126,7 @@ export class IdleIssueReconciler {
       }
     }
 
-    for (const issue of this.db.issues.listIssues()) {
+    for (const issue of this.db.issues.listTerminalIssuesNeedingGitHubProbe()) {
       if (!this.shouldProbeTerminalIssueFromGitHub(issue)) continue;
       await this.reconcileFromGitHub(issue);
     }
@@ -159,7 +159,7 @@ export class IdleIssueReconciler {
     }
 
     const now = Date.now();
-    for (const issue of this.db.issues.listIssues()) {
+    for (const issue of this.db.issues.listOrchestrationIssuesWithSettleDeadline()) {
       if (
         issue.issueClass !== "orchestration"
         || !issue.orchestrationSettleUntil

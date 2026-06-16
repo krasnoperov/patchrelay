@@ -247,7 +247,10 @@ export class PatchRelayDatabase {
 
   listIssuesReadyForExecution(): Array<{ projectId: string; linearIssueId: string }> {
     const ready = new Map<string, { projectId: string; linearIssueId: string }>();
-    for (const issue of this.issues.listIssues()) {
+    // Terminal issues with no open workflow task are a guaranteed no-op here
+    // (deriveWorkflowTasks short-circuits for done/failed), so reconcile only
+    // the workflow-relevant subset instead of the whole table every tick.
+    for (const issue of this.issues.listWorkflowTaskReconcileCandidates()) {
       reconcileWorkflowTasksForIssue(this, issue);
     }
     for (const issue of this.trackedIssues.listIssuesReadyForExecution()) {

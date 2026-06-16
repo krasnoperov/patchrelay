@@ -170,6 +170,120 @@ export class IssueStore {
     return rows.map(mapIssueRow);
   }
 
+  // Terminal issues (escalated/failed) that still carry an idle PR worth
+  // re-probing against GitHub. The vast majority of issues are 'done' and
+  // never qualify, so filtering in SQL avoids loading the whole table and
+  // running a per-issue run lookup just to discard it. The caller keeps its
+  // exact JS predicate (shouldProbeTerminalIssueFromGitHub) as the source of
+  // truth; this query only narrows the candidate set.
+  listTerminalIssuesNeedingGitHubProbe(): IssueRecord[] {
+    const rows = this.connection
+      .prepare(
+        `SELECT * FROM issues
+         WHERE factory_state IN ('escalated', 'failed')
+           AND pr_number IS NOT NULL
+           AND active_run_id IS NULL
+           AND pending_run_type IS NULL
+           AND (pr_state IS NULL OR pr_state != 'merged')`,
+      )
+      .all() as Array<Record<string, unknown>>;
+    return rows.map(mapIssueRow);
+  }
+
+  // Orchestration issues with a settle deadline that may have elapsed. The
+  // exact time/finite-parse check stays in the caller; this narrows from the
+  // full table to the handful of orchestration rows with a pending settle.
+  listOrchestrationIssuesWithSettleDeadline(): IssueRecord[] {
+    const rows = this.connection
+      .prepare(
+        `SELECT * FROM issues
+         WHERE issue_class = 'orchestration'
+           AND orchestration_settle_until IS NOT NULL
+           AND active_run_id IS NULL
+           AND delegated_to_patchrelay = 1`,
+      )
+      .all() as Array<Record<string, unknown>>;
+    return rows.map(mapIssueRow);
+  }
+
+  // Recently-updated done/merged issues for the merged-Linear completion
+  // reconciler. `updatedSinceIso` is an ISO-8601 UTC timestamp; updated_at is
+  // stored in the same format so lexicographic comparison is correct. The
+  // caller re-applies its exact recency predicate; this skips the ~98% of
+  // 'done' issues that fell outside the reconcile window.
+  listRecentCompletionCandidates(updatedSinceIso: string): IssueRecord[] {
+    const rows = this.connection
+      .prepare(
+        `SELECT * FROM issues
+         WHERE updated_at >= ?
+           AND (factory_state = 'done' OR pr_state = 'merged')
+         ORDER BY updated_at DESC`,
+      )
+      .all(updatedSinceIso) as Array<Record<string, unknown>>;
+    return rows.map(mapIssueRow);
+  }
+
+  // Issues whose durable workflow tasks may need reconciling. A done/failed
+  // issue produces no tasks (deriveWorkflowTasks short-circuits), so the only
+  // terminal issues worth visiting are those that still hold an open task to
+  // close. Everything else is non-terminal. This skips the ~98% of issues
+  // that are 'done' with nothing open — a guaranteed no-op otherwise.
+  listWorkflowTaskReconcileCandidates(): IssueRecord[] {
+    const rows = this.connection
+      .prepare(
+        `SELECT * FROM issues AS i
+         WHERE i.factory_state IS NULL
+            OR i.factory_state != 'done'
+            OR EXISTS (
+                 SELECT 1 FROM workflow_tasks t
+                 WHERE t.project_id = i.project_id
+                   AND t.subject_id = i.linear_issue_id
+                   AND t.status = 'open'
+               )`,
+      )
+      .all() as Array<Record<string, unknown>>;
+    return rows.map(mapIssueRow);
+  }
+
+  // Terminal, run-free issues the terminal-wake reconciler must evaluate:
+  // those with a pending run type, or with an unprocessed *actionable* session
+  // event. Iterating the whole table every tick to find these few was wasteful
+  // (non-actionable events like self_comment/delegation_observed accumulate on
+  // done issues and would otherwise be re-checked forever). `nonActionable` is
+  // passed from NON_ACTIONABLE_SESSION_EVENTS so the actionable definition has
+  // one home; the caller keeps its exact JS guards as the source of truth.
+  listTerminalIssuesWithPendingWake(nonActionable: readonly string[]): IssueRecord[] {
+    const placeholders = nonActionable.map(() => "?").join(", ");
+    const exclusion = placeholders ? `AND e.event_type NOT IN (${placeholders})` : "";
+    const rows = this.connection
+      .prepare(
+        `SELECT * FROM issues AS i
+         WHERE i.active_run_id IS NULL
+           AND i.factory_state IN ('done', 'escalated', 'failed', 'awaiting_input')
+           AND (
+             i.pending_run_type IS NOT NULL
+             OR EXISTS (
+                  SELECT 1 FROM issue_session_events e
+                  WHERE e.project_id = i.project_id
+                    AND e.linear_issue_id = i.linear_issue_id
+                    AND e.processed_at IS NULL
+                    ${exclusion}
+                )
+           )`,
+      )
+      .all(...nonActionable) as Array<Record<string, unknown>>;
+    return rows.map(mapIssueRow);
+  }
+
+  // Issues that currently pin an active run. Used by restart recovery to
+  // re-sync agent sessions without loading the whole (mostly terminal) table.
+  listIssuesWithActiveRun(): IssueRecord[] {
+    const rows = this.connection
+      .prepare("SELECT * FROM issues WHERE active_run_id IS NOT NULL")
+      .all() as Array<Record<string, unknown>>;
+    return rows.map(mapIssueRow);
+  }
+
   listIdleNonTerminalIssues(): IssueRecord[] {
     const rows = this.connection
       .prepare(
