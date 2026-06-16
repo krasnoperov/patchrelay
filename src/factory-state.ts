@@ -62,6 +62,20 @@ export const TERMINAL_STATES: ReadonlySet<FactoryState> = new Set([
   "awaiting_input",
 ]);
 
+// States where implementation/repair work is already in flight or queued
+// (i.e. NOT a fresh "delegated but nothing started" issue). Used to avoid
+// telling the operator "no work is queued" when the issue is actively being
+// worked — e.g. an agentSessionCreated webhook racing a session change.
+export const IN_PROGRESS_STATES: ReadonlySet<FactoryState> = new Set([
+  "implementing",
+  "pr_open",
+  "changes_requested",
+  "repairing_ci",
+  "awaiting_queue",
+  "repairing_queue",
+  "deploying",
+]);
+
 // ─── Semantic guards ─────────────────────────────────────────────
 //
 // Guards express INTENT rather than enumerating states. Adding a new

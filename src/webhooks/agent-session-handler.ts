@@ -6,7 +6,7 @@ import { buildAgentSessionExternalUrls } from "../agent-session-presentation.ts"
 import type { CodexAppServerClient } from "../codex-app-server.ts";
 import type { AgentInputService } from "../agent-input-service.ts";
 import type { PatchRelayDatabase } from "../db.ts";
-import type { RunType } from "../factory-state.ts";
+import { IN_PROGRESS_STATES, type RunType } from "../factory-state.ts";
 import {
   buildAlreadyRunningThought,
   buildAgentSessionAcknowledgementThought,
@@ -129,10 +129,25 @@ export class AgentSessionHandler {
         return;
       }
       if (!trackedIssue?.blockedByCount) {
-        await this.publishAgentActivity(linear, normalized.agentSession.id, {
-          type: "elicitation",
-          body: "PatchRelay is delegated, but no work is queued. Delegate the issue or move it to Start to trigger implementation.",
-        });
+        // Re-read the freshest state: an agentSessionCreated webhook can race a
+        // session change / run launch, so the once-read activeRun above may have
+        // missed an in-flight run. Only nudge "no work queued" when the issue is
+        // genuinely idle — never when it's actively implementing/repairing.
+        const latestIssue = this.db.issues.getIssue(project.id, normalized.issue.id);
+        const freshActiveRun = latestIssue?.activeRunId ? this.db.runs.getRunById(latestIssue.activeRunId) : undefined;
+        if (freshActiveRun) {
+          await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, params.peekPendingSessionWakeRunType, { activeRunType: freshActiveRun.runType });
+          await this.publishAgentActivity(linear, normalized.agentSession.id, buildAlreadyRunningThought(freshActiveRun.runType));
+        } else if (latestIssue && (latestIssue.pendingRunType !== undefined || IN_PROGRESS_STATES.has(latestIssue.factoryState))) {
+          // Work is in flight or queued under the (possibly new) session; keep
+          // the session synced but suppress the misleading elicitation.
+          await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue, params.peekPendingSessionWakeRunType);
+        } else {
+          await this.publishAgentActivity(linear, normalized.agentSession.id, {
+            type: "elicitation",
+            body: "PatchRelay is delegated, but no work is queued. Delegate the issue or move it to Start to trigger implementation.",
+          });
+        }
       }
       return;
     }
