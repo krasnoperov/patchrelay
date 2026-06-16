@@ -310,7 +310,10 @@ export class RunFailurePolicy {
    */
   deferCapacityLimitedRun(params: CapacityDeferralParams): void {
     const { run, capacity } = params;
-    const capacityBackoffUntil = resolveCapacityBackoffUntil(capacity.retryAtIso);
+    // Escalating backoff (2/5/10 min) keyed on consecutive capacity failures
+    // for this issue. Computed inside settleRun from the fresh record so the
+    // counter is monotonic under the lease; surfaced here for logging.
+    let capacityBackoffUntil = resolveCapacityBackoffUntil(capacity.retryAtIso);
     const deferred = this.withHeldLease(run.projectId, run.linearIssueId, (lease) => {
       const settled = settleRun({
         db: this.db,
@@ -322,17 +325,22 @@ export class RunFailurePolicy {
           failureReason: params.failureReason,
         },
         lease,
-        buildIssueUpdate: (record) => ({
-          ...buildAttemptRefundFields(run.runType, record),
-          pendingRunType: null,
-          pendingRunContextJson: null,
-          // The hold state that routes this work again, resolved from fresh
-          // GitHub truth like the interrupted-run recovery path. Never a
-          // terminal state: an unresolvable hold keeps the current one.
-          factoryState: resolvePostRunFactoryState(record, run, { outcome: "recovered" })
-            ?? (run.runType === "implementation" ? "delegated" : record.factoryState),
-          capacityBackoffUntil,
-        }),
+        buildIssueUpdate: (record) => {
+          const capacityBackoffAttempts = record.capacityBackoffAttempts + 1;
+          capacityBackoffUntil = resolveCapacityBackoffUntil(capacity.retryAtIso, capacityBackoffAttempts);
+          return {
+            ...buildAttemptRefundFields(run.runType, record),
+            pendingRunType: null,
+            pendingRunContextJson: null,
+            // The hold state that routes this work again, resolved from fresh
+            // GitHub truth like the interrupted-run recovery path. Never a
+            // terminal state: an unresolvable hold keeps the current one.
+            factoryState: resolvePostRunFactoryState(record, run, { outcome: "recovered" })
+              ?? (run.runType === "implementation" ? "delegated" : record.factoryState),
+            capacityBackoffUntil,
+            capacityBackoffAttempts,
+          };
+        },
       });
       const wakeIssue = settled.issue ?? params.issue;
       return this.appendWakeEventWithLease(lease, wakeIssue, run.runType, undefined, `capacity:${run.id}`);
