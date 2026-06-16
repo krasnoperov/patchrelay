@@ -92,7 +92,10 @@ export function deriveIssueStatusNote(params: {
   if (params.issue.factoryState !== "done" && waitingReason === "PatchRelay work is complete") {
     return undefined;
   }
-  if (params.issue.factoryState === "awaiting_queue") {
+  const staleRunNoLongerCurrent =
+    (params.issue.factoryState === "awaiting_queue" || params.issue.factoryState === "done")
+    && (params.latestRun?.status === "failed" || params.latestRun?.status === "superseded");
+  if (staleRunNoLongerCurrent) {
     return undefined;
   }
 

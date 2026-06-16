@@ -144,3 +144,51 @@ test("getPublicAgentSessionStatus suppresses superseded repair run as current st
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("getPublicAgentSessionStatus suppresses superseded repair run after terminal completion", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-issue-query-terminal-superseded-"));
+  try {
+    const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
+    db.runMigrations();
+
+    const issue = db.upsertIssue({
+      projectId: "inventory",
+      linearIssueId: "issue-terminal-superseded",
+      issueKey: "INV-29",
+      title: "Hide stale terminal repair status",
+      currentLinearState: "Done",
+      factoryState: "done",
+      prNumber: 45,
+      prState: "merged",
+      prReviewState: "approved",
+      prCheckStatus: "pending",
+    });
+
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+    });
+    db.runs.finishRun(run.id, {
+      status: "superseded",
+      failureReason: "same_head_review_handoff_blocked",
+    });
+
+    const query = new IssueQueryService(
+      db,
+      { readThread: async () => ({ id: "thread-1", preview: "", cwd: "", status: "completed", turns: [] }) } as never,
+      { getActiveRunStatus: async () => undefined },
+    );
+
+    const status = await query.getPublicAgentSessionStatus("INV-29");
+    assert.ok(status);
+    assert.equal(status.issue.waitingReason, "PatchRelay work is complete");
+    assert.equal(status.issue.statusNote, undefined);
+    assert.equal(status.latestRun, undefined);
+    assert.equal(status.latestReportSummary, undefined);
+    assert.equal(status.runs[0]?.run.status, "superseded");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

@@ -15,8 +15,8 @@ export class PublicAgentSessionStatusQuery {
 
     const issueRecord = this.db.issues.getIssueByKey(issueKey);
     const latestRunReport = parseStageReport(overview.latestRun?.reportJson, overview.latestRun?.status ?? "unknown");
-    const latestRunSupersededByDownstream =
-      overview.issue.factoryState === "awaiting_queue"
+    const latestRunNoLongerCurrent =
+      isDownstreamOrTerminalState(overview.issue.factoryState)
       && (overview.latestRun?.status === "failed" || overview.latestRun?.status === "superseded");
     const runs = (overview.runs ?? this.overviewQuery.buildRuns(overview.issue.projectId, overview.issue.linearIssueId)).map((run) => ({
       run: {
@@ -47,11 +47,15 @@ export class PublicAgentSessionStatusQuery {
         ...(overview.session?.lastWakeReason ? { lastWakeReason: overview.session.lastWakeReason } : {}),
       },
       ...(overview.activeRun ? { activeRun: overview.activeRun } : {}),
-      ...(overview.latestRun && !latestRunSupersededByDownstream ? { latestRun: overview.latestRun } : {}),
+      ...(overview.latestRun && !latestRunNoLongerCurrent ? { latestRun: overview.latestRun } : {}),
       ...(overview.liveThread ? { liveThread: summarizeCurrentThread(overview.liveThread) } : {}),
-      ...(latestRunReport && !latestRunSupersededByDownstream ? { latestReportSummary: extractStageSummary(latestRunReport) } : {}),
+      ...(latestRunReport && !latestRunNoLongerCurrent ? { latestReportSummary: extractStageSummary(latestRunReport) } : {}),
       runs,
       generatedAt: new Date().toISOString(),
     };
   }
+}
+
+function isDownstreamOrTerminalState(factoryState: string | undefined): boolean {
+  return factoryState === "awaiting_queue" || factoryState === "done";
 }

@@ -138,3 +138,23 @@ test("deriveIssueStatusNote suppresses stale repair summaries after downstream h
 
   assert.equal(note, undefined);
 });
+
+test("deriveIssueStatusNote suppresses stale repair failures after terminal completion", () => {
+  const note = deriveIssueStatusNote({
+    issue: { factoryState: "done" },
+    sessionSummary: "same_head_review_handoff_blocked",
+    latestRun: {
+      id: 1,
+      issueId: 1,
+      projectId: "project",
+      linearIssueId: "issue-1",
+      runType: "review_fix",
+      status: "superseded",
+      startedAt: "2026-06-16T22:41:08.000Z",
+      failureReason: "same_head_review_handoff_blocked",
+    } as never,
+    waitingReason: "PatchRelay work is complete",
+  });
+
+  assert.equal(note, undefined);
+});
