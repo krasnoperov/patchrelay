@@ -19,6 +19,7 @@ const AGE_WIDTH = 4;
 type ContentLine =
   | { kind: "blank" }
   | { kind: "entry-header"; entry: DashboardPrEntry }
+  | { kind: "stack-line"; text: string }
   | { kind: "summary-line"; text: string };
 
 function truncate(value: string, maxWidth: number): string {
@@ -32,6 +33,9 @@ export function buildContentLines(repo: DashboardRepo, width: number): ContentLi
   repo.entries.forEach((entry, index) => {
     if (index > 0) lines.push({ kind: "blank" });
     lines.push({ kind: "entry-header", entry });
+    if (entry.stackedOnPr != null) {
+      lines.push({ kind: "stack-line", text: `↳ stacked on #${entry.stackedOnPr} (merges after it)` });
+    }
     if (entry.summary) {
       const summaryText = clipSummary(entry.summary, {
         maxLines: 3,
@@ -66,6 +70,14 @@ function EntryHeaderRow({ entry, width }: { entry: DashboardPrEntry; width: numb
 
 function renderLine(line: ContentLine, key: number, width: number): React.JSX.Element {
   if (line.kind === "blank") return <Box key={key}><Text> </Text></Box>;
+  if (line.kind === "stack-line") {
+    return (
+      <Box key={key}>
+        <Text>{" ".repeat(SUMMARY_INDENT)}</Text>
+        <Text color="gray">{line.text}</Text>
+      </Box>
+    );
+  }
   if (line.kind === "summary-line") {
     return (
       <Box key={key}>

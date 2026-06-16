@@ -34,6 +34,12 @@ export interface DashboardToken {
   color: DashboardTokenColor;
   kind: DashboardTokenKind;
   eventAt: number;
+  /** Queue position; active entries are ordered by this so the stack/queue order shows. */
+  position: number;
+  /** Whether the entry is still in flight (not merged/evicted/dequeued). */
+  active: boolean;
+  /** PR number this entry's speculative spec is stacked on, when that parent is still active. */
+  stackedOnPr: number | null;
 }
 
 export interface DashboardPrEntry extends DashboardToken {
@@ -193,6 +199,13 @@ function repoEntriesFromSnapshot(
     .sort((a, b) => a.position - b.position)[0] ?? null;
   const queueBlocked = queueBlockMatchesEntry(snapshot.queueBlock, head);
 
+  // Resolve speculative stacking: an entry's spec can be built on top of
+  // another entry's spec (specBasedOn -> that entry's id). Map ids to PR
+  // numbers so the views can show "stacked on #N". Only surface the link
+  // when the parent is still active, since a merged parent collapses the stack.
+  const idToEntry = new Map<string, QueueEntry>();
+  for (const entry of latest) idToEntry.set(entry.id, entry);
+
   const byPr = new Map<number, DashboardPrEntry>();
 
   for (const entry of latest) {
@@ -205,6 +218,8 @@ function repoEntriesFromSnapshot(
     const glyph = GLYPH[kind];
     const color = COLOR[kind];
     const phrase = entryPhrase(entry, { isHead, queueBlocked });
+    const parent = entry.specBasedOn ? idToEntry.get(entry.specBasedOn) ?? null : null;
+    const stackedOnPr = parent && isActive(parent.status) ? parent.prNumber : null;
     const item: DashboardPrEntry = {
       prNumber: entry.prNumber,
       glyph,
@@ -212,6 +227,9 @@ function repoEntriesFromSnapshot(
       kind,
       phrase,
       eventAt: timestamp(entry.updatedAt),
+      position: entry.position,
+      active,
+      stackedOnPr,
     };
     const summary = entrySummary(entry);
     if (summary) item.summary = summary;
@@ -220,7 +238,14 @@ function repoEntriesFromSnapshot(
     byPr.set(entry.prNumber, item);
   }
 
+  // Active entries first, in queue/stack order (by position, head first) so
+  // speculative stacks read top-to-bottom; decided entries follow, newest-first.
   return [...byPr.values()].sort((left, right) => {
+    if (left.active !== right.active) return left.active ? -1 : 1;
+    if (left.active) {
+      if (left.position !== right.position) return left.position - right.position;
+      return left.prNumber - right.prNumber;
+    }
     const leftOrder = tokenSortOrder(left.kind);
     const rightOrder = tokenSortOrder(right.kind);
     if (leftOrder !== rightOrder) return leftOrder - rightOrder;
@@ -260,7 +285,7 @@ export function buildDashboard(
     return {
       repoId: repo.repoId,
       repoFullName: repo.repoFullName,
-      tokens: entries.map(({ prNumber, glyph, color, kind, eventAt }) => ({ prNumber, glyph, color, kind, eventAt })),
+      tokens: entries.map(({ prNumber, glyph, color, kind, eventAt, position, active, stackedOnPr }) => ({ prNumber, glyph, color, kind, eventAt, position, active, stackedOnPr })),
       entries,
       latestActivityAt,
       hasActivity: entries.length > 0,

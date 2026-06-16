@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatEventNarrative, humanStatus, nextStepLabel, statusColor } from "../src/watch/format.ts";
+import { formatEventNarrative, formatRepoTokenText, humanStatus, nextStepLabel, statusColor } from "../src/watch/format.ts";
+
+test("summary token marks a speculatively stacked entry with a connector", () => {
+  const base = { prNumber: 1805, glyph: "●", eventAt: Date.now() };
+  assert.ok(!formatRepoTokenText(base).startsWith("↳"), "unstacked entry has no connector");
+  assert.ok(formatRepoTokenText({ ...base, prNumber: 1806, stackedOnPr: 1805 }).startsWith("↳"), "stacked entry leads with the connector");
+});
 
 test("merge wait detail renders approval-blocked merging clearly", () => {
   const entry = {

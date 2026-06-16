@@ -57,8 +57,11 @@ export function formatTokenAge(eventAt: number): string {
   return relativeTime(eventAt).padStart(4, " ");
 }
 
-export function formatRepoTokenText(token: { prNumber: number; glyph: string; eventAt: number }): string {
-  return `#${token.prNumber} ${token.glyph} ${relativeTime(token.eventAt)}`;
+export function formatRepoTokenText(token: { prNumber: number; glyph: string; eventAt: number; stackedOnPr?: number | null }): string {
+  // A leading connector marks an entry whose spec is speculatively stacked on
+  // the PR shown just before it, so the queue order reads as a stack.
+  const stackMark = token.stackedOnPr != null ? "↳" : "";
+  return `${stackMark}#${token.prNumber} ${token.glyph} ${relativeTime(token.eventAt)}`;
 }
 
 export function mergeWaitState(entry: { status: QueueEntryStatus; waitDetail?: string | null | undefined } | undefined): "approval" | "main" | null {
