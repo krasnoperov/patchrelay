@@ -108,6 +108,9 @@ export interface IssueRecord {
    * failure (usage limit / rate limit / quota). Cleared on the next
    * successful launch. */
   capacityBackoffUntil?: string | undefined;
+  /** Consecutive Codex capacity failures, driving an escalating backoff
+   * (2/5/10 min). Reset to 0 when a run completes successfully. */
+  capacityBackoffAttempts: number;
   orchestrationSettleUntil?: string | undefined;
   /** When the issue entered the post-merge `deploying` state (ISO). Used
    * by the deploy watcher to scope which deploy runs are relevant and to

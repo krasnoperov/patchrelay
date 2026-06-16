@@ -56,6 +56,15 @@ test("classifies rate-limit and quota messages without a parseable retry time", 
   }
 });
 
+test("classifies the model-at-capacity outage as capacity (transient, no retry time)", () => {
+  // The real production string that terminally failed INV-35 before this fix.
+  const message = "Selected model is at capacity. Please try a different model.";
+  const result = classifyCodexFailure(message);
+  assert.ok(result.kind === "capacity", "model-at-capacity must back off and retry, not fail");
+  assert.equal(result.retryAtIso, undefined);
+  assert.equal(result.detail, message);
+});
+
 test("classification is case-insensitive", () => {
   assert.equal(classifyCodexFailure("USAGE LIMIT reached for this account").kind, "capacity");
   assert.equal(classifyCodexFailure("Request was RATE LIMITED").kind, "capacity");

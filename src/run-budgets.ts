@@ -73,24 +73,38 @@ export function getRemainingZombieRecoveryDelayMs(
 // ─── Codex capacity backoff ──────────────────────────────────────────
 //
 // A run that failed on a Codex capacity outage (usage limit / rate limit /
-// quota) is re-enqueued, not escalated, and never consumes a repair budget.
-// The retry waits until the provider-announced retry time when one was
-// parsed from the error (plus a small jitter so a fleet of issues does not
-// stampede the moment the limit resets), else this fixed backoff.
+// quota / model-at-capacity) is re-enqueued, not escalated, and never consumes
+// a repair budget. The retry waits until the provider-announced retry time when
+// one was parsed from the error (plus a small jitter so a fleet of issues does
+// not stampede the moment the limit resets); otherwise it uses an escalating
+// backoff keyed on how many times this issue has consecutively hit capacity —
+// short at first (transient model overload usually clears fast) and longer if
+// it persists.
 
-export const CAPACITY_RETRY_BACKOFF_MS = 10 * 60_000;
+// Escalating backoff steps for consecutive capacity failures with no
+// provider-announced retry time: 2 min, then 5 min, then 10 min (capped).
+export const CAPACITY_BACKOFF_STEPS_MS: readonly number[] = [2 * 60_000, 5 * 60_000, 10 * 60_000];
+
+// Retained for callers/tests that reference the longest step.
+export const CAPACITY_RETRY_BACKOFF_MS = CAPACITY_BACKOFF_STEPS_MS[CAPACITY_BACKOFF_STEPS_MS.length - 1]!;
 
 const CAPACITY_RETRY_JITTER_MS = 60_000;
 
+export function capacityBackoffStepMs(attempts: number): number {
+  const index = Math.min(Math.max(Math.trunc(attempts), 1), CAPACITY_BACKOFF_STEPS_MS.length) - 1;
+  return CAPACITY_BACKOFF_STEPS_MS[index]!;
+}
+
 export function resolveCapacityBackoffUntil(
   retryAtIso: string | undefined,
+  attempts = CAPACITY_BACKOFF_STEPS_MS.length,
   now = Date.now(),
   jitterMs = Math.floor(Math.random() * CAPACITY_RETRY_JITTER_MS),
 ): string {
   const retryAtMs = retryAtIso !== undefined ? Date.parse(retryAtIso) : Number.NaN;
   const untilMs = Number.isFinite(retryAtMs) && retryAtMs > now
     ? retryAtMs + jitterMs
-    : now + CAPACITY_RETRY_BACKOFF_MS;
+    : now + capacityBackoffStepMs(attempts) + jitterMs;
   return new Date(untilMs).toISOString();
 }
 

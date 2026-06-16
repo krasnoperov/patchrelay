@@ -17,10 +17,15 @@ export type CodexFailureClassification = CodexCapacityFailure | { kind: "other" 
 // Known capacity phrasings. The real production string is
 // "You've hit your usage limit. Upgrade to Pro (...) or try again at 3:23 AM.";
 // rate-limit and quota phrasings are matched defensively for the API-key path.
+// "Selected model is at capacity. Please try a different model." is a transient
+// model-overload outage from the provider — it must back off and retry, not
+// terminally fail the issue, so it is matched here too.
 const CAPACITY_PATTERNS: readonly RegExp[] = [
   /usage limit/i,
   /rate limit/i,
   /quota/i,
+  /at capacity/i,
+  /try a different model/i,
 ];
 
 export function classifyCodexFailure(

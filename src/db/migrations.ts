@@ -444,6 +444,10 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   // Codex capacity backoff: launches are deferred until this timestamp
   // after a usage-limit / rate-limit / quota failure.
   addColumnIfMissing(connection, "issues", "capacity_backoff_until", "TEXT");
+
+  // Consecutive Codex capacity failures for an issue, driving an escalating
+  // backoff (2/5/10 min). Reset when a run completes successfully.
+  addColumnIfMissing(connection, "issues", "capacity_backoff_attempts", "INTEGER NOT NULL DEFAULT 0");
 }
 
 function addColumnIfMissing(connection: DatabaseConnection, table: string, column: string, definition: string): void {

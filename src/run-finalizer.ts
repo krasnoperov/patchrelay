@@ -758,6 +758,9 @@ export class RunFinalizer {
         ...(state ? { factoryState: state } : {}),
         pendingRunType: null,
         pendingRunContextJson: null,
+        // A successful completion ends any capacity-failure streak, so the next
+        // capacity outage restarts the escalating backoff from the short step.
+        ...(record.capacityBackoffAttempts > 0 ? { capacityBackoffAttempts: 0 } : {}),
         ...(postRunFollowUp ? {} : (state === "awaiting_queue" || state === "done"
           ? { ...CLEARED_FAILURE_PROVENANCE }
           : {})),
