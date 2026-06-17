@@ -42,7 +42,7 @@ import { getAdjacentEnvFilePaths, loadConfig } from "./config.ts";
 import { CodexThreadMaterializingError, isThreadMaterializingError } from "./codex-thread-errors.ts";
 import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry, type RunSkipReason } from "./telemetry.ts";
 import { LinearIssueProjectionService } from "./linear-issue-projection.ts";
-import { RunAdmissionController } from "./run-admission-controller.ts";
+import { RunAdmissionController, shouldConsumeWakeOnAdmissionFailure } from "./run-admission-controller.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
 const WRITER = "run-orchestrator";
@@ -543,7 +543,38 @@ export class RunOrchestrator {
       return;
     }
 
-    const wakeIssue = this.materializeLegacyPendingWake(issue, { projectId: item.projectId, linearIssueId: item.issueId, leaseId });
+    let wakeIssue = this.materializeLegacyPendingWake(issue, { projectId: item.projectId, linearIssueId: item.issueId, leaseId });
+    const knownDependencyRowsBeforeWake = this.db.issues.listIssueDependencies(item.projectId, item.issueId).length;
+    const unresolvedBlockersBeforeWake = this.db.issues.countUnresolvedBlockers(item.projectId, item.issueId);
+    const pendingSessionWake = this.db.issueSessions.peekIssueSessionWake(item.projectId, item.issueId);
+    if (pendingSessionWake?.runType === "implementation" && unresolvedBlockersBeforeWake > 0) {
+      const refresh = await this.linearIssueProjection.refreshIssue(item.projectId, item.issueId);
+      if (!refresh.refreshed && knownDependencyRowsBeforeWake > 0) {
+        this.releaseIssueSessionLease(item.projectId, item.issueId);
+        this.emitRunSkipped(item, "dependency_refresh_failed", issue, {
+          runType: pendingSessionWake.runType,
+          knownDependencyRows: knownDependencyRowsBeforeWake,
+        });
+        this.logger.info(
+          { issueKey: issue.issueKey, projectId: item.projectId, knownDependencyRows: knownDependencyRowsBeforeWake },
+          "Skipped implementation launch because dependency refresh failed before wake derivation",
+        );
+        return;
+      }
+
+      wakeIssue = this.db.issues.getIssue(item.projectId, item.issueId) ?? wakeIssue;
+      const blockerCount = this.db.issues.countUnresolvedBlockers(item.projectId, item.issueId);
+      if (blockerCount > 0) {
+        this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(item.projectId, item.issueId);
+        this.releaseIssueSessionLease(item.projectId, item.issueId);
+        this.emitRunSkipped(item, "blocked", wakeIssue, { runType: pendingSessionWake.runType, blockerCount });
+        this.logger.info(
+          { issueKey: wakeIssue.issueKey, blockerCount },
+          "Skipped implementation launch because the issue is blocked after dependency refresh",
+        );
+        return;
+      }
+    }
     const wake = this.resolveRunWake(wakeIssue);
     if (!wake) {
       this.emitRunSkipped(item, "no_wake_derivable", issue);
@@ -561,7 +592,9 @@ export class RunOrchestrator {
       runType,
     });
     if (!admission.allowed) {
-      this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(item.projectId, item.issueId);
+      if (shouldConsumeWakeOnAdmissionFailure(admission)) {
+        this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(item.projectId, item.issueId);
+      }
       this.releaseIssueSessionLease(item.projectId, item.issueId);
       this.emitRunSkipped(item, admission.reason, issue, { runType, ...admission });
       if (admission.reason === "dependency_refresh_failed") {
@@ -813,6 +846,7 @@ export class RunOrchestrator {
       runType?: RunType | undefined;
       activeRunId?: number | undefined;
       blockerCount?: number | undefined;
+      knownDependencyRows?: number | undefined;
       remainingDelayMs?: number | undefined;
     },
   ): void {

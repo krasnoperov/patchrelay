@@ -7,6 +7,17 @@ export type RunAdmissionResult =
   | { allowed: false; reason: "dependency_refresh_failed"; knownDependencyRows: number }
   | { allowed: false; reason: "blocked"; blockerCount: number };
 
+export type RunAdmissionFailure = Exclude<RunAdmissionResult, { allowed: true }>;
+
+export function shouldConsumeWakeOnAdmissionFailure(result: RunAdmissionFailure): boolean {
+  switch (result.reason) {
+    case "dependency_refresh_failed":
+      return false;
+    case "blocked":
+      return true;
+  }
+}
+
 export class RunAdmissionController {
   constructor(
     private readonly db: PatchRelayDatabase,

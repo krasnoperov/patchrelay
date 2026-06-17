@@ -382,6 +382,146 @@ test("implementation launch refreshes Linear blockers before claiming a run", as
   }
 });
 
+test("implementation launch preserves pending wake when dependency refresh is unavailable", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-launch-blocker-refresh-unavailable-"));
+  try {
+    let startedThread = false;
+    const { db, orchestrator } = createOrchestrator(baseDir, {
+      forProject: async () => undefined,
+    }, {
+      startThreadForIssueTriage: async () => ({ id: "triage-thread-1", cwd: "/tmp/triage", preview: "", status: "idle", turns: [] }),
+      startThread: async () => {
+        startedThread = true;
+        return { threadId: "thread-should-not-start" };
+      },
+      steerTurn: async () => undefined,
+      readThread: async () => ({ id: "thread-1", turns: [] }),
+    });
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-stale-blocked-child",
+      issueKey: "USE-STALE-BLOCKED",
+      title: "Stale blocked child",
+      delegatedToPatchRelay: true,
+      factoryState: "delegated",
+    });
+    db.replaceIssueDependencies({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      blockers: [{
+        blockerLinearIssueId: "issue-stale-blocker",
+        blockerIssueKey: "USE-STALE-BLOCKER",
+        blockerTitle: "Stale blocker",
+        blockerCurrentLinearState: "Implementing",
+        blockerCurrentLinearStateType: "started",
+      }],
+    });
+    db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "delegated",
+      dedupeKey: `delegated:${issue.linearIssueId}`,
+    });
+
+    await orchestrator.run({ projectId: issue.projectId, issueId: issue.linearIssueId });
+
+    assert.equal(startedThread, false);
+    assert.equal(db.runs.listRunsForIssue(issue.projectId, issue.linearIssueId).length, 0);
+    assert.equal(db.countUnresolvedBlockers(issue.projectId, issue.linearIssueId), 1);
+    assert.equal(db.issueSessions.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId), true);
+    assert.equal(db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)?.runType, "implementation");
+    assert.deepEqual(db.issues.listIdleIssuesWithPendingWake().map((entry) => entry.linearIssueId), [issue.linearIssueId]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("implementation launch starts on a later tick after dependency refresh recovers", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-launch-blocker-refresh-recovers-"));
+  try {
+    let linearAvailable = false;
+    let launchCalls = 0;
+    const { db, orchestrator } = createOrchestrator(baseDir, {
+      forProject: async () => {
+        if (!linearAvailable) return undefined;
+        return {
+          getIssue: async (issueId: string) => buildLiveIssue({
+            id: issueId,
+            identifier: "USE-RECOVERED-BLOCKED",
+            title: "Recovered blocked child",
+            stateName: "Todo",
+            stateType: "unstarted",
+            blockedBy: [],
+          }),
+        } as never;
+      },
+    });
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-recovered-blocked-child",
+      issueKey: "USE-RECOVERED-BLOCKED",
+      title: "Recovered blocked child",
+      delegatedToPatchRelay: true,
+      factoryState: "delegated",
+    });
+    db.replaceIssueDependencies({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      blockers: [{
+        blockerLinearIssueId: "issue-recovered-blocker",
+        blockerIssueKey: "USE-RECOVERED-BLOCKER",
+        blockerTitle: "Recovered blocker",
+        blockerCurrentLinearState: "Implementing",
+        blockerCurrentLinearStateType: "started",
+      }],
+    });
+    db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "delegated",
+      dedupeKey: `delegated:${issue.linearIssueId}`,
+    });
+
+    const runLauncher = (orchestrator as unknown as {
+      runLauncher: {
+        prepareLaunchPlan: () => { prompt: string; branchName: string; worktreePath: string };
+        launchTurn: () => Promise<{ threadId: string; turnId: string }>;
+      };
+    }).runLauncher;
+    runLauncher.prepareLaunchPlan = () => ({
+      prompt: "implement recovered issue",
+      branchName: "use/USE-RECOVERED-BLOCKED",
+      worktreePath: path.join(baseDir, "worktrees", "USE-RECOVERED-BLOCKED"),
+    });
+    runLauncher.launchTurn = async () => {
+      launchCalls += 1;
+      return { threadId: "thread-recovered-blocked", turnId: "turn-recovered-blocked" };
+    };
+
+    await orchestrator.run({ projectId: issue.projectId, issueId: issue.linearIssueId });
+
+    assert.equal(launchCalls, 0);
+    assert.equal(db.runs.listRunsForIssue(issue.projectId, issue.linearIssueId).length, 0);
+    assert.equal(db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)?.runType, "implementation");
+    assert.equal(db.countUnresolvedBlockers(issue.projectId, issue.linearIssueId), 1);
+
+    linearAvailable = true;
+    await orchestrator.run({ projectId: issue.projectId, issueId: issue.linearIssueId });
+
+    const runs = db.runs.listRunsForIssue(issue.projectId, issue.linearIssueId);
+    const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId);
+    assert.equal(launchCalls, 1);
+    assert.equal(runs.length, 1);
+    assert.equal(runs[0]?.runType, "implementation");
+    assert.equal(updatedIssue?.activeRunId, runs[0]?.id);
+    assert.equal(updatedIssue?.factoryState, "implementing");
+    assert.equal(db.countUnresolvedBlockers(issue.projectId, issue.linearIssueId), 0);
+    assert.deepEqual(db.issues.listIdleIssuesWithPendingWake().map((entry) => entry.linearIssueId), []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("idle reconciliation does not re-enqueue issues that already have an active run", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-active-run-orphan-"));
   try {
