@@ -6,6 +6,7 @@ import { buildAgentSessionPlanForIssue } from "./agent-session-plan.ts";
 import { buildGitHubStateActivity } from "./linear-session-reporting.ts";
 import type { AppConfig, LinearClientProvider } from "./types.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
+import { sharedLinearWriteBackoff } from "./linear-rate-limit.ts";
 
 export async function emitGitHubLinearActivity(params: {
   linearProvider: LinearClientProvider;
@@ -17,6 +18,10 @@ export async function emitGitHubLinearActivity(params: {
 }): Promise<void> {
   const { issue, newState, event, linearProvider, logger, feed } = params;
   if (!issue.agentSessionId) return;
+  if (!sharedLinearWriteBackoff.shouldAttempt(issue.projectId)) {
+    logger.debug({ issueKey: issue.issueKey, newState }, "Skipping GitHub Linear activity during rate-limit backoff");
+    return;
+  }
   try {
     const linear = await linearProvider.forProject(issue.projectId);
     if (!linear?.createAgentActivity) return;
@@ -30,6 +35,7 @@ export async function emitGitHubLinearActivity(params: {
     });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
+    sharedLinearWriteBackoff.noteError(issue.projectId, error);
     logger.warn({ issueKey: issue.issueKey, newState, error: msg }, "Failed to emit Linear activity from GitHub webhook");
     feed?.publish({
       level: "warn",
@@ -50,6 +56,10 @@ export async function syncGitHubLinearSession(params: {
 }): Promise<void> {
   const { issue, linearProvider, logger, config } = params;
   if (!issue.agentSessionId) return;
+  if (!sharedLinearWriteBackoff.shouldAttempt(issue.projectId)) {
+    logger.debug({ issueKey: issue.issueKey }, "Skipping GitHub Linear session sync during rate-limit backoff");
+    return;
+  }
   try {
     const linear = await linearProvider.forProject(issue.projectId);
     if (!linear?.updateAgentSession) return;
@@ -71,6 +81,7 @@ export async function syncGitHubLinearSession(params: {
     });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
+    sharedLinearWriteBackoff.noteError(issue.projectId, error);
     logger.warn({ issueKey: issue.issueKey, error: msg }, "Failed to sync Linear session from GitHub webhook");
   }
 }

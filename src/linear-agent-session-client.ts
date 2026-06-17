@@ -7,6 +7,7 @@ import type { OperatorEventFeed } from "./operator-feed.ts";
 import { buildAgentSessionPlanForIssue } from "./agent-session-plan.ts";
 import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
 import { computeLinearActivityKey } from "./linear-activity-key.ts";
+import { sharedLinearWriteBackoff, type LinearWriteBackoff } from "./linear-rate-limit.ts";
 
 const WRITER = "linear-agent-session-client";
 
@@ -17,6 +18,7 @@ export class LinearAgentSessionClient {
     private readonly linearProvider: LinearClientProvider,
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
+    private readonly linearBackoff: LinearWriteBackoff = sharedLinearWriteBackoff,
   ) {}
 
   ensureAgentSessionIssue(issue: IssueRecord): IssueRecord {
@@ -46,6 +48,10 @@ export class LinearAgentSessionClient {
   ): Promise<void> {
     const syncedIssue = this.ensureAgentSessionIssue(issue);
     if (!syncedIssue.agentSessionId) return;
+    if (!this.linearBackoff.shouldAttempt(syncedIssue.projectId)) {
+      this.logger.debug({ issueKey: syncedIssue.issueKey }, "Skipping Linear activity during rate-limit backoff");
+      return;
+    }
     try {
       const linear = await this.linearProvider.forProject(syncedIssue.projectId);
       if (!linear) return;
@@ -72,6 +78,7 @@ export class LinearAgentSessionClient {
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
+      this.linearBackoff.noteError(syncedIssue.projectId, error);
       this.logger.warn({ issueKey: syncedIssue.issueKey, type: content.type, error: msg }, "Failed to emit Linear activity");
       this.feed?.publish({
         level: "warn",
@@ -113,6 +120,10 @@ export class LinearAgentSessionClient {
   async syncCodexPlan(issue: IssueRecord, params: Record<string, unknown>): Promise<void> {
     const syncedIssue = this.ensureAgentSessionIssue(issue);
     if (!syncedIssue.agentSessionId) return;
+    if (!this.linearBackoff.shouldAttempt(syncedIssue.projectId)) {
+      this.logger.debug({ issueKey: syncedIssue.issueKey }, "Skipping Linear codex plan sync during rate-limit backoff");
+      return;
+    }
     const plan = params.plan;
     if (!Array.isArray(plan)) return;
 
@@ -144,6 +155,7 @@ export class LinearAgentSessionClient {
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
+      this.linearBackoff.noteError(syncedIssue.projectId, error);
       this.logger.warn({ issueKey: syncedIssue.issueKey, error: msg }, "Failed to sync codex plan to Linear");
     }
   }
