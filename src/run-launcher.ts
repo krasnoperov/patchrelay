@@ -1,11 +1,12 @@
 import type { Logger } from "pino";
+import { setTimeout as delay } from "node:timers/promises";
 import type { GitHubAppBotIdentity } from "./github-app-token.ts";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
 import { resolveFailureFactoryState } from "./reactive-pr-state.ts";
-import { buildHookEnv, runProjectHook } from "./hook-runner.ts";
+import { buildHookEnv, type HookEnv, type HookResult, runProjectHook } from "./hook-runner.ts";
 import { buildRunFailureActivity } from "./linear-session-reporting.ts";
 import { loadPatchRelayRepoPrompting } from "./patchrelay-customization.ts";
 import {
@@ -22,6 +23,8 @@ import type { WorktreeManager } from "./worktree-manager.ts";
 import { sanitizeDiagnosticText } from "./utils.ts";
 
 const WRITER = "run-launcher";
+const DEFAULT_PREPARE_WORKTREE_MAX_ATTEMPTS = 3;
+const DEFAULT_PREPARE_WORKTREE_RETRY_DELAY_MS = 2_000;
 
 function slugify(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
@@ -97,7 +100,88 @@ export function shouldPreserveDirtyWorktreeBeforeLaunch(params: {
       || params.runType === "branch_upkeep"
       || params.runType === "ci_repair"
       || params.runType === "queue_repair"
+  );
+}
+
+function prepareWorktreeHookFailureMessage(result: HookResult): string {
+  const exitCode = result.exitCode ?? 1;
+  const stderr = result.stderr?.trim();
+  const stdout = result.stdout?.trim();
+  const detail = sanitizeDiagnosticText(stderr || stdout || "[no output]");
+  return `prepare-worktree hook failed (exit ${exitCode}): ${detail}`;
+}
+
+function prepareWorktreeHookErrorMessage(error: unknown): string {
+  const detail = sanitizeDiagnosticText(error instanceof Error ? error.message : String(error));
+  return `prepare-worktree hook errored: ${detail}`;
+}
+
+export async function runPrepareWorktreeHookWithRetries(params: {
+  repoPath: string;
+  worktreePath: string;
+  hookEnv: HookEnv;
+  logger: Logger;
+  issueKey?: string | undefined;
+  runType: RunType;
+  maxAttempts?: number | undefined;
+  retryDelayMs?: number | undefined;
+  runHook?: typeof runProjectHook | undefined;
+}): Promise<void> {
+  const runHook = params.runHook ?? runProjectHook;
+  const maxAttempts = Math.max(1, Math.floor(params.maxAttempts ?? DEFAULT_PREPARE_WORKTREE_MAX_ATTEMPTS));
+  const retryDelayMs = Math.max(0, Math.floor(params.retryDelayMs ?? DEFAULT_PREPARE_WORKTREE_RETRY_DELAY_MS));
+  let lastMessage: string | undefined;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let result: HookResult;
+    try {
+      result = await runHook(params.repoPath, "prepare-worktree", { cwd: params.worktreePath, env: params.hookEnv });
+    } catch (error) {
+      lastMessage = prepareWorktreeHookErrorMessage(error);
+      if (attempt >= maxAttempts) {
+        throw new Error(`${lastMessage} after ${attempt} attempt${attempt === 1 ? "" : "s"}`);
+      }
+      params.logger.warn(
+        {
+          issueKey: params.issueKey,
+          runType: params.runType,
+          attempt,
+          maxAttempts,
+          error: lastMessage,
+        },
+        "prepare-worktree hook errored; retrying",
+      );
+      if (retryDelayMs > 0) {
+        await delay(retryDelayMs);
+      }
+      continue;
+    }
+
+    if (!result.ran || result.exitCode === 0) {
+      return;
+    }
+
+    lastMessage = prepareWorktreeHookFailureMessage(result);
+    if (attempt >= maxAttempts) {
+      throw new Error(`${lastMessage} after ${attempt} attempt${attempt === 1 ? "" : "s"}`);
+    }
+    params.logger.warn(
+      {
+        issueKey: params.issueKey,
+        runType: params.runType,
+        attempt,
+        maxAttempts,
+        exitCode: result.exitCode,
+        detail: lastMessage,
+      },
+      "prepare-worktree hook failed; retrying",
     );
+    if (retryDelayMs > 0) {
+      await delay(retryDelayMs);
+    }
+  }
+
+  throw new Error(lastMessage ?? "prepare-worktree hook failed");
 }
 
 export class RunLauncher {
@@ -292,10 +376,14 @@ export class RunLauncher {
       }
 
       const hookEnv = buildHookEnv(params.issue.issueKey ?? params.issue.linearIssueId, params.branchName, params.runType, params.worktreePath);
-      const prepareResult = await runProjectHook(params.project.repoPath, "prepare-worktree", { cwd: params.worktreePath, env: hookEnv });
-      if (prepareResult.ran && prepareResult.exitCode !== 0) {
-        throw new Error(`prepare-worktree hook failed (exit ${prepareResult.exitCode}): ${prepareResult.stderr?.slice(0, 500) ?? ""}`);
-      }
+      await runPrepareWorktreeHookWithRetries({
+        repoPath: params.project.repoPath,
+        worktreePath: params.worktreePath,
+        hookEnv,
+        logger: this.logger,
+        issueKey: params.issue.issueKey,
+        runType: params.runType,
+      });
       this.db.runs.updateLaunchPhase(params.run.id, "worktree_prepared");
       params.assertLaunchLease(params.run, "before starting the Codex turn");
 
