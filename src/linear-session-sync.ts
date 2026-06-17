@@ -12,6 +12,7 @@ import {
 import { LinearAgentSessionClient } from "./linear-agent-session-client.ts";
 import { LinearProgressReporter } from "./linear-progress-reporter.ts";
 import { syncActiveWorkflowState } from "./linear-workflow-state-sync.ts";
+import { sharedLinearWriteBackoff, type LinearWriteBackoff } from "./linear-rate-limit.ts";
 
 export class LinearSessionSync {
   private readonly agentSessions: LinearAgentSessionClient;
@@ -23,8 +24,9 @@ export class LinearSessionSync {
     private readonly linearProvider: LinearClientProvider,
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
+    private readonly linearBackoff: LinearWriteBackoff = sharedLinearWriteBackoff,
   ) {
-    this.agentSessions = new LinearAgentSessionClient(config, db, linearProvider, logger, feed);
+    this.agentSessions = new LinearAgentSessionClient(config, db, linearProvider, logger, feed, linearBackoff);
     this.progressReporter = new LinearProgressReporter(db, (issue, content, options) =>
       this.agentSessions.emitActivity(issue, content, options)
     );
@@ -40,6 +42,10 @@ export class LinearSessionSync {
 
   async syncSession(issue: IssueRecord, options?: { activeRunType?: RunType }): Promise<void> {
     const syncedIssue = this.agentSessions.ensureAgentSessionIssue(issue);
+    if (!this.linearBackoff.shouldAttempt(syncedIssue.projectId)) {
+      this.logger.debug({ issueKey: syncedIssue.issueKey }, "Skipping Linear session sync during rate-limit backoff");
+      return;
+    }
     try {
       const linear = await this.linearProvider.forProject(syncedIssue.projectId);
       if (!linear) return;
@@ -80,6 +86,7 @@ export class LinearSessionSync {
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
+      this.linearBackoff.noteError(syncedIssue.projectId, error);
       this.logger.warn({ issueKey: syncedIssue.issueKey, error: msg }, "Failed to update Linear plan");
     }
   }

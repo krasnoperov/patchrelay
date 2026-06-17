@@ -10,7 +10,7 @@ import type {
 
 export function getGateCheckNames(project: AppConfig["projects"][number] | undefined): string[] {
   const configured = project?.gateChecks?.map((entry) => entry.trim()).filter(Boolean) ?? [];
-  return configured.length > 0 ? configured : ["verify"];
+  return configured.length > 0 ? configured : ["Tests", "verify"];
 }
 
 export function deriveCiGateStatus(

@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import pino from "pino";
 import { PatchRelayDatabase } from "../src/db.ts";
+import { LinearWriteBackoff } from "../src/linear-rate-limit.ts";
 import { LinearSessionSync } from "../src/linear-session-sync.ts";
 import type { AppConfig, LinearClient } from "../src/types.ts";
 
@@ -1614,6 +1615,73 @@ test("emitActivity deduplicates repeated durable milestone activities", async ()
       db.getIssue(issue.projectId, issue.linearIssueId)?.lastLinearActivityKey,
       "response:Updated PR #91 to address review feedback. Pushed a new head.",
     );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("Linear writes back off by project after a rate-limit failure", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-rate-limit-backoff-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const issue = db.upsertIssue({
+      projectId: "krasnoperov/ballony-i-nasosy",
+      linearIssueId: "issue-tst-rate-limit",
+      issueKey: "TST-93",
+      title: "Back off Linear writes after 429",
+      factoryState: "pr_open",
+      agentSessionId: "session-rate-limit",
+    });
+
+    let providerCalls = 0;
+    let activityCalls = 0;
+    let sessionUpdateCalls = 0;
+    const linear: Partial<LinearClient> = {
+      updateAgentSession: async (params) => {
+        sessionUpdateCalls += 1;
+        return { id: params.agentSessionId };
+      },
+      upsertIssueComment: async (params) => ({ id: "comment-rate-limit", body: params.body }),
+      createAgentActivity: async () => {
+        activityCalls += 1;
+        throw new Error("Rate limit exceeded. Only 5000 requests are allowed per 1 hour (429).");
+      },
+      getIssue: async () => { throw new Error("not used"); },
+      setIssueState: async () => { throw new Error("not used"); },
+      updateIssueLabels: async () => { throw new Error("not used"); },
+      getActorProfile: async () => ({ actorId: "patchrelay-actor" }),
+      getWorkspaceCatalog: async () => ({ workspace: {}, teams: [], projects: [] }),
+    };
+
+    const sync = new LinearSessionSync(
+      config,
+      db,
+      {
+        forProject: async () => {
+          providerCalls += 1;
+          return linear as LinearClient;
+        },
+      },
+      pino({ enabled: false }),
+      undefined,
+      new LinearWriteBackoff(60_000),
+    );
+
+    const activity = {
+      type: "error" as const,
+      body: "PatchRelay needs human help to continue.\n\nCI repair budget exhausted.",
+    };
+
+    await sync.emitActivity(issue, activity);
+    await sync.emitActivity(db.getIssue(issue.projectId, issue.linearIssueId)!, activity);
+    await sync.syncSession(db.getIssue(issue.projectId, issue.linearIssueId)!);
+
+    assert.equal(activityCalls, 1);
+    assert.equal(providerCalls, 1);
+    assert.equal(sessionUpdateCalls, 0);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

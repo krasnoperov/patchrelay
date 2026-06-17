@@ -8,6 +8,7 @@ import { isCompletedLinearState } from "./pr-state.ts";
 import { hasTrustedNoPrCompletion } from "./trusted-no-pr-completion.ts";
 import type { LinearClientProvider } from "./types.ts";
 import { replaceIssueDependenciesFromLinearIssue } from "./linear-issue-projection.ts";
+import { isLinearRateLimitError } from "./linear-rate-limit.ts";
 
 const WRITER = "merged-linear-completion-reconciler";
 
@@ -87,7 +88,7 @@ export class MergedLinearCompletionReconciler {
           { issueKey: issue.issueKey, error: error instanceof Error ? error.message : String(error) },
           "Failed to reconcile merged or stale completed issue state",
         );
-        if (isRateLimitedError(error)) {
+        if (isLinearRateLimitError(error)) {
           this.globalRetryAfter = now + COMPLETION_RECONCILE_RATE_LIMIT_BACKOFF_MS;
           break;
         }
@@ -214,8 +215,7 @@ export class MergedLinearCompletionReconciler {
   }
 
   private deferIssue(issue: IssueRecord, error: unknown, now: number): void {
-    const message = error instanceof Error ? error.message : String(error);
-    const backoffMs = /ratelimit|rate limit/i.test(message)
+    const backoffMs = isLinearRateLimitError(error)
       ? COMPLETION_RECONCILE_RATE_LIMIT_BACKOFF_MS
       : COMPLETION_RECONCILE_FAILURE_BACKOFF_MS;
     this.retryAfterByIssueKey.set(this.issueKey(issue), {
@@ -236,11 +236,6 @@ export class MergedLinearCompletionReconciler {
   private issueKey(issue: Pick<IssueRecord, "projectId" | "linearIssueId">): string {
     return `${issue.projectId}::${issue.linearIssueId}`;
   }
-}
-
-function isRateLimitedError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /ratelimit|rate limit/i.test(message);
 }
 
 function isTerminalLinearState(
