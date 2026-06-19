@@ -890,6 +890,7 @@ export class RunFinalizer {
       completionSummary,
       postRunState: updatedIssue.factoryState,
       ...(updatedIssue.prNumber !== undefined ? { prNumber: updatedIssue.prNumber } : {}),
+      ...(updatedIssue.prUrl ? { prUrl: updatedIssue.prUrl } : {}),
       ...(run.runType === "review_fix" ? { reviewRound: Math.max(1, updatedIssue.reviewFixAttempts) } : {}),
       ...(steeringSummary.delivered > 0 ? { steeringDeliveredCount: steeringSummary.delivered } : {}),
       ...(steeringSummary.failed > 0 ? { steeringFailedCount: steeringSummary.failed } : {}),

@@ -19,7 +19,7 @@ export function buildRunOutcomeSummary(params: {
 }): string {
   switch (params.runType) {
     case "implementation":
-      return summarizeImplementation(params.facts.postRunState);
+      return summarizeImplementation(params.facts);
     case "review_fix":
       return summarizeReviewFix(params.facts);
     case "ci_repair":
@@ -31,8 +31,13 @@ export function buildRunOutcomeSummary(params: {
   }
 }
 
-function summarizeImplementation(postRunState: FactoryState | undefined): string {
-  switch (postRunState) {
+function summarizeImplementation(facts: RunOutcomeFacts): string {
+  const assistantSummary = summarizeImplementationAssistantOutcome(facts.latestAssistantSummary);
+  if (assistantSummary) {
+    return assistantSummary;
+  }
+
+  switch (facts.postRunState) {
     case "awaiting_queue":
       return "Ready for merge.";
     case "done":
@@ -41,6 +46,18 @@ function summarizeImplementation(postRunState: FactoryState | undefined): string
     default:
       return "Ready for review.";
   }
+}
+
+function summarizeImplementationAssistantOutcome(value: string | undefined): string | undefined {
+  const sanitized = sanitizeOperatorFacingText(value)?.trim();
+  if (!sanitized) {
+    return undefined;
+  }
+  const normalized = sanitized.replace(/\s+/g, " ");
+  if (/^(ready for review|ready for merge|completed)\.?$/i.test(normalized)) {
+    return undefined;
+  }
+  return normalized;
 }
 
 function summarizeReviewFix(facts: RunOutcomeFacts): string {

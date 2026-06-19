@@ -2,14 +2,28 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildRunOutcomeSummary } from "../src/run-outcome-summary.ts";
 
-test("run outcome summary reports published implementation outcome without assistant prose", () => {
+test("run outcome summary keeps useful implementation assistant recap", () => {
   assert.equal(
     buildRunOutcomeSummary({
       runType: "implementation",
       facts: {
         prNumber: 42,
         postRunState: "pr_open",
-        latestAssistantSummary: "I inspected files, ran tests, and pushed the branch.",
+        latestAssistantSummary: "Implemented the Lyria provider, exposed it in web and CLI, and verified the audio tests.",
+      },
+    }),
+    "Implemented the Lyria provider, exposed it in web and CLI, and verified the audio tests.",
+  );
+});
+
+test("run outcome summary falls back for generic implementation assistant recap", () => {
+  assert.equal(
+    buildRunOutcomeSummary({
+      runType: "implementation",
+      facts: {
+        prNumber: 42,
+        postRunState: "pr_open",
+        latestAssistantSummary: "Ready for review.",
       },
     }),
     "Ready for review.",

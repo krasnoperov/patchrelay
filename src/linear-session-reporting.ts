@@ -156,6 +156,7 @@ export function buildRunCompletedActivity(params: {
   completionSummary?: string;
   postRunState?: FactoryState;
   prNumber?: number;
+  prUrl?: string;
   reviewRound?: number;
   steeringDeliveredCount?: number;
   steeringFailedCount?: number;
@@ -169,9 +170,10 @@ export function buildRunCompletedActivity(params: {
     case "implementation":
       if (params.postRunState === "pr_open") {
         const body = `${prLabel} opened:${detail || " Ready for review."}`;
+        const bodyWithPr = params.prUrl ? `${body}\n\nPR: ${params.prUrl}` : body;
         return {
           type: "response",
-          body: steeringSummary ? `${body}\n\n${steeringSummary}` : body,
+          body: steeringSummary ? `${bodyWithPr}\n\n${steeringSummary}` : bodyWithPr,
         };
       }
       return undefined;
@@ -234,6 +236,7 @@ export function buildRunCompletedActivity(params: {
 function cleanOutcomeSummary(summary: string | undefined): string | undefined {
   if (!summary) return undefined;
   return summary
+    .replace(/\s+PR:\s*https?:\/\/\S+\.?$/i, "")
     .replace(/\s*(?:,?\s*(?:and|then)\s+)?(?:force-)?pushed(?:\s+(?:a\s+)?(?:new\s+)?head|\s+the\s+branch|\s+changes|\s+an?\s+update|\s+the\s+repaired\s+branch)?\.?$/i, ".")
     .replace(/\s*(?:,?\s*(?:and|then)\s+)?published(?:\s+(?:a\s+)?(?:new\s+)?head|\s+the\s+branch|\s+changes|\s+an?\s+update)?\.?$/i, ".")
     .replace(/\.\.+$/, ".")
