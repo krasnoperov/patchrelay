@@ -6,6 +6,8 @@ import { getGhConfigDir, writeGhHostsToken, type GitHubBotIdentity } from "./git
 
 const TOKEN_REFRESH_MS = 30 * 60_000; // 30 minutes (installation tokens last 1 hour)
 const TOKEN_EXPIRY_MARGIN_MS = 5 * 60_000; // treat a token expiring within 5 min as stale
+const GITHUB_APP_JWT_MAX_LIFETIME_SECONDS = 10 * 60;
+const GITHUB_APP_JWT_CLOCK_SKEW_SECONDS = 60;
 
 export interface GitHubAppCredentials {
   appId: string;
@@ -75,12 +77,12 @@ export function getGitHubAppPaths() {
 /**
  * Generate a GitHub App JWT (RS256, 10-minute lifetime).
  */
-function generateJwt(appId: string, privateKey: string): string {
+export function generateJwt(appId: string, privateKey: string): string {
   const now = Math.floor(Date.now() / 1000);
   const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
   const payload = Buffer.from(JSON.stringify({
-    iat: now - 60, // 60s clock drift allowance
-    exp: now + 600, // 10 minutes
+    iat: now - GITHUB_APP_JWT_CLOCK_SKEW_SECONDS,
+    exp: now + GITHUB_APP_JWT_MAX_LIFETIME_SECONDS - GITHUB_APP_JWT_CLOCK_SKEW_SECONDS,
     iss: appId,
   })).toString("base64url");
 
