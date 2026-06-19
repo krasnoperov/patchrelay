@@ -49,22 +49,34 @@ function createConfig(baseDir: string): AppConfig {
 }
 
 function stubGh(baseDir: string, params: {
-  prViewJson: string;
+  prViewJson: string | string[];
   compareJson?: string;
 }): string {
   const fakeBin = path.join(baseDir, "bin");
   const ghPath = path.join(fakeBin, "gh");
+  const prViews = Array.isArray(params.prViewJson) ? params.prViewJson : [params.prViewJson];
+  const prViewsPath = path.join(baseDir, "pr-views.json");
+  const prViewIndexPath = path.join(baseDir, "pr-view-index");
+  writeFileSync(prViewsPath, JSON.stringify(prViews), "utf8");
+  writeFileSync(prViewIndexPath, "0", "utf8");
   mkdirSync(fakeBin, { recursive: true });
-  writeFileSync(ghPath, `#!/usr/bin/env bash
-if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  printf '%s' '${params.prViewJson}'
-  exit 0
-fi
-if [ "$1" = "api" ]; then
-  printf '%s' '${params.compareJson ?? JSON.stringify({ files: [], commits: [] })}'
-  exit 0
-fi
-exit 1
+  writeFileSync(ghPath, `#!/usr/bin/env node
+const fs = require("node:fs");
+
+if (process.argv[2] === "pr" && process.argv[3] === "view") {
+  const views = JSON.parse(fs.readFileSync(${JSON.stringify(prViewsPath)}, "utf8"));
+  const indexPath = ${JSON.stringify(prViewIndexPath)};
+  const index = Number.parseInt(fs.readFileSync(indexPath, "utf8"), 10) || 0;
+  const next = Math.min(index + 1, views.length - 1);
+  fs.writeFileSync(indexPath, String(next));
+  process.stdout.write(views[Math.min(index, views.length - 1)]);
+  process.exit(0);
+}
+if (process.argv[2] === "api") {
+  process.stdout.write(${JSON.stringify(params.compareJson ?? JSON.stringify({ files: [], commits: [] }))});
+  process.exit(0);
+}
+process.exit(1);
 `, "utf8");
   chmodSync(ghPath, 0o755);
   return fakeBin;
@@ -237,7 +249,9 @@ test("verifyReactiveRunAdvancedBranch accepts ci_repair same head after fresh su
 test("verifyReviewFixAdvancedHead blocks returning the blocking review head to review", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-review-blocking-head-"));
   const oldPath = process.env.PATH;
+  const oldRecheckDelays = process.env.PATCHRELAY_REVIEW_FIX_HEAD_RECHECK_DELAYS_MS;
   try {
+    process.env.PATCHRELAY_REVIEW_FIX_HEAD_RECHECK_DELAYS_MS = "0";
     const fakeBin = stubGh(baseDir, { prViewJson: JSON.stringify({
       headRefOid: "sha-blocked",
       state: "OPEN",
@@ -266,6 +280,61 @@ test("verifyReviewFixAdvancedHead blocks returning the blocking review head to r
     assert.match(result ?? "", /same SHA back to review/);
   } finally {
     process.env.PATH = oldPath;
+    if (oldRecheckDelays === undefined) {
+      delete process.env.PATCHRELAY_REVIEW_FIX_HEAD_RECHECK_DELAYS_MS;
+    } else {
+      process.env.PATCHRELAY_REVIEW_FIX_HEAD_RECHECK_DELAYS_MS = oldRecheckDelays;
+    }
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyReviewFixAdvancedHead rechecks before failing a just-published repair", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-review-blocking-recheck-"));
+  const oldPath = process.env.PATH;
+  const oldRecheckDelays = process.env.PATCHRELAY_REVIEW_FIX_HEAD_RECHECK_DELAYS_MS;
+  try {
+    process.env.PATCHRELAY_REVIEW_FIX_HEAD_RECHECK_DELAYS_MS = "0";
+    const fakeBin = stubGh(baseDir, { prViewJson: [
+      JSON.stringify({
+        headRefOid: "sha-blocked",
+        state: "OPEN",
+        reviewDecision: "CHANGES_REQUESTED",
+        mergeable: "MERGEABLE",
+        mergeStateStatus: "CLEAN",
+      }),
+      JSON.stringify({
+        headRefOid: "sha-next",
+        state: "OPEN",
+        reviewDecision: "REVIEW_REQUIRED",
+        mergeable: "MERGEABLE",
+        mergeStateStatus: "CLEAN",
+      }),
+    ] });
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, policy } = setupPolicy(baseDir);
+    const issue = db.upsertIssue({
+      ...baseIssue(),
+      prReviewState: "changes_requested",
+      lastBlockingReviewHeadSha: "sha-blocked",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+    });
+
+    const result = await policy.verifyReviewFixAdvancedHead(run, issue);
+    assert.equal(result, undefined);
+  } finally {
+    process.env.PATH = oldPath;
+    if (oldRecheckDelays === undefined) {
+      delete process.env.PATCHRELAY_REVIEW_FIX_HEAD_RECHECK_DELAYS_MS;
+    } else {
+      process.env.PATCHRELAY_REVIEW_FIX_HEAD_RECHECK_DELAYS_MS = oldRecheckDelays;
+    }
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
@@ -308,7 +377,9 @@ test("verifyReviewFixAdvancedHead accepts a head advanced beyond the blocking re
 test("verifyReviewFixAdvancedHead falls back to the run source head for older issue rows", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-review-source-fallback-"));
   const oldPath = process.env.PATH;
+  const oldRecheckDelays = process.env.PATCHRELAY_REVIEW_FIX_HEAD_RECHECK_DELAYS_MS;
   try {
+    process.env.PATCHRELAY_REVIEW_FIX_HEAD_RECHECK_DELAYS_MS = "0";
     const fakeBin = stubGh(baseDir, { prViewJson: JSON.stringify({
       headRefOid: "sha-source",
       state: "OPEN",
@@ -336,6 +407,11 @@ test("verifyReviewFixAdvancedHead falls back to the run source head for older is
     assert.match(result ?? "", /same SHA back to review/);
   } finally {
     process.env.PATH = oldPath;
+    if (oldRecheckDelays === undefined) {
+      delete process.env.PATCHRELAY_REVIEW_FIX_HEAD_RECHECK_DELAYS_MS;
+    } else {
+      process.env.PATCHRELAY_REVIEW_FIX_HEAD_RECHECK_DELAYS_MS = oldRecheckDelays;
+    }
     rmSync(baseDir, { recursive: true, force: true });
   }
 });

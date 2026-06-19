@@ -1263,6 +1263,51 @@ test("cli resolves workspace, run context, and live summary from the unified iss
   }
 });
 
+test("cli inspect suppresses stale failed repair after downstream handoff", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-stale-repair-"));
+  let data: CliDataAccess | undefined;
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-stale-repair",
+      issueKey: "USE-59",
+      title: "Hide stale repair",
+      currentLinearState: "Done",
+      factoryState: "done",
+      prNumber: 59,
+      prState: "merged",
+      prReviewState: "approved",
+      prCheckStatus: "success",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+    });
+    db.runs.finishRun(run.id, {
+      status: "failed",
+      failureReason: "same_head_review_handoff_blocked",
+      reportJson: JSON.stringify({ assistantMessages: ["same_head_review_handoff_blocked"] }),
+    });
+
+    data = new CliDataAccess(config, { db });
+    const inspect = await data.inspect("USE-59");
+
+    assert.equal(inspect?.issue?.factoryState, "done");
+    assert.equal(inspect?.latestRun, undefined);
+    assert.equal(inspect?.latestReport, undefined);
+    assert.equal(inspect?.statusNote, undefined);
+  } finally {
+    data?.close();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("cli doctor reports deployment readiness problems", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-doctor-"));
 
