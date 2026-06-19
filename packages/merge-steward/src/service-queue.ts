@@ -181,7 +181,12 @@ export class MergeStewardQueueCommands {
         return false;
       }
 
-      const labels = await this.github.listLabels(prNumber);
+      let labels: string[] = [];
+      try {
+        labels = await this.github.listLabels(prNumber);
+      } catch (error) {
+        this.logger.debug({ prNumber, err: error }, "Could not read labels for priority detection; continuing without priority label");
+      }
       const priority = labels.includes(this.config.priorityQueueLabel) ? 1 : 0;
 
       const checks = await this.github.listChecks(prNumber);

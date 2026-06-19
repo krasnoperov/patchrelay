@@ -75,6 +75,33 @@ test("idempotent: no second edit and no event when already correct", async () =>
   assert.equal(events.length, 0, "no delta → no edit, no event");
 });
 
+test("label read failure is best-effort and does not emit a fake sync", async () => {
+  const github = new GitHubSim();
+  github.addPR({ number: 7, branch: "feat", headSha: "h" });
+  github.listLabels = async () => {
+    throw new Error("labels unavailable");
+  };
+  const events: ReconcileEvent[] = [];
+
+  await syncQueueStateLabels(ctxWith(github, events), entry("validating"));
+
+  assert.equal(events.length, 0);
+});
+
+test("label edit failure is best-effort and does not emit a fake sync", async () => {
+  const github = new GitHubSim();
+  github.addPR({ number: 7, branch: "feat", headSha: "h" });
+  github.setLabels = async () => {
+    throw new Error("label edit rejected");
+  };
+  const events: ReconcileEvent[] = [];
+
+  await syncQueueStateLabels(ctxWith(github, events), entry("validating"));
+
+  assert.deepEqual(await github.listLabels(7), []);
+  assert.equal(events.length, 0);
+});
+
 test("disabled when queueStateLabels is unset", async () => {
   const github = new GitHubSim();
   github.addPR({ number: 7, branch: "feat", headSha: "h", labels: ["queue:testing"] });

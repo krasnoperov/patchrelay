@@ -165,21 +165,17 @@ export class GitHubPRClient implements GitHubPRApi {
 
   async listLabels(prNumber: number): Promise<string[]> {
     const result = await exec("gh", [
-      "pr", "view", String(prNumber),
-      "--repo", this.repoFullName,
-      "--json", "labels",
+      "api",
+      `repos/${this.repoFullName}/issues/${prNumber}/labels`,
+      "--paginate",
+      "--jq", ".[].name",
     ], { allowNonZero: true, githubRepoFullName: this.repoFullName });
 
-    if (result.exitCode !== 0) return [];
-
-    try {
-      const data = JSON.parse(result.stdout) as {
-        labels: Array<{ name: string }>;
-      };
-      return data.labels.map((l) => l.name);
-    } catch {
-      return [];
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to list labels for PR #${prNumber}: ${result.stderr.trim() || `exit ${result.exitCode}`}`);
     }
+
+    return result.stdout.split(/\r?\n/).map((label) => label.trim()).filter(Boolean);
   }
 
   async setLabels(prNumber: number, opts: { add?: string[]; remove?: string[] }): Promise<void> {
@@ -188,7 +184,10 @@ export class GitHubPRClient implements GitHubPRApi {
     for (const label of opts.remove ?? []) args.push("--remove-label", label);
     // Nothing to change beyond the base args — skip the call.
     if (args.length === 5) return;
-    await exec("gh", args, { allowNonZero: true, githubRepoFullName: this.repoFullName });
+    const result = await exec("gh", args, { allowNonZero: true, githubRepoFullName: this.repoFullName });
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to edit labels for PR #${prNumber}: ${result.stderr.trim() || `exit ${result.exitCode}`}`);
+    }
   }
 }
 
