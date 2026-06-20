@@ -127,6 +127,7 @@ function deriveAuthority(
 }
 
 function issueStatus(issue: IssueRecord, blockerCount: number): WorkflowSnapshot["status"] {
+  if (issue.activeRunId !== undefined) return "running";
   if (
     issue.factoryState === "done"
     || issue.prState === "merged"
@@ -134,7 +135,6 @@ function issueStatus(issue: IssueRecord, blockerCount: number): WorkflowSnapshot
   ) return "done";
   if (issue.factoryState === "failed" || issue.factoryState === "escalated") return "failed";
   if (isCanceledLinearState(issue.currentLinearStateType, issue.currentLinearState)) return "failed";
-  if (issue.activeRunId !== undefined) return "running";
   if (!issue.delegatedToPatchRelay || blockerCount > 0 || issue.factoryState === "awaiting_input") return "waiting";
   return "idle";
 }

@@ -47,13 +47,13 @@ test("resolveFactoryState: blockerPausedImplementation wins over terminal + desi
   assert.equal(state, "delegated");
 });
 
-test("resolveFactoryState: terminalRunRelease wins over desiredStage and startupResume", () => {
+test("resolveFactoryState: terminalRunRelease does not mark the issue done", () => {
   const state = resolveFactoryState(baseInputs({
     terminalRunRelease: true,
     desiredStage: "implementation",
     startupResume: { factoryState: "pr_open" },
   }));
-  assert.equal(state, "done");
+  assert.equal(state, "pr_open");
 });
 
 test("resolveFactoryState: fresh desiredStage maps to delegated when startupResume is empty", () => {
@@ -117,12 +117,12 @@ test("resolveIssueUpdatePlan: clearPending alone clears without setting context"
   assert.equal(plan.factoryState, undefined);
 });
 
-test("resolveIssueUpdatePlan: terminal run release marks done and clears pending", () => {
+test("resolveIssueUpdatePlan: terminal run release clears pending without marking done", () => {
   const plan = resolveIssueUpdatePlan(baseInputs({
     terminalRunRelease: true,
     effectiveRunRelease: { release: true },
   }));
-  assert.equal(plan.factoryState, "done");
+  assert.equal(plan.factoryState, undefined);
   assert.equal(plan.pendingRunType, null);
   assert.equal(plan.activeRunId, null);
 });
