@@ -108,29 +108,13 @@ export class RunReconciler {
     }
 
     if (TERMINAL_STATES.has(effectiveIssue.factoryState)) {
-      const terminalClear = { projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null };
-      this.withHeldLease(run.projectId, run.linearIssueId, () => {
-        const commit = this.db.issueSessions.commitIssueState({
-          writer: WRITER,
-          expectedVersion: effectiveIssue.version,
-          update: terminalClear,
-          // Re-check the release predicate against the fresh row.
-          onConflict: (current) =>
-            TERMINAL_STATES.has(current.factoryState) && current.activeRunId === run.id ? terminalClear : undefined,
-        });
-        if (commit.outcome !== "applied") return;
-        this.db.runs.finishRun(run.id, { status: "released", failureReason: "Issue reached terminal state during active run" });
-      });
-      this.logger.info({ issueKey: effectiveIssue.issueKey, runId: run.id, factoryState: effectiveIssue.factoryState }, "Reconciliation: released run on terminal issue");
-      const releasedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? effectiveIssue;
-      void this.linearSync.syncSession(releasedIssue, { activeRunType: run.runType });
-      this.releaseLease(run.projectId, run.linearIssueId);
-      return;
+      this.logger.info(
+        { issueKey: effectiveIssue.issueKey, runId: run.id, factoryState: effectiveIssue.factoryState },
+        "Reconciliation: terminal issue state observed while run is active; keeping run until Codex turn completes",
+      );
     }
 
-    if (await this.releaseRunIfPullRequestMerged(run, effectiveIssue)) {
-      return;
-    }
+    await this.recordMergedPullRequestWhileRunActive(run, effectiveIssue);
 
     if (!run.threadId) {
       if (recoveryLease === "owned") {
@@ -202,35 +186,29 @@ export class RunReconciler {
           const stopUpdate = {
             projectId: run.projectId,
             linearIssueId: run.linearIssueId,
-            activeRunId: null,
             currentLinearState: stopState.stateName,
-            factoryState: "done" as const,
+            currentLinearStateType: "completed" as const,
           };
           this.withHeldLease(run.projectId, run.linearIssueId, () => {
-            const commit = this.db.issueSessions.commitIssueState({
+            this.db.issueSessions.commitIssueState({
               writer: WRITER,
               expectedVersion: effectiveIssue.version,
-              // The Linear stop state is authoritative; only the run-slot
-              // ownership needs re-checking on conflict.
+              // Record the external Linear fact, but keep the active run
+              // sealed until the Codex turn itself completes.
               update: stopUpdate,
               onConflict: (current) => (current.activeRunId === run.id ? stopUpdate : undefined),
             });
-            if (commit.outcome !== "applied") return;
-            this.db.runs.finishRun(run.id, { status: "released" });
           });
           this.feed?.publish({
             level: "info",
             kind: "stage",
             issueKey: issue.issueKey,
             projectId: run.projectId,
-            stage: "done",
+            stage: run.runType,
             status: "reconciled",
-            summary: `Linear state ${stopState.stateName} -> done`,
+            summary: `Linear state ${stopState.stateName} observed while active run continues`,
           });
-          const doneIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? effectiveIssue;
-          void this.linearSync.syncSession(doneIssue, { activeRunType: run.runType });
-          this.releaseLease(run.projectId, run.linearIssueId);
-          return;
+          effectiveIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? effectiveIssue;
         }
       }
     }
@@ -278,53 +256,37 @@ export class RunReconciler {
     }
   }
 
-  private async releaseRunIfPullRequestMerged(run: RunRecord, issue: IssueRecord): Promise<boolean> {
-    if (issue.prNumber === undefined) return false;
+  private async recordMergedPullRequestWhileRunActive(run: RunRecord, issue: IssueRecord): Promise<void> {
+    if (issue.prNumber === undefined) return;
     if (issue.prState === "merged") {
-      this.releaseMergedRun(run, issue, "Cached PR state is merged");
-      return true;
+      return;
     }
 
     const repoFullName = this.resolveRepoFullName(issue.projectId);
-    if (!repoFullName) return false;
+    if (!repoFullName) return;
     const snapshot = await fetchPullRequestSnapshot(repoFullName, issue.prNumber);
     if (!snapshot.ok) {
       this.logger.debug(
         { issueKey: issue.issueKey, prNumber: issue.prNumber, error: snapshot.error.message },
         "Could not refresh active-run PR state during reconciliation",
       );
-      return false;
+      return;
     }
-    if (snapshot.pr.state !== "MERGED") return false;
+    if (snapshot.pr.state !== "MERGED") return;
 
-    this.releaseMergedRun(run, issue, "Pull request merged while the active Codex run was still marked running");
-    return true;
-  }
-
-  private releaseMergedRun(run: RunRecord, issue: IssueRecord, reason: string): void {
     const mergedUpdate = {
       projectId: run.projectId,
       linearIssueId: run.linearIssueId,
-      activeRunId: null,
-      factoryState: "done" as const,
       prState: "merged",
-      pendingRunType: null,
-      pendingRunContextJson: null,
     };
     this.withHeldLease(run.projectId, run.linearIssueId, () => {
-      const commit = this.db.issueSessions.commitIssueState({
+      this.db.issueSessions.commitIssueState({
         writer: WRITER,
         expectedVersion: issue.version,
-        // The merge itself is external truth; only re-check that the run
-        // slot still belongs to this run before clearing it.
+        // The merge itself is external truth, but it must not release the
+        // active run. The Codex turn completion is the handoff boundary.
         update: mergedUpdate,
         onConflict: (current) => (current.activeRunId === run.id ? mergedUpdate : undefined),
-      });
-      if (commit.outcome !== "applied") return;
-      this.db.issueSessions.clearPendingIssueSessionEvents(run.projectId, run.linearIssueId);
-      this.db.runs.finishRun(run.id, {
-        status: "released",
-        failureReason: reason,
       });
     });
     this.feed?.publish({
@@ -332,13 +294,10 @@ export class RunReconciler {
       kind: "stage",
       issueKey: issue.issueKey,
       projectId: run.projectId,
-      stage: "done",
+      stage: run.runType,
       status: "reconciled",
-      summary: `Released active ${run.runType} run after PR merge`,
+      summary: `Observed merged PR while active ${run.runType} run continues`,
     });
-    const doneIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
-    void this.linearSync.syncSession(doneIssue, { activeRunType: run.runType });
-    this.releaseLease(run.projectId, run.linearIssueId);
   }
 
   private async confirmDelegationAuthorityBeforeRelease(

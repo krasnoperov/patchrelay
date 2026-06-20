@@ -1644,7 +1644,7 @@ test("un-delegation webhook syncs the issue back to a queued Linear state immedi
   }
 });
 
-test("terminal Linear completion during active run releases the run and marks the issue done", async () => {
+test("terminal Linear completion during active run records Linear state but keeps the run active", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-terminal-active-"));
   try {
     const config = createConfig(baseDir);
@@ -1676,6 +1676,7 @@ test("terminal Linear completion during active run releases the run and marks th
       linearIssueId: "issue-maf-50-done",
       runType: "implementation",
     });
+    db.runs.updateRunThread(run.id, { threadId: "thread-maf-50-done", turnId: "turn-maf-50-done" });
     db.upsertIssue({
       projectId: "krasnoperov/mafia",
       linearIssueId: "issue-maf-50-done",
@@ -1719,15 +1720,15 @@ test("terminal Linear completion during active run releases the run and marks th
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-50-done");
     assert.equal(issue?.currentLinearState, "Done");
     assert.equal(issue?.currentLinearStateType, "completed");
-    assert.equal(issue?.factoryState, "done");
-    assert.equal(issue?.activeRunId, undefined);
-    assert.equal(issue?.pendingRunType, undefined);
-    assert.equal(issue?.pendingRunContextJson, undefined);
+    assert.equal(issue?.factoryState, "implementing");
+    assert.equal(issue?.activeRunId, run.id);
+    assert.equal(issue?.pendingRunType, "implementation");
+    assert.equal(issue?.pendingRunContextJson, JSON.stringify({ note: "stale wake" }));
     assert.deepEqual(enqueued, []);
 
     const finishedRun = db.runs.getRunById(run.id);
-    assert.equal(finishedRun?.status, "released");
-    assert.equal(finishedRun?.failureReason, "Issue reached terminal state during active run");
+    assert.equal(finishedRun?.status, "running");
+    assert.equal(finishedRun?.failureReason, undefined);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

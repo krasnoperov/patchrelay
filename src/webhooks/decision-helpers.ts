@@ -36,7 +36,7 @@ export function decideActiveRunRelease(p: {
   delegated: boolean;
 }): { release: boolean; reason?: string } {
   if (!p.hasActiveRun) return { release: false };
-  if (p.terminal) return { release: true, reason: "Issue reached terminal state during active run" };
+  // External terminal state is a fact, not a handoff. The active Codex turn owns completion.
   if (!p.delegated) return { release: true, reason: "Un-delegated from PatchRelay" };
   return { release: false };
 }

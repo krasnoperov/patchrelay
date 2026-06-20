@@ -442,6 +442,26 @@ test("merged PR is terminal and does not derive follow-up work", () => {
   }
 });
 
+test("active run keeps workflow running even when external state is terminal", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const issue = makeIssue(db, {
+      factoryState: "done",
+      prNumber: 42,
+      prState: "merged",
+      activeRunId: 77,
+      currentLinearState: "Done",
+      currentLinearStateType: "completed",
+    });
+    const snapshot = projectWorkflowSnapshot({ issue });
+
+    assert.equal(snapshot.status, "running");
+    assert.equal(snapshot.openTasks[0]?.id, "wait:active-run:77");
+  } finally {
+    cleanup();
+  }
+});
+
 test("awaiting-input workflows do not derive implementation work", () => {
   const { db, cleanup } = createDb();
   try {

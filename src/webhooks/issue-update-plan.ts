@@ -61,17 +61,15 @@ export interface ResolvedIssueUpdate {
  *
  *   1. explicit undelegation
  *   2. blocker-paused implementation (force back to `delegated`)
- *   3. terminal run release (mark `done`)
- *   4. fresh `desiredStage` decision (mark `delegated`)
+ *   3. fresh `desiredStage` decision (mark `delegated`)
  *      — but only if startupResume didn't already pick a state
- *   5. startup resume override
- *   6. new undelegated + agent-session fallback → `awaiting_input`
- *   7. no change
+ *   4. startup resume override
+ *   5. new undelegated + agent-session fallback → `awaiting_input`
+ *   6. no change
  */
 export function resolveFactoryState(input: IssueUpdatePlanInputs): FactoryState | undefined {
   if (input.undelegation.factoryState) return input.undelegation.factoryState;
   if (input.blockerPausedImplementation) return "delegated";
-  if (input.terminalRunRelease) return "done";
   if (input.desiredStage && !input.startupResume.factoryState) return "delegated";
   if (input.startupResume.factoryState) return input.startupResume.factoryState;
   if (!input.existingIssue && !input.delegated && input.incomingAgentSessionId) {
