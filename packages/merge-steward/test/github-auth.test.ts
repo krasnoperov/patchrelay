@@ -1,10 +1,23 @@
 import assert from "node:assert/strict";
+import { generateKeyPairSync } from "node:crypto";
 import test from "node:test";
 import {
+  generateJwt,
   resolveGitHubAppCredentials,
   resolveGitHubAuthConfig,
 } from "../src/github-auth.ts";
 import { resolveGitHubCommandEnv } from "../src/exec.ts";
+
+function privateKeyPem(): string {
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  return privateKey.export({ type: "pkcs1", format: "pem" }).toString();
+}
+
+function decodeJwtPayload(token: string): { iat: number; exp: number; iss: string } {
+  const [, payload] = token.split(".");
+  assert.ok(payload, "expected JWT payload");
+  return JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { iat: number; exp: number; iss: string };
+}
 
 test("resolveGitHubAuthConfig resolves GitHub App credentials when configured", () => {
   const auth = resolveGitHubAuthConfig({
@@ -16,6 +29,14 @@ test("resolveGitHubAuthConfig resolves GitHub App credentials when configured", 
   if (auth.mode === "app") {
     assert.equal(auth.credentials.appId, "123456");
   }
+});
+
+test("generateJwt stays within GitHub App's 10 minute lifetime limit", () => {
+  const jwt = generateJwt("123456", privateKeyPem());
+  const payload = decodeJwtPayload(jwt);
+
+  assert.equal(payload.iss, "123456");
+  assert.equal(payload.exp - payload.iat, 10 * 60);
 });
 
 test("resolveGitHubAuthConfig returns none without GitHub App credentials", () => {
