@@ -232,6 +232,23 @@ test("run completion activity unwraps shell-wrapped verification commands in pub
   });
 });
 
+test("run completion activity appends durable PR URL and strips assistant PR fragments", () => {
+  const activity = buildRunCompletedActivity({
+    runType: "implementation",
+    completionSummary:
+      "Implemented the Lyria provider, exposed it in web and CLI, and verified the audio tests. PR: https://github.",
+    postRunState: "pr_open",
+    prNumber: 116,
+    prUrl: "https://github.com/krasnoperov/inventory/pull/116",
+  });
+
+  assert.deepEqual(activity, {
+    type: "response",
+    body:
+      "PR #116 opened: Implemented the Lyria provider, exposed it in web and CLI, and verified the audio tests.\n\nPR: https://github.com/krasnoperov/inventory/pull/116",
+  });
+});
+
 test("run completion activity strips repo-local absolute paths from publish comments", () => {
   const activity = buildRunCompletedActivity({
     runType: "review_fix",
