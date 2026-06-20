@@ -36,6 +36,8 @@ const REACTIVE_SCOPE_RISK_EXACT_PATHS = new Set([
   "pnpm-lock.yaml",
 ]);
 
+const DEFAULT_REVIEW_FIX_HEAD_RECHECK_DELAYS_MS = [1_000, 2_000, 4_000];
+
 export class ReactiveRunPolicy {
   constructor(
     private readonly config: AppConfig,
@@ -76,6 +78,33 @@ export class ReactiveRunPolicy {
     }
   }
 
+  private async readReviewFixCompletionSnapshot(
+    run: RunRecord,
+    prNumber: number,
+    blockingReviewHeadSha: string,
+  ) {
+    let snapshot = await readReactivePrSnapshot(this.config, run.projectId, prNumber);
+    if (!snapshot || snapshot.prState !== "open" || snapshot.headSha !== blockingReviewHeadSha) {
+      return snapshot;
+    }
+
+    for (const delayMs of getReviewFixHeadRecheckDelaysMs()) {
+      if (delayMs > 0) {
+        await delay(delayMs);
+      }
+      const nextSnapshot = await readReactivePrSnapshot(this.config, run.projectId, prNumber);
+      if (!nextSnapshot) {
+        continue;
+      }
+      snapshot = nextSnapshot;
+      if (snapshot.prState !== "open" || snapshot.headSha !== blockingReviewHeadSha) {
+        return snapshot;
+      }
+    }
+
+    return snapshot;
+  }
+
   private hasFreshSuccessfulCiGate(
     projectId: string,
     fallbackGateCheckName: string,
@@ -110,7 +139,7 @@ export class ReactiveRunPolicy {
       return `Requested-changes run finished for PR #${issue.prNumber} without a recorded blocking review or starting head SHA. PatchRelay cannot verify that a new head was published.`;
     }
     try {
-      const snapshot = await readReactivePrSnapshot(this.config, run.projectId, issue.prNumber);
+      const snapshot = await this.readReviewFixCompletionSnapshot(run, issue.prNumber, blockingReviewHeadSha);
       if (!snapshot || snapshot.prState !== "open") return undefined;
       if (!snapshot.headSha) {
         return `Requested-changes run finished for PR #${issue.prNumber} but GitHub did not report a current head SHA.`;
@@ -426,6 +455,21 @@ function resolveRequestedChangesBlockingHead(
   issue: Pick<IssueRecord, "lastBlockingReviewHeadSha">,
 ): string | undefined {
   return issue.lastBlockingReviewHeadSha ?? run.sourceHeadSha;
+}
+
+function getReviewFixHeadRecheckDelaysMs(): number[] {
+  const raw = process.env.PATCHRELAY_REVIEW_FIX_HEAD_RECHECK_DELAYS_MS;
+  if (raw === undefined) {
+    return DEFAULT_REVIEW_FIX_HEAD_RECHECK_DELAYS_MS;
+  }
+  return raw
+    .split(",")
+    .map((entry) => Number.parseInt(entry.trim(), 10))
+    .filter((entry) => Number.isFinite(entry) && entry >= 0);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isReactiveScopeRiskPath(filePath: string): boolean {

@@ -294,20 +294,23 @@ export class CliDataAccess extends CliOperatorApiClient {
     const latestSummary = safeJsonParse(latestRun?.summaryJson);
     const completionCheck = latestRun ? extractCompletionCheck(latestRun) : undefined;
     const downstreamHandoff = issue.factoryState === "awaiting_queue" || issue.prReviewState === "approved";
+    const latestRunNoLongerCurrent =
+      downstreamHandoff
+      && (latestRun?.status === "failed" || latestRun?.status === "superseded");
 
     const statusNote =
       (completionCheck?.outcome === "needs_input" ? completionCheck.question : completionCheck?.summary) ??
-      latestReport?.assistantMessages.at(-1) ??
-      (typeof latestSummary?.latestAssistantMessage === "string" ? latestSummary.latestAssistantMessage : undefined) ??
+      (!latestRunNoLongerCurrent ? latestReport?.assistantMessages.at(-1) : undefined) ??
+      (!latestRunNoLongerCurrent && typeof latestSummary?.latestAssistantMessage === "string" ? latestSummary.latestAssistantMessage : undefined) ??
       (latestRun?.status === "failed" && !downstreamHandoff ? "Latest run failed." : undefined) ??
       undefined;
 
     return {
       issue,
       ...(activeRun ? { activeRun } : {}),
-      ...(!activeRun && latestRun ? { latestRun } : {}),
-      ...(latestReport ? { latestReport } : {}),
-      ...(latestSummary ? { latestSummary } : {}),
+      ...(!activeRun && latestRun && !latestRunNoLongerCurrent ? { latestRun } : {}),
+      ...(latestReport && !latestRunNoLongerCurrent ? { latestReport } : {}),
+      ...(latestSummary && !latestRunNoLongerCurrent ? { latestSummary } : {}),
       ...(dbIssue.prNumber ? { prNumber: dbIssue.prNumber } : {}),
       ...(dbIssue.prState ? { prState: dbIssue.prState } : {}),
       ...(dbIssue.prReviewState ? { prReviewState: dbIssue.prReviewState } : {}),
