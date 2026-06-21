@@ -160,7 +160,7 @@ export async function processWebhookEvent(
     }
 
     case "pr_merged": {
-      service.acknowledgeExternalMerge(event.prNumber);
+      await service.acknowledgeExternalMerge(event.prNumber);
       break;
     }
 

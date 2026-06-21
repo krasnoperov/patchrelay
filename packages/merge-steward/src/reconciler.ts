@@ -143,6 +143,9 @@ async function verifyMergedEntriesPostPush(ctx: ReconcileContext): Promise<void>
         postMergeCheckedAt: now,
       }, "post-merge verification");
     }
+
+    const post = ctx.store.getEntry(entry.id);
+    if (post) await syncQueueStateLabels(ctx, post);
   }
 }
 

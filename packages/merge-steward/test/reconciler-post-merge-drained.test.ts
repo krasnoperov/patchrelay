@@ -40,6 +40,7 @@ function mergedPendingEntry(overrides: Partial<QueueEntry> = {}): QueueEntry {
 }
 
 function buildContext(store: MemoryStore, checks: CheckResult[], events: ReconcileEvent[]): ReconcileContext {
+  const labels = new Map<number, string[]>([[10, ["queue", "queue:testing"]]]);
   return {
     store,
     repoId: "repo",
@@ -47,7 +48,18 @@ function buildContext(store: MemoryStore, checks: CheckResult[], events: Reconci
     remotePrefix: "",
     git: {} as ReconcileContext["git"],
     ci: {} as ReconcileContext["ci"],
-    github: { async listChecksForRef() { return checks; } } as unknown as ReconcileContext["github"],
+    github: {
+      async listChecksForRef() { return checks; },
+      async listLabels(prNumber: number) { return [...(labels.get(prNumber) ?? [])]; },
+      async setLabels(prNumber: number, opts: { add?: string[]; remove?: string[] }) {
+        const current = labels.get(prNumber) ?? [];
+        const removed = current.filter((label) => !(opts.remove ?? []).includes(label));
+        for (const label of opts.add ?? []) {
+          if (!removed.includes(label)) removed.push(label);
+        }
+        labels.set(prNumber, removed);
+      },
+    } as unknown as ReconcileContext["github"],
     eviction: {} as ReconcileContext["eviction"],
     specBuilder: {} as ReconcileContext["specBuilder"],
     speculativeDepth: 1,
@@ -56,6 +68,7 @@ function buildContext(store: MemoryStore, checks: CheckResult[], events: Reconci
       getRequiredChecks: () => ["Tests"],
       shouldRequireAllChecksOnEmptyRequiredSet: () => false,
     } as unknown as ReconcileContext["policy"],
+    queueStateLabels: { testing: "queue:testing", merging: "queue:merging" },
     onEvent: (event) => events.push(event),
   };
 }
@@ -74,6 +87,7 @@ test("post-merge verification still runs when the active queue is empty", async 
   const resolved = store.getEntry("entry-1");
   assert.equal(resolved?.postMergeStatus, "pass");
   assert.equal(resolved?.postMergeSummary, "all required checks passed");
+  assert.equal(events.at(-1)?.action, "queue_label_synced");
 });
 
 test("decidedAt is stamped on the first terminal transition and never bumped", () => {
