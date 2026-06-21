@@ -296,7 +296,7 @@ export class MergeStewardQueueCommands {
     }
   }
 
-  acknowledgeExternalMerge(prNumber: number): void {
+  async acknowledgeExternalMerge(prNumber: number): Promise<void> {
     const entry = this.store.getEntryByPR(this.config.repoId, prNumber);
     if (entry) {
       this.store.transition(entry.id, "merged" as QueueEntryStatus, {
@@ -306,7 +306,30 @@ export class MergeStewardQueueCommands {
         postMergeCheckedAt: new Date().toISOString(),
       });
       this.invalidateDownstreamOf(entry);
+      await this.clearQueueStateLabels(prNumber);
       this.logger.info({ prNumber, entryId: entry.id }, "External merge acknowledged");
+    }
+  }
+
+  private async clearQueueStateLabels(prNumber: number): Promise<void> {
+    const managed = [this.config.queueTestingLabel, this.config.queueMergingLabel].filter(Boolean);
+    if (managed.length === 0) return;
+
+    let current: string[];
+    try {
+      current = await this.github.listLabels(prNumber);
+    } catch (error) {
+      this.logger.debug({ prNumber, err: error }, "Could not read queue state labels after external merge");
+      return;
+    }
+
+    const remove = managed.filter((label) => current.includes(label));
+    if (remove.length === 0) return;
+
+    try {
+      await this.github.setLabels(prNumber, { remove });
+    } catch (error) {
+      this.logger.warn({ prNumber, labels: remove, err: error }, "Could not clear queue state labels after external merge");
     }
   }
 

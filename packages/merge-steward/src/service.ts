@@ -104,8 +104,8 @@ export class MergeStewardService {
     return this.queueCommands.updatePriorityByPR(prNumber, priority);
   }
 
-  acknowledgeExternalMerge(prNumber: number): void {
-    this.queueCommands.acknowledgeExternalMerge(prNumber);
+  async acknowledgeExternalMerge(prNumber: number): Promise<void> {
+    await this.queueCommands.acknowledgeExternalMerge(prNumber);
   }
 
   getStatus(): QueueEntry[] {

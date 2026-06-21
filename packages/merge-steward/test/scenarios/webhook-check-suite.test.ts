@@ -24,6 +24,9 @@ const testConfig: StewardConfig = {
   speculativeDepth: 1,
   pollIntervalMs: 600_000,
   admissionLabel: "queue",
+  priorityQueueLabel: "priority",
+  queueTestingLabel: "queue:testing",
+  queueMergingLabel: "queue:merging",
   mergeQueueCheckName: "merge-steward/queue",
   excludeBranches: [],
   server: { bind: "127.0.0.1", port: 0 },
@@ -50,6 +53,42 @@ function createService(store: MemoryStore, githubSim: GitHubSim) {
   );
 }
 
+function queueEntry(overrides: Partial<QueueEntry> & Pick<QueueEntry, "id" | "prNumber" | "branch" | "headSha">): QueueEntry {
+  return {
+    id: overrides.id,
+    repoId: "test-repo",
+    prNumber: overrides.prNumber,
+    branch: overrides.branch,
+    headSha: overrides.headSha,
+    baseSha: "base",
+    status: "queued",
+    position: 1,
+    priority: 0,
+    generation: 0,
+    ciRunId: null,
+    ciRetries: 0,
+    retryAttempts: 0,
+    maxRetries: 2,
+    lastFailedBaseSha: null,
+    issueKey: null,
+    specBranch: null,
+    specSha: null,
+    specBasedOn: null,
+    waitDetail: null,
+    postMergeStatus: null,
+    postMergeSha: null,
+    postMergeSummary: null,
+    postMergeCheckedAt: null,
+    baseRefName: "main",
+    headPatchId: null,
+    specTreeId: null,
+    decidedAt: null,
+    enqueuedAt: "2026-06-21T10:50:00.000Z",
+    updatedAt: "2026-06-21T10:50:00.000Z",
+    ...overrides,
+  };
+}
+
 describe("check_suite_completed with empty pull_requests", () => {
   it("normalizes to prNumber: null when pull_requests is empty", () => {
     const event = normalizeWebhook("check_suite", {
@@ -68,6 +107,37 @@ describe("check_suite_completed with empty pull_requests", () => {
       assert.strictEqual(event.prNumber, null);
       assert.strictEqual(event.branch, "feat-x");
     }
+  });
+
+  it("clears queue state labels when an active PR is externally merged", async () => {
+    const githubSim = new GitHubSim();
+    const store = new MemoryStore();
+    githubSim.addPR({
+      number: 88,
+      branch: "feat-external",
+      headSha: "sha-88",
+      labels: ["queue", "queue:testing", "priority"],
+    });
+    store.insert(queueEntry({
+      id: "entry-external",
+      prNumber: 88,
+      branch: "feat-external",
+      headSha: "sha-88",
+      status: "validating",
+    }));
+    const service = createService(store, githubSim);
+
+    await processWebhookEvent(
+      { type: "pr_merged", prNumber: 88 },
+      service,
+      { admissionLabel: "queue", priorityQueueLabel: "priority", baseBranch: "main", repoFullName: "test/repo", github: githubSim },
+      silentLogger,
+    );
+
+    const entry = store.getEntry("entry-external");
+    assert.strictEqual(entry?.status, "merged");
+    assert.strictEqual(entry?.postMergeStatus, "pending");
+    assert.deepStrictEqual(await githubSim.listLabels(88), ["queue", "priority"]);
   });
 
   it("resolves PR by branch when pull_requests is empty via findPRByBranch", async () => {
