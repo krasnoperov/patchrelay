@@ -179,6 +179,7 @@ export class PatchRelayService {
       this.orchestrator.linearSync,
       (projectId, issueId) => runtime.enqueueIssue(projectId, issueId),
       logger,
+      this.orchestrator.leaseService,
     );
     this.trackedIssueListQuery = new TrackedIssueListQuery(db);
 

@@ -6,6 +6,7 @@ import pino from "pino";
 import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { ServiceStartupRecovery } from "../src/service-startup-recovery.ts";
+import { IssueSessionLeaseService } from "../src/issue-session-lease-service.ts";
 import type { AppConfig, LinearClient } from "../src/types.ts";
 
 function createConfig(baseDir: string): AppConfig {
@@ -129,6 +130,7 @@ test("startup recovery repairs re-delegated paused local work even without an ag
       { syncSession: async () => undefined } as never,
       (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
       pino({ enabled: false }),
+      new IssueSessionLeaseService(db, pino({ enabled: false }), "test-worker"),
     );
 
     await recovery.recoverDelegatedIssueStateFromLinear();
@@ -216,6 +218,7 @@ test("startup recovery discovers delegated Linear issues missing from the local 
       { syncSession: async () => undefined } as never,
       (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
       pino({ enabled: false }),
+      new IssueSessionLeaseService(db, pino({ enabled: false }), "test-worker"),
     );
 
     await recovery.recoverDelegatedIssueStateFromLinear();
@@ -293,6 +296,7 @@ test("startup recovery re-queues delegated requested-changes work after a restar
       { syncSession: async () => undefined } as never,
       (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
       pino({ enabled: false }),
+      new IssueSessionLeaseService(db, pino({ enabled: false }), "test-worker"),
     );
 
     await recovery.recoverDelegatedIssueStateFromLinear();
@@ -342,6 +346,7 @@ test("startup recovery does not resync idle paused issues just because they stil
       } as never,
       () => undefined,
       pino({ enabled: false }),
+      new IssueSessionLeaseService(db, pino({ enabled: false }), "test-worker"),
     );
 
     await recovery.syncKnownAgentSessions();
@@ -381,6 +386,7 @@ test("startup recovery does not scan webhook history for idle issues without act
       { syncSession: async () => undefined } as never,
       () => undefined,
       pino({ enabled: false }),
+      new IssueSessionLeaseService(db, pino({ enabled: false }), "test-worker"),
     );
 
     await recovery.syncKnownAgentSessions();
@@ -434,11 +440,71 @@ test("startup recovery still resyncs active runs with agent sessions", async () 
       } as never,
       () => undefined,
       pino({ enabled: false }),
+      new IssueSessionLeaseService(db, pino({ enabled: false }), "test-worker"),
     );
 
     await recovery.syncKnownAgentSessions();
 
     assert.deepEqual(syncCalls, [{ issueKey: "USE-ACTIVE", activeRunType: "implementation" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("startup recovery drains legacy pending_run_type rows into durable workflow tasks (S6)", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-startup-recovery-drain-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    // A pre-S6 row that still carries the legacy pending columns.
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-drain",
+      issueKey: "USE-DRAIN",
+      delegatedToPatchRelay: true,
+      factoryState: "changes_requested",
+      prNumber: 900,
+      prState: "open",
+      prHeadSha: "sha-drain",
+      prReviewState: "changes_requested",
+      lastBlockingReviewHeadSha: "sha-drain",
+      pendingRunType: "review_fix",
+      pendingRunContextJson: JSON.stringify({
+        requestedChangesHeadSha: "sha-drain",
+        wakeReason: "review_changes_requested",
+      }),
+    });
+
+    const recovery = new ServiceStartupRecovery(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { syncSession: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+      new IssueSessionLeaseService(db, pino({ enabled: false }), "test-worker"),
+    );
+
+    recovery.reconcileKnownWorkflowTasks();
+
+    // Columns drained…
+    const drained = db.getIssue("usertold", "issue-drain");
+    assert.equal(drained?.pendingRunType, undefined);
+    assert.equal(drained?.pendingRunContextJson, undefined);
+    // …and the equivalent runnable workflow task exists.
+    const tasks = db.workflowTasks.listOpenRunnableTasks("usertold")
+      .filter((task) => task.subjectId === "issue-drain" && task.taskId === "run:review_fix");
+    assert.equal(tasks.length, 1);
+
+    // A second sweep is a no-op: no columns to drain, task unchanged.
+    recovery.reconcileKnownWorkflowTasks();
+    const afterSecond = db.getIssue("usertold", "issue-drain");
+    assert.equal(afterSecond?.pendingRunType, undefined);
+    const stillOne = db.workflowTasks.listOpenRunnableTasks("usertold")
+      .filter((task) => task.subjectId === "issue-drain" && task.taskId === "run:review_fix");
+    assert.equal(stillOne.length, 1);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

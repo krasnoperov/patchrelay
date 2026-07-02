@@ -61,7 +61,9 @@ test("reconciler reopens stale local done issues back into requested-changes rep
       currentLinearStateType: "started",
       prNumber: 201,
       prState: "open",
+      prHeadSha: "sha-201",
       prReviewState: "changes_requested",
+      lastBlockingReviewHeadSha: "sha-201",
       prCheckStatus: "success",
     });
 
@@ -88,7 +90,12 @@ test("reconciler reopens stale local done issues back into requested-changes rep
 
     const issue = db.getIssue("usertold", "issue-review-fix");
     assert.equal(issue?.factoryState, "changes_requested");
-    assert.equal(issue?.pendingRunType, "review_fix");
+    // S6: reopening restores the PR-fact-derived factoryState and reconciles the
+    // equivalent runnable workflow task instead of writing pending_run_type.
+    assert.equal(issue?.pendingRunType, undefined);
+    const reviewFixTask = db.workflowTasks.listOpenRunnableTasks("usertold")
+      .find((task) => task.subjectId === "issue-review-fix" && task.taskId === "run:review_fix");
+    assert.ok(reviewFixTask, "expected an open runnable run:review_fix task after reopen");
     assert.equal(issue?.currentLinearState, "In Progress");
     assert.equal(issue?.currentLinearStateType, "started");
   } finally {

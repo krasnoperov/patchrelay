@@ -194,6 +194,18 @@ export class WakeDispatcher {
           detail: `Session-event rung answered ${sessionWake.wakeReason} — the durable inbox task should have covered it`,
         });
       }
+      // S6: the union superset — every session-event dispatch (any wake reason)
+      // should now be covered by a durable workflow task. Firing means a task
+      // failed to materialize; silence on the live service is the S7 go signal.
+      emitTelemetry(this.telemetry, {
+        type: "health.invariant",
+        invariant: "session_event_dispatch",
+        status: "observed",
+        projectId,
+        linearIssueId,
+        ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+        detail: `Session-event rung won the dispatch${sessionWake.wakeReason ? ` (${sessionWake.wakeReason})` : ""} — a durable workflow task should have covered it`,
+      });
       return {
         runType: sessionWake.runType,
         ...(sessionWake.wakeReason ? { wakeReason: sessionWake.wakeReason } : {}),
@@ -205,6 +217,18 @@ export class WakeDispatcher {
       return undefined;
     }
     if (issue.pendingRunType) {
+      // S6: the legacy column rung. All writers now redirect to durable
+      // observations+tasks and the startup drain nulls surviving rows, so this
+      // should never win — fire the invariant to prove it before S7 drops it.
+      emitTelemetry(this.telemetry, {
+        type: "health.invariant",
+        invariant: "legacy_pending_dispatch",
+        status: "observed",
+        projectId,
+        linearIssueId,
+        ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+        detail: `Legacy pending_run_type column (${issue.pendingRunType}) won the dispatch — a durable workflow task should have covered it`,
+      });
       return {
         runType: issue.pendingRunType,
         eventIds: [],

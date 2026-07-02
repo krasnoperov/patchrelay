@@ -224,6 +224,16 @@ export class IssueStore {
     return rows.map(mapIssueRow);
   }
 
+  // S6 drain: issues still carrying a legacy `pending_run_type` column value.
+  // The startup drain sweep synthesizes the equivalent durable observation /
+  // workflow task for each and nulls the columns, so S7 can drop them.
+  listIssuesWithPendingRunType(): IssueRecord[] {
+    const rows = this.connection
+      .prepare(`SELECT * FROM issues WHERE pending_run_type IS NOT NULL`)
+      .all() as Array<Record<string, unknown>>;
+    return rows.map(mapIssueRow);
+  }
+
   // Issues whose durable workflow tasks may need reconciling. A done/failed
   // issue produces no tasks (deriveWorkflowTasks short-circuits), so the only
   // terminal issues worth visiting are those that still hold an open task to
@@ -327,6 +337,15 @@ export class IssueStore {
   // events, and a prior enqueueIssue call can be silently lost (worker
   // race, lease contention, in-memory queue cleared by service restart).
   // The idle reconciler iterates this set and re-enqueues each one.
+  // The idle reconciler's safety-net sweep: idle, delegated, non-terminal
+  // issues that carry a pending wake the direct dispatch may have missed (lease
+  // race, restart). A wake now lives in one of two places: an unprocessed
+  // *actionable* session event, OR — since the v2 bridge — an open runnable
+  // workflow task with no backing session event (GitHub-repair wakes:
+  // review_fix / ci_repair / queue_repair / branch_upkeep exist only as tasks).
+  // Selecting on session events alone stranded task-only wakes when a webhook's
+  // direct dispatch lost the issue-session lease (USE-478 stalled 2h), so the
+  // sweep unions both sources under the same idle guards.
   listIdleIssuesWithPendingWake(): IssueRecord[] {
     const rows = this.connection
       .prepare(
@@ -335,6 +354,18 @@ export class IssueStore {
            ON e.project_id = i.project_id
           AND e.linear_issue_id = i.linear_issue_id
          WHERE e.processed_at IS NULL
+           AND i.active_run_id IS NULL
+           AND i.delegated_to_patchrelay = 1
+           AND i.factory_state NOT IN ('done', 'escalated', 'failed', 'awaiting_input')
+         UNION
+         SELECT DISTINCT i.* FROM issues i
+         INNER JOIN workflow_tasks t
+           ON t.project_id = i.project_id
+          AND t.subject_id = i.linear_issue_id
+         WHERE t.status = 'open'
+           AND t.task_type = 'run'
+           AND t.gate_action = 'start'
+           AND t.run_type IS NOT NULL
            AND i.active_run_id IS NULL
            AND i.delegated_to_patchrelay = 1
            AND i.factory_state NOT IN ('done', 'escalated', 'failed', 'awaiting_input')`,

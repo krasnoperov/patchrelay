@@ -9,6 +9,7 @@ import { hasTrustedNoPrCompletion } from "./trusted-no-pr-completion.ts";
 import type { LinearClientProvider } from "./types.ts";
 import { replaceIssueDependenciesFromLinearIssue } from "./linear-issue-projection.ts";
 import { isLinearRateLimitError } from "./linear-rate-limit.ts";
+import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
 const WRITER = "merged-linear-completion-reconciler";
 
@@ -142,7 +143,10 @@ export class MergedLinearCompletionReconciler {
         ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
         ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
         ...(restored ? { factoryState: restored.factoryState } : {}),
-        ...(restored ? { pendingRunType: restored.pendingRunType } : {}),
+        // S6: the legacy `pending_run_type` write is gone. Reopening restores the
+        // PR-fact-derived `factoryState`; the reconcile below re-derives the
+        // equivalent runnable workflow task (review_fix / ci_repair / queue_repair)
+        // from the PR facts already on the row.
       };
     };
     const restored = resolveOpenWorkflowState(issue);
@@ -158,6 +162,9 @@ export class MergedLinearCompletionReconciler {
     if (commit.outcome !== "applied") {
       return;
     }
+    // S6: materialize the runnable workflow task from the restored PR facts so
+    // the reopened issue becomes ready without a legacy `pending_run_type` write.
+    reconcileWorkflowTasksForIssue(this.db, commit.issue);
     this.logger.info(
       {
         issueKey: issue.issueKey,

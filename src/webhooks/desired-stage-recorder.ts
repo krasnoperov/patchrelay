@@ -15,6 +15,7 @@ import type {
   TrackedIssueRecord,
 } from "../types.ts";
 import { buildOperatorRetryEvent } from "../operator-retry-event.ts";
+import { appendBranchUpkeepObservation } from "../branch-upkeep-signal.ts";
 import { planIssueWebhookWorkflow } from "./issue-webhook-workflow-planner.ts";
 import type { WakeDispatcher } from "../wake-dispatcher.ts";
 import { dirtyWorktreeEventPayload, inspectGitWorktreeStatus } from "../git-worktree-status.ts";
@@ -212,6 +213,24 @@ export class DesiredStageRecorder {
         summary: `Implementation paused because ${issue.issueKey ?? normalizedIssue.id} is now blocked`,
       });
     } else if (workflowPlan.startupResume.pendingRunType) {
+      // S6: a branch_upkeep resume folds its run context into the durable
+      // `github.parent_head_moved` observation the workflow-task path derives
+      // `run:branch_upkeep` from (the legacy `pending_run_context_json` column is
+      // no longer written). Every other resume run type is fact-derived from the
+      // PR facts / delegation just committed above.
+      const resumeContext = workflowPlan.startupResume.pendingRunContext;
+      if (workflowPlan.startupResume.pendingRunType === "branch_upkeep" && resumeContext) {
+        appendBranchUpkeepObservation(this.db, issue, {
+          parentBranch: typeof resumeContext.baseBranch === "string" ? resumeContext.baseBranch : "main",
+          ...(issue.prHeadSha ? { childHeadSha: issue.prHeadSha } : {}),
+          ...(issue.prNumber !== undefined ? { childPrNumber: issue.prNumber } : {}),
+        });
+      }
+      // Session event kept for diagnostics; it no longer holds dispatch
+      // authority. The webhook handler reconciles workflow tasks and enqueues
+      // right after `record()` returns, so the branch_upkeep observation above
+      // (and the PR facts just committed) materialize the runnable `workflow_task`
+      // that drives the resumed run — no dispatch call is needed here.
       this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(params.project.id, normalizedIssue.id, {
         projectId: params.project.id,
         linearIssueId: normalizedIssue.id,

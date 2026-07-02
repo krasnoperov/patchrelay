@@ -11,6 +11,7 @@ import {
   readReactivePrSnapshot,
 } from "./reactive-pr-state.ts";
 import { readReactivePublishDelta } from "./reactive-publish-delta.ts";
+import { appendBranchUpkeepObservation } from "./branch-upkeep-signal.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 import { readLatestRequestedChangesReviewContext } from "./remote-pr-review.ts";
 import { hasFreshSuccessfulGateCheck } from "./github-rollup.ts";
@@ -399,21 +400,14 @@ export class ReactiveRunPolicy {
     headSha: string | undefined,
   ): void {
     try {
-      this.db.workflowObservations.appendObservation({
-        projectId: issue.projectId,
-        subjectId: issue.linearIssueId,
-        source: "github",
-        type: "github.parent_head_moved",
-        // This path is "review-fix left the PR dirty against its base": there
-        // is no parent PR here and we do not know the base branch's SHA, so
-        // parentHeadSha is intentionally omitted. childHeadSha (the issue's
-        // own dirty head) drives the task's self-close once a new head lands.
-        payloadJson: JSON.stringify({
-          parentBranch: baseBranch,
-          ...(issue.prNumber !== undefined ? { childPrNumber: issue.prNumber } : {}),
-          ...(headSha ? { childHeadSha: headSha } : {}),
-        }),
-        dedupeKey: `branch_upkeep:${issue.linearIssueId}:${headSha ?? "unknown-sha"}`,
+      // This path is "review-fix left the PR dirty against its base": there is
+      // no parent PR here and we do not know the base branch's SHA, so
+      // parentHeadSha is omitted. childHeadSha (the issue's own dirty head)
+      // drives the task's self-close (and the dedupe) once a new head lands.
+      appendBranchUpkeepObservation(this.db, issue, {
+        parentBranch: baseBranch,
+        ...(issue.prNumber !== undefined ? { childPrNumber: issue.prNumber } : {}),
+        ...(headSha ? { childHeadSha: headSha } : {}),
       });
       const refreshed = this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
       reconcileWorkflowTasksForIssue(this.db, refreshed);

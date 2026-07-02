@@ -184,6 +184,54 @@ test("review fix completion blocks same-head handoff", () => {
   }
 });
 
+test("delegated draft PR derives run:implementation (S6 — draft continues implementation)", () => {
+  const { db, cleanup } = createDb();
+  try {
+    // A delegated issue with only a draft PR is work-in-progress: implementation
+    // continues on it. This mirrors deriveIssueSessionReactiveIntent (which
+    // excludes drafts) and replaces the legacy `pending_run_type: implementation`
+    // that the linked-PR-adoption / re-delegation writers used to set.
+    const issue = makeIssue(db, {
+      factoryState: "delegated",
+      prNumber: 77,
+      prState: "open",
+      prIsDraft: true,
+      prHeadSha: "draft-head",
+    });
+    const snapshot = projectWorkflowSnapshot({ issue });
+    const task = snapshot.openTasks[0];
+
+    assert.equal(task?.id, "run:implementation");
+    assert.equal(task?.runType, "implementation");
+    assert.equal(evaluateTaskStart(snapshot, task!).action, "start");
+  } finally {
+    cleanup();
+  }
+});
+
+test("draft PR masks the reactive review/repair gates (S6)", () => {
+  const { db, cleanup } = createDb();
+  try {
+    // Even with changes_requested facts on the row, a draft PR routes to
+    // implementation rather than review_fix — a draft is not review-blocked.
+    const issue = makeIssue(db, {
+      factoryState: "delegated",
+      prNumber: 78,
+      prState: "open",
+      prIsDraft: true,
+      prHeadSha: "draft-head-2",
+      prReviewState: "changes_requested",
+      lastBlockingReviewHeadSha: "draft-head-2",
+    });
+    const snapshot = projectWorkflowSnapshot({ issue });
+    const task = snapshot.openTasks[0];
+
+    assert.equal(task?.id, "run:implementation");
+  } finally {
+    cleanup();
+  }
+});
+
 test("review fix task preserves requested-changes observation context", () => {
   const { db, cleanup } = createDb();
   try {

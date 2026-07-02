@@ -3,9 +3,8 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
+import { appendBranchUpkeepObservation } from "./branch-upkeep-signal.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
-
-const WRITER = "github-webhook-stack-coordination";
 
 // Plan §8.3-8.4: when a parent PR's head moves (review-fix push,
 // eviction repair, base-branch update), child PRs stacked on it
@@ -36,40 +35,24 @@ export function maybeFanChildRebaseWakes(params: {
       );
       continue;
     }
-    db.issueSessions.commitIssueState({
-      writer: WRITER,
-      update: {
-        projectId: child.projectId,
-        linearIssueId: child.linearIssueId,
-        pendingRunType: "branch_upkeep",
-      },
-    });
-    // S2: append the durable signal the v2 workflow-task path derives
-    // `run:branch_upkeep` from. The legacy `pending_run_type` write above is
-    // kept intentionally this stage (dual path), but the observation + reconcile
-    // materialize a runnable workflow task so the `workflow_task` dispatch rung
-    // — which outranks the legacy column in both resolvers — wins. Repeated
-    // syncs on the same parent head dedupe; a new parent head is a new
-    // observation (and a new child head self-closes the stale one).
-    db.workflowObservations.appendObservation({
-      projectId: child.projectId,
-      subjectId: child.linearIssueId,
-      source: "github",
-      type: "github.parent_head_moved",
-      payloadJson: JSON.stringify({
-        parentBranch: event.branchName,
-        ...(event.headSha ? { parentHeadSha: event.headSha } : {}),
-        ...(child.prNumber !== undefined ? { childPrNumber: child.prNumber } : {}),
-        ...(child.prHeadSha ? { childHeadSha: child.prHeadSha } : {}),
-      }),
-      dedupeKey: `branch_upkeep:${child.linearIssueId}:${event.headSha ?? "unknown-sha"}`,
+    // S6: append the durable signal the v2 workflow-task path derives
+    // `run:branch_upkeep` from and reconcile a runnable workflow task. The
+    // legacy `pending_run_type` column write is gone — the `workflow_task`
+    // dispatch rung is now the only source. Repeated syncs on the same parent
+    // head dedupe (keyed on the parent head); a new child head self-closes the
+    // stale one.
+    appendBranchUpkeepObservation(db, child, {
+      parentBranch: event.branchName,
+      ...(event.headSha ? { parentHeadSha: event.headSha } : {}),
+      ...(child.prNumber !== undefined ? { childPrNumber: child.prNumber } : {}),
+      ...(child.prHeadSha ? { childHeadSha: child.prHeadSha } : {}),
+      dedupeSha: event.headSha,
     });
     const refreshedChild = db.issues.getIssue(child.projectId, child.linearIssueId) ?? child;
     reconcileWorkflowTasksForIssue(db, refreshedChild);
-    // The pending_run_type field / observation above aren't an in-memory
-    // enqueue, so we still need an explicit dispatch call. dispatchIfWakePending
-    // resolves the runnable workflow task (falling back to the legacy column if
-    // reconciliation could not materialize one).
+    // The observation append is not an in-memory enqueue, so we still need an
+    // explicit dispatch call. dispatchIfWakePending resolves the runnable
+    // workflow task materialized by the reconcile above.
     wakeDispatcher.dispatchIfWakePending(child.projectId, child.linearIssueId);
     logger.info(
       {
