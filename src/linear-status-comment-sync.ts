@@ -11,6 +11,25 @@ import type { LinearClientProvider } from "./types.ts";
 
 const WRITER = "linear-status-comment-sync";
 
+// Idempotence guard: skip the Linear write when the target comment already
+// carries the body we are about to write. Without this, every sync re-updates
+// the comment, Linear echoes a commentUpdated webhook, and any webhook-driven
+// sync path turns into a self-sustaining update loop (observed live: USE-478
+// collapsed its placeholder every ~30-60s for two hours, ~90 comment writes).
+// Process-lifetime cache keyed by comment id; a restart costs at most one
+// redundant write per comment, which the cache then absorbs.
+const lastWrittenCommentBody = new Map<string, string>();
+
+function shouldSkipCommentWrite(commentId: string | undefined, body: string): boolean {
+  return commentId !== undefined && lastWrittenCommentBody.get(commentId) === body;
+}
+
+function noteCommentWrite(commentId: string, body: string): void {
+  // Bound the cache; entries are tiny but issues are unbounded over months.
+  if (lastWrittenCommentBody.size > 5000) lastWrittenCommentBody.clear();
+  lastWrittenCommentBody.set(commentId, body);
+}
+
 export async function syncVisibleStatusComment(params: {
   db: PatchRelayDatabase;
   issue: IssueRecord;
@@ -22,11 +41,15 @@ export async function syncVisibleStatusComment(params: {
   const { db, issue, linear, logger, trackedIssue, options } = params;
   try {
     const body = renderStatusComment(db, issue, trackedIssue, options);
+    if (shouldSkipCommentWrite(issue.statusCommentId, body)) {
+      return;
+    }
     const result = await linear.upsertIssueComment({
       issueId: issue.linearIssueId,
       ...(issue.statusCommentId ? { commentId: issue.statusCommentId } : {}),
       body,
     });
+    noteCommentWrite(result.id, body);
     if (result.id !== issue.statusCommentId) {
       db.issueSessions.commitIssueState({
         writer: WRITER,
@@ -74,11 +97,16 @@ export async function collapseVisibleStatusComment(params: {
     return;
   }
   try {
+    const body = renderCollapsedStatusComment();
+    if (shouldSkipCommentWrite(issue.statusCommentId, body)) {
+      return;
+    }
     await linear.upsertIssueComment({
       issueId: issue.linearIssueId,
       commentId: issue.statusCommentId,
-      body: renderCollapsedStatusComment(),
+      body,
     });
+    noteCommentWrite(issue.statusCommentId, body);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     logger.warn({ issueId: issue.linearIssueId, error: msg }, "Failed to collapse Linear status comment");
