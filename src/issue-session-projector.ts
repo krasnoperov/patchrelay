@@ -2,7 +2,7 @@ import type {
   IssueRecord,
   RunRecord,
 } from "./db-types.ts";
-import type { RunType } from "./factory-state.ts";
+import type { RunType } from "./run-type.ts";
 import type { IssueStore } from "./db/issue-store.ts";
 import type { IssueSessionStore } from "./db/issue-session-store.ts";
 import type { RunStore } from "./db/run-store.ts";
