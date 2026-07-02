@@ -21,7 +21,8 @@ export class TrackedIssueQuery {
         factoryState: issue.factoryState,
         sessionState: deriveIssueSessionState({
           activeRunId: issue.activeRunId,
-          factoryState: issue.factoryState,
+          ...(issue.prState !== undefined ? { prState: issue.prState } : {}),
+          compatibilityFactoryState: issue.factoryState,
         }),
         currentLinearState: issue.currentLinearState,
         currentLinearStateType: issue.currentLinearStateType,
