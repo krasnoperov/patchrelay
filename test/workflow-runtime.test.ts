@@ -270,6 +270,100 @@ test("stale requested-changes aggregate waits after review fix pushed a new head
   }
 });
 
+test("parent head moved derives a branch_upkeep task carrying upkeep context", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const issue = makeIssue(db, {
+      factoryState: "pr_open",
+      prNumber: 101,
+      prState: "open",
+      prHeadSha: "child-head-1",
+    });
+    db.workflowObservations.appendObservation({
+      projectId: issue.projectId,
+      subjectId: issue.linearIssueId,
+      source: "github",
+      type: "github.parent_head_moved",
+      payloadJson: JSON.stringify({
+        parentBranch: "feat/parent",
+        parentHeadSha: "parent-head-2",
+        childPrNumber: 101,
+        childHeadSha: "child-head-1",
+      }),
+      dedupeKey: "branch_upkeep:issue-1:parent-head-2",
+    });
+
+    const snapshot = projectWorkflowSnapshot({
+      issue,
+      observations: db.workflowObservations.listObservations(issue.projectId, issue.linearIssueId),
+    });
+    const task = snapshot.openTasks[0];
+
+    assert.equal(task?.id, "run:branch_upkeep");
+    assert.equal(task?.runType, "branch_upkeep");
+    assert.equal(task?.requirements?.branchUpkeepRequired, true);
+    assert.equal(task?.requirements?.reviewFixMode, "branch_upkeep");
+    assert.equal(task?.requirements?.baseBranch, "feat/parent");
+    assert.equal(task?.requirements?.childPrNumber, 101);
+    assert.equal(evaluateTaskStart(snapshot, task!).action, "start");
+    assert.equal(evaluateTaskCompletion(snapshot, task!).action, "start");
+  } finally {
+    cleanup();
+  }
+});
+
+test("branch_upkeep task closes once the child head advances past the moved parent", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const issue = makeIssue(db, {
+      factoryState: "pr_open",
+      prNumber: 101,
+      prState: "open",
+      prHeadSha: "child-head-1",
+    });
+    db.workflowObservations.appendObservation({
+      projectId: issue.projectId,
+      subjectId: issue.linearIssueId,
+      source: "github",
+      type: "github.parent_head_moved",
+      payloadJson: JSON.stringify({
+        parentBranch: "feat/parent",
+        parentHeadSha: "parent-head-2",
+        childPrNumber: 101,
+        childHeadSha: "child-head-1",
+      }),
+      dedupeKey: "branch_upkeep:issue-1:parent-head-2",
+    });
+
+    const first = reconcileWorkflowTasksForIssue(db, issue);
+    assert.equal(first.result.open.some((task) => task.taskId === "run:branch_upkeep"), true);
+    assert.equal(
+      db.workflowTasks.listOpenRunnableTasks(issue.projectId)
+        .some((task) => task.subjectId === issue.linearIssueId && task.taskId === "run:branch_upkeep"),
+      true,
+    );
+
+    // The child rebases: its own head advances past the head that was current
+    // when the parent moved, so the branch_upkeep fact no longer holds and the
+    // task self-closes on the next reconcile.
+    db.issueSessions.commitIssueState({
+      writer: "workflow-runtime-test",
+      update: { projectId: issue.projectId, linearIssueId: issue.linearIssueId, prHeadSha: "child-head-2" },
+    });
+    const advanced = db.getIssue(issue.projectId, issue.linearIssueId)!;
+    const second = reconcileWorkflowTasksForIssue(db, advanced);
+
+    assert.equal(second.result.open.some((task) => task.taskId === "run:branch_upkeep"), false);
+    assert.equal(
+      db.workflowTasks.listOpenRunnableTasks(issue.projectId)
+        .some((task) => task.subjectId === issue.linearIssueId && task.taskId === "run:branch_upkeep"),
+      false,
+    );
+  } finally {
+    cleanup();
+  }
+});
+
 test("settled PR check failure derives a CI repair task", () => {
   const { db, cleanup } = createDb();
   try {

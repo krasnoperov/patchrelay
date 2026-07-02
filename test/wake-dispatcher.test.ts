@@ -7,6 +7,7 @@ import pino from "pino";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { WakeDispatcher } from "../src/wake-dispatcher.ts";
 import { reconcileWorkflowTasksForIssue } from "../src/workflow-task-reconciler.ts";
+import { MemoryPatchRelayTelemetry } from "../src/telemetry.ts";
 
 function withDb<T>(fn: (db: PatchRelayDatabase, baseDir: string) => Promise<T>): Promise<T> {
   return (async () => {
@@ -242,6 +243,48 @@ test("dispatchIfWakePending falls back to legacy pendingRunType when no event ex
 
     assert.equal(runType, "branch_upkeep");
     assert.deepEqual(enqueueCalls, [["proj", "issue-1"]]);
+  });
+});
+
+test("dispatchIfWakePending resolves branch_upkeep from a workflow task with source workflow_task", async () => {
+  await withDb(async (db) => {
+    makeIssue(db, { prNumber: 101, prState: "open", prHeadSha: "child-head-1" });
+    db.workflowObservations.appendObservation({
+      projectId: "proj",
+      subjectId: "issue-1",
+      source: "github",
+      type: "github.parent_head_moved",
+      payloadJson: JSON.stringify({
+        parentBranch: "feat/parent",
+        parentHeadSha: "parent-head-2",
+        childPrNumber: 101,
+        childHeadSha: "child-head-1",
+      }),
+      dedupeKey: "branch_upkeep:issue-1:parent-head-2",
+    });
+    reconcileWorkflowTasksForIssue(db, db.getIssue("proj", "issue-1")!);
+
+    const telemetry = new MemoryPatchRelayTelemetry();
+    const enqueueCalls: Array<[string, string]> = [];
+    const dispatcher = new WakeDispatcher(
+      db,
+      (p, i) => enqueueCalls.push([p, i]),
+      () => undefined,
+      pino({ enabled: false }),
+      undefined,
+      telemetry,
+    );
+
+    const runType = dispatcher.dispatchIfWakePending("proj", "issue-1");
+
+    assert.equal(runType, "branch_upkeep");
+    assert.deepEqual(enqueueCalls, [["proj", "issue-1"]]);
+    assert.equal(telemetry.list("wake.derived").at(-1)?.source, "workflow_task");
+    // The implicit-wake invariant must stay silent when a task backs the wake.
+    assert.equal(
+      telemetry.list("health.invariant").some((event) => event.invariant === "implicit_wake_without_task"),
+      false,
+    );
   });
 });
 

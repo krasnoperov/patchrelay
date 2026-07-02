@@ -63,11 +63,11 @@ test("maybeFanChildRebaseWakes enqueues branch_upkeep on stacked children for pr
     db.issues.upsertIssue({
       projectId: "p", linearIssueId: "CHILD",
       factoryState: "pr_open", branchName: "feat/child", prNumber: 101,
-      parentPrBranch: "feat/parent",
+      parentPrBranch: "feat/parent", delegatedToPatchRelay: true,
     });
 
     const enqueued: Array<[string, string]> = [];
-    maybeFanChildRebaseWakes({
+    const fan = () => maybeFanChildRebaseWakes({
       db,
       logger: silentLogger(),
       wakeDispatcher: createTestWakeDispatcher(db, (projectId, issueId) => enqueued.push([projectId, issueId])),
@@ -78,12 +78,28 @@ test("maybeFanChildRebaseWakes enqueues branch_upkeep on stacked children for pr
         headSha: "deadbeef",
       },
     });
+    fan();
 
-    assert.deepEqual(enqueued, [["p", "PARENT"]].length === 0
-      ? []
-      : [["p", "CHILD"]]);
+    assert.deepEqual(enqueued, [["p", "CHILD"]]);
+
+    // Legacy dual-path write is kept this stage.
     const child = db.issues.getIssue("p", "CHILD")!;
     assert.equal(child.pendingRunType, "branch_upkeep");
+
+    // S2: the durable v2 signal is appended and materialized into a runnable
+    // workflow task, so the workflow_task dispatch rung wins.
+    const observations = db.workflowObservations.listObservations("p", "CHILD")
+      .filter((observation) => observation.type === "github.parent_head_moved");
+    assert.equal(observations.length, 1);
+    const runnable = db.workflowTasks.listOpenRunnableTasks("p")
+      .filter((task) => task.subjectId === "CHILD" && task.taskId === "run:branch_upkeep");
+    assert.equal(runnable.length, 1);
+
+    // Repeated syncs on the same parent head dedupe the observation.
+    fan();
+    const afterSecond = db.workflowObservations.listObservations("p", "CHILD")
+      .filter((observation) => observation.type === "github.parent_head_moved");
+    assert.equal(afterSecond.length, 1);
   });
 });
 

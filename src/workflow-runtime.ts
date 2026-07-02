@@ -50,6 +50,19 @@ export interface WorkflowContext {
   ciSnapshot?: RunContext["ciSnapshot"] | undefined;
   requestedChangesContext?: RunContext | undefined;
   delegationContext?: RunContext | undefined;
+  branchUpkeepContext?: BranchUpkeepContext | undefined;
+}
+
+// S2: the durable signal behind a `run:branch_upkeep` task. Mirrors the
+// facts the legacy `deriveIssueSessionReactiveIntent` branch_upkeep branch
+// reacted to (a stacked child needs a rebase onto a moved parent head, or a
+// review-fix left the PR dirty). Sourced from the latest
+// `github.parent_head_moved` observation and self-closes once the child's own
+// head advances past the head that was current when the parent moved.
+export interface BranchUpkeepContext {
+  parentBranch?: string | undefined;
+  parentHeadSha?: string | undefined;
+  childPrNumber?: number | undefined;
 }
 
 export interface WorkflowSnapshot {
@@ -215,6 +228,32 @@ function latestDelegationContext(observations: WorkflowObservationRecord[]): Run
   return undefined;
 }
 
+function latestBranchUpkeepContext(
+  observations: WorkflowObservationRecord[],
+  issuePrHeadSha: string | undefined,
+): BranchUpkeepContext | undefined {
+  for (const observation of [...observations].reverse()) {
+    if (observation.source !== "github" || observation.type !== "github.parent_head_moved") {
+      continue;
+    }
+    const payload = parseObservationPayload(observation);
+    // Self-closing fact: the child needs upkeep only while its own head is
+    // still the one that was current when the parent moved. Once the child
+    // rebases (its head advances), a newer observation supersedes this one, or
+    // this signal stops matching and the task closes on the next reconcile.
+    const childHeadSha = payload?.childHeadSha;
+    if (typeof childHeadSha === "string" && issuePrHeadSha && childHeadSha !== issuePrHeadSha) {
+      continue;
+    }
+    return {
+      ...(typeof payload?.parentBranch === "string" ? { parentBranch: payload.parentBranch } : {}),
+      ...(typeof payload?.parentHeadSha === "string" ? { parentHeadSha: payload.parentHeadSha } : {}),
+      ...(typeof payload?.childPrNumber === "number" ? { childPrNumber: payload.childPrNumber } : {}),
+    };
+  }
+  return undefined;
+}
+
 function parseObjectJson(raw: string | undefined): Record<string, unknown> | undefined {
   if (!raw) return undefined;
   try {
@@ -237,6 +276,7 @@ export function projectWorkflowSnapshot(input: WorkflowProjectionInput): Workflo
   const ciSnapshot = parseCiSnapshotContext(input.issue.lastGitHubCiSnapshotJson);
   const requestedChangesContext = latestRequestedChangesContext(observations, input.issue.lastBlockingReviewHeadSha);
   const delegationContext = latestDelegationContext(observations);
+  const branchUpkeepContext = latestBranchUpkeepContext(observations, input.issue.prHeadSha);
   const baseSnapshot: Omit<WorkflowSnapshot, "openTasks"> = {
     id: `${input.issue.projectId}:${input.issue.linearIssueId}`,
     projectId: input.issue.projectId,
@@ -257,6 +297,7 @@ export function projectWorkflowSnapshot(input: WorkflowProjectionInput): Workflo
       ...(ciSnapshot ? { ciSnapshot } : {}),
       ...(requestedChangesContext ? { requestedChangesContext } : {}),
       ...(delegationContext ? { delegationContext } : {}),
+      ...(branchUpkeepContext ? { branchUpkeepContext } : {}),
     },
     ...(input.activeRun
       ? { activeRun: input.activeRun }
@@ -343,6 +384,32 @@ export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks"
       reason: "Child workflows are complete; parent objective needs verification",
       requirements: { childCount: snapshot.childCount },
     }];
+  }
+
+  // S2: branch_upkeep — a stacked child whose parent PR head moved, or a PR
+  // that a review-fix left dirty, needs a rebase onto latest. Mirrors the
+  // legacy `deriveIssueSessionReactiveIntent` branch_upkeep branch guards (PR
+  // present, open-or-unset state) and wins over review_fix the same way the
+  // reactive intent returned branch_upkeep in place of review_fix on conflict.
+  const hasPrArtifact = snapshot.artifacts.some((artifact) => artifact.type === "pr");
+  const prStateAllowsUpkeep = hasPrArtifact && (prState === undefined || prState === "open");
+  if (prStateAllowsUpkeep && issue.branchUpkeepContext) {
+    tasks.push({
+      id: "run:branch_upkeep",
+      type: "run",
+      runType: "branch_upkeep",
+      reason: "Parent PR head moved (or PR left dirty); branch needs upkeep onto latest",
+      requirements: {
+        branchUpkeepRequired: true,
+        reviewFixMode: "branch_upkeep",
+        wakeReason: "branch_upkeep",
+        ...(issue.branchUpkeepContext.parentBranch ? { baseBranch: issue.branchUpkeepContext.parentBranch } : {}),
+        ...(issue.branchUpkeepContext.parentHeadSha ? { parentHeadSha: issue.branchUpkeepContext.parentHeadSha } : {}),
+        ...(issue.branchUpkeepContext.childPrNumber !== undefined ? { childPrNumber: issue.branchUpkeepContext.childPrNumber } : {}),
+        ...(prState ? { prState } : {}),
+      },
+    });
+    return tasks;
   }
 
   if (prState === "open" && isCurrentHeadRequestedChanges({
@@ -442,6 +509,16 @@ export function evaluateTaskStart(snapshot: WorkflowSnapshot, task: WorkflowTask
   if (task.runType === "implementation" && snapshot.blockerCount > 0) {
     return { action: "wait", reason: "blocked" };
   }
+  if (task.runType === "branch_upkeep") {
+    // Unlike review_fix, branch_upkeep does not require a blocking review head
+    // (a stacked child needs a rebase regardless of review). It only needs a
+    // live PR to push a new head onto.
+    const pr = snapshot.artifacts.find((artifact) => artifact.type === "pr");
+    if (!pr || (pr.state !== undefined && pr.state !== "open")) {
+      return { action: "wait", reason: "missing_open_pr" };
+    }
+    return { action: "start" };
+  }
   if (task.runType === "review_fix" && typeof task.requirements?.blockingHeadSha !== "string") {
     return {
       action: "ask",
@@ -462,6 +539,9 @@ export function evaluateTaskCompletion(snapshot: WorkflowSnapshot, task: Workflo
   const pr = snapshot.artifacts.find((artifact) => artifact.type === "pr");
   if (task.runType === "implementation" && (!pr || pr.state !== "open")) {
     return { action: "escalate", reason: "implementation_completed_without_open_pr" };
+  }
+  if (task.runType === "branch_upkeep" && (!pr || (pr.state !== undefined && pr.state !== "open"))) {
+    return { action: "escalate", reason: "branch_upkeep_completed_without_open_pr" };
   }
   if (task.runType === "review_fix") {
     const blockingHeadSha = task.requirements?.blockingHeadSha;
