@@ -187,6 +187,9 @@ export interface RunRecord {
   authorityEpoch: number;
   leaseRevokedAt?: string | undefined;
   leaseRevokeReason?: string | undefined;
+  // S5: the workflow task id this run was claimed for (e.g. "run:input"),
+  // stamped at claim time so the finalizer closes the exact task.
+  taskId?: string | undefined;
   startedAt: string;
   endedAt?: string | undefined;
 }
@@ -260,7 +263,7 @@ export interface ThreadEventRecord {
   createdAt: string;
 }
 
-export type WorkflowObservationSource = "linear" | "github" | "git" | "runner" | "operator";
+export type WorkflowObservationSource = "linear" | "github" | "git" | "runner" | "operator" | "executor";
 
 export interface WorkflowObservationRecord {
   id: number;

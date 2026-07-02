@@ -312,7 +312,7 @@ function parseRunType(value: unknown): RunType | undefined {
 // branch_upkeep is intentionally NOT downgraded: it is exempt from the
 // orchestrator's inactive-requested-changes guard (so it never livelocks) and is
 // a legitimate continuation (branch maintenance) regardless of review state.
-function resolvePayloadRunType(payloadRunType: unknown, issue: Pick<IssueRecord, "prReviewState">): RunType | undefined {
+export function resolvePayloadRunType(payloadRunType: unknown, issue: Pick<IssueRecord, "prReviewState">): RunType | undefined {
   const parsed = parseRunType(payloadRunType);
   if (parsed === "review_fix" && issue.prReviewState !== "changes_requested") {
     return "implementation";

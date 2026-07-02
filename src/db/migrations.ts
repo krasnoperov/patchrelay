@@ -371,6 +371,10 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   addColumnIfMissing(connection, "runs", "authority_epoch", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(connection, "runs", "lease_revoked_at", "TEXT");
   addColumnIfMissing(connection, "runs", "lease_revoke_reason", "TEXT");
+  // S5 (v2 inbox tasks): the workflow task id this run was claimed for. The
+  // finalizer prefers this over the reconstructed `run:<runType>` string so an
+  // inbox task (run:input / run:orchestration_followup) closes by its real id.
+  addColumnIfMissing(connection, "runs", "task_id", "TEXT");
   addColumnIfMissing(connection, "workflow_tasks", "authority_epoch", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(connection, "workflow_tasks", "gate_action", "TEXT NOT NULL DEFAULT 'wait'");
   addColumnIfMissing(connection, "workflow_tasks", "gate_reason", "TEXT");

@@ -105,11 +105,16 @@ export class RunWakePlanner {
       ...(rawRequirements?.blockingHeadSha ? { requestedChangesHeadSha: rawRequirements.blockingHeadSha } : {}),
       source: "workflow_task",
     }) ?? { source: "workflow_task" };
+    // S5: inbox tasks (run:input / run:orchestration_followup) resume the
+    // existing thread even for an implementation run type — the human/child
+    // follow-up continues an in-progress session. They carry `resumeThread:true`
+    // in their requirements; reconciled-fact tasks keep the runType default.
+    const resumeThread = rawRequirements?.resumeThread === true || runType !== "implementation";
     return {
       runType,
       ...(Object.keys(context).length > 0 ? { context } : {}),
       wakeReason: task.taskId,
-      resumeThread: runType !== "implementation",
+      resumeThread,
       eventIds: [],
     };
   }

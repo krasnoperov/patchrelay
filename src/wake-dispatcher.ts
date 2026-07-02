@@ -26,6 +26,26 @@ interface DispatchableWake {
   source: "session_event" | "legacy_pending_run_type" | "workflow_task";
 }
 
+// S5: the human-input / completion-check / orchestration child-update wake
+// reasons that the durable inbox tasks (run:input / run:orchestration_followup)
+// are meant to own. If the session-event rung answers one of these, the inbox
+// task should have covered it first — a proving instrument for S6/S7.
+const INPUT_FAMILY_WAKE_REASONS = new Set<string>([
+  "direct_reply",
+  "followup_prompt",
+  "followup_comment",
+  "human_instruction",
+  "operator_prompt",
+  "completion_check_continue",
+  "child_changed",
+  "child_delivered",
+  "child_regressed",
+]);
+
+function isInputFamilyWakeReason(wakeReason: string | undefined): boolean {
+  return wakeReason !== undefined && INPUT_FAMILY_WAKE_REASONS.has(wakeReason);
+}
+
 // Single owner of "append a session event and tell the orchestrator
 // something might be runnable", and of "release a finished run so the
 // next wake fires." Until this existed, 8+ call sites each made their
@@ -162,6 +182,17 @@ export class WakeDispatcher {
     if (sessionWake) {
       if (this.workflowTasksSuppressSessionWake(openWorkflowTasks, sessionWake.wakeReason)) {
         return undefined;
+      }
+      if (isInputFamilyWakeReason(sessionWake.wakeReason)) {
+        emitTelemetry(this.telemetry, {
+          type: "health.invariant",
+          invariant: "session_wake_answered_input",
+          status: "observed",
+          projectId,
+          linearIssueId,
+          ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+          detail: `Session-event rung answered ${sessionWake.wakeReason} — the durable inbox task should have covered it`,
+        });
       }
       return {
         runType: sessionWake.runType,

@@ -147,7 +147,11 @@ export type PatchRelayTelemetryEvent =
       | "stale_blocked_read_model"
       | "active_run_with_unresolved_blocker"
       | "stale_lease_blocking_runnable_work"
-      | "detached_active_run";
+      | "detached_active_run"
+      // S5: the legacy session-event rung answered a human-input / child-update
+      // family wake that the durable inbox task should have covered. A proving
+      // instrument for the S6/S7 cutover (silent ⇒ the inbox path owns input).
+      | "session_wake_answered_input";
     status: "observed" | "repaired";
     detail?: string | undefined;
     blockerCount?: number | undefined;

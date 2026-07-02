@@ -10,8 +10,33 @@ import { wakeOrchestrationParentsForChildEvent } from "./orchestration-parent-wa
 import type { RunContext } from "./run-context.ts";
 import type { buildStageReport } from "./run-reporting.ts";
 import type { WakeDispatcher } from "./wake-dispatcher.ts";
+import { COMPLETION_CHECK_CONTINUE_OBSERVATION } from "./workflow-runtime.ts";
 
 const WRITER = "no-pr-completion-check";
+
+// S5: land a completion-check "continue" as a durable inbox observation. The
+// run's slot is cleared in the same lease block, so the release path (which
+// reconciles + dispatches) derives a run:input task carrying this runType.
+// Dual path: the legacy completion_check_continue session event is still
+// written alongside. Idempotent via `cc_continue:<runId>`.
+function appendCompletionCheckContinueObservation(
+  db: PatchRelayDatabase,
+  run: Pick<RunRecord, "id" | "projectId" | "linearIssueId" | "runType">,
+  summary: string,
+): void {
+  db.workflowObservations.appendObservation({
+    projectId: run.projectId,
+    subjectId: run.linearIssueId,
+    source: "executor",
+    type: COMPLETION_CHECK_CONTINUE_OBSERVATION,
+    payloadJson: JSON.stringify({
+      runId: run.id,
+      runType: run.runType,
+      ...(summary.trim() ? { completionCheckSummary: summary.trim() } : {}),
+    }),
+    dedupeKey: `cc_continue:${run.id}`,
+  });
+}
 
 // Post-completion-check decision writes all clear the run slot; on a version
 // conflict, apply only if the slot still belongs to this run on the fresh row.
@@ -153,6 +178,7 @@ export async function handleNoPrCompletionCheck(params: {
       }
       params.db.runs.finishRun(params.run.id, runUpdate);
       params.db.runs.saveCompletionCheck(params.run.id, completionCheck);
+      appendCompletionCheckContinueObservation(params.db, params.run, completionCheck.summary);
       return Boolean(params.db.issueSessions.appendIssueSessionEventWithLease(lease, {
         projectId: params.run.projectId,
         linearIssueId: params.run.linearIssueId,
@@ -235,6 +261,7 @@ export async function handleNoPrCompletionCheck(params: {
           summary: "PatchRelay changed files locally but has not published them yet; continuing automatically to finish publication.",
           why: params.publishedOutcomeError,
         });
+        appendCompletionCheckContinueObservation(params.db, params.run, params.publishedOutcomeError);
         return Boolean(params.db.issueSessions.appendIssueSessionEventWithLease(lease, {
           projectId: params.run.projectId,
           linearIssueId: params.run.linearIssueId,

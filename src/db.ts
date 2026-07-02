@@ -407,6 +407,7 @@ function mapRunRow(row: Record<string, unknown>): RunRecord {
     authorityEpoch: Number(row.authority_epoch ?? 0),
     ...(row.lease_revoked_at !== null ? { leaseRevokedAt: String(row.lease_revoked_at) } : {}),
     ...(row.lease_revoke_reason !== null ? { leaseRevokeReason: String(row.lease_revoke_reason) } : {}),
+    ...(row.task_id !== null && row.task_id !== undefined ? { taskId: String(row.task_id) } : {}),
     startedAt: String(row.started_at),
     ...(row.ended_at !== null ? { endedAt: String(row.ended_at) } : {}),
   };
