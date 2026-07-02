@@ -902,7 +902,7 @@ test("reactive intent does not repeat requested-changes work after the PR head a
 test("wake reason falls back to reactive GitHub truth", () => {
   assert.equal(
     deriveIssueSessionWakeReason({
-      factoryState: "pr_open",
+      compatibilityFactoryState: "pr_open",
       prNumber: 20,
       prState: "open",
       prHeadSha: "reviewed-head",

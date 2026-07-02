@@ -79,6 +79,7 @@ export class PatchRelayDatabase {
         runs: this.runs,
         workflowTasks: this.workflowTasks,
         issue,
+        telemetry: this.telemetryProxy,
         ...(options ? { options } : {}),
       }),
       telemetry: this.telemetryProxy,

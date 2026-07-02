@@ -7,7 +7,7 @@ import type { IssueStore } from "./db/issue-store.ts";
 import type { IssueSessionStore } from "./db/issue-session-store.ts";
 import type { RunStore } from "./db/run-store.ts";
 import type { WorkflowTaskStore } from "./db/workflow-task-store.ts";
-import { hasPendingWake } from "./pending-wake.ts";
+import { hasPendingWake, peekPendingWakeRunType } from "./pending-wake.ts";
 import { isoNow, type DatabaseConnection } from "./db/shared.ts";
 import { buildTrackedIssueRecord } from "./tracked-issue-projector.ts";
 import {
@@ -15,8 +15,11 @@ import {
 } from "./issue-session-events.ts";
 import {
   deriveIssueSessionState,
+  deriveIssueSessionStateLegacy,
   deriveIssueSessionWakeReason,
+  deriveIssueSessionWakeReasonLegacy,
 } from "./issue-session.ts";
+import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
 
 export function syncIssueSessionFromIssue(params: {
   connection: DatabaseConnection;
@@ -25,6 +28,7 @@ export function syncIssueSessionFromIssue(params: {
   runs: RunStore;
   workflowTasks: WorkflowTaskStore;
   issue: IssueRecord;
+  telemetry?: PatchRelayTelemetry | undefined;
   options?: {
     summaryText?: string | undefined;
     lastRunType?: RunType | undefined;
@@ -40,7 +44,15 @@ export function syncIssueSessionFromIssue(params: {
   const threadGeneration = activeThreadId && activeThreadId !== existing?.activeThreadId
     ? (existing?.threadGeneration ?? 0) + 1
     : (existing?.threadGeneration ?? (activeThreadId ? 1 : 0));
+  // S4 shadow parity: compute both the new PR-fact-based derivation (written)
+  // and the legacy factory-state-keyed one; emit divergence telemetry so the
+  // S8/S9 cutover can be gated on it staying silent.
   const sessionState = deriveIssueSessionState({
+    ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
+    ...(issue.prState !== undefined ? { prState: issue.prState } : {}),
+    compatibilityFactoryState: issue.factoryState,
+  });
+  const legacySessionState = deriveIssueSessionStateLegacy({
     ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
     factoryState: issue.factoryState,
   });
@@ -52,17 +64,37 @@ export function syncIssueSessionFromIssue(params: {
     latestRun,
     latestEvent: issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 1 }).at(-1),
   });
+  const pendingWakeRunType = peekPendingWakeRunType(
+    { workflowTasks, issueSessions },
+    issue.projectId,
+    issue.linearIssueId,
+  );
+  const derivedWakeReason = deriveIssueSessionWakeReason({
+    delegatedToPatchRelay: issue.delegatedToPatchRelay,
+    ...(pendingWakeRunType !== undefined ? { pendingWakeRunType } : {}),
+    compatibilityFactoryState: issue.factoryState,
+    prNumber: issue.prNumber,
+    prState: issue.prState,
+    prReviewState: issue.prReviewState,
+    prCheckStatus: issue.prCheckStatus,
+    latestFailureSource: issue.lastGitHubFailureSource,
+  });
+  const legacyWakeReason = deriveIssueSessionWakeReasonLegacy({
+    delegatedToPatchRelay: issue.delegatedToPatchRelay,
+    pendingRunType: issue.pendingRunType,
+    factoryState: issue.factoryState,
+    prNumber: issue.prNumber,
+    prState: issue.prState,
+    prReviewState: issue.prReviewState,
+    prCheckStatus: issue.prCheckStatus,
+    latestFailureSource: issue.lastGitHubFailureSource,
+  });
+  emitSessionProjectionDivergence(params.telemetry, issue, [
+    { field: "session_state", oldValue: legacySessionState, newValue: sessionState },
+    { field: "waiting_reason", oldValue: legacyWakeReason ?? null, newValue: derivedWakeReason ?? null },
+  ]);
   const lastWakeReason = options?.lastWakeReason
-    ?? deriveIssueSessionWakeReason({
-      delegatedToPatchRelay: issue.delegatedToPatchRelay,
-      pendingRunType: issue.pendingRunType,
-      factoryState: issue.factoryState,
-      prNumber: issue.prNumber,
-      prState: issue.prState,
-      prReviewState: issue.prReviewState,
-      prCheckStatus: issue.prCheckStatus,
-      latestFailureSource: issue.lastGitHubFailureSource,
-    })
+    ?? derivedWakeReason
     ?? existing?.lastWakeReason;
   const now = isoNow();
 
@@ -150,6 +182,25 @@ export function syncIssueSessionFromIssue(params: {
     now,
     now,
   );
+}
+
+function emitSessionProjectionDivergence(
+  telemetry: PatchRelayTelemetry | undefined,
+  issue: IssueRecord,
+  fields: Array<{ field: "session_state" | "waiting_reason"; oldValue: string | null; newValue: string | null }>,
+): void {
+  for (const { field, oldValue, newValue } of fields) {
+    if (oldValue === newValue) continue;
+    emitTelemetry(telemetry ?? noopTelemetry, {
+      type: "state.projection_divergence",
+      field,
+      oldValue,
+      newValue,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+    });
+  }
 }
 
 function resolveIssueSessionSummary(

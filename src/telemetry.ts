@@ -131,6 +131,15 @@ export type PatchRelayTelemetryEvent =
     resolution: "recomputed" | "skipped" | "applied_anyway";
   })
   | (PatchRelayTelemetryIds & {
+    // S4 cutover instrument: emitted when the new PR-fact-based session_state /
+    // waiting_reason derivation disagrees with the legacy factory-state-keyed
+    // one. Must stay silent for known shapes; gates S8/S9. Fire-and-forget.
+    type: "state.projection_divergence";
+    field: "session_state" | "waiting_reason";
+    oldValue: string | null;
+    newValue: string | null;
+  })
+  | (PatchRelayTelemetryIds & {
     type: "health.invariant";
     invariant:
       | "blocked_issue_with_pending_wake"
