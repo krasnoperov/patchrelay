@@ -138,7 +138,8 @@ export type PatchRelayTelemetryEvent =
       | "stale_blocked_read_model"
       | "active_run_with_unresolved_blocker"
       | "stale_lease_blocking_runnable_work"
-      | "detached_active_run";
+      | "detached_active_run"
+      | "implicit_wake_without_task";
     status: "observed" | "repaired";
     detail?: string | undefined;
     blockerCount?: number | undefined;

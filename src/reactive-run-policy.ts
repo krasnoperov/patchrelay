@@ -11,6 +11,7 @@ import {
   readReactivePrSnapshot,
 } from "./reactive-pr-state.ts";
 import { readReactivePublishDelta } from "./reactive-publish-delta.ts";
+import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 import { readLatestRequestedChangesReviewContext } from "./remote-pr-review.ts";
 import { hasFreshSuccessfulGateCheck } from "./github-rollup.ts";
 import type { RunContext } from "./run-context.ts";
@@ -364,6 +365,14 @@ export class ReactiveRunPolicy {
       if (snapshot.reviewState && snapshot.reviewState !== "changes_requested") return undefined;
       if (!isDirtyMergeStateStatus(snapshot.pr.mergeStateStatus)) return undefined;
 
+      // S2: append the durable signal the v2 workflow-task path derives
+      // `run:branch_upkeep` from, and reconcile so a runnable workflow task is
+      // materialized. The follow-up below (consumed by run-finalizer as a
+      // legacy session-event wake) is kept intentionally this stage — the
+      // `workflow_task` rung outranks it in both resolvers, so the task wins.
+      // Self-closes once a new head is pushed past the current dirty head.
+      this.appendBranchUpkeepSignalAndReconcile(issue, snapshot.baseBranch, snapshot.headSha);
+
       return {
         pendingRunType: "branch_upkeep",
         factoryState: "changes_requested",
@@ -381,6 +390,39 @@ export class ReactiveRunPolicy {
         error: error instanceof Error ? error.message : String(error),
       }, "Failed to resolve post-run PR upkeep");
       return undefined;
+    }
+  }
+
+  private appendBranchUpkeepSignalAndReconcile(
+    issue: IssueRecord,
+    baseBranch: string,
+    headSha: string | undefined,
+  ): void {
+    try {
+      this.db.workflowObservations.appendObservation({
+        projectId: issue.projectId,
+        subjectId: issue.linearIssueId,
+        source: "github",
+        type: "github.parent_head_moved",
+        // This path is "review-fix left the PR dirty against its base": there
+        // is no parent PR here and we do not know the base branch's SHA, so
+        // parentHeadSha is intentionally omitted. childHeadSha (the issue's
+        // own dirty head) drives the task's self-close once a new head lands.
+        payloadJson: JSON.stringify({
+          parentBranch: baseBranch,
+          ...(issue.prNumber !== undefined ? { childPrNumber: issue.prNumber } : {}),
+          ...(headSha ? { childHeadSha: headSha } : {}),
+        }),
+        dedupeKey: `branch_upkeep:${issue.linearIssueId}:${headSha ?? "unknown-sha"}`,
+      });
+      const refreshed = this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+      reconcileWorkflowTasksForIssue(this.db, refreshed);
+    } catch (error) {
+      this.logger.debug({
+        issueKey: issue.issueKey,
+        prNumber: issue.prNumber,
+        error: error instanceof Error ? error.message : String(error),
+      }, "Failed to append branch_upkeep signal after review fix");
     }
   }
 
