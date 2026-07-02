@@ -1,5 +1,6 @@
-import type { FactoryState, RunType } from "./factory-state.ts";
+import type { FactoryState } from "./factory-state.ts";
 import { isTerminalLinearState } from "./pr-state.ts";
+import type { RunType } from "./run-type.ts";
 
 export type IssueSessionState = "idle" | "running" | "waiting_input" | "done" | "failed";
 

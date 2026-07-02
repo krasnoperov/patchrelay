@@ -2,7 +2,7 @@ import type { GitHubFailureSource, IssueRecord, WorkflowObservationRecord } from
 import { buildFailureContext } from "./idle-reconciliation-helpers.ts";
 import { isCurrentHeadRequestedChanges } from "./issue-session.ts";
 import { isCanceledLinearState, isCompletedLinearState } from "./pr-state.ts";
-import type { RunType } from "./factory-state.ts";
+import type { RunType } from "./run-type.ts";
 import { tryParseRunContextValue, type RunContext } from "./run-context.ts";
 
 export type WorkflowTaskType = "run" | "verify" | "ask" | "wait" | "publish" | "escalate";

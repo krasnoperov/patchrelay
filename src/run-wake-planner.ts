@@ -1,7 +1,7 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, WorkflowTaskRecord } from "./db-types.ts";
-import type { RunType } from "./factory-state.ts";
+import type { RunType } from "./run-type.ts";
 import type { IssueSessionLease } from "./issue-session-lease-service.ts";
 import type { IssueSessionEventType } from "./issue-session-events.ts";
 import {

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
-import type { RunType } from "./factory-state.ts";
+import type { RunType } from "./run-type.ts";
 import { sanitizeOperatorFacingText } from "./presentation-text.ts";
 import { runContextSchema, type RunContext } from "./run-context.ts";
 import { assertNever } from "./utils.ts";

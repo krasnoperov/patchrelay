@@ -1,5 +1,7 @@
 import type { GitHubTriggerEvent } from "./github-types.ts";
 
+export type { RunType } from "./run-type.ts";
+
 /**
  * Factory state machine — the single source of truth for issue lifecycle.
  */
@@ -42,9 +44,6 @@ export const FACTORY_STATES: ReadonlySet<FactoryState> = new Set<FactoryState>(F
 export function isFactoryState(value: string): value is FactoryState {
   return FACTORY_STATES.has(value as FactoryState);
 }
-
-/** What kind of Codex run to start. */
-export type RunType = "implementation" | "ci_repair" | "review_fix" | "branch_upkeep" | "queue_repair";
 
 /** Which factory states involve an active Codex run. */
 export const ACTIVE_RUN_STATES: ReadonlySet<FactoryState> = new Set([
