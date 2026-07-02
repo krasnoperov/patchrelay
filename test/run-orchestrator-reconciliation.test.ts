@@ -2376,7 +2376,12 @@ exit 1
     assert.equal(updatedIssue?.factoryState, "changes_requested");
     assert.equal(updatedIssue?.activeRunId, undefined);
     assert.equal(updatedIssue?.reviewFixAttempts, 0);
-    assert.equal(updatedIssue?.pendingRunType, "review_fix");
+    // S6: the interrupted-retry no longer writes the legacy pending_run_type
+    // column — the retry is a fact-derived run:review_fix workflow task.
+    assert.equal(updatedIssue?.pendingRunType, undefined);
+    const reviewFixTask = db.workflowTasks.listOpenRunnableTasks("usertold")
+      .find((task) => task.subjectId === "issue-15r" && task.taskId === "run:review_fix");
+    assert.ok(reviewFixTask, "expected an open runnable run:review_fix task");
     assert.equal(updatedRun?.status, "failed");
     assert.equal(updatedRun?.failureReason, "Requested-changes run was interrupted before PatchRelay could verify that a new PR head was published");
     assert.deepEqual(
@@ -2460,16 +2465,22 @@ exit 1
 
     const updatedIssue = db.getIssue("usertold", "issue-15s");
     const updatedRun = db.runs.getRunById(run.id);
-    const pendingContext = updatedIssue?.pendingRunContextJson
-      ? JSON.parse(updatedIssue.pendingRunContextJson) as Record<string, unknown>
-      : undefined;
     assert.equal(updatedIssue?.factoryState, "changes_requested");
     assert.equal(updatedIssue?.activeRunId, undefined);
     assert.equal(updatedIssue?.reviewFixAttempts, 1);
-    assert.equal(updatedIssue?.pendingRunType, "branch_upkeep");
+    // S6: the branch_upkeep retry folds into a github.parent_head_moved
+    // observation → run:branch_upkeep workflow task (no legacy column write). The
+    // branch-upkeep run context now lives in the task requirements.
+    assert.equal(updatedIssue?.pendingRunType, undefined);
+    const branchUpkeepTask = db.workflowTasks.listOpenRunnableTasks("usertold")
+      .find((task) => task.subjectId === "issue-15s" && task.taskId === "run:branch_upkeep");
+    assert.ok(branchUpkeepTask, "expected an open runnable run:branch_upkeep task");
+    const taskReq = branchUpkeepTask?.requirementsJson
+      ? JSON.parse(branchUpkeepTask.requirementsJson) as Record<string, unknown>
+      : {};
     assert.equal(updatedRun?.status, "failed");
-    assert.equal(pendingContext?.branchUpkeepRequired, true);
-    assert.equal(pendingContext?.wakeReason, "branch_upkeep");
+    assert.equal(taskReq.branchUpkeepRequired, true);
+    assert.equal(taskReq.wakeReason, "branch_upkeep");
     assert.deepEqual(
       db.listIssuesReadyForExecution(),
       [{ projectId: "usertold", linearIssueId: "issue-15s" }],

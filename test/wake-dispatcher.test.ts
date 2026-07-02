@@ -283,6 +283,64 @@ test("dispatchIfWakePending resolves branch_upkeep from a workflow task with sou
   });
 });
 
+test("legacy pending_run_type rung fires the legacy_pending_dispatch invariant (S6)", async () => {
+  await withDb(async (db) => {
+    // No runnable task, no session wake — only the legacy column. The rung still
+    // works (dual-path) but must fire the proving invariant for the S7 cutover.
+    makeIssue(db, { factoryState: "pr_open" });
+    db.upsertIssue({ projectId: "proj", linearIssueId: "issue-1", pendingRunType: "review_fix" });
+
+    const telemetry = new MemoryPatchRelayTelemetry();
+    const enqueueCalls: Array<[string, string]> = [];
+    const dispatcher = new WakeDispatcher(
+      db,
+      (p, i) => enqueueCalls.push([p, i]),
+      () => undefined,
+      pino({ enabled: false }),
+      undefined,
+      telemetry,
+    );
+
+    const runType = dispatcher.dispatchIfWakePending("proj", "issue-1");
+
+    assert.equal(runType, "review_fix");
+    assert.equal(telemetry.list("wake.derived").at(-1)?.source, "legacy_pending_run_type");
+    const invariant = telemetry.list("health.invariant").find((e) => e.invariant === "legacy_pending_dispatch");
+    assert.ok(invariant, "legacy_pending_dispatch invariant should fire");
+  });
+});
+
+test("session-event rung fires the session_event_dispatch invariant (S6)", async () => {
+  await withDb(async (db) => {
+    // A session-event wake with no backing workflow task: still dispatches
+    // (dual-path) but fires the union invariant that must be silent for S7.
+    makeIssue(db, { factoryState: "pr_open" });
+    db.issueSessions.appendIssueSessionEventRespectingActiveLease("proj", "issue-1", {
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      eventType: "delegated",
+      dedupeKey: "delegated:issue-1",
+    });
+
+    const telemetry = new MemoryPatchRelayTelemetry();
+    const dispatcher = new WakeDispatcher(
+      db,
+      () => undefined,
+      () => undefined,
+      pino({ enabled: false }),
+      undefined,
+      telemetry,
+    );
+
+    const runType = dispatcher.dispatchIfWakePending("proj", "issue-1");
+
+    assert.equal(runType, "implementation");
+    assert.equal(telemetry.list("wake.derived").at(-1)?.source, "session_event");
+    const invariant = telemetry.list("health.invariant").find((e) => e.invariant === "session_event_dispatch");
+    assert.ok(invariant, "session_event_dispatch invariant should fire");
+  });
+});
+
 test("dispatchIfWakePending enqueues an already materialized runnable workflow task", async () => {
   await withDb(async (db) => {
     const issue = db.upsertIssue({

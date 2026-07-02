@@ -1,5 +1,5 @@
 import type { FactoryState, RunType } from "../factory-state.ts";
-import { serializeRunContext, type RunContext } from "../run-context.ts";
+import { type RunContext } from "../run-context.ts";
 
 /**
  * The 14-conditional-spread cascade inside DesiredStageRecorder.record was
@@ -91,13 +91,6 @@ function shouldClearPending(input: IssueUpdatePlanInputs): boolean {
   return false;
 }
 
-function buildStartupResumeContextJson(input: IssueUpdatePlanInputs): string | null | undefined {
-  if (input.startupResume.pendingRunType === undefined) return undefined;
-  return input.startupResume.pendingRunContext
-    ? serializeRunContext(input.startupResume.pendingRunContext, "startup resume context")
-    : null;
-}
-
 export function resolveIssueUpdatePlan(input: IssueUpdatePlanInputs): ResolvedIssueUpdate {
   const resolved: ResolvedIssueUpdate = {};
 
@@ -107,8 +100,12 @@ export function resolveIssueUpdatePlan(input: IssueUpdatePlanInputs): ResolvedIs
   }
 
   if (shouldClearPending(input)) {
+    // S6: both legacy pending columns are always nulled now. The startup-resume
+    // run context is no longer persisted here — the caller
+    // (`DesiredStageRecorder.record`) folds a branch_upkeep resume into a
+    // durable `github.parent_head_moved` observation and reconciles the run task.
     resolved.pendingRunType = null;
-    resolved.pendingRunContextJson = buildStartupResumeContextJson(input) ?? null;
+    resolved.pendingRunContextJson = null;
   }
 
   if (input.effectiveRunRelease.release) {

@@ -56,6 +56,48 @@ test("repairing_ci issues with an unseen failure signature become ready without 
   }
 });
 
+test("idle sweep re-enqueues issues whose wake exists only as a runnable workflow task (S6)", () => {
+  // Regression for USE-478: a review webhook's direct dispatch lost the
+  // issue-session lease at run-failure time, so the issue was left with an open
+  // runnable run:review_fix task but NO unprocessed session event. The idle
+  // reconciler safety-net sweep must still find it — otherwise the issue stalls
+  // until a manual retry.
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-db-ready-wake-task-only-"));
+  try {
+    const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
+    db.runMigrations();
+
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-task-only",
+      issueKey: "USE-478",
+      delegatedToPatchRelay: true,
+      factoryState: "changes_requested",
+      prNumber: 478,
+      prState: "open",
+      prHeadSha: "sha-478",
+      prReviewState: "changes_requested",
+      lastBlockingReviewHeadSha: "sha-478",
+    });
+
+    // Materialize the runnable task from the PR facts, with no session event.
+    reconcileWorkflowTasksForIssue(db, issue);
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-task-only"), undefined);
+    assert.equal(db.issueSessions.hasPendingIssueSessionEvents("usertold", "issue-task-only"), false);
+    const runnable = db.workflowTasks.listOpenRunnableTasks("usertold")
+      .filter((task) => task.subjectId === "issue-task-only" && task.taskId === "run:review_fix");
+    assert.equal(runnable.length, 1);
+
+    // The task-only wake must appear in the safety-net sweep set.
+    assert.deepEqual(
+      db.issues.listIdleIssuesWithPendingWake().map((entry) => entry.linearIssueId),
+      ["issue-task-only"],
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("terminal issues with a fresh GitHub wake become ready for execution again", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-db-ready-wake-terminal-"));
   try {

@@ -205,6 +205,7 @@ function issueArtifacts(issue: IssueRecord): WorkflowArtifact[] {
         ...(issue.prHeadSha ? { headSha: issue.prHeadSha } : {}),
         ...(issue.prReviewState ? { reviewState: issue.prReviewState } : {}),
         ...(issue.prCheckStatus ? { checkStatus: issue.prCheckStatus } : {}),
+        ...(issue.prIsDraft ? { isDraft: true } : {}),
       },
     });
   }
@@ -530,19 +531,26 @@ export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks"
   const prState = snapshot.artifacts.find((artifact) => artifact.type === "pr")?.state;
   const prHeadSha = snapshot.artifacts.find((artifact) => artifact.type === "pr")?.metadata?.headSha;
   const prReviewState = snapshot.artifacts.find((artifact) => artifact.type === "pr")?.metadata?.reviewState;
+  // A draft PR is work-in-progress: implementation continues on it and none of
+  // the reactive review/repair/upkeep gates apply. This mirrors
+  // `deriveIssueSessionReactiveIntent`, which returns undefined for drafts —
+  // the legacy writers routed a delegated draft PR to `run:implementation`.
+  const prIsDraft = snapshot.artifacts.find((artifact) => artifact.type === "pr")?.metadata?.isDraft === true;
 
   // ── Signal computations (hoisted so the S5 inbox precedence can consult
   //    the structural repair/upkeep signals before falling into a wait gate) ──
   const hasPrArtifact = snapshot.artifacts.some((artifact) => artifact.type === "pr");
   const hasThread = snapshot.artifacts.some((artifact) => artifact.type === "codex_thread");
   const branchUpkeepSignalled = hasPrArtifact
+    && !prIsDraft
     && (prState === undefined || prState === "open")
     && issue.branchUpkeepContext !== undefined;
   // Legacy `deriveIssueSessionReactiveIntent` precedence: queue_repair first,
   // then ci_repair, then branch_upkeep/review_fix. Hoisted so branch_upkeep and
   // the S5 inbox tasks all yield to a broken merge/CI gate.
-  const queueRepairSignalled = prState === "open" && issue.lastGitHubFailureSource === "queue_eviction";
-  const branchFailureMatchesCurrentHead = issue.lastGitHubFailureSource === "branch_ci"
+  const queueRepairSignalled = !prIsDraft && prState === "open" && issue.lastGitHubFailureSource === "queue_eviction";
+  const branchFailureMatchesCurrentHead = !prIsDraft
+    && issue.lastGitHubFailureSource === "branch_ci"
     && typeof issue.lastGitHubFailureSignature === "string"
     && typeof issue.lastGitHubFailureHeadSha === "string"
     && typeof prHeadSha === "string"
@@ -655,7 +663,7 @@ export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks"
     return tasks;
   }
 
-  if (!branchUpkeepSignalled && prState === "open" && isCurrentHeadRequestedChanges({
+  if (!branchUpkeepSignalled && !prIsDraft && prState === "open" && isCurrentHeadRequestedChanges({
     prReviewState: typeof prReviewState === "string" ? prReviewState : undefined,
     prHeadSha: typeof prHeadSha === "string" ? prHeadSha : undefined,
     lastBlockingReviewHeadSha: issue.lastBlockingReviewHeadSha,
@@ -708,18 +716,20 @@ export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks"
     return tasks;
   }
 
-  if (!snapshot.artifacts.some((artifact) => artifact.type === "pr") && issue.factoryState === "delegated") {
+  if ((!hasPrArtifact || prIsDraft) && issue.factoryState === "delegated") {
     tasks.push({
       id: "run:implementation",
       type: "run",
       runType: "implementation",
-      reason: "Delegated workflow has no PR artifact yet",
+      reason: prIsDraft
+        ? "Delegated workflow has only a draft PR; implementation continues"
+        : "Delegated workflow has no PR artifact yet",
       requirements: {
         ...issue.delegationContext,
         blockerCount: snapshot.blockerCount,
       },
     });
-  } else if (!snapshot.artifacts.some((artifact) => artifact.type === "pr")) {
+  } else if (!hasPrArtifact) {
     tasks.push({
       id: `wait:${issue.factoryState}`,
       type: "wait",

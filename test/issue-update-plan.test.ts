@@ -89,7 +89,11 @@ test("resolveIssueUpdatePlan: clears pending when desiredStage advances a fresh 
   assert.equal(plan.pendingRunContextJson, null);
 });
 
-test("resolveIssueUpdatePlan: startup resume serializes pendingRunContext to JSON", () => {
+test("resolveIssueUpdatePlan: startup resume always nulls both legacy pending columns (S6)", () => {
+  // S6: the resume run context is no longer persisted to the legacy
+  // `pending_run_context_json` column — `DesiredStageRecorder.record` folds a
+  // branch_upkeep resume into a durable observation and the run task is
+  // re-derived from PR facts. Both columns are always nulled here now.
   const plan = resolveIssueUpdatePlan(baseInputs({
     startupResume: {
       factoryState: "pr_open",
@@ -99,7 +103,7 @@ test("resolveIssueUpdatePlan: startup resume serializes pendingRunContext to JSO
   }));
   assert.equal(plan.factoryState, "pr_open");
   assert.equal(plan.pendingRunType, null);
-  assert.equal(plan.pendingRunContextJson, JSON.stringify({ reason: "operator_retry" }));
+  assert.equal(plan.pendingRunContextJson, null);
 });
 
 test("resolveIssueUpdatePlan: startup resume without context produces a null contextJson", () => {

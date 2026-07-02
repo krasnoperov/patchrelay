@@ -82,12 +82,13 @@ test("maybeFanChildRebaseWakes enqueues branch_upkeep on stacked children for pr
 
     assert.deepEqual(enqueued, [["p", "CHILD"]]);
 
-    // Legacy dual-path write is kept this stage.
+    // S6: the legacy `pending_run_type` column write is gone — the durable
+    // workflow task is now the only dispatch source.
     const child = db.issues.getIssue("p", "CHILD")!;
-    assert.equal(child.pendingRunType, "branch_upkeep");
+    assert.equal(child.pendingRunType, undefined);
 
-    // S2: the durable v2 signal is appended and materialized into a runnable
-    // workflow task, so the workflow_task dispatch rung wins.
+    // The durable v2 signal is appended and materialized into a runnable
+    // workflow task, so the workflow_task dispatch rung drives the run.
     const observations = db.workflowObservations.listObservations("p", "CHILD")
       .filter((observation) => observation.type === "github.parent_head_moved");
     assert.equal(observations.length, 1);

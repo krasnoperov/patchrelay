@@ -2299,6 +2299,13 @@ test("delegateChanged adopts a linked draft PR as implementation work", { concur
     assert.equal(issue?.factoryState, "delegated");
     assert.equal(issue?.prIsDraft, true);
     assert.equal(issue?.branchName, "feat-linked-draft");
+    // S6: the legacy pending_run_type column is no longer written; the draft PR
+    // drives a durable run:implementation workflow task (the session wake below
+    // is diagnostic dual-path only).
+    assert.equal(issue?.pendingRunType, undefined);
+    const implementationTask = db.workflowTasks.listOpenRunnableTasks("krasnoperov/mafia")
+      .filter((task) => task.subjectId === "issue-maf-adopt-draft" && task.taskId === "run:implementation");
+    assert.equal(implementationTask.length, 1);
     assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-adopt-draft")?.runType, "implementation");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-adopt-draft" }]);
   } finally {

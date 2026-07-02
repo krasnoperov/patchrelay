@@ -16,7 +16,9 @@ import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "./teleme
 import { resolvePostRunFactoryState } from "./run-completion-policy.ts";
 import type { RunCompletionPolicy } from "./run-completion-policy.ts";
 import { isRequestedChangesRunType } from "./reactive-pr-state.ts";
-import { serializeRunContext, type RunContext } from "./run-context.ts";
+import { type RunContext } from "./run-context.ts";
+import { appendBranchUpkeepObservation } from "./branch-upkeep-signal.ts";
+import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 import { settleRun } from "./run-settlement.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
 
@@ -593,15 +595,25 @@ export class RunFailurePolicy {
     const recoveredIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? refreshedIssue;
 
     if (recoveredState === "changes_requested") {
-      this.db.issueSessions.commitIssueState({
-        writer: WRITER,
-        update: {
-          projectId: run.projectId,
-          linearIssueId: run.linearIssueId,
-          pendingRunType: retryRunType,
-          pendingRunContextJson: retryContext ? serializeRunContext(retryContext, "requested-changes retry context") : null,
-        },
-      });
+      // S6: fold the retry intent into the durable observation the workflow-task
+      // path derives the retry run from, instead of the legacy `pending_run_type`
+      // column. A `branch_upkeep` retry needs the `github.parent_head_moved`
+      // signal to derive `run:branch_upkeep`; a `review_fix` retry is already
+      // fact-derived from the requested-changes facts on the row (the original
+      // review's observation carries the context). `reconcile` materializes the
+      // runnable task; the dispatch below picks it up.
+      if (retryRunType === "branch_upkeep") {
+        const baseBranch = typeof retryContext?.baseBranch === "string" ? retryContext.baseBranch : "main";
+        appendBranchUpkeepObservation(this.db, run, {
+          parentBranch: baseBranch,
+          ...(recoveredIssue.prHeadSha ? { childHeadSha: recoveredIssue.prHeadSha } : {}),
+          ...(recoveredIssue.prNumber !== undefined ? { childPrNumber: recoveredIssue.prNumber } : {}),
+        });
+      }
+      reconcileWorkflowTasksForIssue(
+        this.db,
+        this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? recoveredIssue,
+      );
       this.feed?.publish({
         level: "warn",
         kind: "workflow",

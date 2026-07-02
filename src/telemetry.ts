@@ -151,7 +151,15 @@ export type PatchRelayTelemetryEvent =
       // S5: the legacy session-event rung answered a human-input / child-update
       // family wake that the durable inbox task should have covered. A proving
       // instrument for the S6/S7 cutover (silent ⇒ the inbox path owns input).
-      | "session_wake_answered_input";
+      | "session_wake_answered_input"
+      // S6: the dispatcher chose the session-event rung (any wake reason) or the
+      // legacy `pending_run_type` column rung. Both should now be fully covered by
+      // durable workflow tasks — these fire only if a task failed to materialize.
+      // Silent on the live service ⇒ safe to delete both rungs + drop the column
+      // (S7). `session_event_dispatch` is the union superset of
+      // `session_wake_answered_input` (which stays scoped to the input families).
+      | "session_event_dispatch"
+      | "legacy_pending_dispatch";
     status: "observed" | "repaired";
     detail?: string | undefined;
     blockerCount?: number | undefined;
