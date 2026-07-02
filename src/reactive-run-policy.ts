@@ -404,9 +404,12 @@ export class ReactiveRunPolicy {
         subjectId: issue.linearIssueId,
         source: "github",
         type: "github.parent_head_moved",
+        // This path is "review-fix left the PR dirty against its base": there
+        // is no parent PR here and we do not know the base branch's SHA, so
+        // parentHeadSha is intentionally omitted. childHeadSha (the issue's
+        // own dirty head) drives the task's self-close once a new head lands.
         payloadJson: JSON.stringify({
           parentBranch: baseBranch,
-          ...(headSha ? { parentHeadSha: headSha } : {}),
           ...(issue.prNumber !== undefined ? { childPrNumber: issue.prNumber } : {}),
           ...(headSha ? { childHeadSha: headSha } : {}),
         }),

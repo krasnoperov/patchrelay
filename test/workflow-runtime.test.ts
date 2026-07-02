@@ -364,6 +364,120 @@ test("branch_upkeep task closes once the child head advances past the moved pare
   }
 });
 
+test("queue eviction outranks a pending branch_upkeep signal", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const issue = makeIssue(db, {
+      factoryState: "pr_open",
+      prNumber: 101,
+      prState: "open",
+      prHeadSha: "child-head-1",
+      lastGitHubFailureSource: "queue_eviction",
+      lastGitHubFailureHeadSha: "child-head-1",
+      lastGitHubFailureSignature: "queue:evicted",
+    });
+    db.workflowObservations.appendObservation({
+      projectId: issue.projectId,
+      subjectId: issue.linearIssueId,
+      source: "github",
+      type: "github.parent_head_moved",
+      payloadJson: JSON.stringify({
+        parentBranch: "feat/parent",
+        parentHeadSha: "parent-head-2",
+        childPrNumber: 101,
+        childHeadSha: "child-head-1",
+      }),
+      dedupeKey: "branch_upkeep:issue-1:parent-head-2",
+    });
+
+    const snapshot = projectWorkflowSnapshot({
+      issue,
+      observations: db.workflowObservations.listObservations(issue.projectId, issue.linearIssueId),
+    });
+
+    assert.equal(snapshot.openTasks[0]?.id, "run:queue_repair");
+    assert.equal(snapshot.openTasks.some((task) => task.id === "run:branch_upkeep"), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test("settled red CI outranks a pending branch_upkeep signal", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const issue = makeIssue(db, {
+      factoryState: "pr_open",
+      prNumber: 101,
+      prState: "open",
+      prHeadSha: "child-head-1",
+      prCheckStatus: "failed",
+      lastGitHubFailureSource: "branch_ci",
+      lastGitHubFailureHeadSha: "child-head-1",
+      lastGitHubFailureSignature: "ci:unit-tests",
+    });
+    db.workflowObservations.appendObservation({
+      projectId: issue.projectId,
+      subjectId: issue.linearIssueId,
+      source: "github",
+      type: "github.parent_head_moved",
+      payloadJson: JSON.stringify({
+        parentBranch: "feat/parent",
+        parentHeadSha: "parent-head-2",
+        childPrNumber: 101,
+        childHeadSha: "child-head-1",
+      }),
+      dedupeKey: "branch_upkeep:issue-1:parent-head-2",
+    });
+
+    const snapshot = projectWorkflowSnapshot({
+      issue,
+      observations: db.workflowObservations.listObservations(issue.projectId, issue.linearIssueId),
+    });
+
+    assert.equal(snapshot.openTasks[0]?.id, "run:ci_repair");
+    assert.equal(snapshot.openTasks.some((task) => task.id === "run:branch_upkeep"), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test("branch_upkeep outranks review_fix when both signals are present", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const issue = makeIssue(db, {
+      factoryState: "pr_open",
+      prNumber: 101,
+      prState: "open",
+      prHeadSha: "child-head-1",
+      prReviewState: "changes_requested",
+      lastBlockingReviewHeadSha: "child-head-1",
+    });
+    db.workflowObservations.appendObservation({
+      projectId: issue.projectId,
+      subjectId: issue.linearIssueId,
+      source: "github",
+      type: "github.parent_head_moved",
+      payloadJson: JSON.stringify({
+        parentBranch: "feat/parent",
+        parentHeadSha: "parent-head-2",
+        childPrNumber: 101,
+        childHeadSha: "child-head-1",
+      }),
+      dedupeKey: "branch_upkeep:issue-1:parent-head-2",
+    });
+
+    const snapshot = projectWorkflowSnapshot({
+      issue,
+      observations: db.workflowObservations.listObservations(issue.projectId, issue.linearIssueId),
+    });
+
+    assert.equal(snapshot.openTasks[0]?.id, "run:branch_upkeep");
+    assert.equal(snapshot.openTasks.some((task) => task.id === "run:review_fix"), false);
+  } finally {
+    cleanup();
+  }
+});
+
 test("settled PR check failure derives a CI repair task", () => {
   const { db, cleanup } = createDb();
   try {

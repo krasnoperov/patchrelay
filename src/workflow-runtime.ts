@@ -388,31 +388,51 @@ export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks"
 
   // S2: branch_upkeep — a stacked child whose parent PR head moved, or a PR
   // that a review-fix left dirty, needs a rebase onto latest. Mirrors the
-  // legacy `deriveIssueSessionReactiveIntent` branch_upkeep branch guards (PR
-  // present, open-or-unset state) and wins over review_fix the same way the
-  // reactive intent returned branch_upkeep in place of review_fix on conflict.
+  // legacy `deriveIssueSessionReactiveIntent` precedence: queue_repair and
+  // ci_repair win first (see below), then branch_upkeep wins over review_fix
+  // the same way the reactive intent returned branch_upkeep in place of
+  // review_fix on conflict.
   const hasPrArtifact = snapshot.artifacts.some((artifact) => artifact.type === "pr");
-  const prStateAllowsUpkeep = hasPrArtifact && (prState === undefined || prState === "open");
-  if (prStateAllowsUpkeep && issue.branchUpkeepContext) {
-    tasks.push({
-      id: "run:branch_upkeep",
-      type: "run",
-      runType: "branch_upkeep",
-      reason: "Parent PR head moved (or PR left dirty); branch needs upkeep onto latest",
-      requirements: {
-        branchUpkeepRequired: true,
-        reviewFixMode: "branch_upkeep",
-        wakeReason: "branch_upkeep",
-        ...(issue.branchUpkeepContext.parentBranch ? { baseBranch: issue.branchUpkeepContext.parentBranch } : {}),
-        ...(issue.branchUpkeepContext.parentHeadSha ? { parentHeadSha: issue.branchUpkeepContext.parentHeadSha } : {}),
-        ...(issue.branchUpkeepContext.childPrNumber !== undefined ? { childPrNumber: issue.branchUpkeepContext.childPrNumber } : {}),
-        ...(prState ? { prState } : {}),
-      },
-    });
+  const branchUpkeepSignalled = hasPrArtifact
+    && (prState === undefined || prState === "open")
+    && issue.branchUpkeepContext !== undefined;
+  const branchUpkeepTask = (): WorkflowTask => ({
+    id: "run:branch_upkeep",
+    type: "run",
+    runType: "branch_upkeep",
+    reason: "Parent PR head moved (or PR left dirty); branch needs upkeep onto latest",
+    requirements: {
+      branchUpkeepRequired: true,
+      reviewFixMode: "branch_upkeep",
+      wakeReason: "branch_upkeep",
+      ...(issue.branchUpkeepContext?.parentBranch ? { baseBranch: issue.branchUpkeepContext.parentBranch } : {}),
+      ...(issue.branchUpkeepContext?.parentHeadSha ? { parentHeadSha: issue.branchUpkeepContext.parentHeadSha } : {}),
+      ...(issue.branchUpkeepContext?.childPrNumber !== undefined ? { childPrNumber: issue.branchUpkeepContext.childPrNumber } : {}),
+      ...(prState ? { prState } : {}),
+    },
+  });
+
+  // Legacy `deriveIssueSessionReactiveIntent` precedence: queue_repair first,
+  // then ci_repair, then branch_upkeep/review_fix. Hoist the repair conditions
+  // so branch_upkeep yields to them — a queue eviction or settled red CI on a
+  // stacked child whose parent head moved must still dispatch the repair run.
+  const queueRepairSignalled = prState === "open" && issue.lastGitHubFailureSource === "queue_eviction";
+  const branchFailureMatchesCurrentHead = issue.lastGitHubFailureSource === "branch_ci"
+    && typeof issue.lastGitHubFailureSignature === "string"
+    && typeof issue.lastGitHubFailureHeadSha === "string"
+    && typeof prHeadSha === "string"
+    && issue.lastGitHubFailureHeadSha === prHeadSha;
+  const branchFailureAlreadyAttempted = branchFailureMatchesCurrentHead
+    && issue.lastAttemptedFailureHeadSha === issue.lastGitHubFailureHeadSha
+    && issue.lastAttemptedFailureSignature === issue.lastGitHubFailureSignature;
+  const ciRepairSignalled = prState === "open" && branchFailureMatchesCurrentHead && !branchFailureAlreadyAttempted;
+
+  if (branchUpkeepSignalled && !queueRepairSignalled && !ciRepairSignalled) {
+    tasks.push(branchUpkeepTask());
     return tasks;
   }
 
-  if (prState === "open" && isCurrentHeadRequestedChanges({
+  if (!branchUpkeepSignalled && prState === "open" && isCurrentHeadRequestedChanges({
     prReviewState: typeof prReviewState === "string" ? prReviewState : undefined,
     prHeadSha: typeof prHeadSha === "string" ? prHeadSha : undefined,
     lastBlockingReviewHeadSha: issue.lastBlockingReviewHeadSha,
@@ -434,7 +454,7 @@ export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks"
     return tasks;
   }
 
-  if (prState === "open" && issue.lastGitHubFailureSource === "queue_eviction") {
+  if (queueRepairSignalled) {
     tasks.push({
       id: "run:queue_repair",
       type: "run",
@@ -449,16 +469,7 @@ export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks"
     return tasks;
   }
 
-  const branchFailureMatchesCurrentHead = issue.lastGitHubFailureSource === "branch_ci"
-    && typeof issue.lastGitHubFailureSignature === "string"
-    && typeof issue.lastGitHubFailureHeadSha === "string"
-    && typeof prHeadSha === "string"
-    && issue.lastGitHubFailureHeadSha === prHeadSha;
-  const branchFailureAlreadyAttempted = branchFailureMatchesCurrentHead
-    && issue.lastAttemptedFailureHeadSha === issue.lastGitHubFailureHeadSha
-    && issue.lastAttemptedFailureSignature === issue.lastGitHubFailureSignature;
-
-  if (prState === "open" && branchFailureMatchesCurrentHead && !branchFailureAlreadyAttempted) {
+  if (ciRepairSignalled) {
     tasks.push({
       id: "run:ci_repair",
       type: "run",
