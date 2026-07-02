@@ -29,7 +29,7 @@ import { ImmediateIssueSessionProjectionInvalidator } from "./issue-session-proj
 import { syncIssueSessionFromIssue } from "./issue-session-projector.ts";
 import { noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
 import { TrackedIssueQuery } from "./tracked-issue-query.ts";
-import { WorkflowWakeResolver } from "./workflow-wake-resolver.ts";
+import { hasPendingWake } from "./pending-wake.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
 export class PatchRelayDatabase {
@@ -47,7 +47,6 @@ export class PatchRelayDatabase {
   readonly workflowTasks: WorkflowTaskStore;
   readonly issues: IssueStore;
   readonly issueSessions: IssueSessionStore;
-  readonly workflowWakes: WorkflowWakeResolver;
   readonly runs: RunStore;
   readonly trackedIssues: TrackedIssueQuery;
 
@@ -78,6 +77,7 @@ export class PatchRelayDatabase {
         issues: this.issues,
         issueSessions: this.issueSessions,
         runs: this.runs,
+        workflowTasks: this.workflowTasks,
         issue,
         ...(options ? { options } : {}),
       }),
@@ -101,11 +101,9 @@ export class PatchRelayDatabase {
       this.issueSessionProjection,
       this.telemetryProxy,
     );
-    this.workflowWakes = new WorkflowWakeResolver(this.issues, this.issueSessions);
     this.trackedIssues = new TrackedIssueQuery(this.issues, this.issueSessions, {
       hasPendingWake: (projectId, linearIssueId) =>
-        this.workflowWakes.hasPendingWake(projectId, linearIssueId)
-        || this.workflowTasks.listOpenRunnableTasks(projectId).some((task) => task.subjectId === linearIssueId),
+        hasPendingWake(this, projectId, linearIssueId),
     }, this.runs);
   }
 

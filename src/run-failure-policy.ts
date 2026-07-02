@@ -2,6 +2,7 @@ import type { Logger } from "pino";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { UpsertIssueParams } from "./db/issue-store.ts";
+import { hasPendingWake } from "./pending-wake.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
 import type { ReleaseIssueSessionLease, WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import { buildRunFailureActivity } from "./linear-session-reporting.ts";
@@ -538,7 +539,7 @@ export class RunFailurePolicy {
       dedupeKey: `interrupted_implementation:implementation:${run.linearIssueId}`,
     });
 
-    if (!this.db.workflowWakes.peekIssueWake(run.projectId, run.linearIssueId)) {
+    if (!hasPendingWake(this.db, run.projectId, run.linearIssueId)) {
       const failedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? refreshedIssue;
       this.feed?.publish({
         level: "error",

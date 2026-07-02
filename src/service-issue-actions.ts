@@ -2,6 +2,7 @@ import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { AgentInputService } from "./agent-input-service.ts";
+import { hasPendingWake } from "./pending-wake.ts";
 import type { IssueRecord } from "./db-types.ts";
 import type { OperatorClosedEventPayload } from "./issue-session-events.ts";
 import { buildOperatorRetryEvent } from "./operator-retry-event.ts";
@@ -153,7 +154,7 @@ export class ServiceIssueActions {
       status: "retry",
       summary: `Retry queued: ${retryTarget.runType}`,
     });
-    if (this.db.workflowWakes.peekIssueWake(issue.projectId, issue.linearIssueId)) {
+    if (hasPendingWake(this.db, issue.projectId, issue.linearIssueId)) {
       this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
     }
     return { issueKey, runType: retryTarget.runType };

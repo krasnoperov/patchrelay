@@ -8,6 +8,7 @@ import { PatchRelayDatabase } from "../src/db.ts";
 import { deriveIssueExecutionStateFromRecords } from "../src/issue-execution-state.ts";
 import { ISSUE_SESSION_LEASE_MS } from "../src/issue-session-lease-service.ts";
 import { RunOrchestrator } from "../src/run-orchestrator.ts";
+import { RunWakePlanner } from "../src/run-wake-planner.ts";
 import { MemoryPatchRelayTelemetry } from "../src/telemetry.ts";
 import type { AppConfig, CodexThreadSummary } from "../src/types.ts";
 
@@ -294,7 +295,7 @@ test("crash before settlement: interrupted ci_repair run settles, budget is refu
       assert.equal(issue?.lastAttemptedFailureHeadSha, undefined);
       // The same idle pass routes the still-red failure again.
       assert.equal(issue?.factoryState, "repairing_ci");
-      assert.equal(db.workflowWakes.peekIssueWake(PROJECT, "issue-interrupted")?.runType, "ci_repair");
+      assert.equal(new RunWakePlanner(db).resolveRunWake(db.getIssue(PROJECT, "issue-interrupted")!)?.runType, "ci_repair");
       // D4: the dead worker's heartbeat-stale lease was reclaimed without
       // waiting for TTL expiry, and is not left held after recovery.
       assert.equal(telemetry.list("lease.reclaimed").length, 1);
@@ -349,7 +350,7 @@ test("launch race: slot claimed but no thread persisted - restart settles the zo
       // The zombie budget was consumed and a recovery wake was dispatched.
       assert.equal(issue?.zombieRecoveryAttempts, 1);
       assert.ok(issue?.lastZombieRecoveryAt, "the recovery timestamp arms the backoff");
-      assert.equal(db.workflowWakes.peekIssueWake(PROJECT, "issue-launch-race")?.runType, "implementation");
+      assert.equal(new RunWakePlanner(db).resolveRunWake(db.getIssue(PROJECT, "issue-launch-race")!)?.runType, "implementation");
       assert.ok(
         enqueueCalls.some((call) => call.issueId === "issue-launch-race"),
         "the recovered issue must be handed back to the work queue in the same pass",
@@ -406,7 +407,7 @@ test("thread persisted but gone after restart: stale foreign lease is reclaimed 
       assert.equal(run?.failureReason, "Stale thread after restart");
       assert.equal(issue?.activeRunId, undefined);
       assert.equal(issue?.zombieRecoveryAttempts, 1);
-      assert.equal(db.workflowWakes.peekIssueWake(PROJECT, "issue-stale-thread")?.runType, "implementation");
+      assert.equal(new RunWakePlanner(db).resolveRunWake(db.getIssue(PROJECT, "issue-stale-thread")!)?.runType, "implementation");
       const session = db.issueSessions.getIssueSession(PROJECT, "issue-stale-thread");
       assert.notEqual(session?.workerId, DEAD_WORKER_ID);
       assertConvergedIssue(db, "issue-stale-thread");
@@ -467,7 +468,7 @@ test("wake appended but dispatch lost: restart dispatches exactly once with no d
 
       const dispatches = enqueueCalls.filter((call) => call.issueId === "issue-lost-dispatch");
       assert.equal(dispatches.length, 1, "the surviving wake must be dispatched exactly once per pass");
-      assert.equal(db.workflowWakes.peekIssueWake(PROJECT, "issue-lost-dispatch")?.runType, "review_fix");
+      assert.equal(new RunWakePlanner(db).resolveRunWake(db.getIssue(PROJECT, "issue-lost-dispatch")!)?.runType, "review_fix");
       const events = db.issueSessions.listIssueSessionEvents(PROJECT, "issue-lost-dispatch");
       assert.equal(events.length, 1, "re-derivation must not append a duplicate wake event");
       assert.equal(db.getIssue(PROJECT, "issue-lost-dispatch")?.factoryState, "changes_requested");
@@ -595,7 +596,7 @@ test("stranded expired lease on runnable work: restart with a different worker d
 
       const dispatches = enqueueCalls.filter((call) => call.issueId === "issue-stranded-lease");
       assert.equal(dispatches.length, 1, "the runnable wake must be dispatched despite the leftover lease row");
-      assert.equal(db.workflowWakes.peekIssueWake(PROJECT, "issue-stranded-lease")?.runType, "implementation");
+      assert.equal(new RunWakePlanner(db).resolveRunWake(db.getIssue(PROJECT, "issue-stranded-lease")!)?.runType, "implementation");
 
       // The launch path's first gate is lease acquisition: a different
       // worker must win it over the expired foreign lease in one call.

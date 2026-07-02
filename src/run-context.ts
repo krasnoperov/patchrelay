@@ -80,9 +80,8 @@ const ciSnapshotCheckShape = {
 };
 
 /** Settled CI snapshot. Produced by github-failure-context.ts
- * buildCiSnapshotFromChecks (attached to workflow task payloads by
- * workflow-runtime.ts and to implicit ci_repair wakes by
- * workflow-wake-resolver.ts); consumed by prompting/patchrelay.ts
+ * buildCiSnapshotFromChecks (attached to ci_repair workflow task payloads by
+ * workflow-runtime.ts); consumed by prompting/patchrelay.ts
  * buildCiRepairContext. */
 const ciSnapshotShape = {
   headSha: z.string().optional(),
@@ -259,8 +258,8 @@ const runContextShape = {
    * (head that was failing/dirty at wake time). */
   failingHeadSha: z.string().optional(),
   // GitHubFailureContext fields (github-failure-context.ts), spread into
-  // contexts by buildFailureContext / workflow-wake-resolver.ts /
-  // operator-retry-event.ts; consumed by prompting/patchrelay.ts.
+  // contexts by buildFailureContext / operator-retry-event.ts; consumed by
+  // prompting/patchrelay.ts.
   checkName: z.string().optional(),
   checkUrl: z.string().optional(),
   checkDetailsUrl: z.string().optional(),
@@ -397,8 +396,8 @@ export function parseRunContextOrWarn(
 
 /**
  * Non-throwing variant for boundaries inside the persistence layer where no
- * logger is plumbed (workflow-wake-resolver assembling implicit wake contexts
- * from reconciliation columns): a value the schema rejects degrades to
+ * logger is plumbed (assembling run contexts from reconciliation columns):
+ * a value the schema rejects degrades to
  * "no context", which was already the legacy behavior for malformed JSON in
  * those columns. Everywhere a logger exists, prefer parseRunContextOrWarn so
  * the failure is at least observable.

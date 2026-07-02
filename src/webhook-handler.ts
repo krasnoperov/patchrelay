@@ -2,6 +2,7 @@ import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { RunType } from "./factory-state.ts";
+import { peekPendingWakeRunType } from "./pending-wake.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { LinearSessionSync } from "./linear-session-sync.ts";
@@ -332,7 +333,7 @@ export class WebhookHandler {
   }
 
   private peekPendingSessionWakeRunType(projectId: string, issueId: string): RunType | undefined {
-    return this.db.workflowWakes.peekIssueWake(projectId, issueId)?.runType;
+    return peekPendingWakeRunType(this.db, projectId, issueId);
   }
 
   private enqueuePendingSessionWake(projectId: string, issueId: string): RunType | undefined {

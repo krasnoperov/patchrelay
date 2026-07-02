@@ -6,6 +6,7 @@ import path from "node:path";
 import pino from "pino";
 import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
+import { peekPendingWakeRunType } from "../src/pending-wake.ts";
 import { RunOrchestrator } from "../src/run-orchestrator.ts";
 import type { AppConfig, LinearClient, LinearIssueSnapshot } from "../src/types.ts";
 
@@ -308,7 +309,7 @@ test("idle reconciliation clears stale pending wakes from terminal issues", asyn
     assert.equal(updated?.factoryState, "done");
     assert.equal(updated?.pendingRunType, undefined);
     assert.equal(db.issueSessions.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId), false);
-    assert.equal(db.workflowWakes.peekIssueWake(issue.projectId, issue.linearIssueId), undefined);
+    assert.equal(peekPendingWakeRunType(db, issue.projectId, issue.linearIssueId), undefined);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
