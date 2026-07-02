@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import pino from "pino";
 import { PatchRelayDatabase } from "../src/db.ts";
+import { peekPendingWakeRunType } from "../src/pending-wake.ts";
 import type { IssueRecord } from "../src/db-types.ts";
 import {
   evaluateTaskCompletion,
@@ -528,6 +529,34 @@ test("settled PR check failure derives a CI repair task", () => {
       },
     });
     assert.equal(evaluateTaskStart(snapshot, task!).action, "start");
+  } finally {
+    cleanup();
+  }
+});
+
+test("settled red CI already attempted at the current head derives no CI repair task", () => {
+  // Folds the deleted implicit-resolver dedupe: once the same failure
+  // signature has been attempted against the same head, re-derivation must
+  // not re-route another ci_repair run until the head or signature moves.
+  const { db, cleanup } = createDb();
+  try {
+    const issue = makeIssue(db, {
+      prNumber: 42,
+      prState: "open",
+      prHeadSha: "abc123",
+      prCheckStatus: "failed",
+      lastGitHubFailureSource: "branch_ci",
+      lastGitHubFailureHeadSha: "abc123",
+      lastGitHubFailureSignature: "ci:unit-tests",
+      lastAttemptedFailureHeadSha: "abc123",
+      lastAttemptedFailureSignature: "ci:unit-tests",
+    });
+    const snapshot = projectWorkflowSnapshot({ issue });
+
+    assert.equal(
+      snapshot.openTasks.some((task) => task.id === "run:ci_repair"),
+      false,
+    );
   } finally {
     cleanup();
   }
@@ -1193,7 +1222,7 @@ test("terminal Linear truth suppresses stale delegated session wakes", () => {
       dedupeKey: "delegated:issue-linear-done",
     });
 
-    assert.equal(db.workflowWakes.peekIssueWake(issue.projectId, issue.linearIssueId)?.runType, "implementation");
+    assert.equal(peekPendingWakeRunType(db, issue.projectId, issue.linearIssueId), "implementation");
     assert.equal(new RunWakePlanner(db).resolveRunWake(issue), undefined);
   } finally {
     cleanup();

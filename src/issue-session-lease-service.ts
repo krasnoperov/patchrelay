@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, IssueSessionRecord, RunRecord } from "./db-types.ts";
+import { peekPendingWakeRunType } from "./pending-wake.ts";
 import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
 
 export const ISSUE_SESSION_LEASE_MS = 10 * 60_000;
@@ -224,8 +225,7 @@ export class IssueSessionLeaseService {
 
   private emitStaleLeaseInvariantIfRunnable(projectId: string, linearIssueId: string): void {
     const issue = this.db.issues.getIssue(projectId, linearIssueId);
-    const wake = this.db.workflowWakes.peekIssueWake(projectId, linearIssueId);
-    const runType = wake?.runType ?? issue?.pendingRunType;
+    const runType = peekPendingWakeRunType(this.db, projectId, linearIssueId) ?? issue?.pendingRunType;
     if (!runType) return;
     emitTelemetry(this.telemetry, {
       type: "health.invariant",

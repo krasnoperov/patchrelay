@@ -6,6 +6,8 @@ import type { RunType } from "./run-type.ts";
 import type { IssueStore } from "./db/issue-store.ts";
 import type { IssueSessionStore } from "./db/issue-session-store.ts";
 import type { RunStore } from "./db/run-store.ts";
+import type { WorkflowTaskStore } from "./db/workflow-task-store.ts";
+import { hasPendingWake } from "./pending-wake.ts";
 import { isoNow, type DatabaseConnection } from "./db/shared.ts";
 import { buildTrackedIssueRecord } from "./tracked-issue-projector.ts";
 import {
@@ -21,6 +23,7 @@ export function syncIssueSessionFromIssue(params: {
   issues: IssueStore;
   issueSessions: IssueSessionStore;
   runs: RunStore;
+  workflowTasks: WorkflowTaskStore;
   issue: IssueRecord;
   options?: {
     summaryText?: string | undefined;
@@ -28,7 +31,7 @@ export function syncIssueSessionFromIssue(params: {
     lastWakeReason?: string | undefined;
   };
 }): void {
-  const { connection, issues, issueSessions, runs, issue, options } = params;
+  const { connection, issues, issueSessions, runs, workflowTasks, issue, options } = params;
   const existing = issueSessions.getIssueSession(issue.projectId, issue.linearIssueId);
   const latestRun = runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
   const latestRunType = options?.lastRunType ?? latestRun?.runType ?? existing?.lastRunType;
@@ -45,7 +48,7 @@ export function syncIssueSessionFromIssue(params: {
     issue,
     session: existing,
     blockedBy: issues.listIssueDependencies(issue.projectId, issue.linearIssueId),
-    hasPendingWake: issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId) !== undefined,
+    hasPendingWake: hasPendingWake({ workflowTasks, issueSessions }, issue.projectId, issue.linearIssueId),
     latestRun,
     latestEvent: issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 1 }).at(-1),
   });

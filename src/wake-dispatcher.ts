@@ -23,7 +23,7 @@ interface DispatchableWake {
   runType: RunType;
   wakeReason?: string | undefined;
   eventIds: number[];
-  source: "session_event" | "implicit" | "legacy_pending_run_type" | "workflow_task";
+  source: "session_event" | "legacy_pending_run_type" | "workflow_task";
 }
 
 // Single owner of "append a session event and tell the orchestrator
@@ -180,33 +180,7 @@ export class WakeDispatcher {
         source: "legacy_pending_run_type",
       };
     }
-    const implicitWake = this.db.workflowWakes.peekIssueWake(projectId, linearIssueId);
-    if (!implicitWake) return undefined;
-    // S2 → S3 gate instrument: the implicit derived-wake rung is the last
-    // fallback we intend to delete. Reaching it means neither a workflow task,
-    // a session event, nor the legacy column produced this wake. We already
-    // reconciled above, so if no runnable workflow task backs this issue the
-    // implicit rung is firing uncovered — count it (this MUST NOT change
-    // dispatch behavior; the implicit wake still dispatches below).
-    if (!this.peekRunnableWorkflowTask(projectId, linearIssueId, openWorkflowTasks)) {
-      emitTelemetry(this.telemetry, {
-        type: "health.invariant",
-        invariant: "implicit_wake_without_task",
-        status: "observed",
-        projectId,
-        linearIssueId,
-        ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
-        runType: implicitWake.runType,
-        ...(implicitWake.wakeReason ? { wakeReason: implicitWake.wakeReason } : {}),
-        detail: "Implicit derived wake fired without a backing workflow task",
-      });
-    }
-    return {
-      runType: implicitWake.runType,
-      ...(implicitWake.wakeReason ? { wakeReason: implicitWake.wakeReason } : {}),
-      eventIds: implicitWake.eventIds,
-      source: "implicit",
-    };
+    return undefined;
   }
 
   // Scope the next enqueue calls inside `fn` to a single dedupe Set.

@@ -15,7 +15,6 @@ import { parseRunContextOrWarn, serializeRunContext, tryParseRunContextValue, ty
 import { assertNever } from "./utils.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
-import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
 
 const WRITER = "run-wake-planner";
 
@@ -51,7 +50,6 @@ export class RunWakePlanner {
   constructor(
     private readonly db: PatchRelayDatabase,
     private readonly logger?: Logger,
-    private readonly telemetry: PatchRelayTelemetry = noopTelemetry,
   ) {}
 
   resolveRunWake(issue: IssueRecord): PendingRunWake | undefined {
@@ -92,32 +90,7 @@ export class RunWakePlanner {
       return undefined;
     }
 
-    const implicitWake = this.db.workflowWakes.peekIssueWake(freshIssue.projectId, freshIssue.linearIssueId);
-    if (!implicitWake) return undefined;
-    // S2 → S3 gate instrument (mirror of wake-dispatcher): reaching the
-    // implicit derived-wake rung after reconciling means no workflow task backs
-    // this issue. Count it; this MUST NOT change dispatch — the implicit wake
-    // is still returned below.
-    if (!this.resolveWorkflowTaskWake(freshIssue)) {
-      emitTelemetry(this.telemetry, {
-        type: "health.invariant",
-        invariant: "implicit_wake_without_task",
-        status: "observed",
-        projectId: freshIssue.projectId,
-        linearIssueId: freshIssue.linearIssueId,
-        ...(freshIssue.issueKey ? { issueKey: freshIssue.issueKey } : {}),
-        runType: implicitWake.runType,
-        ...(implicitWake.wakeReason ? { wakeReason: implicitWake.wakeReason } : {}),
-        detail: "Implicit derived wake fired without a backing workflow task",
-      });
-    }
-    return {
-      runType: implicitWake.runType,
-      context: implicitWake.context,
-      wakeReason: implicitWake.wakeReason,
-      resumeThread: implicitWake.resumeThread,
-      eventIds: implicitWake.eventIds,
-    };
+    return undefined;
   }
 
   private resolveWorkflowTaskWake(issue: IssueRecord): PendingRunWake | undefined {

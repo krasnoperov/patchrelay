@@ -238,8 +238,7 @@ async function runReconciliationPass(world: World): Promise<void> {
 function captureConvergedFacts(world: World) {
   const issue = world.db.getIssue(PROJECT, ISSUE);
   assert.ok(issue, `${world.name}: issue row must exist`);
-  const wake = new RunWakePlanner(world.db).resolveRunWake(issue)
-    ?? world.db.workflowWakes.peekIssueWake(PROJECT, ISSUE);
+  const wake = new RunWakePlanner(world.db).resolveRunWake(issue);
   return {
     factoryState: issue.factoryState,
     prState: issue.prState ?? null,
@@ -739,7 +738,7 @@ test("lost check_failed (queue_eviction): queue health probe routes the same que
     // attempted-failure row markers it also writes are wiped again by the
     // idle pass's approved-branch provenance clear — nothing concrete is
     // recorded in lastGitHubFailure*, so clearing is considered harmless).
-    const lostWake = pair.lost.db.workflowWakes.peekIssueWake(PROJECT, ISSUE);
+    const lostWake = new RunWakePlanner(pair.lost.db).resolveRunWake(pair.lost.db.getIssue(PROJECT, ISSUE)!);
     assert.equal(lostWake?.context.failureSignature, "same_head_queue_eviction:sha-evict");
     assert.equal(lostWake?.context.requiresFreshHead, true);
 

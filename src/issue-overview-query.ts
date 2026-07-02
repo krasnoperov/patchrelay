@@ -2,6 +2,7 @@ import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { CodexThreadSummary } from "./codex-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueSessionRecord } from "./db-types.ts";
+import { hasPendingWake } from "./pending-wake.ts";
 import { parseGitHubFailureContext } from "./github-failure-context.ts";
 import { isIssueSessionReadyForExecution } from "./issue-session.ts";
 import { getLegacyIssueOverview } from "./legacy-issue-overview.ts";
@@ -193,8 +194,7 @@ export class IssueOverviewQuery {
         delegatedToPatchRelay: issueRecord?.delegatedToPatchRelay,
         ...(activeRun ? { activeRunId: activeRun.id } : {}),
         blockedByCount: unresolvedBlockedBy.length,
-        hasPendingWake: this.db.workflowWakes.peekIssueWake(session.projectId, session.linearIssueId) !== undefined
-          || this.db.workflowTasks.listOpenRunnableTasks(session.projectId).some((task) => task.subjectId === session.linearIssueId),
+        hasPendingWake: hasPendingWake(this.db, session.projectId, session.linearIssueId),
         hasLegacyPendingRun: issueRecord?.pendingRunType !== undefined,
         orchestrationSettleUntil: issueRecord?.orchestrationSettleUntil,
         ...(session.prNumber !== undefined ? { prNumber: session.prNumber } : {}),

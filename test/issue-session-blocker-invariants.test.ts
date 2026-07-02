@@ -5,6 +5,7 @@ import path from "node:path";
 import pino from "pino";
 import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
+import { peekPendingWakeRunType } from "../src/pending-wake.ts";
 import { IssueOverviewQuery } from "../src/issue-overview-query.ts";
 import { DependencyReadinessHandler } from "../src/webhooks/dependency-readiness-handler.ts";
 import { TrackedIssueListQuery } from "../src/tracked-issue-list-query.ts";
@@ -114,7 +115,7 @@ test("blocked idle issue has one blocked truth across session, list, overview, a
     const listEntry = getListEntry(db, "USE-2");
 
     assert.equal(db.countUnresolvedBlockers("usertold", "issue-child"), 1);
-    assert.equal(db.workflowWakes.peekIssueWake("usertold", "issue-child"), undefined);
+    assert.equal(peekPendingWakeRunType(db, "usertold", "issue-child"), undefined);
     assert.deepEqual(db.listIssuesReadyForExecution(), []);
     assert.equal(dispatcher.dispatchIfWakePending("usertold", "issue-child"), undefined);
     assert.deepEqual(enqueued, []);

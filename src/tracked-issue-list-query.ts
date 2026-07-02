@@ -138,7 +138,6 @@ export class TrackedIssueListQuery {
         .listOpenRunnableTasks(String(row.project_id))
         .some((task) => task.subjectId === String(row.linear_issue_id));
       const hasPendingWake = hasPendingSessionEvents
-        || this.db.workflowWakes.peekIssueWake(String(row.project_id), String(row.linear_issue_id)) !== undefined
         || hasRunnableWorkflowTask;
       const detachedActiveRun = hasDetachedActiveLatestRun({
         activeRunId: row.active_run_type !== null ? 1 : undefined,

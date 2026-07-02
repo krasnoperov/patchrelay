@@ -2,6 +2,7 @@ import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import { appendDelegationObservedEvent } from "./delegation-audit.ts";
 import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
+import { hasPendingWake as computeHasPendingWake } from "./pending-wake.ts";
 import type { AppConfig, LinearClientProvider, LinearIssueSnapshot, ProjectConfig } from "./types.ts";
 import type { LinearSessionSync } from "./linear-session-sync.ts";
 import { isResumablePausedLocalWork } from "./paused-issue-state.ts";
@@ -128,8 +129,7 @@ export class ServiceStartupRecovery {
       }
       const unresolvedBlockers = this.db.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId);
       const latestRun = this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
-      const hasPendingWake = this.db.workflowWakes.peekIssueWake(issue.projectId, issue.linearIssueId) !== undefined
-        || this.db.workflowTasks.listOpenRunnableTasks(issue.projectId).some((task) => task.subjectId === issue.linearIssueId);
+      const hasPendingWake = computeHasPendingWake(this.db, issue.projectId, issue.linearIssueId);
       const shouldRecoverPausedLocalWork =
         delegated
         && isResumablePausedLocalWork({

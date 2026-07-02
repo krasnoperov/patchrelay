@@ -280,11 +280,6 @@ test("dispatchIfWakePending resolves branch_upkeep from a workflow task with sou
     assert.equal(runType, "branch_upkeep");
     assert.deepEqual(enqueueCalls, [["proj", "issue-1"]]);
     assert.equal(telemetry.list("wake.derived").at(-1)?.source, "workflow_task");
-    // The implicit-wake invariant must stay silent when a task backs the wake.
-    assert.equal(
-      telemetry.list("health.invariant").some((event) => event.invariant === "implicit_wake_without_task"),
-      false,
-    );
   });
 });
 

@@ -258,7 +258,7 @@ export class RunOrchestrator {
       feed,
       telemetry,
     );
-    this.runWakePlanner = new RunWakePlanner(db, logger, telemetry);
+    this.runWakePlanner = new RunWakePlanner(db, logger);
     this.linearIssueProjection = new LinearIssueProjectionService(db, linearProvider, logger);
     this.runAdmission = new RunAdmissionController(db, this.linearIssueProjection);
     this.idleReconciler = new IdleIssueReconciler(

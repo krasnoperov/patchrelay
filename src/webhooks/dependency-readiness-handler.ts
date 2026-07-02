@@ -2,6 +2,7 @@ import type { PatchRelayDatabase } from "../db.ts";
 import type { RunType } from "../factory-state.ts";
 import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "../telemetry.ts";
 import type { WakeDispatcher } from "../wake-dispatcher.ts";
+import { peekPendingWakeRunType } from "../pending-wake.ts";
 import { reconcileWorkflowTasksForIssue } from "../workflow-task-reconciler.ts";
 
 const WRITER = "dependency-readiness-handler";
@@ -68,7 +69,7 @@ export class DependencyReadinessHandler {
         ...workflowReconciliation.result.opened,
         ...workflowReconciliation.result.updated,
       ].some((task) => task.gateAction === "start" && task.runType);
-      const pendingWakeRunType = this.db.workflowWakes.peekIssueWake(projectId, dependent.linearIssueId)?.runType
+      const pendingWakeRunType = peekPendingWakeRunType(this.db, projectId, dependent.linearIssueId)
         ?? issue.pendingRunType;
       if (pendingWakeRunType) {
         const dispatchedRunType = this.wakeDispatcher.dispatchIfWakePending(projectId, dependent.linearIssueId);
