@@ -21,8 +21,18 @@ import {
   type StopRequestedEventPayload,
 } from "./issue-session-events.ts";
 import { dirtyWorktreeEventPayload, inspectGitWorktreeStatus } from "./git-worktree-status.ts";
+import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
+import { HUMAN_INPUT_OBSERVATION, SIGNAL_CONSUMED_OBSERVATION } from "./workflow-runtime.ts";
+import { createHash } from "node:crypto";
 
 const WRITER = "agent-input-service";
+
+type HumanInputKind = "direct_reply" | "followup_prompt" | "followup_comment" | "operator_prompt";
+
+function humanInputDedupeKey(linearIssueId: string, text: string, inputKind: HumanInputKind): string {
+  const digest = createHash("sha256").update(text).digest("hex");
+  return `input:${linearIssueId}:${digest}:${inputKind}`;
+}
 
 export interface AgentInputDeliveryResult {
   status: "answered" | "ignored" | "queued" | "steered" | "delivery_failed" | "stopped";
@@ -145,6 +155,18 @@ export class AgentInputService {
     emitActivity?: ((content: LinearAgentActivityContent, options?: { ephemeral?: boolean }) => Promise<void>) | undefined;
   }): Promise<AgentInputDeliveryResult> {
     const { issue, activeRun, body, source } = params;
+    // S5: human input ALWAYS lands as a durable observation first (dual path
+    // with the legacy queueFollowUpEvent below). On a successful steer we mark
+    // it consumed; on failure / no-active-turn it stays unconsumed and becomes a
+    // run:input task after the active run releases.
+    const inputKind = inputSourceEventType(source);
+    const observationId = this.appendHumanInputObservation({
+      issue,
+      text: body,
+      inputKind,
+      ...(params.author ? { author: params.author } : {}),
+      ...(params.operatorSource ? { operatorSource: params.operatorSource } : {}),
+    });
     if (!activeRun.threadId || !activeRun.turnId) {
       const queuedRunType = this.queueFollowUpEvent(issue, body, source, params.author, params.operatorSource, false);
       return { status: "queued", ...(queuedRunType ? { queuedRunType } : {}) };
@@ -165,6 +187,7 @@ export class AgentInputService {
 
     try {
       await this.codex.steerTurn({ threadId: activeRun.threadId, turnId: activeRun.turnId, input });
+      this.markInputConsumedBySteer(issue, observationId);
       this.recordPromptDelivery({
         issue,
         source,
@@ -234,6 +257,24 @@ export class AgentInputService {
       issue = this.prepareReplacementWork(params.project, originalIssue);
     }
 
+    // S5: land the input as a durable inbox observation and reconcile the
+    // run:input task BEFORE the legacy queueFollowUpEvent dispatch, so the
+    // workflow_task rung (not the session rung) answers this input. The
+    // observation is idle-issue durable: it survives a restart and re-derives
+    // the task after reconcileKnownWorkflowTasks.
+    this.appendHumanInputObservation({
+      issue,
+      text: params.body,
+      inputKind: params.directReply ? "direct_reply" : inputSourceEventType(params.source),
+      ...(params.author ? { author: params.author } : {}),
+      ...(params.operatorSource ? { operatorSource: params.operatorSource } : {}),
+      ...(replacementPrRequired ? { previousIssue: originalIssue } : {}),
+    });
+    reconcileWorkflowTasksForIssue(this.db, issue);
+
+    // Dual path: the legacy session event is still written, and its
+    // recordEventAndDispatch drains the wake — which now resolves to the
+    // run:input workflow task reconciled just above (no extra enqueue needed).
     const queuedRunType = this.queueFollowUpEvent(
       issue,
       params.body,
@@ -243,6 +284,7 @@ export class AgentInputService {
       params.directReply,
       replacementPrRequired ? originalIssue : undefined,
     );
+
     if (queuedRunType) {
       await params.emitActivity?.(
         replacementPrRequired
@@ -254,6 +296,57 @@ export class AgentInputService {
       await params.emitActivity?.(buildNonActionableFollowupActivity("unknown_needs_ack"));
     }
     return { status: queuedRunType ? "queued" : "ignored", ...(queuedRunType ? { queuedRunType } : {}) };
+  }
+
+  // S5: land human input as a durable `human.input` observation (the v2 inbox).
+  // Idempotent via the (project, subject, source, dedupe_key) unique index, so
+  // the same text+kind twice yields one observation. Returns the observation id
+  // so a successful steer can mark it consumed.
+  private appendHumanInputObservation(params: {
+    issue: Pick<IssueRecord, "projectId" | "linearIssueId">;
+    text: string;
+    inputKind: HumanInputKind;
+    author?: string | undefined;
+    operatorSource?: string | undefined;
+    previousIssue?: Pick<IssueRecord, "prNumber" | "prUrl" | "prState" | "prHeadSha"> | undefined;
+  }): number {
+    const observation = this.db.workflowObservations.appendObservation({
+      projectId: params.issue.projectId,
+      subjectId: params.issue.linearIssueId,
+      source: params.inputKind === "operator_prompt" ? "operator" : "linear",
+      type: HUMAN_INPUT_OBSERVATION,
+      payloadJson: JSON.stringify({
+        text: params.text,
+        inputKind: params.inputKind,
+        ...(params.author ? { author: params.author } : {}),
+        ...(params.operatorSource ? { operatorSource: params.operatorSource } : {}),
+        ...(params.previousIssue?.prNumber !== undefined
+          ? {
+              replacementPrRequired: true,
+              previousPrNumber: params.previousIssue.prNumber,
+              ...(params.previousIssue.prUrl ? { previousPrUrl: params.previousIssue.prUrl } : {}),
+              ...(params.previousIssue.prState ? { previousPrState: params.previousIssue.prState } : {}),
+              ...(params.previousIssue.prHeadSha ? { previousPrHeadSha: params.previousIssue.prHeadSha } : {}),
+            }
+          : {}),
+      }),
+      dedupeKey: humanInputDedupeKey(params.issue.linearIssueId, params.text, params.inputKind),
+    });
+    return observation.id;
+  }
+
+  // S5 STEER consumption: mark a human.input observation consumed after its
+  // instruction was steered into the active turn. The steer dedupe key keeps
+  // the append idempotent, and no run:input task ever derives for it.
+  private markInputConsumedBySteer(issue: Pick<IssueRecord, "projectId" | "linearIssueId">, observationId: number): void {
+    this.db.workflowObservations.appendObservation({
+      projectId: issue.projectId,
+      subjectId: issue.linearIssueId,
+      source: "executor",
+      type: SIGNAL_CONSUMED_OBSERVATION,
+      payloadJson: JSON.stringify({ consumedObservationIds: [observationId], method: "steer" }),
+      dedupeKey: `signal_consumed:steer:${observationId}`,
+    });
   }
 
   private queueFollowUpEvent(

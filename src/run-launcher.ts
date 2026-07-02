@@ -18,6 +18,7 @@ import {
 } from "./prompting/patchrelay.ts";
 import type { PendingRunWake } from "./run-wake-planner.ts";
 import type { RunContext } from "./run-context.ts";
+import { SIGNAL_CONSUMED_OBSERVATION } from "./workflow-runtime.ts";
 import type { AppConfig, LinearAgentActivityContent } from "./types.ts";
 import type { WorktreeManager } from "./worktree-manager.ts";
 import { sanitizeDiagnosticText } from "./utils.ts";
@@ -25,6 +26,21 @@ import { sanitizeDiagnosticText } from "./utils.ts";
 const WRITER = "run-launcher";
 const DEFAULT_PREPARE_WORKTREE_MAX_ATTEMPTS = 3;
 const DEFAULT_PREPARE_WORKTREE_RETRY_DELAY_MS = 2_000;
+
+// S5: read the `consumesObservationIds` an inbox workflow task carries in its
+// requirements_json. Boundary over stringly-stored JSON: a malformed payload
+// degrades to "no ids to consume" rather than wedging the claim.
+function parseConsumesObservationIds(requirementsJson: string | undefined): number[] {
+  if (!requirementsJson) return [];
+  try {
+    const parsed = JSON.parse(requirementsJson) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+    const ids = (parsed as Record<string, unknown>).consumesObservationIds;
+    return Array.isArray(ids) ? ids.filter((id): id is number => typeof id === "number") : [];
+  } catch {
+    return [];
+  }
+}
 
 function slugify(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
@@ -310,8 +326,40 @@ export class RunLauncher {
           onConflict: (current) => (current.activeRunId == null ? claimUpdate : undefined),
         });
         if (claimCommit.outcome !== "applied") return undefined;
+        // Dual path (S5): session events still get consumed so the legacy rung
+        // stays coherent while the inbox path lands.
         this.db.issueSessions.consumeIssueSessionEvents(params.item.projectId, params.item.issueId, freshWake.eventIds, created.id);
         this.db.issueSessions.setIssueSessionLastWakeReason(params.item.projectId, params.item.issueId, freshWake.wakeReason ?? null);
+        // S5 CLAIM consumption: stamp the workflow task id on the run and, when
+        // the claimed task carries inbox observations, record their exactly-once
+        // consumption as a `workflow.signal_consumed` observation (never a
+        // column) so re-derivation stays monotonic. The dedupe key keys off the
+        // run id, so a retried claim of the same run is idempotent, and once the
+        // input observations are consumed the task self-closes on the next
+        // reconcile — a re-claim cannot spawn a second run against the same input.
+        const claimedTaskId = freshWake.wakeReason;
+        if (claimedTaskId) {
+          const claimedTask = this.db.workflowTasks.getTask(params.item.projectId, params.item.issueId, claimedTaskId);
+          if (claimedTask?.status === "open") {
+            this.db.runs.setRunTaskId(created.id, claimedTaskId);
+            const consumedObservationIds = parseConsumesObservationIds(claimedTask.requirementsJson);
+            if (consumedObservationIds.length > 0) {
+              this.db.workflowObservations.appendObservation({
+                projectId: params.item.projectId,
+                subjectId: params.item.issueId,
+                source: "executor",
+                type: SIGNAL_CONSUMED_OBSERVATION,
+                payloadJson: JSON.stringify({
+                  runId: created.id,
+                  taskId: claimedTaskId,
+                  consumedObservationIds,
+                  method: "claim",
+                }),
+                dedupeKey: `signal_consumed:run:${created.id}`,
+              });
+            }
+          }
+        }
         return created;
       });
     });

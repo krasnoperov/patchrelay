@@ -104,6 +104,13 @@ export class RunStore {
     return run;
   }
 
+  // S5: stamp the workflow task id this run was claimed for. Written after the
+  // activeRunId commit inside claimRun so the finalizer can close the exact
+  // inbox task (run:input / run:orchestration_followup) by id.
+  setRunTaskId(runId: number, taskId: string): void {
+    this.connection.prepare("UPDATE runs SET task_id = ? WHERE id = ?").run(taskId, runId);
+  }
+
   getRunById(id: number): RunRecord | undefined {
     const row = this.connection.prepare("SELECT * FROM runs WHERE id = ?").get(id) as Record<string, unknown> | undefined;
     return row ? this.mapRunRow(row) : undefined;

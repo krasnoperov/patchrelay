@@ -467,7 +467,9 @@ export class RunFinalizer {
 
   private resolveWorkflowCompletionTask(run: RunRecord): WorkflowTask | undefined {
     if (!isRepairRunType(run.runType)) return undefined;
-    const record = this.db.workflowTasks.getTask(run.projectId, run.linearIssueId, `run:${run.runType}`);
+    // S5: prefer the task id stamped at claim time; old rows without a
+    // task_id fall back to the reconstructed `run:<runType>` string.
+    const record = this.db.workflowTasks.getTask(run.projectId, run.linearIssueId, run.taskId ?? `run:${run.runType}`);
     if (!record?.runType) return undefined;
     const requirements = parseObjectJson(record.requirementsJson);
     return {

@@ -1,9 +1,25 @@
 import type { GitHubFailureSource, IssueRecord, WorkflowObservationRecord } from "./db-types.ts";
 import { buildFailureContext } from "./idle-reconciliation-helpers.ts";
 import { isCurrentHeadRequestedChanges } from "./issue-session.ts";
+import { resolvePayloadRunType } from "./issue-session-events.ts";
 import { isCanceledLinearState, isCompletedLinearState } from "./pr-state.ts";
 import type { RunType } from "./run-type.ts";
 import { tryParseRunContextValue, type RunContext } from "./run-context.ts";
+
+// ─── S5 inbox observation types ───────────────────────────────────────
+// Append-only *signal* observations that reconciled facts cannot "un-happen":
+// human input, completion-check continuation, and orchestration child updates.
+// Consumption is itself an observation (`workflow.signal_consumed`), never a
+// column, so `deriveWorkflowTasks` stays a pure, monotonic function of the log:
+//   unconsumed = signals − ⋃ signal_consumed.payload.consumedObservationIds
+export const HUMAN_INPUT_OBSERVATION = "human.input";
+export const COMPLETION_CHECK_CONTINUE_OBSERVATION = "executor.completion_check_continue";
+export const CHILD_OBSERVATION_TYPES = new Set<string>([
+  "orchestration.child_changed",
+  "orchestration.child_delivered",
+  "orchestration.child_regressed",
+]);
+export const SIGNAL_CONSUMED_OBSERVATION = "workflow.signal_consumed";
 
 export type WorkflowTaskType = "run" | "verify" | "ask" | "wait" | "publish" | "escalate";
 
@@ -51,6 +67,28 @@ export interface WorkflowContext {
   requestedChangesContext?: RunContext | undefined;
   delegationContext?: RunContext | undefined;
   branchUpkeepContext?: BranchUpkeepContext | undefined;
+  // S5: the durable inbox signals behind `run:input` / `run:orchestration_followup`.
+  inputInboxContext?: InboxInputContext | undefined;
+  orchestrationInboxContext?: OrchestrationInboxContext | undefined;
+}
+
+// S5: the resolved shape of one or more unconsumed human.input /
+// completion_check_continue observations. `requirements` is the RunContext-shaped
+// payload merged from the observations (followUps, directReplyMode,
+// completionCheckMode, replacement-PR facts, wakeReason) plus the
+// `consumesObservationIds` the claim will mark consumed and a `resumeThread` hint.
+export interface InboxInputContext {
+  runType: RunType;
+  wakeReason: string;
+  consumesObservationIds: number[];
+  requirements: Record<string, unknown>;
+}
+
+// S5: the resolved shape of one or more unconsumed orchestration child_*
+// observations for a parent that has already started a thread.
+export interface OrchestrationInboxContext {
+  consumesObservationIds: number[];
+  requirements: Record<string, unknown>;
 }
 
 // S2: the durable signal behind a `run:branch_upkeep` task. Mirrors the
@@ -266,6 +304,146 @@ function parseObjectJson(raw: string | undefined): Record<string, unknown> | und
   }
 }
 
+// S5: exactly-once consumption ledger. The union of every
+// `workflow.signal_consumed` observation's `consumedObservationIds`. Because
+// consumption is an append-only observation (not a mutable column), this stays
+// a pure function of the log — answered input never resurrects, and re-running
+// derivation twice on the same log yields the same open-task set.
+function consumedObservationIdSet(observations: WorkflowObservationRecord[]): Set<number> {
+  const consumed = new Set<number>();
+  for (const observation of observations) {
+    if (observation.type !== SIGNAL_CONSUMED_OBSERVATION) continue;
+    const payload = parseObservationPayload(observation);
+    const ids = payload?.consumedObservationIds;
+    if (!Array.isArray(ids)) continue;
+    for (const id of ids) {
+      if (typeof id === "number") consumed.add(id);
+    }
+  }
+  return consumed;
+}
+
+function deriveInputInboxContext(
+  issue: Pick<IssueRecord, "prReviewState" | "prHeadSha" | "lastBlockingReviewHeadSha">,
+  observations: WorkflowObservationRecord[],
+): InboxInputContext | undefined {
+  const consumed = consumedObservationIdSet(observations);
+  const unconsumed = observations.filter((observation) => (
+    (observation.type === HUMAN_INPUT_OBSERVATION || observation.type === COMPLETION_CHECK_CONTINUE_OBSERVATION)
+    && !consumed.has(observation.id)
+  ));
+  if (unconsumed.length === 0) return undefined;
+
+  // Mirror deriveSessionWakePlan's direct_reply downgrade: a reply resumes a
+  // review_fix only while the current head still carries requested changes,
+  // otherwise it is a plain implementation continuation.
+  const currentHeadRequestedChanges = isCurrentHeadRequestedChanges({
+    ...(issue.prReviewState ? { prReviewState: issue.prReviewState } : {}),
+    ...(issue.prHeadSha ? { prHeadSha: issue.prHeadSha } : {}),
+    ...(issue.lastBlockingReviewHeadSha ? { lastBlockingReviewHeadSha: issue.lastBlockingReviewHeadSha } : {}),
+  });
+
+  const context: Record<string, unknown> = {};
+  const followUps: Array<{ type: string; text: string; author?: string }> = [];
+  const consumesObservationIds: number[] = [];
+  let runType: RunType | undefined;
+  let wakeReason: string | undefined;
+
+  for (const observation of unconsumed) {
+    consumesObservationIds.push(observation.id);
+    const payload = parseObservationPayload(observation) ?? {};
+    if (observation.type === COMPLETION_CHECK_CONTINUE_OBSERVATION) {
+      if (!runType) {
+        runType = resolvePayloadRunType(payload.runType, issue)
+          ?? (currentHeadRequestedChanges ? "review_fix" : "implementation");
+        wakeReason = "completion_check_continue";
+      }
+      Object.assign(context, payload);
+      const summary = typeof payload.completionCheckSummary === "string"
+        ? payload.completionCheckSummary
+        : typeof payload.summary === "string" ? payload.summary : undefined;
+      if (summary?.trim()) context.completionCheckSummary = summary.trim();
+      context.completionCheckMode = true;
+    } else {
+      const inputKind = typeof payload.inputKind === "string" ? payload.inputKind : "followup_prompt";
+      if (!runType) {
+        runType = currentHeadRequestedChanges ? "review_fix" : "implementation";
+        wakeReason = inputKind;
+      }
+      const text = typeof payload.text === "string" ? payload.text
+        : typeof payload.body === "string" ? payload.body : undefined;
+      if (text) {
+        followUps.push({
+          type: inputKind,
+          text,
+          ...(typeof payload.author === "string" ? { author: payload.author } : {}),
+        });
+      }
+      if (inputKind === "direct_reply") context.directReplyMode = true;
+      if (payload.replacementPrRequired === true) {
+        context.replacementPrRequired = true;
+        if (typeof payload.previousPrNumber === "number") context.previousPrNumber = payload.previousPrNumber;
+        if (typeof payload.previousPrUrl === "string") context.previousPrUrl = payload.previousPrUrl;
+        if (typeof payload.previousPrState === "string") context.previousPrState = payload.previousPrState;
+        if (typeof payload.previousPrHeadSha === "string") context.previousPrHeadSha = payload.previousPrHeadSha;
+      }
+    }
+  }
+
+  if (!runType) return undefined;
+  if (followUps.length > 0) {
+    context.followUps = followUps;
+    context.followUpMode = true;
+    context.followUpCount = followUps.length;
+  }
+  if (wakeReason) context.wakeReason = wakeReason;
+
+  const requirements: Record<string, unknown> = {
+    ...context,
+    consumesObservationIds,
+    resumeThread: true,
+  };
+  // A review_fix start gate (and later completion checks) needs a blocking
+  // review head; carry the same one the reconciled-fact review_fix task uses.
+  if (runType === "review_fix") {
+    const blockingHeadSha = issue.lastBlockingReviewHeadSha ?? issue.prHeadSha;
+    if (blockingHeadSha) {
+      requirements.blockingHeadSha = blockingHeadSha;
+      requirements.requestedChangesHeadSha = blockingHeadSha;
+    }
+  }
+
+  return { runType, wakeReason: wakeReason ?? "human_input", consumesObservationIds, requirements };
+}
+
+function deriveOrchestrationInboxContext(
+  observations: WorkflowObservationRecord[],
+): OrchestrationInboxContext | undefined {
+  const consumed = consumedObservationIdSet(observations);
+  const unconsumed = observations.filter((observation) => (
+    CHILD_OBSERVATION_TYPES.has(observation.type) && !consumed.has(observation.id)
+  ));
+  if (unconsumed.length === 0) return undefined;
+
+  const context: Record<string, unknown> = {};
+  let wakeReason: string | undefined;
+  for (const observation of unconsumed) {
+    Object.assign(context, parseObservationPayload(observation) ?? {});
+    if (!wakeReason) wakeReason = observation.type.replace("orchestration.", "");
+  }
+
+  const consumesObservationIds = unconsumed.map((observation) => observation.id);
+  return {
+    consumesObservationIds,
+    requirements: {
+      ...context,
+      consumesObservationIds,
+      resumeThread: true,
+      wakeReason: wakeReason ?? "child_changed",
+    },
+  };
+}
+
 export function projectWorkflowSnapshot(input: WorkflowProjectionInput): WorkflowSnapshot {
   const observations = input.observations ?? [];
   const blockerCount = input.blockerCount ?? 0;
@@ -277,6 +455,8 @@ export function projectWorkflowSnapshot(input: WorkflowProjectionInput): Workflo
   const requestedChangesContext = latestRequestedChangesContext(observations, input.issue.lastBlockingReviewHeadSha);
   const delegationContext = latestDelegationContext(observations);
   const branchUpkeepContext = latestBranchUpkeepContext(observations, input.issue.prHeadSha);
+  const inputInboxContext = deriveInputInboxContext(input.issue, observations);
+  const orchestrationInboxContext = deriveOrchestrationInboxContext(observations);
   const baseSnapshot: Omit<WorkflowSnapshot, "openTasks"> = {
     id: `${input.issue.projectId}:${input.issue.linearIssueId}`,
     projectId: input.issue.projectId,
@@ -298,6 +478,8 @@ export function projectWorkflowSnapshot(input: WorkflowProjectionInput): Workflo
       ...(requestedChangesContext ? { requestedChangesContext } : {}),
       ...(delegationContext ? { delegationContext } : {}),
       ...(branchUpkeepContext ? { branchUpkeepContext } : {}),
+      ...(inputInboxContext ? { inputInboxContext } : {}),
+      ...(orchestrationInboxContext ? { orchestrationInboxContext } : {}),
     },
     ...(input.activeRun
       ? { activeRun: input.activeRun }
@@ -349,6 +531,66 @@ export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks"
   const prHeadSha = snapshot.artifacts.find((artifact) => artifact.type === "pr")?.metadata?.headSha;
   const prReviewState = snapshot.artifacts.find((artifact) => artifact.type === "pr")?.metadata?.reviewState;
 
+  // ── Signal computations (hoisted so the S5 inbox precedence can consult
+  //    the structural repair/upkeep signals before falling into a wait gate) ──
+  const hasPrArtifact = snapshot.artifacts.some((artifact) => artifact.type === "pr");
+  const hasThread = snapshot.artifacts.some((artifact) => artifact.type === "codex_thread");
+  const branchUpkeepSignalled = hasPrArtifact
+    && (prState === undefined || prState === "open")
+    && issue.branchUpkeepContext !== undefined;
+  // Legacy `deriveIssueSessionReactiveIntent` precedence: queue_repair first,
+  // then ci_repair, then branch_upkeep/review_fix. Hoisted so branch_upkeep and
+  // the S5 inbox tasks all yield to a broken merge/CI gate.
+  const queueRepairSignalled = prState === "open" && issue.lastGitHubFailureSource === "queue_eviction";
+  const branchFailureMatchesCurrentHead = issue.lastGitHubFailureSource === "branch_ci"
+    && typeof issue.lastGitHubFailureSignature === "string"
+    && typeof issue.lastGitHubFailureHeadSha === "string"
+    && typeof prHeadSha === "string"
+    && issue.lastGitHubFailureHeadSha === prHeadSha;
+  const branchFailureAlreadyAttempted = branchFailureMatchesCurrentHead
+    && issue.lastAttemptedFailureHeadSha === issue.lastGitHubFailureHeadSha
+    && issue.lastAttemptedFailureSignature === issue.lastGitHubFailureSignature;
+  const ciRepairSignalled = prState === "open" && branchFailureMatchesCurrentHead && !branchFailureAlreadyAttempted;
+  const structuralRepairSignalled = queueRepairSignalled || ciRepairSignalled || branchUpkeepSignalled;
+
+  // ── S5 inbox precedence ───────────────────────────────────────────────
+  // Chosen order (top wins): queue_repair → ci_repair → branch_upkeep → run:input
+  // → run:orchestration_followup → the reconciled-fact review_fix/implementation
+  // and the wait gates below. Rationale: a broken merge/CI gate or a stale
+  // stacked branch is structural and must be fixed before we act on fresher
+  // human intent (so those signals mask the inbox). But an unconsumed
+  // human.input / completion_check_continue is the *freshest* intent, so it
+  // outranks the reconciled-fact review_fix and pre-empts the awaiting_input /
+  // wait:blockers / wait:children gates — waiting is not an answer to input that
+  // already arrived. run:orchestration_followup overrides wait:children only for
+  // a parent that already has a thread; a thread-less parent keeps absorbing
+  // child changes under the structural gates (which stay). While a run is
+  // active the wait:active-run early return above masks every inbox task; the
+  // observations persist and re-derive at release, so no input is lost.
+  const inputInbox = issue.inputInboxContext;
+  if (inputInbox && !structuralRepairSignalled) {
+    tasks.push({
+      id: "run:input",
+      type: "run",
+      runType: inputInbox.runType,
+      reason: "Unconsumed human input / completion-check continuation needs a run",
+      requirements: inputInbox.requirements,
+    });
+    return tasks;
+  }
+
+  const orchestrationInbox = issue.orchestrationInboxContext;
+  if (orchestrationInbox && hasThread && !structuralRepairSignalled) {
+    tasks.push({
+      id: "run:orchestration_followup",
+      type: "run",
+      runType: "implementation",
+      reason: "Child workflow updates need parent re-planning",
+      requirements: orchestrationInbox.requirements,
+    });
+    return tasks;
+  }
+
   if (issue.factoryState === "awaiting_input") {
     return [{
       id: "wait:input",
@@ -389,13 +631,9 @@ export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks"
   // S2: branch_upkeep — a stacked child whose parent PR head moved, or a PR
   // that a review-fix left dirty, needs a rebase onto latest. Mirrors the
   // legacy `deriveIssueSessionReactiveIntent` precedence: queue_repair and
-  // ci_repair win first (see below), then branch_upkeep wins over review_fix
-  // the same way the reactive intent returned branch_upkeep in place of
-  // review_fix on conflict.
-  const hasPrArtifact = snapshot.artifacts.some((artifact) => artifact.type === "pr");
-  const branchUpkeepSignalled = hasPrArtifact
-    && (prState === undefined || prState === "open")
-    && issue.branchUpkeepContext !== undefined;
+  // ci_repair win first, then branch_upkeep wins over review_fix the same way
+  // the reactive intent returned branch_upkeep in place of review_fix on
+  // conflict.
   const branchUpkeepTask = (): WorkflowTask => ({
     id: "run:branch_upkeep",
     type: "run",
@@ -411,21 +649,6 @@ export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks"
       ...(prState ? { prState } : {}),
     },
   });
-
-  // Legacy `deriveIssueSessionReactiveIntent` precedence: queue_repair first,
-  // then ci_repair, then branch_upkeep/review_fix. Hoist the repair conditions
-  // so branch_upkeep yields to them — a queue eviction or settled red CI on a
-  // stacked child whose parent head moved must still dispatch the repair run.
-  const queueRepairSignalled = prState === "open" && issue.lastGitHubFailureSource === "queue_eviction";
-  const branchFailureMatchesCurrentHead = issue.lastGitHubFailureSource === "branch_ci"
-    && typeof issue.lastGitHubFailureSignature === "string"
-    && typeof issue.lastGitHubFailureHeadSha === "string"
-    && typeof prHeadSha === "string"
-    && issue.lastGitHubFailureHeadSha === prHeadSha;
-  const branchFailureAlreadyAttempted = branchFailureMatchesCurrentHead
-    && issue.lastAttemptedFailureHeadSha === issue.lastGitHubFailureHeadSha
-    && issue.lastAttemptedFailureSignature === issue.lastGitHubFailureSignature;
-  const ciRepairSignalled = prState === "open" && branchFailureMatchesCurrentHead && !branchFailureAlreadyAttempted;
 
   if (branchUpkeepSignalled && !queueRepairSignalled && !ciRepairSignalled) {
     tasks.push(branchUpkeepTask());

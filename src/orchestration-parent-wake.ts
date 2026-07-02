@@ -126,24 +126,43 @@ export function wakeOrchestrationParentsForChildEvent(params: {
       continue;
     }
 
-    if (!parentHasRunnableWorkflowTask(params.db, parent)) {
+    const childEventPayload = {
+      childIssueId: params.child.linearIssueId,
+      ...(params.child.issueKey ? { childIssueKey: params.child.issueKey } : {}),
+      ...(params.child.title ? { childTitle: params.child.title } : {}),
+      factoryState: params.child.factoryState,
+      ...(params.child.currentLinearState ? { currentLinearState: params.child.currentLinearState } : {}),
+      ...(params.child.prNumber !== undefined ? { prNumber: params.child.prNumber } : {}),
+      ...(params.child.prState ? { prState: params.child.prState } : {}),
+      ...(params.changeKind ? { changeKind: params.changeKind } : {}),
+    } satisfies RunContext;
+    const childDedupeKey = `${params.eventType}:${parent.linearIssueId}:${params.child.linearIssueId}:${params.child.factoryState}:${params.changeKind ?? params.child.prState ?? "no-pr"}`;
+
+    // S5: append the durable orchestration child-update observation (dual path
+    // with the legacy session event below). The reconcile inside
+    // parentHasRunnableWorkflowTask can now materialize a
+    // run:orchestration_followup for a parent that already has a thread; a
+    // thread-less parent keeps absorbing the update under its structural
+    // wait:children gate (the observation persists and re-derives later).
+    params.db.workflowObservations.appendObservation({
+      projectId: parent.projectId,
+      subjectId: parent.linearIssueId,
+      source: "linear",
+      type: `orchestration.${params.eventType}`,
+      payloadJson: JSON.stringify(childEventPayload),
+      dedupeKey: childDedupeKey,
+    });
+    const refreshedParent = params.db.issues.getIssue(parent.projectId, parent.linearIssueId) ?? parent;
+
+    if (!parentHasRunnableWorkflowTask(params.db, refreshedParent)) {
       parentIds.push(parent.linearIssueId);
       continue;
     }
 
     params.wakeDispatcher.recordEventAndDispatch(parent.projectId, parent.linearIssueId, {
       eventType: params.eventType,
-      eventJson: JSON.stringify({
-        childIssueId: params.child.linearIssueId,
-        ...(params.child.issueKey ? { childIssueKey: params.child.issueKey } : {}),
-        ...(params.child.title ? { childTitle: params.child.title } : {}),
-        factoryState: params.child.factoryState,
-        ...(params.child.currentLinearState ? { currentLinearState: params.child.currentLinearState } : {}),
-        ...(params.child.prNumber !== undefined ? { prNumber: params.child.prNumber } : {}),
-        ...(params.child.prState ? { prState: params.child.prState } : {}),
-        ...(params.changeKind ? { changeKind: params.changeKind } : {}),
-      } satisfies RunContext),
-      dedupeKey: `${params.eventType}:${parent.linearIssueId}:${params.child.linearIssueId}:${params.child.factoryState}:${params.changeKind ?? params.child.prState ?? "no-pr"}`,
+      eventJson: JSON.stringify(childEventPayload),
+      dedupeKey: childDedupeKey,
     });
     parentIds.push(parent.linearIssueId);
   }
