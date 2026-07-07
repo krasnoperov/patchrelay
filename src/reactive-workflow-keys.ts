@@ -1,6 +1,6 @@
 import type { RunType } from "./factory-state.ts";
 
-export interface RequestedChangesWakeIdentityParams {
+export interface RequestedChangesWorkflowIdentityParams {
   linearIssueId: string;
   runType?: Extract<RunType, "review_fix" | "branch_upkeep"> | undefined;
   headSha?: string | undefined;
@@ -9,7 +9,7 @@ export interface RequestedChangesWakeIdentityParams {
   reviewerName?: string | undefined;
 }
 
-export interface RequestedChangesWakeIdentity {
+export interface RequestedChangesWorkflowIdentity {
   dedupeKey: string;
   coalesceKey: string;
   headSha?: string | undefined;
@@ -17,9 +17,9 @@ export interface RequestedChangesWakeIdentity {
 
 const UNKNOWN_HEAD = "unknown-sha";
 
-export function buildRequestedChangesWakeIdentity(
-  params: RequestedChangesWakeIdentityParams,
-): RequestedChangesWakeIdentity {
+export function buildRequestedChangesWorkflowIdentity(
+  params: RequestedChangesWorkflowIdentityParams,
+): RequestedChangesWorkflowIdentity {
   const runType = params.runType ?? "review_fix";
   const headSha = params.reviewCommitId ?? params.headSha;
   const coalesceHead = headSha ?? UNKNOWN_HEAD;
@@ -84,18 +84,18 @@ function parseObject(raw: string | undefined): Record<string, unknown> | undefin
   }
 }
 
-export type ReactiveWakeEventType =
+export type ReactiveWorkflowEventType =
   | "delegated"
   | "review_changes_requested"
   | "settled_red_ci"
   | "merge_steward_incident";
 
 /**
- * Map a run type to the issue-session event type that wakes it. Shared by every
- * reconciler that records a reactive wake (idle reconciliation, startup
+ * Map a run type to the issue-session event type that represents it. Shared by every
+ * reconciler that records a reactive workflow intent (idle reconciliation, startup
  * recovery, queue health) so the mapping stays in one place.
  */
-export function reactiveWakeEventType(runType: RunType): ReactiveWakeEventType {
+export function reactiveWorkflowEventType(runType: RunType): ReactiveWorkflowEventType {
   switch (runType) {
     case "queue_repair":
       return "merge_steward_incident";
@@ -110,13 +110,13 @@ export function reactiveWakeEventType(runType: RunType): ReactiveWakeEventType {
 }
 
 /**
- * Build the dedupe key for a CI/queue repair wake. The discriminator prefers the
+ * Build the dedupe key for a CI/queue repair workflow intent. The discriminator prefers the
  * failure signature, then the PR head, then the recorded failure head, falling
  * back to "unknown" — the same precedence every reconciler used independently
  * before this was consolidated (a prior divergence here swallowed fresh repair
  * incidents after the main branch advanced).
  */
-export function buildRepairWakeDedupeKey(params: {
+export function buildRepairWorkflowDedupeKey(params: {
   scope: string;
   runType: "queue_repair" | "ci_repair";
   linearIssueId: string;

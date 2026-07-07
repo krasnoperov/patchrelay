@@ -8,12 +8,12 @@ import {
   isPatchRelayManagedCommentAuthor,
 } from "./comment-policy.ts";
 import type { LinearAgentActivityContent, NormalizedEvent, ProjectConfig, TrackedIssueRecord } from "../types.ts";
-import type { WakeDispatcher } from "../wake-dispatcher.ts";
+import type { WorkflowTaskDispatcher } from "../workflow-task-dispatcher.ts";
 
-export class CommentWakeHandler {
+export class CommentInputHandler {
   constructor(
     private readonly db: PatchRelayDatabase,
-    private readonly wakeDispatcher: WakeDispatcher,
+    private readonly workflowTaskDispatcher: WorkflowTaskDispatcher,
     private readonly feed?: OperatorEventFeed,
     private readonly agentInput?: AgentInputService,
     private readonly emitLinearActivity?: (
@@ -47,7 +47,7 @@ export class CommentWakeHandler {
     const selfAuthored = isPatchRelayManagedCommentAuthor(installation, normalized.actor, normalized.comment.userName);
     const inertPatchRelayComment = isInertPatchRelayComment(issue, normalized.comment.id, trimmedBody, normalized.actor?.type);
     if (selfAuthored || inertPatchRelayComment) {
-      this.wakeDispatcher.recordEventAndDispatch(project.id, normalized.issue.id, {
+      this.workflowTaskDispatcher.recordEventAndDispatch(project.id, normalized.issue.id, {
         eventType: "self_comment",
         eventJson: JSON.stringify({
           body: trimmedBody,

@@ -1,18 +1,18 @@
 import type { Logger } from "pino";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
-import { ACTIVE_RUN_STATES, type FactoryState, type RunType } from "./factory-state.ts";
+import type { FactoryState, RunType } from "./factory-state.ts";
 import type { WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import type { AppConfig } from "./types.ts";
 import { ImplementationOutcomePolicy } from "./implementation-outcome-policy.ts";
 import { ReactiveRunPolicy } from "./reactive-run-policy.ts";
-import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
+import { deriveReactiveWorkflowIntent } from "./reactive-workflow-intent.ts";
 import type { RunContext } from "./run-context.ts";
+import type { WorkflowRunIntent } from "./workflow-intent.ts";
 
 export interface PostRunFollowUp {
-  pendingRunType: RunType;
+  workflowIntent: WorkflowRunIntent;
   factoryState: FactoryState;
-  context?: RunContext | undefined;
   summary: string;
 }
 
@@ -22,6 +22,7 @@ export type PostRunOutcome = "completed" | "recovered";
 export type PostRunStateIssue = Pick<
   IssueRecord,
   "factoryState"
+    | "activeRunId"
     | "prNumber"
     | "prState"
     | "prHeadSha"
@@ -38,14 +39,14 @@ export type PostRunStateIssue = Pick<
 // Shared rule (both old functions agreed):
 //   - no PR on the issue → undefined (nothing to resolve from PR truth);
 //   - approved open/closed PR → awaiting_queue; otherwise pr_open;
-//   - merged PR (while the issue is in an active-run state) → done.
+//   - merged PR (while the issue still points at this run) → done.
 //
 // The two old functions genuinely disagreed in two places, and the
 // disagreement is semantic, so it survives as the `outcome` option rather
 // than being averaged away:
 //   - outcome "completed" (the run did its work, default): gate every write
-//     on ACTIVE_RUN_STATES so a state advanced concurrently by webhooks
-//     (e.g. deploying, awaiting_queue) is never clobbered, and never
+//     on the issue still pointing at this exact active run so a state advanced
+//     concurrently by webhooks/finalizers is never clobbered, and never
 //     re-derive a reactive repair state — the stale GitHub verdict
 //     (changes_requested / red CI) refers to the head the run just
 //     replaced, and routing it again would loop the fix forever.
@@ -56,7 +57,7 @@ export type PostRunStateIssue = Pick<
 //     so the original problem is routed again.
 export function resolvePostRunFactoryState(
   issue: PostRunStateIssue,
-  _run: Pick<RunRecord, "runType">,
+  run: Pick<RunRecord, "id" | "runType">,
   options?: { outcome?: PostRunOutcome },
 ): FactoryState | undefined {
   if (!issue.prNumber) return undefined;
@@ -64,7 +65,7 @@ export function resolvePostRunFactoryState(
   if (options?.outcome === "recovered") {
     if (issue.prState === "merged") return "done";
     if (issue.prState === "open") {
-      const reactiveIntent = deriveIssueSessionReactiveIntent({
+      const reactiveIntent = deriveReactiveWorkflowIntent({
         prNumber: issue.prNumber,
         prState: issue.prState,
         prHeadSha: issue.prHeadSha,
@@ -80,7 +81,7 @@ export function resolvePostRunFactoryState(
     // Closed (or unknown) PR: fall through to the factory-state-gated rule.
   }
 
-  if (!ACTIVE_RUN_STATES.has(issue.factoryState)) return undefined;
+  if (issue.activeRunId !== run.id) return undefined;
   if (issue.prState === "merged") return "done";
   if (issue.prReviewState === "approved") return "awaiting_queue";
   return "pr_open";
@@ -116,12 +117,12 @@ export class RunCompletionPolicy {
     return await this.reactive.refreshIssueAfterReactivePublish(run, issue);
   }
 
-  async resolveRequestedChangesWakeContext(
+  async resolveRequestedChangesWorkflowContext(
     issue: IssueRecord,
     runType: RunType,
     context: RunContext | undefined,
   ): Promise<RunContext | undefined> {
-    return await this.reactive.resolveRequestedChangesWakeContext(issue, runType, context);
+    return await this.reactive.resolveRequestedChangesWorkflowContext(issue, runType, context);
   }
 
   async resolvePostRunFollowUp(

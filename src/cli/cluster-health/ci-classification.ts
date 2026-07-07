@@ -1,5 +1,6 @@
 import { deriveGateCheckStatusFromRollup, type GitHubStatusRollupEntry } from "../../github-rollup.ts";
 import type { IssueRecord } from "../../db-types.ts";
+import type { IssueExecutionState } from "../../issue-execution-state.ts";
 import type { AppConfig } from "../../types.ts";
 import type {
   CiGateStatus,
@@ -41,8 +42,7 @@ export function deriveCiGateStatus(
 export interface CiOwnerParams {
   delegatedToPatchRelay: boolean;
   gateCheckStatus: CiGateStatus;
-  activeRunId?: number | undefined;
-  factoryState: string;
+  executionState: IssueExecutionState;
   reviewDecision?: string | undefined;
   reviewRequested: boolean;
   currentHeadSha?: string | undefined;
@@ -52,7 +52,7 @@ export interface CiOwnerParams {
 }
 
 export function deriveCiOwner(params: CiOwnerParams): CiOwner {
-  if (params.activeRunId !== undefined) {
+  if (params.executionState.kind === "running" || params.executionState.kind === "inconsistent") {
     return "patchrelay";
   }
   const headAdvancedPastBlockingReview = Boolean(
@@ -62,26 +62,28 @@ export function deriveCiOwner(params: CiOwnerParams): CiOwner {
   );
   if (params.gateCheckStatus === "failure") {
     if (!params.delegatedToPatchRelay) return "paused";
-    return params.factoryState === "repairing_ci" ? "patchrelay" : "unknown";
+    return executionStateOwnsRunType(params.executionState, "ci_repair") ? "patchrelay" : "unknown";
   }
   if (params.gateCheckStatus === "pending") {
     return "external";
   }
-  if (params.factoryState === "awaiting_queue" || params.reviewDecision === "APPROVED") {
+  if (isDownstreamWait(params.executionState) || params.reviewDecision === "APPROVED") {
     if (params.mergeConflictDetected && !params.delegatedToPatchRelay) {
       return "paused";
     }
-    return params.mergeConflictDetected && params.factoryState !== "repairing_queue"
+    return params.mergeConflictDetected && !executionStateOwnsRunType(params.executionState, "queue_repair")
       ? "unknown"
       : "downstream";
   }
   if (params.reviewDecision === "CHANGES_REQUESTED") {
     if (params.mergeConflictDetected) {
       if (!params.delegatedToPatchRelay) return "paused";
-      return params.factoryState === "changes_requested" ? "patchrelay" : "unknown";
+      return executionStateOwnsRunType(params.executionState, "branch_upkeep", "review_fix", "queue_repair")
+        ? "patchrelay"
+        : "unknown";
     }
     if (!params.delegatedToPatchRelay) return "paused";
-    if (params.factoryState === "changes_requested") return "patchrelay";
+    if (executionStateOwnsRunType(params.executionState, "review_fix", "branch_upkeep")) return "patchrelay";
     if (
       params.reviewQuillAttempt?.backlog
       && params.currentHeadSha
@@ -99,10 +101,21 @@ export function deriveCiOwner(params: CiOwnerParams): CiOwner {
     if (params.gateCheckStatus === "success") return "reviewer";
     return params.reviewRequested ? "reviewer" : "unknown";
   }
-  if (params.gateCheckStatus === "success" && params.factoryState === "pr_open") {
+  if (params.gateCheckStatus === "success") {
     return "reviewer";
   }
   return "external";
+}
+
+function executionStateOwnsRunType(state: IssueExecutionState, ...runTypes: string[]): boolean {
+  if (state.kind === "ready") return runTypes.includes(state.runnableTaskRunType);
+  if (state.kind === "awaiting_followup") return runTypes.includes(state.followup);
+  return false;
+}
+
+function isDownstreamWait(state: IssueExecutionState): boolean {
+  return state.kind === "idle_awaiting_external"
+    && (state.waitingOn === "merge_queue" || state.waitingOn === "downstream_automation");
 }
 
 export interface CiOwnershipDescriptionParams {
@@ -196,6 +209,7 @@ export interface BuildCiEntryParams {
   issue: IssueRecord;
   delegatedToPatchRelay: boolean;
   gateCheckStatus: CiGateStatus;
+  executionState: IssueExecutionState;
   reviewDecision?: string | undefined;
   reviewRequested: boolean;
   currentHeadSha?: string | undefined;
@@ -209,6 +223,7 @@ export function buildCiEntry(params: BuildCiEntryParams): ClusterCiEntry {
     issue,
     delegatedToPatchRelay,
     gateCheckStatus,
+    executionState,
     reviewDecision,
     reviewRequested,
     currentHeadSha,
@@ -219,8 +234,7 @@ export function buildCiEntry(params: BuildCiEntryParams): ClusterCiEntry {
   const owner = deriveCiOwner({
     delegatedToPatchRelay,
     gateCheckStatus,
-    activeRunId: issue.activeRunId,
-    factoryState: issue.factoryState,
+    executionState,
     reviewDecision,
     reviewRequested,
     currentHeadSha,

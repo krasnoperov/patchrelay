@@ -7,7 +7,7 @@ import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { GitHubWebhookHandler } from "../src/github-webhook-handler.ts";
 import type { GitHubCiSnapshotResolver, GitHubFailureContextResolver } from "../src/github-failure-context.ts";
-import { RunWakePlanner } from "../src/run-wake-planner.ts";
+import { RunTaskPlanner } from "../src/run-task-planner.ts";
 import type { AppConfig } from "../src/types.ts";
 
 function createConfig(baseDir: string, options?: { gateChecks?: string[] }): AppConfig {
@@ -144,10 +144,10 @@ function buildCheckRunPayload(params: {
   }), "utf8");
 }
 
-function resolveRuntimeWake(db: PatchRelayDatabase, projectId: string, issueId: string) {
+function resolveRuntimeTask(db: PatchRelayDatabase, projectId: string, issueId: string) {
   const issue = db.getIssue(projectId, issueId);
   assert.ok(issue);
-  return new RunWakePlanner(db).resolveRunWake(issue);
+  return new RunTaskPlanner(db).resolveRunTask(issue);
 }
 
 test("queue eviction check_run queues queue_repair with explicit provenance", async () => {
@@ -192,12 +192,12 @@ test("queue eviction check_run queues queue_repair with explicit provenance", as
     });
 
     const issue = db.getIssue("usertold", "issue-1");
-    const wake = resolveRuntimeWake(db, "usertold", "issue-1");
+    const workflowTask = resolveRuntimeTask(db, "usertold", "issue-1");
     assert.equal(issue?.factoryState, "repairing_queue");
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-1"), undefined);
-    assert.equal(wake?.runType, "queue_repair");
-    assert.equal(wake?.wakeReason, "run:queue_repair");
-    const pending = wake?.context ?? {};
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-1"), undefined);
+    assert.equal(workflowTask?.runType, "queue_repair");
+    assert.equal(workflowTask?.workflowReason, "run:queue_repair");
+    const pending = workflowTask?.context ?? {};
     assert.equal(pending.failureReason, "queue_eviction");
     assert.equal(pending.checkName, "merge-steward/queue");
     assert.equal(pending.checkUrl, "https://github.com/owner/repo/actions/runs/42");
@@ -253,7 +253,6 @@ test("stale queue eviction webhooks do not resurrect terminal issues", async () 
 
     const issue = db.getIssue("usertold", "issue-2");
     assert.equal(issue?.factoryState, "done");
-    assert.equal(issue?.pendingRunType, undefined);
     assert.deepEqual(enqueueCalls, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -319,10 +318,10 @@ test("default gate fallback recognizes verify and enqueues CI repair", async () 
       }).toString("utf8"),
     });
 
-    const wake = resolveRuntimeWake(db, "usertold", "issue-verify");
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-verify"), undefined);
-    assert.equal(wake?.runType, "ci_repair");
-    assert.equal(wake?.wakeReason, "run:ci_repair");
+    const workflowTask = resolveRuntimeTask(db, "usertold", "issue-verify");
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-verify"), undefined);
+    assert.equal(workflowTask?.runType, "ci_repair");
+    assert.equal(workflowTask?.workflowReason, "run:ci_repair");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -358,10 +357,10 @@ test("queue eviction falls back to minimal context when incident payload is malf
       }).toString("utf8"),
     });
 
-    const wake = resolveRuntimeWake(db, "usertold", "issue-3");
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-3"), undefined);
-    assert.equal(wake?.runType, "queue_repair");
-    const pending = wake?.context ?? {};
+    const workflowTask = resolveRuntimeTask(db, "usertold", "issue-3");
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-3"), undefined);
+    assert.equal(workflowTask?.runType, "queue_repair");
+    const pending = workflowTask?.context ?? {};
     assert.equal(pending.failureReason, "queue_eviction");
     assert.equal(pending.checkName, "merge-steward/queue");
     assert.equal(pending.checkUrl, "https://github.com/owner/repo/actions/runs/43");
@@ -441,7 +440,7 @@ test("branch CI failures clear stale queue incident context", async () => {
     });
 
     const issue = db.getIssue("usertold", "issue-4");
-    assert.equal(new RunWakePlanner(db).resolveRunWake(issue!)?.runType, "ci_repair");
+    assert.equal(new RunTaskPlanner(db).resolveRunTask(issue!)?.runType, "ci_repair");
     assert.equal(issue?.lastGitHubFailureSource, "branch_ci");
     assert.equal(issue?.lastQueueIncidentJson, undefined);
   } finally {
@@ -531,11 +530,11 @@ test("branch CI failures persist enriched Actions context in pending repair prom
     });
 
     const issue = db.getIssue("usertold", "issue-5");
-    const wake = resolveRuntimeWake(db, "usertold", "issue-5");
-    const pending = wake?.context ?? {};
+    const workflowTask = resolveRuntimeTask(db, "usertold", "issue-5");
+    const pending = workflowTask?.context ?? {};
     assert.equal(resolvedCheckName, "Checks");
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-5"), undefined);
-    assert.equal(wake?.runType, "ci_repair");
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-5"), undefined);
+    assert.equal(workflowTask?.runType, "ci_repair");
     assert.equal(issue?.lastGitHubFailureSignature, "branch_ci::sha-45::Checks::npx tsgo --noEmit");
     assert.equal(issue?.lastGitHubFailureHeadSha, "sha-45");
     assert.equal(pending.failureHeadSha, "sha-45");
@@ -605,7 +604,6 @@ test("same failure signature and head sha are not re-enqueued after an attempted
     });
 
     const issue = db.getIssue("usertold", "issue-6");
-    assert.equal(issue?.pendingRunType, undefined);
     assert.deepEqual(enqueueCalls, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -638,7 +636,6 @@ test("non-gate branch CI failures wait for the settled Tests gate before enqueui
     });
 
     const issue = db.getIssue("usertold", "issue-7");
-    assert.equal(issue?.pendingRunType, undefined);
     assert.deepEqual(enqueueCalls, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -671,7 +668,6 @@ test("checks with similar names do not count as the Tests gate", async () => {
     });
 
     const issue = db.getIssue("usertold", "issue-8");
-    assert.equal(issue?.pendingRunType, undefined);
     assert.equal(issue?.lastGitHubCiSnapshotJson, undefined);
     assert.deepEqual(enqueueCalls, []);
   } finally {
@@ -710,7 +706,6 @@ test("gate failures wait when settled snapshot resolution is unavailable", async
     });
 
     const issue = db.getIssue("usertold", "issue-9");
-    assert.equal(issue?.pendingRunType, undefined);
     assert.equal(issue?.lastGitHubFailureSource, undefined);
     assert.equal(issue?.lastGitHubCiSnapshotHeadSha, "sha-49");
     assert.equal(issue?.lastGitHubCiSnapshotGateCheckStatus, "pending");

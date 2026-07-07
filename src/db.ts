@@ -26,10 +26,10 @@ import { runPatchRelayMigrations } from "./db/migrations.ts";
 import { assertPatchRelaySchemaReady } from "./db/schema-guard.ts";
 import { SqliteConnection, type DatabaseConnection } from "./db/shared.ts";
 import { ImmediateIssueSessionProjectionInvalidator } from "./issue-session-projection-invalidator.ts";
-import { syncIssueSessionFromIssue } from "./issue-session-projector.ts";
+import { projectIssueSessionReadModel } from "./issue-session-projector.ts";
 import { noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
 import { TrackedIssueQuery } from "./tracked-issue-query.ts";
-import { hasPendingWake } from "./pending-wake.ts";
+import { peekRunnableWorkflowTaskRunType } from "./pending-workflow-task.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
 export class PatchRelayDatabase {
@@ -72,7 +72,7 @@ export class PatchRelayDatabase {
       listDependents: (projectId, blockerLinearIssueId) => this.issues.listDependents(projectId, blockerLinearIssueId),
       countUnresolvedBlockers: (projectId, linearIssueId) => this.issues.countUnresolvedBlockers(projectId, linearIssueId),
       getIssueSessionWaitingReason: (projectId, linearIssueId) => this.issueSessions.getIssueSession(projectId, linearIssueId)?.waitingReason,
-      projectIssue: (issue, options) => syncIssueSessionFromIssue({
+      projectIssue: (issue, options) => projectIssueSessionReadModel({
         connection: this.connection,
         issues: this.issues,
         issueSessions: this.issueSessions,
@@ -103,8 +103,8 @@ export class PatchRelayDatabase {
       this.telemetryProxy,
     );
     this.trackedIssues = new TrackedIssueQuery(this.issues, this.issueSessions, {
-      hasPendingWake: (projectId, linearIssueId) =>
-        hasPendingWake(this, projectId, linearIssueId),
+      peekRunnableWorkflowTaskRunType: (projectId, linearIssueId) =>
+        peekRunnableWorkflowTaskRunType(this, projectId, linearIssueId),
     }, this.runs);
   }
 
@@ -277,12 +277,12 @@ export class PatchRelayDatabase {
    * The idle reconciler re-enqueues these to recover from a silently
    * dropped enqueueIssue (lease race, in-memory queue cleared at restart).
    */
-  listIdleIssuesWithPendingWake(): IssueRecord[] {
-    return this.issues.listIdleIssuesWithPendingWake();
+  listIdleIssuesWithRunnableWorkflowTask(): IssueRecord[] {
+    return this.issues.listIdleIssuesWithRunnableWorkflowTask();
   }
 
   /**
-   * Issues in delegated state with dependencies but no pending/active run.
+   * Issues in delegated state with dependencies but no active run or runnable workflow task.
    * Candidates for unblocking when their blockers complete.
    */
   listBlockedDelegatedIssues(): IssueRecord[] {
@@ -290,7 +290,7 @@ export class PatchRelayDatabase {
   }
 
   /**
-   * Issues waiting in the merge queue with no active or pending run.
+   * Issues waiting in the merge queue with no active run or runnable workflow task.
    * Used by the queue health monitor to probe GitHub for stuck PRs.
    */
   listAwaitingQueueIssues(): IssueRecord[] {
@@ -347,17 +347,17 @@ function mapIssueSessionRow(row: Record<string, unknown>): IssueSessionRecord {
     sessionState: String(row.session_state) as IssueSessionRecord["sessionState"],
     ...(row.waiting_reason !== null && row.waiting_reason !== undefined ? { waitingReason: String(row.waiting_reason) } : {}),
     ...(row.summary_text !== null && row.summary_text !== undefined ? { summaryText: String(row.summary_text) } : {}),
-    ...(row.active_thread_id !== null && row.active_thread_id !== undefined ? { activeThreadId: String(row.active_thread_id) } : {}),
-    threadGeneration: Number(row.thread_generation ?? 0),
+    ...(row.projected_active_thread_id !== null && row.projected_active_thread_id !== undefined ? { activeThreadId: String(row.projected_active_thread_id) } : {}),
+    threadGeneration: Number(row.projected_thread_generation ?? 0),
     ...(row.active_run_id !== null && row.active_run_id !== undefined ? { activeRunId: Number(row.active_run_id) } : {}),
     ...(row.last_run_type !== null && row.last_run_type !== undefined ? { lastRunType: String(row.last_run_type) as RunType } : {}),
-    ...(row.last_wake_reason !== null && row.last_wake_reason !== undefined ? { lastWakeReason: String(row.last_wake_reason) } : {}),
+    ...(row.last_workflow_reason !== null && row.last_workflow_reason !== undefined ? { lastWorkflowReason: String(row.last_workflow_reason) } : {}),
     ciRepairAttempts: Number(row.ci_repair_attempts ?? 0),
     queueRepairAttempts: Number(row.queue_repair_attempts ?? 0),
     reviewFixAttempts: Number(row.review_fix_attempts ?? 0),
-    ...(row.lease_id !== null && row.lease_id !== undefined ? { leaseId: String(row.lease_id) } : {}),
-    ...(row.worker_id !== null && row.worker_id !== undefined ? { workerId: String(row.worker_id) } : {}),
-    ...(row.leased_until !== null && row.leased_until !== undefined ? { leasedUntil: String(row.leased_until) } : {}),
+    ...(row.active_lease_id !== null && row.active_lease_id !== undefined ? { leaseId: String(row.active_lease_id) } : {}),
+    ...(row.active_worker_id !== null && row.active_worker_id !== undefined ? { workerId: String(row.active_worker_id) } : {}),
+    ...(row.active_leased_until !== null && row.active_leased_until !== undefined ? { leasedUntil: String(row.active_leased_until) } : {}),
     createdAt: String(row.created_at),
     displayUpdatedAt: String(row.display_updated_at ?? row.updated_at),
     updatedAt: String(row.updated_at),

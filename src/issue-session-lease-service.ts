@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, IssueSessionRecord, RunRecord } from "./db-types.ts";
-import { peekPendingWakeRunType } from "./pending-wake.ts";
+import { peekRunnableWorkflowTaskRunType } from "./pending-workflow-task.ts";
 import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
 
 export const ISSUE_SESSION_LEASE_MS = 10 * 60_000;
@@ -36,8 +36,8 @@ export type ReleaseIssueSessionLease = (projectId: string, linearIssueId: string
 export type GetHeldIssueSessionLease = (projectId: string, linearIssueId: string) => IssueSessionLease | undefined;
 
 /**
- * Issue-session lease coordination over the `issue_sessions` lease columns.
- * The DB row (`lease_id`, `worker_id`, `leased_until`) is the only truth —
+ * Issue-session lease coordination over the `issue_session_leases` table.
+ * The lease row (`lease_id`, `worker_id`, `leased_until`) is the only truth —
  * there is no in-memory mirror, so a restarted process loses no lease state
  * (D4, core simplification plan). "Held by us" means the row carries this
  * service's `workerId` with an unexpired `leased_until`.
@@ -225,7 +225,7 @@ export class IssueSessionLeaseService {
 
   private emitStaleLeaseInvariantIfRunnable(projectId: string, linearIssueId: string): void {
     const issue = this.db.issues.getIssue(projectId, linearIssueId);
-    const runType = peekPendingWakeRunType(this.db, projectId, linearIssueId) ?? issue?.pendingRunType;
+    const runType = peekRunnableWorkflowTaskRunType(this.db, projectId, linearIssueId);
     if (!runType) return;
     emitTelemetry(this.telemetry, {
       type: "health.invariant",

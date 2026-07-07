@@ -2,7 +2,7 @@ import type { PatchRelayDatabase } from "../db.ts";
 import type { IssueRecord } from "../db-types.ts";
 import type { RunType } from "../factory-state.ts";
 import type { OperatorEventFeed } from "../operator-feed.ts";
-import { wakeOrchestrationParentsForChildEvent } from "../orchestration-parent-wake.ts";
+import { dispatchOrchestrationParentsForChildEvent } from "../orchestration-parent-dispatch.ts";
 import { triggerEventAllowed } from "../project-resolution.ts";
 import { isResolvedLinearState } from "./decision-helpers.ts";
 import { isDelegatedToPatchRelay, resolveDelegationTruth } from "./delegation-truth.ts";
@@ -17,8 +17,9 @@ import type {
 import { buildOperatorRetryEvent } from "../operator-retry-event.ts";
 import { appendBranchUpkeepObservation } from "../branch-upkeep-signal.ts";
 import { planIssueWebhookWorkflow } from "./issue-webhook-workflow-planner.ts";
-import type { WakeDispatcher } from "../wake-dispatcher.ts";
+import type { WorkflowTaskDispatcher } from "../workflow-task-dispatcher.ts";
 import { dirtyWorktreeEventPayload, inspectGitWorktreeStatus } from "../git-worktree-status.ts";
+import { isIssueAwaitingInputProjection } from "../issue-execution-state.ts";
 
 const WRITER = "desired-stage-recorder";
 
@@ -26,23 +27,23 @@ export class DesiredStageRecorder {
   constructor(
     private readonly db: PatchRelayDatabase,
     private readonly linearProvider: LinearClientProvider,
-    private readonly wakeDispatcher: WakeDispatcher,
+    private readonly workflowTaskDispatcher: WorkflowTaskDispatcher,
     private readonly feed?: OperatorEventFeed,
   ) {}
 
   async record(params: {
     project: ProjectConfig;
     normalized: NormalizedEvent;
-    peekPendingSessionWakeRunType: (projectId: string, issueId: string) => RunType | undefined;
+    peekRunnableWorkflowTaskRunType: (projectId: string, issueId: string) => RunType | undefined;
     stopActiveRun: (run: NonNullable<ReturnType<PatchRelayDatabase["runs"]["getRunById"]>>, input: string) => Promise<void>;
   }): Promise<{
     issue: TrackedIssueRecord | undefined;
-    wakeRunType: RunType | undefined;
+    runnableTaskRunType: RunType | undefined;
     delegated: boolean;
   }> {
     const normalizedIssue = params.normalized.issue;
     if (!normalizedIssue) {
-      return { issue: undefined, wakeRunType: undefined, delegated: false };
+      return { issue: undefined, runnableTaskRunType: undefined, delegated: false };
     }
 
     const existingIssue = this.db.issues.getIssue(params.project.id, normalizedIssue.id);
@@ -50,10 +51,10 @@ export class DesiredStageRecorder {
     const latestRun = existingIssue ? this.db.runs.getLatestRunForIssue(params.project.id, normalizedIssue.id) : undefined;
     const triggerAllowed = triggerEventAllowed(params.project, params.normalized.triggerEvent);
     const incomingAgentSessionId = params.normalized.agentSession?.id;
-    const hasPendingWake = params.peekPendingSessionWakeRunType(params.project.id, normalizedIssue.id) !== undefined;
+    const hasRunnableWorkflowTask = params.peekRunnableWorkflowTaskRunType(params.project.id, normalizedIssue.id) !== undefined;
 
     if (!existingIssue && !isDelegatedToPatchRelay(this.db, params.project, normalizedIssue) && !incomingAgentSessionId) {
-      return { issue: undefined, wakeRunType: undefined, delegated: false };
+      return { issue: undefined, runnableTaskRunType: undefined, delegated: false };
     }
 
     const syncResult = await syncIssueDependencies(this.db, this.linearProvider, params.project.id, normalizedIssue);
@@ -80,8 +81,8 @@ export class DesiredStageRecorder {
     });
     const unresolvedBlockers = this.db.issues.countUnresolvedBlockers(params.project.id, normalizedIssue.id);
     const childIssueCount = this.db.issues.listCanonicalChildIssues(params.project.id, normalizedIssue.id).length;
-    const existingWakeRunType = existingIssue
-      ? params.peekPendingSessionWakeRunType(params.project.id, normalizedIssue.id)
+    const existingWorkflowTaskRunType = existingIssue
+      ? params.peekRunnableWorkflowTaskRunType(params.project.id, normalizedIssue.id)
       : undefined;
     const workflowPlan = planIssueWebhookWorkflow({
       existingIssue,
@@ -94,8 +95,8 @@ export class DesiredStageRecorder {
       unresolvedBlockers,
       hasActiveRun: Boolean(activeRun),
       activeRunType: activeRun?.runType,
-      hasPendingWake,
-      existingWakeRunType,
+      hasRunnableWorkflowTask,
+      existingWorkflowTaskRunType,
       incomingAgentSessionId,
       childIssueCount,
     });
@@ -154,7 +155,7 @@ export class DesiredStageRecorder {
         },
       });
       if (fallbackCommit.outcome !== "applied") {
-        return { issue: undefined, wakeRunType: undefined, delegated };
+        return { issue: undefined, runnableTaskRunType: undefined, delegated };
       }
       issue = fallbackCommit.issue;
     }
@@ -193,7 +194,7 @@ export class DesiredStageRecorder {
         status: "un_delegated",
         summary: releaseWorktreeStatus?.dirty && releaseWorktreeStatus.summary
           ? `Issue un-delegated from PatchRelay with dirty worktree: ${releaseWorktreeStatus.summary}`
-          : issue.factoryState === "awaiting_input"
+          : isIssueAwaitingInputProjection(issue)
           ? "Issue un-delegated from PatchRelay"
           : `Issue un-delegated from PatchRelay; ${issue.factoryState} is now paused`,
       });
@@ -212,14 +213,14 @@ export class DesiredStageRecorder {
         status: "blocked",
         summary: `Implementation paused because ${issue.issueKey ?? normalizedIssue.id} is now blocked`,
       });
-    } else if (workflowPlan.startupResume.pendingRunType) {
-      // S6: a branch_upkeep resume folds its run context into the durable
+    } else if (workflowPlan.startupResume.workflowIntent) {
+      // A branch_upkeep resume folds its run context into the durable
       // `github.parent_head_moved` observation the workflow-task path derives
-      // `run:branch_upkeep` from (the legacy `pending_run_context_json` column is
-      // no longer written). Every other resume run type is fact-derived from the
-      // PR facts / delegation just committed above.
-      const resumeContext = workflowPlan.startupResume.pendingRunContext;
-      if (workflowPlan.startupResume.pendingRunType === "branch_upkeep" && resumeContext) {
+      // `run:branch_upkeep` from. Every other resume run type is fact-derived
+      // from the PR facts / delegation just committed above.
+      const resumeIntent = workflowPlan.startupResume.workflowIntent;
+      const resumeContext = resumeIntent.context;
+      if (resumeIntent.runType === "branch_upkeep" && resumeContext) {
         appendBranchUpkeepObservation(this.db, issue, {
           parentBranch: typeof resumeContext.baseBranch === "string" ? resumeContext.baseBranch : "main",
           ...(issue.prHeadSha ? { childHeadSha: issue.prHeadSha } : {}),
@@ -234,7 +235,7 @@ export class DesiredStageRecorder {
       this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(params.project.id, normalizedIssue.id, {
         projectId: params.project.id,
         linearIssueId: normalizedIssue.id,
-        ...buildOperatorRetryEvent(issue, workflowPlan.startupResume.pendingRunType, workflowPlan.startupResume.source),
+        ...buildOperatorRetryEvent(issue, resumeIntent.runType, workflowPlan.startupResume.source),
       });
     } else if (workflowPlan.shouldEnterOrchestrationSettle) {
       this.feed?.publish({
@@ -249,7 +250,7 @@ export class DesiredStageRecorder {
     }
 
     if (previousParentIssueId && previousParentIssueId !== currentParentIssueId) {
-      wakeOrchestrationParentsForChildEvent({
+      dispatchOrchestrationParentsForChildEvent({
         db: this.db,
         child: {
           projectId: issue.projectId,
@@ -264,7 +265,7 @@ export class DesiredStageRecorder {
         },
         eventType: "child_changed",
         changeKind: "detached",
-        wakeDispatcher: this.wakeDispatcher,
+        workflowTaskDispatcher: this.workflowTaskDispatcher,
       });
     }
 
@@ -284,19 +285,19 @@ export class DesiredStageRecorder {
             ? "child_regressed"
             : undefined;
       if (eventType) {
-        wakeOrchestrationParentsForChildEvent({
+        dispatchOrchestrationParentsForChildEvent({
           db: this.db,
           child: issue,
           eventType,
           changeKind,
-          wakeDispatcher: this.wakeDispatcher,
+          workflowTaskDispatcher: this.workflowTaskDispatcher,
         });
       }
     }
 
     return {
       issue: this.db.issueToTrackedIssue(issue),
-      wakeRunType: params.peekPendingSessionWakeRunType(params.project.id, normalizedIssue.id),
+      runnableTaskRunType: params.peekRunnableWorkflowTaskRunType(params.project.id, normalizedIssue.id),
       delegated,
     };
   }

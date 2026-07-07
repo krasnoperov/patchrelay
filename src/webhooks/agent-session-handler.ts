@@ -6,7 +6,7 @@ import { buildAgentSessionExternalUrls } from "../agent-session-presentation.ts"
 import type { CodexAppServerClient } from "../codex-app-server.ts";
 import type { AgentInputService } from "../agent-input-service.ts";
 import type { PatchRelayDatabase } from "../db.ts";
-import { IN_PROGRESS_STATES, type RunType } from "../factory-state.ts";
+import { type RunType } from "../factory-state.ts";
 import {
   buildAlreadyRunningThought,
   buildAgentSessionAcknowledgementThought,
@@ -25,7 +25,7 @@ import type {
   ProjectConfig,
   TrackedIssueRecord,
 } from "../types.ts";
-import type { WakeDispatcher } from "../wake-dispatcher.ts";
+import type { WorkflowTaskDispatcher } from "../workflow-task-dispatcher.ts";
 
 type LinearClient = NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>;
 
@@ -45,7 +45,7 @@ export class AgentSessionHandler {
     private readonly db: PatchRelayDatabase,
     private readonly linearProvider: LinearClientProvider,
     private readonly codex: CodexAppServerClient,
-    private readonly wakeDispatcher: WakeDispatcher,
+    private readonly workflowTaskDispatcher: WorkflowTaskDispatcher,
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
     private readonly agentInput?: AgentInputService,
@@ -88,12 +88,12 @@ export class AgentSessionHandler {
     normalized: NormalizedEvent;
     project: ProjectConfig;
     trackedIssue: TrackedIssueRecord | undefined;
-    wakeRunType: RunType | undefined;
+    runnableTaskRunType: RunType | undefined;
     delegated: boolean;
-    peekPendingSessionWakeRunType: (projectId: string, issueId: string) => RunType | undefined;
+    peekRunnableWorkflowTaskRunType: (projectId: string, issueId: string) => RunType | undefined;
     isDirectReplyToOutstandingQuestion: (issue: ReturnType<PatchRelayDatabase["getIssue"]>) => boolean;
   }): Promise<void> {
-    const { normalized, project, trackedIssue, wakeRunType, delegated } = params;
+    const { normalized, project, trackedIssue, runnableTaskRunType, delegated } = params;
     if (!normalized.agentSession?.id || !normalized.issue) return;
 
     const linear = await this.linearProvider.forProject(project.id);
@@ -106,47 +106,41 @@ export class AgentSessionHandler {
       if (!delegated) {
         const latestIssue = this.db.issues.getIssue(project.id, normalized.issue.id);
         if (latestIssue ?? trackedIssue) {
-          await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, params.peekPendingSessionWakeRunType);
+          await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, params.peekRunnableWorkflowTaskRunType);
         }
         return;
       }
-      if (wakeRunType) {
+      if (runnableTaskRunType) {
         const latestIssue = this.db.issues.getIssue(project.id, normalized.issue.id);
-        await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, params.peekPendingSessionWakeRunType, { pendingRunType: wakeRunType });
-        await this.publishAgentActivity(linear, normalized.agentSession.id, buildDelegationThought(wakeRunType));
+        await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, params.peekRunnableWorkflowTaskRunType, { runnableTaskRunType: runnableTaskRunType });
+        await this.publishAgentActivity(linear, normalized.agentSession.id, buildDelegationThought(runnableTaskRunType));
         return;
       }
       if (activeRun) {
         const latestIssue = this.db.issues.getIssue(project.id, normalized.issue.id);
-        await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, params.peekPendingSessionWakeRunType, { activeRunType: activeRun.runType });
+        await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, params.peekRunnableWorkflowTaskRunType, { activeRunType: activeRun.runType });
         await this.publishAgentActivity(linear, normalized.agentSession.id, buildAlreadyRunningThought(activeRun.runType));
         return;
       }
       if ((trackedIssue?.blockedByCount ?? 0) > 0) {
         const latestIssue = this.db.issues.getIssue(project.id, normalized.issue.id);
-        await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, params.peekPendingSessionWakeRunType);
+        await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, params.peekRunnableWorkflowTaskRunType);
         await this.publishAgentActivity(linear, normalized.agentSession.id, buildBlockedDelegationActivity(trackedIssue?.blockedByKeys));
         return;
       }
       if (!trackedIssue?.blockedByCount) {
         // Re-read the freshest state: an agentSessionCreated webhook can race a
         // session change / run launch, so the once-read activeRun above may have
-        // missed an in-flight run. Only nudge "no work queued" when the issue is
-        // genuinely idle — never when it's actively implementing/repairing.
+        // missed an in-flight run. Creation is no longer allowed to conclude
+        // "no work queued"; that belongs to health/reconciliation after the
+        // workflow task projection has settled.
         const latestIssue = this.db.issues.getIssue(project.id, normalized.issue.id);
         const freshActiveRun = latestIssue?.activeRunId ? this.db.runs.getRunById(latestIssue.activeRunId) : undefined;
         if (freshActiveRun) {
-          await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, params.peekPendingSessionWakeRunType, { activeRunType: freshActiveRun.runType });
+          await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, params.peekRunnableWorkflowTaskRunType, { activeRunType: freshActiveRun.runType });
           await this.publishAgentActivity(linear, normalized.agentSession.id, buildAlreadyRunningThought(freshActiveRun.runType));
-        } else if (latestIssue && (latestIssue.pendingRunType !== undefined || IN_PROGRESS_STATES.has(latestIssue.factoryState))) {
-          // Work is in flight or queued under the (possibly new) session; keep
-          // the session synced but suppress the misleading elicitation.
-          await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue, params.peekPendingSessionWakeRunType);
-        } else {
-          await this.publishAgentActivity(linear, normalized.agentSession.id, {
-            type: "elicitation",
-            body: "PatchRelay is delegated, but no work is queued. Delegate the issue or move it to Start to trigger implementation.",
-          });
+        } else if (latestIssue) {
+          await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue, params.peekRunnableWorkflowTaskRunType);
         }
       }
       return;
@@ -160,7 +154,7 @@ export class AgentSessionHandler {
         activeRun,
         linear,
         syncAgentSession: (agentSessionId, issue, options) =>
-          this.syncAgentSession(linear, agentSessionId, issue, params.peekPendingSessionWakeRunType, options),
+          this.syncAgentSession(linear, agentSessionId, issue, params.peekRunnableWorkflowTaskRunType, options),
       });
       return;
     }
@@ -189,28 +183,28 @@ export class AgentSessionHandler {
         body: promptBody,
         directReply,
         emitActivity: (content, options) => this.publishAgentActivity(linear, normalized.agentSession!.id, content, options),
-        peekPendingSessionWakeRunType: params.peekPendingSessionWakeRunType,
+        peekRunnableWorkflowTaskRunType: params.peekRunnableWorkflowTaskRunType,
       });
       const latestIssue = this.db.issues.getIssue(project.id, normalized.issue.id);
       const syncOptions = result.activeRunType
         ? { activeRunType: result.activeRunType }
-        : result.queuedRunType ? { pendingRunType: result.queuedRunType }
-          : wakeRunType ? { pendingRunType: wakeRunType }
+        : result.queuedRunType ? { runnableTaskRunType: result.queuedRunType }
+          : runnableTaskRunType ? { runnableTaskRunType: runnableTaskRunType }
             : undefined;
       await this.syncAgentSession(
         linear,
         normalized.agentSession.id,
         latestIssue ?? trackedIssue,
-        params.peekPendingSessionWakeRunType,
+        params.peekRunnableWorkflowTaskRunType,
         syncOptions,
       );
       return;
     }
 
-    if (wakeRunType) {
+    if (runnableTaskRunType) {
       const latestIssue = this.db.issues.getIssue(project.id, normalized.issue.id);
-      await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, params.peekPendingSessionWakeRunType, { pendingRunType: wakeRunType });
-      await this.publishAgentActivity(linear, normalized.agentSession.id, buildDelegationThought(wakeRunType, "prompt"), { ephemeral: true });
+      await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, params.peekRunnableWorkflowTaskRunType, { runnableTaskRunType: runnableTaskRunType });
+      await this.publishAgentActivity(linear, normalized.agentSession.id, buildDelegationThought(runnableTaskRunType, "prompt"), { ephemeral: true });
     }
   }
 
@@ -223,7 +217,7 @@ export class AgentSessionHandler {
     syncAgentSession: (
       agentSessionId: string,
       issue: TrackedIssueRecord | ReturnType<PatchRelayDatabase["getIssue"]> | undefined,
-      options?: { activeRunType?: RunType; pendingRunType?: RunType },
+      options?: { activeRunType?: RunType; runnableTaskRunType?: RunType },
     ) => Promise<void>;
   }): Promise<void> {
     const issueId = params.normalized.issue!.id;
@@ -317,8 +311,8 @@ export class AgentSessionHandler {
     linear: LinearClient,
     agentSessionId: string,
     issue: TrackedIssueRecord | ReturnType<PatchRelayDatabase["getIssue"]> | undefined,
-    peekPendingSessionWakeRunType: (projectId: string, issueId: string) => RunType | undefined,
-    options?: { activeRunType?: RunType; pendingRunType?: RunType },
+    peekRunnableWorkflowTaskRunType: (projectId: string, issueId: string) => RunType | undefined,
+    options?: { activeRunType?: RunType; runnableTaskRunType?: RunType },
   ): Promise<void> {
     if (!linear.updateAgentSession) return;
     try {
@@ -335,14 +329,19 @@ export class AgentSessionHandler {
               plan: buildAgentSessionPlanForIssue(
                 {
                   factoryState: issue.factoryState,
-                  pendingRunType: options?.pendingRunType ?? peekPendingSessionWakeRunType(
-                    issue.projectId,
-                    issue.linearIssueId,
-                  ),
                   ciRepairAttempts: "ciRepairAttempts" in issue ? issue.ciRepairAttempts : 0,
                   queueRepairAttempts: "queueRepairAttempts" in issue ? issue.queueRepairAttempts : 0,
                 },
-                options?.activeRunType ? { activeRunType: options.activeRunType } : undefined,
+                (() => {
+                  const runnableTaskRunType = options?.runnableTaskRunType ?? peekRunnableWorkflowTaskRunType(
+                    issue.projectId,
+                    issue.linearIssueId,
+                  );
+                  return {
+                    ...(options?.activeRunType ? { activeRunType: options.activeRunType } : {}),
+                    ...(runnableTaskRunType ? { runnableTaskRunType } : {}),
+                  };
+                })(),
               ),
             }
           : {}),

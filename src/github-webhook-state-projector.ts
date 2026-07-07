@@ -52,7 +52,7 @@ export async function projectGitHubWebhookState(
 
   // Plan §8.3: when a PR's base ref differs from the repo default,
   // it's stacked on another open PR. Cache the parent branch so we
-  // can fan child-rebase wakes on parent's `pr_synchronize`. Clear
+  // can fan child-rebase workflow signals on parent's `pr_synchronize`. Clear
   // the field when a base ref reverts to the default (e.g. parent
   // landed and GitHub auto-retargeted) or when the PR closes.
   const parentPrBranch = computeParentPrBranchUpdate(event, project);
@@ -364,6 +364,11 @@ async function updateGitHubCiSnapshot(
       update: {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
+        ...(event.triggerEvent === "check_failed"
+          ? { prCheckStatus: "pending" }
+          : event.triggerEvent === "check_passed"
+            ? { prCheckStatus: "success" }
+            : {}),
         lastGitHubCiSnapshotHeadSha: event.headSha ?? issue.lastGitHubCiSnapshotHeadSha ?? null,
         lastGitHubCiSnapshotGateCheckName: getPrimaryGateCheckName(project),
         lastGitHubCiSnapshotGateCheckStatus: "pending",
@@ -387,16 +392,19 @@ async function updateGitHubCiSnapshot(
     return;
   }
 
+  const gateCheckStatus = event.triggerEvent === "check_passed" && snapshot.gateCheckStatus === "pending"
+    ? "success"
+    : snapshot.gateCheckStatus;
   deps.db.issueSessions.commitIssueState({
     writer: WRITER,
     expectedVersion: preResolveVersion,
     update: {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
-      prCheckStatus: snapshot.gateCheckStatus,
+      prCheckStatus: gateCheckStatus,
       lastGitHubCiSnapshotHeadSha: snapshot.headSha,
       lastGitHubCiSnapshotGateCheckName: snapshot.gateCheckName ?? getPrimaryGateCheckName(project),
-      lastGitHubCiSnapshotGateCheckStatus: snapshot.gateCheckStatus,
+      lastGitHubCiSnapshotGateCheckStatus: gateCheckStatus,
       lastGitHubCiSnapshotJson: JSON.stringify(snapshot),
       lastGitHubCiSnapshotSettledAt: snapshot.settledAt ?? null,
     },

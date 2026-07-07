@@ -9,7 +9,7 @@ export type RunAdmissionResult =
 
 export type RunAdmissionFailure = Exclude<RunAdmissionResult, { allowed: true }>;
 
-export function shouldConsumeWakeOnAdmissionFailure(result: RunAdmissionFailure): boolean {
+export function shouldConsumeWorkflowTaskOnAdmissionFailure(result: RunAdmissionFailure): boolean {
   switch (result.reason) {
     case "dependency_refresh_failed":
       return false;

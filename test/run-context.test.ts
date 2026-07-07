@@ -21,7 +21,7 @@ test("parseRunContext parses a typical branch-upkeep context", () => {
   const context = parseRunContext(JSON.stringify({
     branchUpkeepRequired: true,
     reviewFixMode: "branch_upkeep",
-    wakeReason: "branch_upkeep",
+    workflowReason: "branch_upkeep",
     promptContext: "Update onto latest main.",
     mergeStateStatus: "DIRTY",
     failingHeadSha: "abc123",
@@ -105,15 +105,15 @@ test("parseRunContextOrWarn degrades to undefined and reports the failure", () =
   assert.equal(warnings.length, 1);
   assert.match(warnings[0]!, /Malformed run context JSON/);
 
-  const valid = parseRunContextOrWarn(JSON.stringify({ wakeReason: "delegated" }), () => {
+  const valid = parseRunContextOrWarn(JSON.stringify({ workflowReason: "delegated" }), () => {
     throw new Error("should not warn on valid input");
   });
-  assert.equal(valid?.wakeReason, "delegated");
+  assert.equal(valid?.workflowReason, "delegated");
 });
 
 test("serializeRunContext round-trips through parseRunContext", () => {
   const original: RunContext = {
-    wakeReason: "settled_red_ci",
+    workflowReason: "settled_red_ci",
     failureSignature: "branch_ci::abc::verify::step",
     failureHeadSha: "abc",
     followUps: [{ type: "direct_reply", text: "hi", author: "alv" }],

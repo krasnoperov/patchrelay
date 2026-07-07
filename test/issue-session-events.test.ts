@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { deriveSessionWakePlan, type IssueSessionEventRecord } from "../src/issue-session-events.ts";
+import { deriveSessionInputPlan, type IssueSessionEventRecord } from "../src/issue-session-events.ts";
 import type { IssueRecord } from "../src/db-types.ts";
 
 function delegatedEvent(runType: string): IssueSessionEventRecord {
@@ -14,27 +14,27 @@ function delegatedEvent(runType: string): IssueSessionEventRecord {
   };
 }
 
-test("deriveSessionWakePlan resolves a legacy main_repair payload to implementation", () => {
+test("deriveSessionInputPlan resolves a legacy main_repair payload to implementation", () => {
   // main_repair was removed as a run type; a historical delegated event carrying it
-  // must not strand the issue — it falls back to a normal implementation wake.
+  // must not strand the issue — it falls back to a normal implementation workflowTask.
   const issue = { issueClass: "implementation" } as IssueRecord;
-  const plan = deriveSessionWakePlan(issue, [delegatedEvent("main_repair")]);
+  const plan = deriveSessionInputPlan(issue, [delegatedEvent("main_repair")]);
   assert.equal(plan?.runType, "implementation");
-  assert.equal(plan?.wakeReason, "delegated");
+  assert.equal(plan?.workflowReason, "delegated");
 });
 
-test("deriveSessionWakePlan keeps a still-valid run type from the delegated payload", () => {
+test("deriveSessionInputPlan keeps a still-valid run type from the delegated payload", () => {
   const issue = { issueClass: "implementation" } as IssueRecord;
-  const plan = deriveSessionWakePlan(issue, [delegatedEvent("ci_repair")]);
+  const plan = deriveSessionInputPlan(issue, [delegatedEvent("ci_repair")]);
   assert.equal(plan?.runType, "ci_repair");
 });
 
-test("deriveSessionWakePlan ignores stale requested-changes events after the PR head advances", () => {
+test("deriveSessionInputPlan ignores stale requested-changes events after the PR head advances", () => {
   const issue = {
     issueClass: "implementation",
     prHeadSha: "new-head",
   } as IssueRecord;
-  const plan = deriveSessionWakePlan(issue, [
+  const plan = deriveSessionInputPlan(issue, [
     event("review_changes_requested", JSON.stringify({
       requestedChangesHeadSha: "old-reviewed-head",
       reviewCommitId: "old-reviewed-head",
@@ -44,48 +44,48 @@ test("deriveSessionWakePlan ignores stale requested-changes events after the PR 
   assert.equal(plan, undefined);
 });
 
-test("deriveSessionWakePlan downgrades a delegated review_fix payload to implementation when the PR is no longer changes_requested", () => {
+test("deriveSessionInputPlan downgrades a delegated review_fix payload to implementation when the PR is no longer changes_requested", () => {
   // A delegated event carrying a stale review_fix run type must not produce a
-  // review_fix wake the orchestrator would reject as inactive (and then fail
+  // review_fix workflowTask the orchestrator would reject as inactive (and then fail
   // to clear, since the triggering event is not a review_changes_requested
   // event) — it would strand the issue in an enqueue→skip loop.
   const issue = { issueClass: "implementation", prReviewState: "approved" } as IssueRecord;
-  const plan = deriveSessionWakePlan(issue, [delegatedEvent("review_fix")]);
+  const plan = deriveSessionInputPlan(issue, [delegatedEvent("review_fix")]);
   assert.equal(plan?.runType, "implementation");
 });
 
-test("deriveSessionWakePlan keeps a delegated review_fix payload when the PR is still changes_requested", () => {
+test("deriveSessionInputPlan keeps a delegated review_fix payload when the PR is still changes_requested", () => {
   const issue = { issueClass: "implementation", prReviewState: "changes_requested" } as IssueRecord;
-  const plan = deriveSessionWakePlan(issue, [delegatedEvent("review_fix")]);
+  const plan = deriveSessionInputPlan(issue, [delegatedEvent("review_fix")]);
   assert.equal(plan?.runType, "review_fix");
 });
 
-test("deriveSessionWakePlan preserves a branch_upkeep payload regardless of review state", () => {
+test("deriveSessionInputPlan preserves a branch_upkeep payload regardless of review state", () => {
   // branch_upkeep is exempt from the orchestrator's inactive-requested-changes
   // guard and is valid branch maintenance even when not changes_requested, so
   // it must NOT be downgraded.
   const issue = { issueClass: "implementation", prReviewState: "approved" } as IssueRecord;
-  const plan = deriveSessionWakePlan(issue, [delegatedEvent("branch_upkeep")]);
+  const plan = deriveSessionInputPlan(issue, [delegatedEvent("branch_upkeep")]);
   assert.equal(plan?.runType, "branch_upkeep");
 });
 
-test("deriveSessionWakePlan downgrades a completion_check_continue review_fix to implementation when the PR is no longer changes_requested", () => {
+test("deriveSessionInputPlan downgrades a completion_check_continue review_fix to implementation when the PR is no longer changes_requested", () => {
   // A review_fix run that finished and asked to continue carries runType
   // review_fix in its payload. If the PR review is no longer
   // changes_requested (dismissed/approved/commented), continuing as review_fix
   // would be rejected by the orchestrator as an inactive requested-changes
-  // wake and strand the issue — so it must resolve to implementation instead.
+  // workflowTask and strand the issue — so it must resolve to implementation instead.
   const issue = { issueClass: "implementation", prReviewState: "commented" } as IssueRecord;
-  const plan = deriveSessionWakePlan(issue, [
+  const plan = deriveSessionInputPlan(issue, [
     event("completion_check_continue", JSON.stringify({ runType: "review_fix", summary: "continue" })),
   ]);
   assert.equal(plan?.runType, "implementation");
-  assert.equal(plan?.wakeReason, "completion_check_continue");
+  assert.equal(plan?.workflowReason, "completion_check_continue");
 });
 
-test("deriveSessionWakePlan keeps a completion_check_continue review_fix when the PR is still changes_requested", () => {
+test("deriveSessionInputPlan keeps a completion_check_continue review_fix when the PR is still changes_requested", () => {
   const issue = { issueClass: "implementation", prReviewState: "changes_requested" } as IssueRecord;
-  const plan = deriveSessionWakePlan(issue, [
+  const plan = deriveSessionInputPlan(issue, [
     event("completion_check_continue", JSON.stringify({ runType: "review_fix", summary: "continue" })),
   ]);
   assert.equal(plan?.runType, "review_fix");
@@ -114,7 +114,7 @@ function event(
   };
 }
 
-test("parseIssueSessionEvent returns the typed payload for a valid wake event", () => {
+test("parseIssueSessionEvent returns the typed payload for a valid workflowTask event", () => {
   const typed = parseIssueSessionEvent(event("review_changes_requested", JSON.stringify({
     requestedChangesCoalesceKey: "key",
     branchUpkeepRequired: true,
@@ -174,10 +174,10 @@ test("parseIssueSessionEventOrWarn drops events with an unknown stored event typ
   assert.equal(warnings.length, 1);
 });
 
-test("deriveSessionWakePlan degrades a malformed wake payload instead of wedging the issue", () => {
+test("deriveSessionInputPlan degrades a malformed workflowTask payload instead of wedging the issue", () => {
   const issue = { issueClass: "implementation" } as IssueRecord;
   const errors: string[] = [];
-  const plan = deriveSessionWakePlan(
+  const plan = deriveSessionInputPlan(
     issue,
     [event("settled_red_ci", "{broken", 7)],
     (_event, message) => errors.push(message),
@@ -187,9 +187,9 @@ test("deriveSessionWakePlan degrades a malformed wake payload instead of wedging
   assert.equal(errors.length, 1);
 });
 
-test("deriveSessionWakePlan builds follow-ups from typed input-message payloads", () => {
+test("deriveSessionInputPlan builds follow-ups from typed input-message payloads", () => {
   const issue = { issueClass: "implementation" } as IssueRecord;
-  const plan = deriveSessionWakePlan(issue, [
+  const plan = deriveSessionInputPlan(issue, [
     event("delegated", undefined, 1),
     event("direct_reply", JSON.stringify({ text: "please also fix the docs", author: "alv" }), 2),
   ]);

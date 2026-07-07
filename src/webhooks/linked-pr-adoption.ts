@@ -1,6 +1,6 @@
 import { resolveLinkedPullRequest } from "../linear-linked-pr-reconciliation.ts";
 import { readRemotePrState } from "../remote-pr-state.ts";
-import { deriveLinkedPrAdoptionOutcome } from "../delegation-linked-pr.ts";
+import { deriveLinkedPrAdoptionOutcome, type LinkedPrAdoptionOutcome } from "../delegation-linked-pr.ts";
 import type { IssueMetadata, IssueRecord, ProjectConfig } from "../types.ts";
 
 export interface LinkedPrAdoptionInput {
@@ -18,7 +18,7 @@ export interface LinkedPrAdoptionInput {
  */
 export async function resolveLinkedPrAdoption(
   input: LinkedPrAdoptionInput,
-) {
+): Promise<LinkedPrAdoptionOutcome | undefined> {
   if (!input.delegated) return undefined;
   if (input.existingIssue?.prNumber !== undefined) return undefined;
 
@@ -27,8 +27,6 @@ export async function resolveLinkedPrAdoption(
   if (resolution.kind === "ambiguous") {
     return {
       factoryState: "awaiting_input" as const,
-      pendingRunType: null,
-      pendingRunContext: undefined,
       issueUpdates: {},
     };
   }
@@ -37,8 +35,6 @@ export async function resolveLinkedPrAdoption(
   if (!remote) {
     return {
       factoryState: "awaiting_input" as const,
-      pendingRunType: null,
-      pendingRunContext: undefined,
       issueUpdates: {
         prNumber: resolution.reference.prNumber,
         prUrl: resolution.reference.url,

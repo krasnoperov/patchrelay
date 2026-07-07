@@ -3,11 +3,9 @@ import { rm } from "node:fs/promises";
 import path from "node:path";
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
-import type { FactoryState } from "./factory-state.ts";
+import { isIssueTerminalProjection } from "./issue-execution-state.ts";
 import type { AppConfig, ProjectConfig } from "./types.ts";
 import { execCommand } from "./utils.ts";
-
-const CLEANUP_STATES: ReadonlySet<FactoryState> = new Set(["done", "failed", "escalated"]);
 
 export interface WorktreeCleanupOptions {
   dryRun?: boolean | undefined;
@@ -67,7 +65,7 @@ export async function runTerminalWorktreeCleanup(params: {
   for (const issue of params.db.listIssues()) {
     result.scanned += 1;
     if (!issue.worktreePath) continue;
-    if (!CLEANUP_STATES.has(issue.factoryState)) {
+    if (!isIssueTerminalProjection(issue)) {
       result.skippedState += 1;
       continue;
     }

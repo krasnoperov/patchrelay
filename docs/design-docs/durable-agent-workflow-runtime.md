@@ -141,11 +141,11 @@ type WorkflowTask =
   | { type: "escalate"; reason: string };
 ```
 
-Tasks replace the overloaded "wake" concept. An event does not directly start work; events update the snapshot, and the snapshot produces tasks.
+Tasks are the only executor-admission vocabulary. An event does not directly start work; events update the snapshot, and the snapshot produces tasks.
 
 The current task set is materialized as a durable read model. Reconciliation upserts the tasks the projector still wants and closes stale task rows when authority, blockers, PR state, or active-run state changes. Runnable executor work is therefore a query over current gated tasks, not a transient webhook side effect.
 
-Startup and tick-time dispatch should rebuild this read model before asking what can run. During migration from v1, legacy wakes and durable runnable tasks can both feed the ready queue, but the intended endpoint is that executor admission reads runnable tasks only.
+Startup and tick-time dispatch rebuild this read model before asking what can run. Executor admission reads open runnable workflow tasks only.
 
 ### Run
 
@@ -542,7 +542,7 @@ executors/
 The v1 implementation has valuable hard-won invariants:
 
 - issue session events become the event log,
-- `WakeDispatcher` becomes scheduler dispatch,
+- the old dispatch shell becomes workflow-task dispatch,
 - `commitIssueState` becomes projector/write transaction discipline,
 - reactive run policies become verifier gates,
 - run finalizer becomes run lifecycle,
@@ -551,17 +551,17 @@ The v1 implementation has valuable hard-won invariants:
 
 The v1 factory states should become connector-facing projections, not the core workflow model.
 
-## Current Runtime Bridge
+## Current Runtime
 
-The v2 bridge keeps the existing factory-state projection for UI and Linear sync, but executor admission now prefers durable workflow tasks:
+PatchRelay keeps the existing factory-state projection for UI and Linear sync, but executor admission reads durable workflow tasks:
 
 ```text
-explicit session event -> workflow task -> legacy pending run -> implicit compatibility wake
+observations -> snapshot -> workflow_tasks -> runs -> projections
 ```
 
 GitHub PR lifecycle repair now follows the v2 path. The GitHub connector records external failure or review provenance, appends a GitHub observation, reconciles workflow tasks, and dispatches the issue only if the reconciled task is runnable.
 
-The connector does not append synthetic session wakes for branch-CI repair, merge-queue repair, or requested-changes review repair. Requested-changes observations carry review body, review identity, reviewer, review URL, and inline review comments when available; the `run:review_fix` task passes that context into the executor prompt.
+The connector does not append synthetic session inputs for branch-CI repair, merge-queue repair, or requested-changes review repair. Requested-changes observations carry review body, review identity, reviewer, review URL, and inline review comments when available; the `run:review_fix` task passes that context into the executor prompt.
 
 ## Design Principles
 

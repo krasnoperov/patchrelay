@@ -47,7 +47,7 @@ test("buildBranchUpkeepContext encodes the upkeep directive in the prompt", () =
   const context = buildBranchUpkeepContext(42, "main", "DIRTY", "abc123");
   assert.equal(context.branchUpkeepRequired, true);
   assert.equal(context.reviewFixMode, "branch_upkeep");
-  assert.equal(context.wakeReason, "branch_upkeep");
+  assert.equal(context.workflowReason, "branch_upkeep");
   assert.equal(context.mergeStateStatus, "DIRTY");
   assert.equal(context.failingHeadSha, "abc123");
   assert.equal(context.baseBranch, "main");

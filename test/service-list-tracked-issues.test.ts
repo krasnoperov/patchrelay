@@ -7,6 +7,7 @@ import pino from "pino";
 import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { PatchRelayService } from "../src/service.ts";
+import { reconcileWorkflowTasksForIssue } from "../src/workflow-task-reconciler.ts";
 import type { AppConfig } from "../src/types.ts";
 
 function createConfig(baseDir: string): AppConfig {
@@ -315,8 +316,10 @@ test("listTrackedIssues ordering ignores lease heartbeats", async () => {
 
     const listed = service.listTrackedIssues().map((entry) => entry.issueKey);
     assert.deepEqual(listed.slice(0, 2), ["USE-2", "USE-1"]);
-    assert.equal(db.issueSessions.getIssueSession("usertold", "issue-1")?.updatedAt, "2026-04-01T10:45:00.000Z");
-    assert.equal(db.issueSessions.getIssueSession("usertold", "issue-1")?.displayUpdatedAt, "2026-04-01T09:00:00.000Z");
+    const session = db.issueSessions.getIssueSession("usertold", "issue-1");
+    assert.equal(session?.updatedAt, "2026-04-01T09:00:00.000Z");
+    assert.equal(session?.displayUpdatedAt, "2026-04-01T09:00:00.000Z");
+    assert.equal(session?.leasedUntil, "2026-04-01T11:30:00.000Z");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -543,7 +546,6 @@ test("listTrackedIssues clears stale blocker text after blocker snapshot resolve
       title: "Blocked delegated issue",
       delegatedToPatchRelay: true,
       factoryState: "delegated",
-      pendingRunType: "implementation",
     });
 
     const blocked = service.listTrackedIssues().find((entry) => entry.issueKey === "USE-3");
@@ -558,8 +560,8 @@ test("listTrackedIssues clears stale blocker text after blocker snapshot resolve
       blockerCurrentLinearState: "Done",
       blockerCurrentLinearStateType: "completed",
     });
+    reconcileWorkflowTasksForIssue(db, db.getIssue("usertold", "issue-3")!);
 
-    const unblockedSession = db.issueSessions.getIssueSession("usertold", "issue-3");
     const unblocked = service.listTrackedIssues().find((entry) => entry.issueKey === "USE-3");
     assert.ok(unblocked);
     assert.equal(db.countUnresolvedBlockers("usertold", "issue-3"), 0);
@@ -567,7 +569,6 @@ test("listTrackedIssues clears stale blocker text after blocker snapshot resolve
     assert.deepEqual(unblocked.blockedByKeys, []);
     assert.equal(unblocked.waitingReason, "Ready to run implementation");
     assert.equal(unblocked.statusNote, "Ready to run implementation");
-    assert.equal(unblockedSession?.waitingReason, "Ready to run implementation");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -701,7 +702,7 @@ test("service start preserves delegated completion-check questions in awaiting_i
     assert.equal(tracked.factoryState, "awaiting_input");
     assert.equal(tracked.waitingReason, "Waiting on operator input");
     assert.equal(tracked.statusNote, "Should the workflow prefer the compact layout?");
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-3b"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-3b"), undefined);
     await service.stop();
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -732,7 +733,6 @@ test("listTrackedIssues does not mark downstream waiting issues as ready just be
       title: "Waiting downstream",
       currentLinearState: "In Review",
       factoryState: "awaiting_queue",
-      pendingRunType: "implementation",
       prNumber: 22,
       prReviewState: "approved",
       prCheckStatus: "success",
@@ -771,7 +771,6 @@ test("listTrackedIssues does not mark awaiting-review issues as ready just becau
       title: "Awaiting review",
       currentLinearState: "In Review",
       factoryState: "pr_open",
-      pendingRunType: "implementation",
       prNumber: 21,
       prState: "open",
       prReviewState: "review_required",
@@ -854,7 +853,6 @@ test("listTrackedIssues treats completed Linear state as terminal even before fa
       currentLinearState: "Done",
       currentLinearStateType: "completed",
       factoryState: "delegated",
-      pendingRunType: "implementation",
     });
 
     const tracked = service.listTrackedIssues().find((entry) => entry.issueKey === "USE-LINEAR-DONE");

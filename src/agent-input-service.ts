@@ -13,7 +13,7 @@ import {
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import type { LinearAgentActivityContent, ProjectConfig } from "./types.ts";
-import type { WakeDispatcher } from "./wake-dispatcher.ts";
+import type { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
 import {
   extractLatestAssistantSummary,
   type InputMessageEventPayload,
@@ -22,7 +22,8 @@ import {
 } from "./issue-session-events.ts";
 import { dirtyWorktreeEventPayload, inspectGitWorktreeStatus } from "./git-worktree-status.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
-import { HUMAN_INPUT_OBSERVATION, SIGNAL_CONSUMED_OBSERVATION } from "./workflow-runtime.ts";
+import { isIssueDoneProjection } from "./issue-execution-state.ts";
+import { HUMAN_INPUT_OBSERVATION, SIGNAL_CONSUMED_OBSERVATION } from "./workflow-model.ts";
 import { createHash } from "node:crypto";
 
 const WRITER = "agent-input-service";
@@ -51,7 +52,7 @@ export class AgentInputService {
   constructor(
     private readonly db: PatchRelayDatabase,
     private readonly codex: CodexAppServerClient,
-    private readonly wakeDispatcher: WakeDispatcher,
+    private readonly workflowTaskDispatcher: WorkflowTaskDispatcher,
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
     private readonly followupClassifier?: FollowupIntentClassifier,
@@ -66,7 +67,7 @@ export class AgentInputService {
     operatorSource?: string | undefined;
     directReply?: boolean | undefined;
     emitActivity?: ((content: LinearAgentActivityContent, options?: { ephemeral?: boolean }) => Promise<void>) | undefined;
-    peekPendingSessionWakeRunType?: ((projectId: string, issueId: string) => RunType | undefined) | undefined;
+    peekRunnableWorkflowTaskRunType?: ((projectId: string, issueId: string) => RunType | undefined) | undefined;
   }): Promise<AgentInputDeliveryResult> {
     const body = params.body.trim();
     if (!body) return { status: "ignored" };
@@ -77,7 +78,7 @@ export class AgentInputService {
 
     if (intent?.intent === "status" && !params.directReply) {
       await params.emitActivity?.(
-        this.buildStatusActivity(issue, activeRun, params.peekPendingSessionWakeRunType, activeRun ? "thought" : "response"),
+        this.buildStatusActivity(issue, activeRun, params.peekRunnableWorkflowTaskRunType, activeRun ? "thought" : "response"),
         activeRun ? { ephemeral: true } : undefined,
       );
       return { status: "answered", ...(activeRun?.runType ? { activeRunType: activeRun.runType } : {}) };
@@ -87,7 +88,7 @@ export class AgentInputService {
       if (activeRun) {
         await this.stopActiveRun(issue, activeRun, body, params.source);
       } else {
-        this.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
+        this.workflowTaskDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
           eventType: "stop_requested",
           eventJson: JSON.stringify({ body, source: params.source, ...(params.author ? { author: params.author } : {}) } satisfies StopRequestedEventPayload),
         });
@@ -141,7 +142,7 @@ export class AgentInputService {
       directReply,
       delegatedToPatchRelay: issue.delegatedToPatchRelay,
       prReviewState: issue.prReviewState,
-      explicitWakeIntent: true,
+      explicitWorkflowIntent: true,
     });
   }
 
@@ -155,10 +156,9 @@ export class AgentInputService {
     emitActivity?: ((content: LinearAgentActivityContent, options?: { ephemeral?: boolean }) => Promise<void>) | undefined;
   }): Promise<AgentInputDeliveryResult> {
     const { issue, activeRun, body, source } = params;
-    // S5: human input ALWAYS lands as a durable observation first (dual path
-    // with the legacy queueFollowUpEvent below). On a successful steer we mark
-    // it consumed; on failure / no-active-turn it stays unconsumed and becomes a
-    // run:input task after the active run releases.
+    // Human input lands as a durable observation first. On a successful steer we
+    // mark it consumed; on failure / no-active-turn it stays unconsumed and
+    // becomes a run:input task after the active run releases.
     const inputKind = inputSourceEventType(source);
     const observationId = this.appendHumanInputObservation({
       issue,
@@ -168,7 +168,7 @@ export class AgentInputService {
       ...(params.operatorSource ? { operatorSource: params.operatorSource } : {}),
     });
     if (!activeRun.threadId || !activeRun.turnId) {
-      const queuedRunType = this.queueFollowUpEvent(issue, body, source, params.author, params.operatorSource, false);
+      const queuedRunType = this.recordInputSessionEventAndDispatch(issue, body, source, params.author, params.operatorSource, false);
       return { status: "queued", ...(queuedRunType ? { queuedRunType } : {}) };
     }
 
@@ -225,7 +225,7 @@ export class AgentInputService {
         turnId: activeRun.turnId,
         error: message,
       });
-      const queuedRunType = this.queueFollowUpEvent(issue, body, source, params.author, params.operatorSource, false);
+      const queuedRunType = this.recordInputSessionEventAndDispatch(issue, body, source, params.author, params.operatorSource, false);
       this.feed?.publish({
         level: "warn",
         kind: inputFeedKind(source),
@@ -252,16 +252,15 @@ export class AgentInputService {
   }): Promise<AgentInputDeliveryResult> {
     const originalIssue = params.issue;
     let issue = originalIssue;
-    const replacementPrRequired = originalIssue.factoryState === "done" && originalIssue.prNumber !== undefined;
+    const replacementPrRequired = isIssueDoneProjection(originalIssue) && originalIssue.prNumber !== undefined;
     if (replacementPrRequired) {
       issue = this.prepareReplacementWork(params.project, originalIssue);
     }
 
-    // S5: land the input as a durable inbox observation and reconcile the
-    // run:input task BEFORE the legacy queueFollowUpEvent dispatch, so the
-    // workflow_task rung (not the session rung) answers this input. The
-    // observation is idle-issue durable: it survives a restart and re-derives
-    // the task after reconcileKnownWorkflowTasks.
+    // Land the input as a durable inbox observation and reconcile the run:input
+    // task before recording the session-history event. The observation is
+    // idle-issue durable: it survives a restart and re-derives the task after
+    // reconcileKnownWorkflowTasks.
     this.appendHumanInputObservation({
       issue,
       text: params.body,
@@ -272,10 +271,7 @@ export class AgentInputService {
     });
     reconcileWorkflowTasksForIssue(this.db, issue);
 
-    // Dual path: the legacy session event is still written, and its
-    // recordEventAndDispatch drains the wake — which now resolves to the
-    // run:input workflow task reconciled just above (no extra enqueue needed).
-    const queuedRunType = this.queueFollowUpEvent(
+    const queuedRunType = this.recordInputSessionEventAndDispatch(
       issue,
       params.body,
       params.source,
@@ -349,7 +345,7 @@ export class AgentInputService {
     });
   }
 
-  private queueFollowUpEvent(
+  private recordInputSessionEventAndDispatch(
     issue: Pick<IssueRecord, "projectId" | "linearIssueId" | "factoryState" | "prNumber" | "prUrl" | "prState" | "prHeadSha" | "prReviewState">,
     body: string,
     source: AgentInputSource,
@@ -358,8 +354,13 @@ export class AgentInputService {
     directReply: boolean,
     previousIssue?: Pick<IssueRecord, "prNumber" | "prUrl" | "prState" | "prHeadSha"> | undefined,
   ): RunType | undefined {
-    return this.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
-      eventType: directReply ? "direct_reply" : inputSourceEventType(source),
+    const inputKind = directReply ? "direct_reply" : inputSourceEventType(source);
+    const freshIssue = this.db.issues.getIssue(issue.projectId, issue.linearIssueId);
+    if (freshIssue) {
+      reconcileWorkflowTasksForIssue(this.db, freshIssue);
+    }
+    return this.workflowTaskDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
+      eventType: inputKind,
       eventJson: JSON.stringify({
         ...(source === "linear_addressed_comment" ? { body } : { text: body }),
         source: inputSourcePayloadSource(source),
@@ -445,7 +446,7 @@ export class AgentInputService {
         });
       }
     });
-    this.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
+    this.workflowTaskDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
       eventType: "stop_requested",
       eventJson: JSON.stringify({ body, source, ...dirtyPayload } satisfies StopRequestedEventPayload),
     });
@@ -456,7 +457,7 @@ export class AgentInputService {
   private buildStatusActivity(
     issue: IssueRecord,
     activeRun: ActiveRun | undefined,
-    peekPendingSessionWakeRunType: ((projectId: string, issueId: string) => RunType | undefined) | undefined,
+    peekRunnableWorkflowTaskRunType: ((projectId: string, issueId: string) => RunType | undefined) | undefined,
     activityType: "thought" | "response",
   ): LinearAgentActivityContent {
     const latestRun = activeRun ?? this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
@@ -468,12 +469,12 @@ export class AgentInputService {
       sessionSummary: extractLatestAssistantSummary(latestRun),
       waitingReason: undefined,
     });
-    const pendingRunType = peekPendingSessionWakeRunType?.(issue.projectId, issue.linearIssueId);
+    const runnableTaskRunType = peekRunnableWorkflowTaskRunType?.(issue.projectId, issue.linearIssueId);
     return buildFollowupStatusActivity({
       issue,
       ...(statusNote ? { statusNote } : {}),
       ...(activeRun?.runType ? { activeRunType: activeRun.runType } : {}),
-      ...(pendingRunType ? { pendingRunType } : {}),
+      ...(runnableTaskRunType ? { runnableTaskRunType } : {}),
       activityType,
     });
   }

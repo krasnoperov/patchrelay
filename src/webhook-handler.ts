@@ -2,7 +2,7 @@ import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { RunType } from "./factory-state.ts";
-import { peekPendingWakeRunType } from "./pending-wake.ts";
+import { peekRunnableWorkflowTaskRunType } from "./pending-workflow-task.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { LinearSessionSync } from "./linear-session-sync.ts";
@@ -10,7 +10,7 @@ import { trustedActorAllowed } from "./project-resolution.ts";
 import { normalizeWebhook } from "./webhooks.ts";
 import { InstallationWebhookHandler } from "./webhook-installation-handler.ts";
 import { AgentSessionHandler } from "./webhooks/agent-session-handler.ts";
-import { CommentWakeHandler } from "./webhooks/comment-wake-handler.ts";
+import { CommentInputHandler } from "./webhooks/comment-input-handler.ts";
 import { WebhookContextLoader } from "./webhooks/context-loader.ts";
 import { DependencyReadinessHandler } from "./webhooks/dependency-readiness-handler.ts";
 import { DesiredStageRecorder } from "./webhooks/desired-stage-recorder.ts";
@@ -18,11 +18,12 @@ import { IssueRemovalHandler } from "./webhooks/issue-removal-handler.ts";
 import type { AppConfig, LinearClientProvider, LinearWebhookPayload } from "./types.ts";
 import { safeJsonParse, sanitizeDiagnosticText } from "./utils.ts";
 import { extractLatestAssistantSummary } from "./issue-session-events.ts";
-import { WakeDispatcher } from "./wake-dispatcher.ts";
+import { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
 import { CodexFollowupIntentClassifier, type FollowupIntentClassifier } from "./followup-intent.ts";
 import { AgentInputService } from "./agent-input-service.ts";
 import { noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
+import { isIssueAwaitingInputProjection } from "./issue-execution-state.ts";
 
 export interface IssueQueueItem {
   projectId: string;
@@ -32,21 +33,21 @@ export interface IssueQueueItem {
 export class WebhookHandler {
   private readonly installationHandler: InstallationWebhookHandler;
   private readonly issueRemovalHandler: IssueRemovalHandler;
-  private readonly commentWakeHandler: CommentWakeHandler;
+  private readonly commentInputHandler: CommentInputHandler;
   private readonly agentSessionHandler: AgentSessionHandler;
   private readonly desiredStageRecorder: DesiredStageRecorder;
   private readonly contextLoader: WebhookContextLoader;
   private readonly dependencyReadinessHandler: DependencyReadinessHandler;
   private readonly linearSync: LinearSessionSync;
 
-  private readonly wakeDispatcher: WakeDispatcher;
+  private readonly workflowTaskDispatcher: WorkflowTaskDispatcher;
 
   constructor(
     private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
     private readonly linearProvider: LinearClientProvider,
     private readonly codex: CodexAppServerClient,
-    wakeDispatcherOrEnqueueIssue: WakeDispatcher | ((projectId: string, issueId: string) => void),
+    workflowTaskDispatcherOrEnqueueIssue: WorkflowTaskDispatcher | ((projectId: string, issueId: string) => void),
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
     followupClassifier?: FollowupIntentClassifier,
@@ -57,29 +58,28 @@ export class WebhookHandler {
     // run finalizer owns that. So when a test passes a bare
     // enqueueIssue callback, wrap it in a dispatcher with a no-op
     // releaseLease (any production caller passes a real dispatcher).
-    this.wakeDispatcher = wakeDispatcherOrEnqueueIssue instanceof WakeDispatcher
-      ? wakeDispatcherOrEnqueueIssue
-      : new WakeDispatcher(db, wakeDispatcherOrEnqueueIssue, () => undefined, logger, feed, telemetry);
+    this.workflowTaskDispatcher = workflowTaskDispatcherOrEnqueueIssue instanceof WorkflowTaskDispatcher
+      ? workflowTaskDispatcherOrEnqueueIssue
+      : new WorkflowTaskDispatcher(db, workflowTaskDispatcherOrEnqueueIssue, () => undefined, logger, feed, telemetry);
 
     this.installationHandler = new InstallationWebhookHandler(config, { linearInstallations: db.linearInstallations }, logger, feed);
     this.issueRemovalHandler = new IssueRemovalHandler(db, feed);
     this.linearSync = new LinearSessionSync(config, db, linearProvider, logger, feed);
     const intentClassifier = followupClassifier ?? new CodexFollowupIntentClassifier(codex, logger);
-    const agentInputService = agentInput ?? new AgentInputService(db, codex, this.wakeDispatcher, logger, feed, intentClassifier);
-    this.commentWakeHandler = new CommentWakeHandler(
+    const agentInputService = agentInput ?? new AgentInputService(db, codex, this.workflowTaskDispatcher, logger, feed, intentClassifier);
+    this.commentInputHandler = new CommentInputHandler(
       db,
-      this.wakeDispatcher,
+      this.workflowTaskDispatcher,
       feed,
       agentInputService,
       (issue, content, options) => this.linearSync.emitActivity(issue, content, options),
     );
-    this.agentSessionHandler = new AgentSessionHandler(config, db, linearProvider, codex, this.wakeDispatcher, logger, feed, agentInputService);
-    this.desiredStageRecorder = new DesiredStageRecorder(db, linearProvider, this.wakeDispatcher, feed);
+    this.agentSessionHandler = new AgentSessionHandler(config, db, linearProvider, codex, this.workflowTaskDispatcher, logger, feed, agentInputService);
+    this.desiredStageRecorder = new DesiredStageRecorder(db, linearProvider, this.workflowTaskDispatcher, feed);
     this.contextLoader = new WebhookContextLoader(config, linearProvider);
     this.dependencyReadinessHandler = new DependencyReadinessHandler(
       db,
-      this.wakeDispatcher,
-      (projectId, issueId) => this.peekPendingSessionWakeRunType(projectId, issueId),
+      this.workflowTaskDispatcher,
       telemetry,
     );
   }
@@ -174,7 +174,7 @@ export class WebhookHandler {
       const result = await this.desiredStageRecorder.record({
         project,
         normalized: hydrated,
-        peekPendingSessionWakeRunType: (projectId, issueId) => this.peekPendingSessionWakeRunType(projectId, issueId),
+        peekRunnableWorkflowTaskRunType: (projectId, issueId) => this.peekRunnableWorkflowTaskRunType(projectId, issueId),
         stopActiveRun: (run, input) => this.stopActiveRun(run, input),
       });
       const trackedIssue = result.issue;
@@ -200,10 +200,10 @@ export class WebhookHandler {
         dedupeKey: hydrated.webhookId,
       });
       const observedIssue = this.db.getIssue(project.id, issue.id);
-      let openedRunnableWorkflowTask = false;
+      let runnableWorkflowTaskRunType: RunType | undefined;
       if (observedIssue) {
-        const workflowReconciliation = reconcileWorkflowTasksForIssue(this.db, observedIssue);
-        openedRunnableWorkflowTask = workflowReconciliation.result.opened.some((task) => task.gateAction === "start" && task.runType);
+        reconcileWorkflowTasksForIssue(this.db, observedIssue);
+        runnableWorkflowTaskRunType = this.peekRunnableWorkflowTaskRunType(project.id, issue.id);
       }
 
       const newlyReadyDependents = this.dependencyReadinessHandler.reconcile(project.id, issue.id);
@@ -228,13 +228,13 @@ export class WebhookHandler {
         normalized: hydrated,
         project,
         trackedIssue,
-        wakeRunType: result.wakeRunType,
+        runnableTaskRunType: result.runnableTaskRunType,
         delegated: result.delegated,
-        peekPendingSessionWakeRunType: (projectId, issueId) => this.peekPendingSessionWakeRunType(projectId, issueId),
+        peekRunnableWorkflowTaskRunType: (projectId, issueId) => this.peekRunnableWorkflowTaskRunType(projectId, issueId),
         isDirectReplyToOutstandingQuestion: (targetIssue) => this.isDirectReplyToOutstandingQuestion(targetIssue),
       });
 
-      await this.commentWakeHandler.handle({
+      await this.commentInputHandler.handle({
         normalized: hydrated,
         project,
         trackedIssue,
@@ -243,45 +243,32 @@ export class WebhookHandler {
 
       this.db.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
 
-      const wakeAlreadyQueuedByFollowUpHandler = normalized.triggerEvent === "commentCreated"
+      const dispatchAlreadyQueuedByFollowUpHandler = normalized.triggerEvent === "commentCreated"
         || normalized.triggerEvent === "commentUpdated"
         || normalized.triggerEvent === "agentPrompted";
 
-      await this.wakeDispatcher.withTick(async () => {
-        if (result.wakeRunType && !wakeAlreadyQueuedByFollowUpHandler) {
-          const queuedRunType = this.enqueuePendingSessionWake(project.id, issue.id);
-          this.feed?.publish({
-            level: "info",
-            kind: "stage",
-            issueKey: issue.identifier,
-            projectId: project.id,
-            stage: queuedRunType ?? result.wakeRunType,
-            status: "queued",
-            summary: `Queued ${(queuedRunType ?? result.wakeRunType)} workflow`,
-            detail: `Triggered by ${hydrated.triggerEvent}.`,
-          });
-        }
-        if (openedRunnableWorkflowTask && !wakeAlreadyQueuedByFollowUpHandler) {
-          const workflowTaskRunType = this.enqueuePendingSessionWake(project.id, issue.id);
-          if (workflowTaskRunType && !result.wakeRunType) {
+      await this.workflowTaskDispatcher.withTick(async () => {
+        if ((result.runnableTaskRunType || runnableWorkflowTaskRunType) && !dispatchAlreadyQueuedByFollowUpHandler) {
+          const queuedRunType = this.enqueueRunnableWorkflowTask(project.id, issue.id);
+          if (queuedRunType) {
             this.feed?.publish({
               level: "info",
               kind: "stage",
               issueKey: issue.identifier,
               projectId: project.id,
-              stage: workflowTaskRunType,
+              stage: queuedRunType,
               status: "queued",
-              summary: `Queued ${workflowTaskRunType} workflow`,
-              detail: `Derived after ${hydrated.triggerEvent}.`,
+              summary: `Queued ${queuedRunType} workflow`,
+              detail: `Triggered by ${hydrated.triggerEvent}.`,
             });
           }
         }
         for (const dependentIssueId of newlyReadyDependents) {
           // The dependency-readiness handler already dispatched via the
-          // wake dispatcher; here we just emit the operator-feed event so
+          // workflow task dispatcher; here we just emit the operator-feed event so
           // the dispatched run shows up in the timeline.
           const dependent = this.db.getTrackedIssue(project.id, dependentIssueId);
-          const queuedRunType = this.peekPendingSessionWakeRunType(project.id, dependentIssueId);
+          const queuedRunType = this.peekRunnableWorkflowTaskRunType(project.id, dependentIssueId);
           this.feed?.publish({
             level: "info",
             kind: "stage",
@@ -332,18 +319,18 @@ export class WebhookHandler {
     }
   }
 
-  private peekPendingSessionWakeRunType(projectId: string, issueId: string): RunType | undefined {
-    return peekPendingWakeRunType(this.db, projectId, issueId);
+  private peekRunnableWorkflowTaskRunType(projectId: string, issueId: string): RunType | undefined {
+    return peekRunnableWorkflowTaskRunType(this.db, projectId, issueId);
   }
 
-  private enqueuePendingSessionWake(projectId: string, issueId: string): RunType | undefined {
-    return this.wakeDispatcher.dispatchIfWakePending(projectId, issueId);
+  private enqueueRunnableWorkflowTask(projectId: string, issueId: string): RunType | undefined {
+    return this.workflowTaskDispatcher.dispatchIfWorkflowTaskPending(projectId, issueId);
   }
 
   private isDirectReplyToOutstandingQuestion(issue: ReturnType<PatchRelayDatabase["getIssue"]>): boolean {
     if (!issue) return false;
     const linearNeedsInput = issue.currentLinearState?.trim().toLowerCase().includes("input") ?? false;
-    if (issue.factoryState !== "awaiting_input" && !linearNeedsInput) return false;
+    if (!isIssueAwaitingInputProjection(issue) && !linearNeedsInput) return false;
     if (issue.threadId) {
       return true;
     }

@@ -24,7 +24,7 @@ import {
 import { ServiceRuntime, type ServiceRuntimeOptions } from "./service-runtime.ts";
 import { ServiceIssueActions } from "./service-issue-actions.ts";
 import { ServiceStartupRecovery } from "./service-startup-recovery.ts";
-import { WakeDispatcher } from "./wake-dispatcher.ts";
+import { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
 import { WebhookHandler } from "./webhook-handler.ts";
 import { acceptIncomingWebhook } from "./service-webhooks.ts";
 import { ABANDONED_PENDING_WEBHOOK_AGE_MS } from "./db/webhook-event-store.ts";
@@ -80,16 +80,16 @@ export class PatchRelayService {
       throw new Error("Service runtime enqueueIssue is not initialized");
     };
     let leaseRelease: (projectId: string, issueId: string) => void = () => {
-      throw new Error("WakeDispatcher releaseLease is not yet bound");
+      throw new Error("WorkflowTaskDispatcher releaseLease is not yet bound");
     };
 
     // The dispatcher owns every "append event + maybe enqueue" and every
-    // "release run + drain pending wake" call. See src/wake-dispatcher.ts
+    // "release run + dispatch pending workflow task" call. See src/workflow-task-dispatcher.ts
     // for why. Both `enqueueIssue` and `leaseRelease` are late-bound — the
     // runtime owns the queue, and the lease service lives inside the
     // orchestrator (its construction depends on the Codex client). All
     // downstream consumers receive this single dispatcher instance.
-    const dispatcher = new WakeDispatcher(
+    const dispatcher = new WorkflowTaskDispatcher(
       db,
       (projectId, issueId) => enqueueIssue(projectId, issueId),
       (projectId, issueId) => leaseRelease(projectId, issueId),
@@ -509,7 +509,7 @@ export class PatchRelayService {
     readyForExecution: boolean;
     currentLinearState?: string;
     activeRunType?: string;
-    pendingRunType?: string;
+    runnableTaskRunType?: string;
     latestRunType?: string;
     latestRunStatus?: string;
     prNumber?: number;

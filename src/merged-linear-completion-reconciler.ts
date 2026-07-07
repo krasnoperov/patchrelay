@@ -1,11 +1,13 @@
 import type { Logger } from "pino";
 import type { IssueRecord } from "./db-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
-import type { FactoryState, RunType } from "./factory-state.ts";
-import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
+import type { FactoryState } from "./factory-state.ts";
+import { deriveReactiveWorkflowIntent } from "./reactive-workflow-intent.ts";
+import { workflowRunIntent, type WorkflowRunIntent } from "./workflow-intent.ts";
 import { resolvePreferredCompletedLinearState } from "./linear-workflow.ts";
 import { isCompletedLinearState } from "./pr-state.ts";
 import { hasTrustedNoPrCompletion } from "./trusted-no-pr-completion.ts";
+import { isIssueDoneProjection } from "./issue-execution-state.ts";
 import type { LinearClientProvider } from "./types.ts";
 import { replaceIssueDependenciesFromLinearIssue } from "./linear-issue-projection.ts";
 import { isLinearRateLimitError } from "./linear-rate-limit.ts";
@@ -77,7 +79,7 @@ export class MergedLinearCompletionReconciler {
           continue;
         }
 
-        if (issue.factoryState === "done" && !isTerminalLinearState(liveIssue.stateType, liveIssue.stateName)) {
+        if (isIssueDoneProjection(issue) && !isTerminalLinearState(liveIssue.stateType, liveIssue.stateName)) {
           this.reopenStaleLocalDoneIssue(issue, liveIssue);
         } else {
           this.refreshCachedLinearState(issue, liveIssue);
@@ -143,10 +145,9 @@ export class MergedLinearCompletionReconciler {
         ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
         ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
         ...(restored ? { factoryState: restored.factoryState } : {}),
-        // S6: the legacy `pending_run_type` write is gone. Reopening restores the
-        // PR-fact-derived `factoryState`; the reconcile below re-derives the
-        // equivalent runnable workflow task (review_fix / ci_repair / queue_repair)
-        // from the PR facts already on the row.
+        // Reopening restores the PR-fact-derived display state; the reconcile below
+        // re-derives the equivalent runnable workflow task (review_fix / ci_repair /
+        // queue_repair) from the PR facts already on the row.
       };
     };
     const restored = resolveOpenWorkflowState(issue);
@@ -157,13 +158,13 @@ export class MergedLinearCompletionReconciler {
       // Reopening a local done state must be re-derived against the fresh
       // row when something else wrote in between — and only if it is
       // still done.
-      onConflict: (current) => (current.factoryState === "done" ? buildReopenUpdate(current) : undefined),
+      onConflict: (current) => (isIssueDoneProjection(current) ? buildReopenUpdate(current) : undefined),
     });
     if (commit.outcome !== "applied") {
       return;
     }
-    // S6: materialize the runnable workflow task from the restored PR facts so
-    // the reopened issue becomes ready without a legacy `pending_run_type` write.
+    // Materialize the runnable workflow task from the restored PR facts so the
+    // reopened issue becomes ready through the workflow_tasks table.
     reconcileWorkflowTasksForIssue(this.db, commit.issue);
     this.logger.info(
       {
@@ -195,7 +196,7 @@ export class MergedLinearCompletionReconciler {
   }
 
   private isRecentCompletionCandidate(issue: IssueRecord, now: number): boolean {
-    if (issue.factoryState !== "done" && issue.prState !== "merged") {
+    if (!isIssueDoneProjection(issue) && issue.prState !== "merged") {
       return false;
     }
     const updatedAt = Date.parse(issue.updatedAt);
@@ -268,8 +269,8 @@ function resolveOpenWorkflowState(
     | "lastBlockingReviewHeadSha"
     | "lastGitHubFailureSource"
   >,
-): { factoryState: FactoryState; pendingRunType: RunType | null } | undefined {
-  const reactiveIntent = deriveIssueSessionReactiveIntent({
+): { factoryState: FactoryState; workflowIntent?: WorkflowRunIntent | undefined } | undefined {
+  const reactiveIntent = deriveReactiveWorkflowIntent({
     delegatedToPatchRelay: issue.delegatedToPatchRelay,
     prNumber: issue.prNumber,
     prState: issue.prState,
@@ -282,19 +283,19 @@ function resolveOpenWorkflowState(
   if (reactiveIntent) {
     return {
       factoryState: reactiveIntent.compatibilityFactoryState,
-      pendingRunType: reactiveIntent.runType,
+      workflowIntent: workflowRunIntent(reactiveIntent.runType),
     };
   }
 
   if (issue.prNumber !== undefined && (issue.prState === undefined || issue.prState === "open")) {
     if (issue.prReviewState === "approved" && (issue.prCheckStatus === "success" || issue.prCheckStatus === "passed")) {
-      return { factoryState: "awaiting_queue", pendingRunType: null };
+      return { factoryState: "awaiting_queue" };
     }
-    return { factoryState: "pr_open", pendingRunType: null };
+    return { factoryState: "pr_open" };
   }
 
   if (issue.delegatedToPatchRelay) {
-    return { factoryState: "delegated", pendingRunType: null };
+    return { factoryState: "delegated" };
   }
 
   return undefined;

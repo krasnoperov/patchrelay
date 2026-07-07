@@ -182,7 +182,7 @@ test("cli cluster reports unmanaged blockers and lost dispatch", async () => {
     assert.equal(stderr.read(), "");
     const text = stdout.read();
     assert.match(text, /PASS \[service:patchrelay\] Healthy/);
-    assert.match(text, /FAIL \[issue:dispatch USE-31\] Delegated issue is idle but no wake is queued/);
+    assert.match(text, /FAIL \[issue:dispatch USE-31\] Delegated issue is idle but no workflow task is queued/);
     assert.match(text, /FAIL \[issue:blockers USE-34\] Blocked by unmanaged issue USE-32/);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
@@ -1245,7 +1245,7 @@ test("cli cluster treats undelegated paused no-pr work as paused instead of stuc
     assert.equal(stderr.read(), "");
     const text = stdout.read();
     assert.doesNotMatch(text, /issue:dispatch USE-40 Issue is parked in implementing without an active run/);
-    assert.doesNotMatch(text, /issue:dispatch USE-40 Delegated issue is idle but no wake is queued/);
+    assert.doesNotMatch(text, /issue:dispatch USE-40 Delegated issue is idle but no workflowTask is queued/);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     rmSync(baseDir, { recursive: true, force: true });

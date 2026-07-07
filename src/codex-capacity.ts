@@ -1,7 +1,7 @@
 // Classifies Codex turn failures that are capacity outages (account usage
 // limit, rate limit, quota) rather than evidence about the work itself.
 // A capacity failure must not consume repair budgets or escalate an issue —
-// the RunFailurePolicy defers the same wake behind a backoff instead
+// the RunFailurePolicy defers the same workflow task behind a backoff instead
 // (see deferCapacityLimitedRun).
 
 export interface CodexCapacityFailure {

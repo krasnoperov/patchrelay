@@ -1,5 +1,5 @@
 import type { NormalizedGitHubEvent } from "./github-types.ts";
-import { buildRequestedChangesWakeIdentity } from "./reactive-wake-keys.ts";
+import { buildRequestedChangesWorkflowIdentity } from "./reactive-workflow-keys.ts";
 import type { RunContext } from "./run-context.ts";
 
 type FetchLike = typeof fetch;
@@ -33,7 +33,7 @@ export async function resolveGitHubRequestedChangesContext(params: {
   const reviewComments = params.includeInlineComments === false
     ? undefined
     : await fetchReviewCommentsForEvent(event, fetchImpl);
-  const identity = buildRequestedChangesWakeIdentity({
+  const identity = buildRequestedChangesWorkflowIdentity({
     linearIssueId,
     headSha: event.headSha,
     reviewCommitId: event.reviewCommitId,

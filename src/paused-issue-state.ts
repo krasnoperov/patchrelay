@@ -1,6 +1,6 @@
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import { resolveAwaitingInputReason } from "./awaiting-input-reason.ts";
-import { deriveIssueExecutionState } from "./issue-execution-state.ts";
+import { deriveIssueExecutionState, isIssueLocalWorkProjection } from "./issue-execution-state.ts";
 
 export function isUndelegatedPausedIssue(issue: { delegatedToPatchRelay?: boolean | undefined; factoryState?: string | undefined }): boolean {
   return deriveIssueExecutionState({
@@ -14,7 +14,7 @@ export function isUndelegatedPausedNoPrWork(
 ): boolean {
   return isUndelegatedPausedIssue(issue)
     && issue.prNumber === undefined
-    && (issue.factoryState === "delegated" || issue.factoryState === "implementing");
+    && isIssueLocalWorkProjection(issue);
 }
 
 export function isResumablePausedLocalWork(params: {
@@ -27,7 +27,7 @@ export function isResumablePausedLocalWork(params: {
   if (params.issue.prNumber !== undefined) {
     return false;
   }
-  if (params.issue.factoryState === "delegated" || params.issue.factoryState === "implementing") {
+  if (isIssueLocalWorkProjection(params.issue)) {
     return true;
   }
   return resolveAwaitingInputReason(params) === "paused_local_work";

@@ -1,12 +1,12 @@
 import { z } from "zod";
 
 // Plan §D1: the one typed schema for the run context object — the bag that is
-// (a) stored in `issues.pending_run_context_json` (legacy pending-wake path,
-//     read back by RunWakePlanner.materializeLegacyPendingWake),
-// (b) carried in session-event `event_json` payloads for wake events and
-//     merged into the wake plan by deriveSessionWakePlan, and
+// (a) stored in `issues.pending_run_context_json` only in pre-cutover DB rows
+//     handled by migrations,
+// (b) carried in session-event `event_json` payloads for workflow-intent events and
+//     merged into the input plan by deriveSessionInputPlan, and
 // (c) passed around in memory as `context` / `effectiveContext` /
-//     `pendingRunContext` until it reaches the prompt builder and launcher.
+//     `workflowContext` until it reaches the prompt builder and launcher.
 //
 // Every known field is typed strictly so a mistyped field fails loudly at the
 // parse boundary. Unknown keys are deliberately TOLERATED (loose object), not
@@ -14,7 +14,7 @@ import { z } from "zod";
 // - existing DB rows contain contexts written by older PatchRelay versions
 //   whose field sets we no longer produce (e.g. `mergeQueueContext`,
 //   `userComment`, `operatorPrompt` below survive only as legacy reads), and
-// - deriveSessionWakePlan merges whole event payloads into the context via
+// - deriveSessionInputPlan merges whole event payloads into the context via
 //   Object.assign, so producer-side extra keys flow through by design.
 // The static `RunContext` type intentionally has NO index signature (it is
 // inferred from a non-loose mirror of the same shape), so compile-time access
@@ -26,7 +26,7 @@ import { z } from "zod";
 // static type free of index signatures so producer-side `satisfies RunContext`
 // checks stay sound.
 
-/** Entry of `followUps`, assembled by deriveSessionWakePlan from
+/** Entry of `followUps`, assembled by deriveSessionInputPlan from
  * direct_reply / followup_prompt / followup_comment / operator_prompt event
  * payloads; consumed by prompting/patchrelay.ts buildFollowUpContextLines. */
 const followUpEntryShape = {
@@ -132,13 +132,13 @@ const mergeQueueContextShape = {
 };
 
 const runContextShape = {
-  // ── Wake framing ──────────────────────────────────────────────────
-  /** Why this wake exists. Produced by deriveSessionWakePlan (and by
+  // -- Workflow intent framing ---------------------------------------
+  /** Why this workflow task exists. Produced by deriveSessionInputPlan (and by
    * branch-upkeep context builders, operator-retry-event); consumed by
    * prompting/patchrelay.ts (turn reason, follow-up prompt selection). Kept a
-   * free string: the value set spans wake reasons and event types and legacy
+   * free string: the value set spans workflow reasons and event types and legacy
    * rows carry values we no longer emit. */
-  wakeReason: z.string().optional(),
+  workflowReason: z.string().optional(),
   /** Requested run type inside a `delegated` / `completion_check_continue`
    * payload. Free string because legacy payloads carry removed run types
    * (e.g. "main_repair"); consumers narrow via parseRunType and fall back to
@@ -170,22 +170,22 @@ const runContextShape = {
   linearAgentActivityContext: z.string().optional(),
   /** Companion count for linearAgentActivityContext (same producer). */
   linearAgentActivityCount: z.number().optional(),
-  /** Follow-up messages collected by deriveSessionWakePlan; consumed by
+  /** Follow-up messages collected by deriveSessionInputPlan; consumed by
    * prompting/patchrelay.ts and linear-agent-activity-recovery.ts. */
   followUps: z.array(z.object(followUpEntryShape)).optional(),
-  /** Set by deriveSessionWakePlan when followUps is non-empty; consumed by
+  /** Set by deriveSessionInputPlan when followUps is non-empty; consumed by
    * prompting/patchrelay.ts shouldBuildFollowUpPrompt. */
   followUpMode: z.boolean().optional(),
-  /** Produced by deriveSessionWakePlan; consumed by run-launcher.ts
+  /** Produced by deriveSessionInputPlan; consumed by run-launcher.ts
    * shouldCompactThread. */
   followUpCount: z.number().optional(),
-  /** Produced by deriveSessionWakePlan for direct_reply events. */
+  /** Produced by deriveSessionInputPlan for direct_reply events. */
   directReplyMode: z.boolean().optional(),
 
   // ── Completion-check continuation ─────────────────────────────────
-  /** Produced by deriveSessionWakePlan for completion_check_continue events. */
+  /** Produced by deriveSessionInputPlan for completion_check_continue events. */
   completionCheckMode: z.boolean().optional(),
-  /** Produced by deriveSessionWakePlan (from the event payload `summary`);
+  /** Produced by deriveSessionInputPlan (from the event payload `summary`);
    * consumed by prompting/patchrelay.ts buildFollowUpContextLines. */
   completionCheckSummary: z.string().optional(),
 
@@ -199,7 +199,7 @@ const runContextShape = {
   dirtyWorktreeMergeInProgress: z.boolean().optional(),
 
   // ── Replacement-PR facts (agent-input-service payloads merged by
-  //    deriveSessionWakePlan; consumed by prompting/patchrelay.ts) ──
+  //    deriveSessionInputPlan; consumed by prompting/patchrelay.ts) ──
   replacementPrRequired: z.boolean().optional(),
   previousPrNumber: z.number().optional(),
   previousPrUrl: z.string().optional(),
@@ -207,10 +207,10 @@ const runContextShape = {
   previousPrHeadSha: z.string().optional(),
 
   // ── Requested-changes / review fix ────────────────────────────────
-  /** Coalescing identity for review_changes_requested wakes. Produced by
-   * buildRequestedChangesWakeIdentity callers (run-wake-planner.ts,
+  /** Coalescing identity for review_changes_requested workflow intents. Produced by
+   * buildRequestedChangesWorkflowIdentity callers (run-task-planner.ts,
    * github-review-context.ts, operator-retry-event.ts,
-   * idle-reconciliation.ts); consumed by reactive-wake-keys.ts
+   * idle-reconciliation.ts); consumed by reactive-workflow-keys.ts
    * readRequestedChangesCoalesceKey for event coalescing. */
   requestedChangesCoalesceKey: z.string().optional(),
   requestedChangesHeadSha: z.string().optional(),
@@ -222,7 +222,7 @@ const runContextShape = {
   reviewFixMode: z.enum(["branch_upkeep"]).optional(),
   /** Same producers/consumers as reviewFixMode (plus
    * review_changes_requested payloads from operator-retry-event.ts and
-   * deriveSessionWakePlan branch selection). */
+   * deriveSessionInputPlan branch selection). */
   branchUpkeepRequired: z.boolean().optional(),
   /** GitHub review id. Produced by github-review-context.ts and
    * reactive-run-policy.ts hydrateRequestedChangesContext; consumed by
@@ -255,7 +255,7 @@ const runContextShape = {
    * hydrateRequestedChangesContext (current PR head). */
   headSha: z.string().optional(),
   /** Produced by buildBranchUpkeepContext / buildReviewFixBranchUpkeepContext
-   * (head that was failing/dirty at wake time). */
+   * (head that was failing/dirty at workflow-intent time). */
   failingHeadSha: z.string().optional(),
   // GitHubFailureContext fields (github-failure-context.ts), spread into
   // contexts by buildFailureContext / operator-retry-event.ts; consumed by
@@ -309,8 +309,8 @@ const runContextShape = {
   /** LEGACY alias of childIssues, still read by prompting/patchrelay.ts. */
   trackedDependents: z.array(z.object(relatedIssueShape)).optional(),
 
-  // ── Child-event facts (orchestration-parent-wake.ts payloads merged by
-  //    deriveSessionWakePlan for child_changed / child_delivered /
+  // ── Child-event facts (orchestration-parent-dispatch.ts payloads merged by
+  //    deriveSessionInputPlan for child_changed / child_delivered /
   //    child_regressed) ──
   childIssueId: z.string().optional(),
   childIssueKey: z.string().optional(),
@@ -345,7 +345,7 @@ export class RunContextParseError extends Error {
  * warn, and treat the context as absent.
  */
 export function parseRunContextValue(value: unknown, where = "run context"): RunContext {
-  const result = runContextSchema.safeParse(value);
+  const result = runContextSchema.safeParse(normalizeRunContextValue(value));
   if (!result.success) {
     throw new RunContextParseError(
       `Invalid ${where}: ${result.error.issues
@@ -403,7 +403,7 @@ export function parseRunContextOrWarn(
  * the failure is at least observable.
  */
 export function tryParseRunContextValue(value: unknown): RunContext | undefined {
-  const result = runContextSchema.safeParse(value);
+  const result = runContextSchema.safeParse(normalizeRunContextValue(value));
   return result.success ? result.data as RunContext : undefined;
 }
 
@@ -413,4 +413,15 @@ export function tryParseRunContextValue(value: unknown): RunContext | undefined 
  */
 export function serializeRunContext(context: RunContext, where = "run context"): string {
   return JSON.stringify(parseRunContextValue(context, where));
+}
+
+function normalizeRunContextValue(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const record = value as Record<string, unknown>;
+  if (record.workflowReason !== undefined || record.wakeReason === undefined) return value;
+  // Deprecated payload alias from pre-workflow-task session events.
+  return {
+    ...record,
+    workflowReason: record.wakeReason,
+  };
 }

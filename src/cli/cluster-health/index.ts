@@ -1,4 +1,6 @@
 import type { PatchRelayDatabase } from "../../db.ts";
+import { deriveIssueExecutionStateFromRecords } from "../../issue-execution-state.ts";
+import { peekRunnableWorkflowTaskRunType } from "../../pending-workflow-task.ts";
 import { hasOpenPr } from "../../pr-state.ts";
 import type { AppConfig } from "../../types.ts";
 import type { CommandRunner } from "../command-types.ts";
@@ -71,6 +73,9 @@ export async function collectClusterHealth(
     const tracked = db.getTrackedIssue(issue.projectId, issue.linearIssueId);
     const deps = db.issues.listIssueDependencies(issue.projectId, issue.linearIssueId);
     const blockedBy = deps.filter((dep) => !isResolvedDependency(dep));
+    const activeRun = issue.activeRunId !== undefined ? db.runs.getRunById(issue.activeRunId) : undefined;
+    const latestRun = db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+    const runnableTaskRunType = peekRunnableWorkflowTaskRunType(db, issue.projectId, issue.linearIssueId);
     const missingTrackedBlockers = blockedBy.filter((dep) => {
       if (trackedByLinearId.has(dep.blockerLinearIssueId)) return false;
       if (dep.blockerIssueKey && trackedByKey.has(dep.blockerIssueKey)) return false;
@@ -83,11 +88,20 @@ export async function collectClusterHealth(
       missingTrackedBlockers,
       ageMs: Math.max(0, now - Date.parse(issue.updatedAt || new Date(0).toISOString())),
       readyForExecution: tracked?.readyForExecution ?? false,
+      executionState: deriveIssueExecutionStateFromRecords(issue, {
+        ...(activeRun ? { activeRun } : {}),
+        ...(latestRun ? { latestRun } : {}),
+        blockedByKeys: blockedBy.map((dep) => dep.blockerIssueKey ?? dep.blockerLinearIssueId),
+        ...(runnableTaskRunType ? { runnableTaskRunType } : {}),
+      }),
     } satisfies IssueSnapshot;
   });
 
-  const reviewRelevantIssues = snapshots.filter((snapshot) => needsReviewAutomation(snapshot.issue));
-  const queueRelevantIssues = snapshots.filter((snapshot) => snapshot.issue.factoryState === "awaiting_queue");
+  const reviewRelevantIssues = snapshots.filter((snapshot) => needsReviewAutomation(snapshot));
+  const queueRelevantIssues = snapshots.filter((snapshot) =>
+    snapshot.executionState.kind === "idle_awaiting_external"
+    && (snapshot.executionState.waitingOn === "merge_queue" || snapshot.executionState.waitingOn === "downstream_automation")
+  );
   const reviewQuillProbe = reviewRelevantIssues.length > 0
     ? await probeOptionalService(runCommand, "review-quill", {
         healthy: (payload) => {

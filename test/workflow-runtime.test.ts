@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import pino from "pino";
 import { PatchRelayDatabase } from "../src/db.ts";
-import { peekPendingWakeRunType } from "../src/pending-wake.ts";
+import { peekRunnableWorkflowTaskRunType } from "../src/pending-workflow-task.ts";
 import type { IssueRecord } from "../src/db-types.ts";
 import {
   evaluateTaskCompletion,
@@ -13,9 +13,9 @@ import {
   projectWorkflowSnapshot,
 } from "../src/workflow-runtime.ts";
 import { reconcileWorkflowTasksForIssue } from "../src/workflow-task-reconciler.ts";
-import { RunWakePlanner } from "../src/run-wake-planner.ts";
-import { WakeDispatcher } from "../src/wake-dispatcher.ts";
-import { wakeOrchestrationParentsForChildEvent } from "../src/orchestration-parent-wake.ts";
+import { RunTaskPlanner } from "../src/run-task-planner.ts";
+import { WorkflowTaskDispatcher } from "../src/workflow-task-dispatcher.ts";
+import { dispatchOrchestrationParentsForChildEvent } from "../src/orchestration-parent-dispatch.ts";
 
 function createDb(): { db: PatchRelayDatabase; cleanup: () => void } {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-v2-runtime-"));
@@ -188,8 +188,7 @@ test("delegated draft PR derives run:implementation (S6 — draft continues impl
   const { db, cleanup } = createDb();
   try {
     // A delegated issue with only a draft PR is work-in-progress: implementation
-    // continues on it. This mirrors deriveIssueSessionReactiveIntent (which
-    // excludes drafts) and replaces the legacy `pending_run_type: implementation`
+    // continues on it. This mirrors deriveReactiveWorkflowIntent (which
     // that the linked-PR-adoption / re-delegation writers used to set.
     const issue = makeIssue(db, {
       factoryState: "delegated",
@@ -862,25 +861,25 @@ test("ready issue discovery includes runnable workflow tasks after restart-style
   }
 });
 
-test("run wake planner can synthesize a wake from a runnable workflow task", () => {
+test("run input planner can resolve a runnable workflow task into a run intent", () => {
   const { db, cleanup } = createDb();
   try {
     const issue = makeIssue(db);
     db.listIssuesReadyForExecution();
 
-    const wake = new RunWakePlanner(db).resolveRunWake(issue);
+    const workflowTask = new RunTaskPlanner(db).resolveRunTask(issue);
 
-    assert.equal(wake?.runType, "implementation");
-    assert.equal(wake?.wakeReason, "run:implementation");
-    assert.equal(wake?.resumeThread, false);
-    assert.equal(wake?.eventIds.length, 0);
-    assert.equal(wake?.context?.source, "workflow_task");
+    assert.equal(workflowTask?.runType, "implementation");
+    assert.equal(workflowTask?.workflowReason, "run:implementation");
+    assert.equal(workflowTask?.resumeThread, false);
+    assert.equal(workflowTask?.eventIds.length, 0);
+    assert.equal(workflowTask?.context?.source, "workflow_task");
   } finally {
     cleanup();
   }
 });
 
-test("run wake planner preserves workflow task repair context", () => {
+test("run input planner preserves workflow task repair context", () => {
   const { db, cleanup } = createDb();
   try {
     const issue = makeIssue(db);
@@ -915,16 +914,16 @@ test("run wake planner preserves workflow task repair context", () => {
       }],
     });
 
-    const wake = new RunWakePlanner(db).resolveRunWake(issue);
+    const workflowTask = new RunTaskPlanner(db).resolveRunTask(issue);
 
-    assert.equal(wake?.runType, "ci_repair");
-    assert.equal(wake?.wakeReason, "run:ci_repair");
-    assert.equal(wake?.context?.source, "workflow_task");
-    assert.equal(wake?.context?.failureSignature, "ci:unit-tests");
-    assert.equal(wake?.context?.failureHeadSha, "abc123");
-    assert.equal(wake?.context?.checkName, "verify");
-    assert.equal(wake?.context?.summary, "Unit tests failed");
-    assert.equal(wake?.context?.ciSnapshot?.gateCheckStatus, "failure");
+    assert.equal(workflowTask?.runType, "ci_repair");
+    assert.equal(workflowTask?.workflowReason, "run:ci_repair");
+    assert.equal(workflowTask?.context?.source, "workflow_task");
+    assert.equal(workflowTask?.context?.failureSignature, "ci:unit-tests");
+    assert.equal(workflowTask?.context?.failureHeadSha, "abc123");
+    assert.equal(workflowTask?.context?.checkName, "verify");
+    assert.equal(workflowTask?.context?.summary, "Unit tests failed");
+    assert.equal(workflowTask?.context?.ciSnapshot?.gateCheckStatus, "failure");
   } finally {
     cleanup();
   }
@@ -1175,24 +1174,24 @@ test("orchestration child changes cannot bypass a wait-children workflow task", 
     });
 
     const enqueueCalls: Array<[string, string]> = [];
-    const dispatcher = new WakeDispatcher(
+    const dispatcher = new WorkflowTaskDispatcher(
       db,
       (projectId, issueId) => enqueueCalls.push([projectId, issueId]),
       () => undefined,
       pino({ enabled: false }),
     );
 
-    const parentIds = wakeOrchestrationParentsForChildEvent({
+    const parentIds = dispatchOrchestrationParentsForChildEvent({
       db,
       child,
       eventType: "child_changed",
       changeKind: "attached",
-      wakeDispatcher: dispatcher,
+      workflowTaskDispatcher: dispatcher,
     });
 
     assert.deepEqual(parentIds, [parent.linearIssueId]);
     assert.deepEqual(enqueueCalls, []);
-    assert.equal(db.issueSessions.peekIssueSessionWake(parent.projectId, parent.linearIssueId), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics(parent.projectId, parent.linearIssueId), undefined);
     assert.deepEqual(
       db.workflowTasks.listOpenTasks(parent.projectId, parent.linearIssueId).map((task) => [task.taskId, task.taskType, task.gateAction]),
       [["wait:children", "wait", "wait"]],
@@ -1202,7 +1201,7 @@ test("orchestration child changes cannot bypass a wait-children workflow task", 
   }
 });
 
-test("workflow wait tasks suppress legacy delegated session wakes", () => {
+test("workflow wait tasks suppress legacy delegated session inputs", () => {
   const { db, cleanup } = createDb();
   try {
     const parent = makeIssue(db, {
@@ -1233,16 +1232,16 @@ test("workflow wait tasks suppress legacy delegated session wakes", () => {
     });
 
     const enqueueCalls: Array<[string, string]> = [];
-    const dispatcher = new WakeDispatcher(
+    const dispatcher = new WorkflowTaskDispatcher(
       db,
       (projectId, issueId) => enqueueCalls.push([projectId, issueId]),
       () => undefined,
       pino({ enabled: false }),
     );
 
-    assert.equal(dispatcher.dispatchIfWakePending(parent.projectId, parent.linearIssueId), undefined);
+    assert.equal(dispatcher.dispatchIfWorkflowTaskPending(parent.projectId, parent.linearIssueId), undefined);
     assert.deepEqual(enqueueCalls, []);
-    assert.equal(new RunWakePlanner(db).resolveRunWake(db.getIssue(parent.projectId, parent.linearIssueId)!), undefined);
+    assert.equal(new RunTaskPlanner(db).resolveRunTask(db.getIssue(parent.projectId, parent.linearIssueId)!), undefined);
     assert.deepEqual(
       db.workflowTasks.listOpenTasks(parent.projectId, parent.linearIssueId).map((task) => [task.taskId, task.taskType, task.gateAction]),
       [["wait:children", "wait", "wait"]],
@@ -1252,7 +1251,7 @@ test("workflow wait tasks suppress legacy delegated session wakes", () => {
   }
 });
 
-test("terminal Linear truth suppresses stale delegated session wakes", () => {
+test("terminal Linear truth exposes no runnable workflow task from stale delegated session facts", () => {
   const { db, cleanup } = createDb();
   try {
     const issue = makeIssue(db, {
@@ -1261,7 +1260,6 @@ test("terminal Linear truth suppresses stale delegated session wakes", () => {
       currentLinearState: "Done",
       currentLinearStateType: "completed",
       factoryState: "delegated",
-      pendingRunType: "implementation",
     });
     db.issueSessions.appendIssueSessionEvent({
       projectId: issue.projectId,
@@ -1270,8 +1268,8 @@ test("terminal Linear truth suppresses stale delegated session wakes", () => {
       dedupeKey: "delegated:issue-linear-done",
     });
 
-    assert.equal(peekPendingWakeRunType(db, issue.projectId, issue.linearIssueId), "implementation");
-    assert.equal(new RunWakePlanner(db).resolveRunWake(issue), undefined);
+    assert.equal(peekRunnableWorkflowTaskRunType(db, issue.projectId, issue.linearIssueId), undefined);
+    assert.equal(new RunTaskPlanner(db).resolveRunTask(issue), undefined);
   } finally {
     cleanup();
   }

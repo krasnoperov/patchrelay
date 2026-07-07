@@ -9,7 +9,6 @@ test("manual retry treats approved awaiting_queue PRs as queue repair", () => {
     prReviewState: "approved",
     prCheckStatus: "pending",
     factoryState: "awaiting_queue",
-    pendingRunType: undefined,
     lastRunType: "queue_repair",
     lastGitHubFailureSource: undefined,
   });
@@ -27,7 +26,6 @@ test("manual retry keeps ordinary open PRs on implementation retry", () => {
     prReviewState: "review_required",
     prCheckStatus: "pending",
     factoryState: "pr_open",
-    pendingRunType: undefined,
     lastRunType: "implementation",
     lastGitHubFailureSource: undefined,
   });

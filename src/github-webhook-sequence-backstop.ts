@@ -1,6 +1,7 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
+import { isIssuePublishedOrDownstreamProjection } from "./issue-execution-state.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 
 type FetchLike = typeof fetch;
@@ -67,7 +68,7 @@ export async function maybeRunSequenceBackstop(params: {
     .listIssues()
     .filter(
       (issue) =>
-        (issue.factoryState === "pr_open" || issue.factoryState === "awaiting_queue")
+        isIssuePublishedOrDownstreamProjection(issue)
         && issue.prNumber !== undefined
         && issue.prNumber !== event.prNumber
         && issue.branchName !== undefined

@@ -8,7 +8,7 @@ For install and first-time setup, see [self-hosting.md](./self-hosting.md). For 
 
 1. Delegate a Linear issue to the PatchRelay app.
 2. Linear sends delegation and agent-session webhooks to PatchRelay, which creates or reuses the issue worktree and launches an implementation run.
-3. Follow up in the Linear agent session to steer the active run or wake it with fresh input while it remains delegated.
+3. Follow up in the Linear agent session to steer the active run or queue fresh workflow input while it remains delegated.
 4. GitHub webhooks automatically trigger CI repair, review fix, or merge queue repair runs when needed.
 5. Watch progress from the terminal, or open the same worktree and take over manually.
 
@@ -162,9 +162,9 @@ Escalate when the incident is product ambiguity, a broken required check on `mai
 
 `thread ... is not materialized yet; includeTurns is unavailable before first user message` means the app-server was asked to read a thread before the first user turn was durable. PatchRelay recovery usually retries or starts fresh. Investigate only when the same issue stays active without progress after the retry backoff.
 
-## Waking a run with new input
+## Queueing a run with new input
 
-While an issue is still delegated, additional prompts in the Linear agent session are treated like chat with the agent. They are forwarded into the active run or queued until the next run wakes. Active-run steering is checkpoint-aware: PatchRelay does not kill arbitrary in-flight shell commands, but it tells the agent to fold the new instruction into the next decision before the next meaningful side effect when possible.
+While an issue is still delegated, additional prompts in the Linear agent session are treated like chat with the agent. They are forwarded into the active run or queued as input for the next runnable workflow task. Active-run steering is checkpoint-aware: PatchRelay does not kill arbitrary in-flight shell commands, but it tells the agent to fold the new instruction into the next decision before the next meaningful side effect when possible.
 
 Linear issue comments are not chat by default. They become agent input only when they explicitly address PatchRelay at the start, for example:
 
@@ -179,7 +179,7 @@ PatchRelay classifies accepted follow-up text with a structured intent classifie
 
 When a PR is already completed and someone asks for more work, use the agent session or an addressed issue comment. PatchRelay keeps the old PR facts as context, clears the current PR fields, and starts replacement implementation work that should publish a fresh PR.
 
-Requested-changes repairs fetch review feedback from GitHub directly on every repair wake. If a reviewer says "fix the PR comments" in Linear, PatchRelay still reads the review body, inline comments, reviewer, reviewed head, and current PR head from GitHub before launching the repair. If that refresh is degraded, the worker prompt says so explicitly and instructs the worker to re-read the GitHub review before changing code.
+Requested-changes repairs fetch review feedback from GitHub directly on every repair run. If a reviewer says "fix the PR comments" in Linear, PatchRelay still reads the review body, inline comments, reviewer, reviewed head, and current PR head from GitHub before launching the repair. If that refresh is degraded, the worker prompt says so explicitly and instructs the worker to re-read the GitHub review before changing code.
 
 ## Taking a run over manually
 

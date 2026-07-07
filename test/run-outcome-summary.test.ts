@@ -30,7 +30,7 @@ test("run outcome summary falls back for generic implementation assistant recap"
   );
 });
 
-test("run outcome summary uses structured wake facts for repair outcomes", () => {
+test("run outcome summary uses structured workflowTask facts for repair outcomes", () => {
   assert.equal(
     buildRunOutcomeSummary({
       runType: "review_fix",

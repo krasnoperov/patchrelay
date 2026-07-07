@@ -8,7 +8,7 @@ import { PatchRelayDatabase } from "../src/db.ts";
 import type { GitHubCiSnapshotResolver, GitHubFailureContextResolver } from "../src/github-failure-context.ts";
 import { GitHubWebhookHandler } from "../src/github-webhook-handler.ts";
 import { normalizeGitHubWebhook } from "../src/github-webhooks.ts";
-import { RunWakePlanner } from "../src/run-wake-planner.ts";
+import { RunTaskPlanner } from "../src/run-task-planner.ts";
 import type { AppConfig, GitHubWebhookPayload, LinearClient } from "../src/types.ts";
 
 function createConfig(baseDir: string): AppConfig {
@@ -207,10 +207,10 @@ function createJsonResponse(data: unknown, status = 200): Response {
   } as Response;
 }
 
-function resolveRuntimeWake(db: PatchRelayDatabase, projectId: string, issueId: string) {
+function resolveRuntimeTask(db: PatchRelayDatabase, projectId: string, issueId: string) {
   const issue = db.getIssue(projectId, issueId);
   assert.ok(issue);
-  return new RunWakePlanner(db).resolveRunWake(issue);
+  return new RunTaskPlanner(db).resolveRunTask(issue);
 }
 
 function buildSuccessfulCheckRunPayload(params: {
@@ -426,7 +426,6 @@ test("review approval updates GitHub state but does not queue new PatchRelay wor
 
     const issue = db.getIssue("usertold", "issue-approval");
     assert.equal(issue?.prReviewState, "approved");
-    assert.equal(issue?.pendingRunType, undefined);
     assert.equal(issue?.activeRunId, undefined);
     assert.deepEqual(enqueueCalls, []);
   } finally {
@@ -666,7 +665,7 @@ test("closed non-merged PR on unfinished work re-delegates implementation immedi
     });
 
     const issue = db.getIssue("usertold", "issue-closed-redelegate");
-    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-closed-redelegate");
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-closed-redelegate");
     assert.equal(issue?.factoryState, "delegated");
     assert.equal(issue?.prState, "closed");
     assert.equal(issue?.prReviewState, undefined);
@@ -674,7 +673,7 @@ test("closed non-merged PR on unfinished work re-delegates implementation immedi
     assert.equal(issue?.lastBlockingReviewHeadSha, undefined);
     assert.equal(issue?.ciSummaryJson, undefined);
     assert.equal(issue?.ciLastUpdatedAt, undefined);
-    assert.equal(wake?.runType, "implementation");
+    assert.equal(workflowTask?.runType, "implementation");
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-closed-redelegate" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -706,7 +705,6 @@ test("green gate-check completion does not queue new PatchRelay work", async () 
 
     const issue = db.getIssue("usertold", "issue-green");
     assert.equal(issue?.prCheckStatus, "success");
-    assert.equal(issue?.pendingRunType, undefined);
     assert.equal(issue?.activeRunId, undefined);
     assert.deepEqual(enqueueCalls, []);
   } finally {
@@ -741,7 +739,6 @@ test("non-gate successful checks do not mark PR checks green early", async () =>
 
     const issue = db.getIssue("usertold", "issue-non-gate-green");
     assert.equal(issue?.prCheckStatus, "pending");
-    assert.equal(issue?.pendingRunType, undefined);
     assert.equal(issue?.activeRunId, undefined);
     assert.deepEqual(enqueueCalls, []);
   } finally {
@@ -783,7 +780,6 @@ test("in-progress gate checks on the current head reset stored green status back
     assert.equal(issue?.prCheckStatus, "pending");
     assert.equal(issue?.lastGitHubCiSnapshotGateCheckStatus, "pending");
     assert.equal(issue?.lastGitHubCiSnapshotSettledAt, undefined);
-    assert.equal(issue?.pendingRunType, undefined);
     assert.deepEqual(enqueueCalls, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -817,7 +813,6 @@ test("pull request label events are inert for PatchRelay queue scheduling", asyn
     });
 
     const issue = db.getIssue("usertold", "issue-queue-label");
-    assert.equal(issue?.pendingRunType, undefined);
     assert.deepEqual(enqueueCalls, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -879,13 +874,13 @@ test("requested changes on a delegated external PR queue review_fix", async () =
     });
 
     const issue = db.getIssue("usertold", "issue-external-review");
-    const wake = resolveRuntimeWake(db, "usertold", "issue-external-review");
+    const workflowTask = resolveRuntimeTask(db, "usertold", "issue-external-review");
     assert.equal(issue?.prReviewState, "changes_requested");
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-external-review"), undefined);
-    assert.equal(wake?.runType, "review_fix");
-    assert.equal(wake?.wakeReason, "run:review_fix");
-    assert.equal(wake?.context?.reviewId, 901);
-    assert.equal(wake?.context?.reviewerName, "reviewbot");
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-external-review"), undefined);
+    assert.equal(workflowTask?.runType, "review_fix");
+    assert.equal(workflowTask?.workflowReason, "run:review_fix");
+    assert.equal(workflowTask?.context?.reviewId, 901);
+    assert.equal(workflowTask?.context?.reviewerName, "reviewbot");
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-external-review" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -937,17 +932,16 @@ test("requested changes on a PatchRelay-owned PR queue review_fix", async () => 
     });
 
     const issue = db.getIssue("usertold", "issue-owned-review");
-    const wake = resolveRuntimeWake(db, "usertold", "issue-owned-review");
-    assert.equal(issue?.pendingRunType, undefined);
+    const workflowTask = resolveRuntimeTask(db, "usertold", "issue-owned-review");
     assert.equal(issue?.lastBlockingReviewHeadSha, "sha-owned");
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-owned-review"), undefined);
-    assert.equal(wake?.runType, "review_fix");
-    assert.equal(wake?.wakeReason, "run:review_fix");
-    assert.equal(wake?.context?.reviewId, 901);
-    assert.equal(wake?.context?.reviewCommitId, "sha-owned");
-    assert.equal(wake?.context?.reviewerName, "reviewbot");
-    assert.equal(wake?.context?.reviewUrl, "https://github.com/owner/repo/pull/13#pullrequestreview-901");
-    assert.deepEqual(wake?.context?.reviewComments, [
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-owned-review"), undefined);
+    assert.equal(workflowTask?.runType, "review_fix");
+    assert.equal(workflowTask?.workflowReason, "run:review_fix");
+    assert.equal(workflowTask?.context?.reviewId, 901);
+    assert.equal(workflowTask?.context?.reviewCommitId, "sha-owned");
+    assert.equal(workflowTask?.context?.reviewerName, "reviewbot");
+    assert.equal(workflowTask?.context?.reviewUrl, "https://github.com/owner/repo/pull/13#pullrequestreview-901");
+    assert.deepEqual(workflowTask?.context?.reviewComments, [
       {
         id: 71,
         body: "Use the saved review context, not a fake leader.",
@@ -1017,8 +1011,8 @@ test("requested changes during an active run are persisted for replay without im
     assert.equal(updatedIssue?.factoryState, "implementing");
     assert.equal(updatedIssue?.prReviewState, "changes_requested");
     assert.equal(updatedIssue?.activeRunId, run.id);
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-active-review"), undefined);
-    assert.equal(resolveRuntimeWake(db, "usertold", "issue-active-review")?.runType, undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-active-review"), undefined);
+    assert.equal(resolveRuntimeTask(db, "usertold", "issue-active-review")?.runType, undefined);
     assert.equal(
       db.workflowObservations.listObservations("usertold", "issue-active-review")
         .some((entry) => entry.type === "github.review_changes_requested"),
@@ -1035,8 +1029,8 @@ test("requested changes during an active run are persisted for replay without im
   }
 });
 
-test("a follow-up requested-changes review on an idle issue still re-enqueues even when a wake is already pending", async () => {
-  // Regression: previously the second review's `hadPendingWake=true` short-circuit
+test("a follow-up requested-changes review on an idle issue still re-enqueues even when a workflowTask is already pending", async () => {
+  // Regression: previously the second review's `hadPendingWorkflowTask=true` short-circuit
   // skipped enqueueIssue, assuming the first review's enqueue was still in flight.
   // If that first enqueue had silently dropped (lease race, lost in-memory queue),
   // the issue stayed orphaned with stacked unprocessed events until an external nudge.
@@ -1070,10 +1064,10 @@ test("a follow-up requested-changes review on an idle issue still re-enqueues ev
     });
 
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-stacked-review" }]);
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-stacked-review"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-stacked-review"), undefined);
     enqueueCalls.length = 0;
 
-    // Second review on a new head while the first review's wake is still pending.
+    // Second review on a new head while the first review's workflowTask is still pending.
     await handler.processGitHubWebhookEvent({
       eventType: "pull_request_review",
       rawBody: buildChangesRequestedReviewPayload({
@@ -1088,10 +1082,10 @@ test("a follow-up requested-changes review on an idle issue still re-enqueues ev
     assert.deepEqual(
       enqueueCalls,
       [{ projectId: "usertold", issueId: "issue-stacked-review" }],
-      "second review must re-enqueue even though a wake is already pending",
+      "second review must re-enqueue even though a workflowTask is already pending",
     );
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-stacked-review"), undefined);
-    assert.equal(resolveRuntimeWake(db, "usertold", "issue-stacked-review")?.context?.reviewId, 912);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-stacked-review"), undefined);
+    assert.equal(resolveRuntimeTask(db, "usertold", "issue-stacked-review")?.context?.reviewId, 912);
   } finally {
     if (previousGitHubToken === undefined) {
       delete process.env.GITHUB_TOKEN;
@@ -1192,9 +1186,9 @@ test("undelegated issue tracks requested-changes state without queuing repair wo
       }),
     });
 
-    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-undelegated-review");
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-undelegated-review");
     const issue = db.getIssue("usertold", "issue-undelegated-review");
-    assert.equal(wake, undefined);
+    assert.equal(workflowTask, undefined);
     assert.equal(issue?.factoryState, "changes_requested");
     assert.equal(issue?.delegatedToPatchRelay, false);
     assert.deepEqual(enqueueCalls, []);
@@ -1229,14 +1223,14 @@ test("undelegated issue links an external PR by issue key and tracks it without 
     });
 
     const issue = db.getIssue("usertold", "issue-external-link");
-    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-external-link");
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-external-link");
     assert.equal(issue?.prNumber, 60);
     assert.equal(issue?.prState, "open");
     assert.equal(issue?.prAuthorLogin, "human-dev");
     assert.equal(issue?.branchName, "handoff/use-60-fix");
     assert.equal(issue?.factoryState, "pr_open");
     assert.equal(issue?.delegatedToPatchRelay, false);
-    assert.equal(wake, undefined);
+    assert.equal(workflowTask, undefined);
     assert.deepEqual(enqueueCalls, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -1373,13 +1367,13 @@ test("delegated issue can repair failing CI on an externally linked PR", async (
     });
 
     const issue = db.getIssue("usertold", "issue-external-ci-repair");
-    const wake = resolveRuntimeWake(db, "usertold", "issue-external-ci-repair");
+    const workflowTask = resolveRuntimeTask(db, "usertold", "issue-external-ci-repair");
     assert.equal(issue?.lastGitHubFailureSource, "branch_ci");
     assert.equal(issue?.branchName, "handoff/use-61-fix");
     assert.equal(issue?.prHeadSha, "sha-external-open");
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-external-ci-repair"), undefined);
-    assert.equal(wake?.runType, "ci_repair");
-    assert.equal(wake?.wakeReason, "run:ci_repair");
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-external-ci-repair"), undefined);
+    assert.equal(workflowTask?.runType, "ci_repair");
+    assert.equal(workflowTask?.workflowReason, "run:ci_repair");
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-external-ci-repair" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -1410,9 +1404,9 @@ test("GitHub PR comments on idle PatchRelay-owned PRs queue follow-up session wo
       }),
     });
 
-    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-pr-comment");
-    assert.equal(wake?.runType, "implementation");
-    assert.equal(Array.isArray(wake?.context.followUps), true);
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-pr-comment");
+    assert.equal(workflowTask?.runType, "implementation");
+    assert.equal(Array.isArray(workflowTask?.context.followUps), true);
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-pr-comment" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -1463,7 +1457,7 @@ test("merged PatchRelay-owned PRs release active runs and do not queue new work"
     assert.equal(updatedIssue?.factoryState, "done");
     assert.equal(updatedIssue?.activeRunId, undefined);
     assert.equal(updatedRun?.status, "released");
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-merged-active"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-merged-active"), undefined);
     assert.deepEqual(enqueueCalls, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

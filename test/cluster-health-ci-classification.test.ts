@@ -8,13 +8,29 @@ import {
 } from "../src/cli/cluster-health/ci-classification.ts";
 import type { CiOwnerParams } from "../src/cli/cluster-health/ci-classification.ts";
 import type { ReviewQuillAttemptOwnership } from "../src/cli/cluster-health/types.ts";
+import type { IssueExecutionState } from "../src/issue-execution-state.ts";
+
+function externalReviewState(): IssueExecutionState {
+  return { kind: "idle_awaiting_external", waitingOn: "external_review" };
+}
+
+function downstreamState(): IssueExecutionState {
+  return { kind: "idle_awaiting_external", waitingOn: "merge_queue" };
+}
+
+function followupState(followup: "review_fix" | "ci_repair" | "queue_repair"): IssueExecutionState {
+  return { kind: "awaiting_followup", followup };
+}
+
+function runningState(): IssueExecutionState {
+  return { kind: "running", run: { activeRunId: 42, runType: "ci_repair", phase: "working" } };
+}
 
 function baseOwnerParams(overrides: Partial<CiOwnerParams> = {}): CiOwnerParams {
   return {
     delegatedToPatchRelay: true,
     gateCheckStatus: "success",
-    activeRunId: undefined,
-    factoryState: "pr_open",
+    executionState: externalReviewState(),
     reviewDecision: undefined,
     reviewRequested: false,
     currentHeadSha: undefined,
@@ -64,14 +80,14 @@ test("deriveCiGateStatus reports failure when a configured gate check failed", (
 
 test("deriveCiOwner returns patchrelay whenever an active run is attached", () => {
   assert.equal(
-    deriveCiOwner(baseOwnerParams({ activeRunId: 42, gateCheckStatus: "failure" })),
+    deriveCiOwner(baseOwnerParams({ executionState: runningState(), gateCheckStatus: "failure" })),
     "patchrelay",
   );
 });
 
 test("deriveCiOwner returns patchrelay for failed gate CI while repairing_ci", () => {
   assert.equal(
-    deriveCiOwner(baseOwnerParams({ gateCheckStatus: "failure", factoryState: "repairing_ci" })),
+    deriveCiOwner(baseOwnerParams({ gateCheckStatus: "failure", executionState: followupState("ci_repair") })),
     "patchrelay",
   );
 });
@@ -85,7 +101,7 @@ test("deriveCiOwner returns paused for undelegated failing CI", () => {
 
 test("deriveCiOwner returns unknown for failed gate CI when no repair run is active", () => {
   assert.equal(
-    deriveCiOwner(baseOwnerParams({ gateCheckStatus: "failure", factoryState: "pr_open" })),
+    deriveCiOwner(baseOwnerParams({ gateCheckStatus: "failure" })),
     "unknown",
   );
 });
@@ -94,7 +110,7 @@ test("deriveCiOwner does not hand off approved PRs with failed gate CI downstrea
   assert.equal(
     deriveCiOwner(baseOwnerParams({
       gateCheckStatus: "failure",
-      factoryState: "awaiting_queue",
+      executionState: downstreamState(),
       reviewDecision: "APPROVED",
     })),
     "unknown",
@@ -131,18 +147,18 @@ test("deriveCiOwner returns unknown when an approved PR has merge conflicts and 
     deriveCiOwner(baseOwnerParams({
       reviewDecision: "APPROVED",
       mergeConflictDetected: true,
-      factoryState: "awaiting_queue",
+      executionState: downstreamState(),
     })),
     "unknown",
   );
 });
 
-test("deriveCiOwner returns downstream when repairing_queue is actively running", () => {
+test("deriveCiOwner returns downstream when a queue conflict has a repair owner", () => {
   assert.equal(
     deriveCiOwner(baseOwnerParams({
       reviewDecision: "APPROVED",
       mergeConflictDetected: true,
-      factoryState: "repairing_queue",
+      executionState: followupState("queue_repair"),
     })),
     "downstream",
   );
@@ -153,7 +169,7 @@ test("deriveCiOwner returns patchrelay when changes_requested run is active on a
     deriveCiOwner(baseOwnerParams({
       reviewDecision: "CHANGES_REQUESTED",
       mergeConflictDetected: true,
-      factoryState: "changes_requested",
+      executionState: followupState("review_fix"),
     })),
     "patchrelay",
   );
@@ -234,7 +250,7 @@ test("deriveCiOwner returns reviewer when REVIEW_REQUIRED with green CI", () => 
 
 test("deriveCiOwner returns reviewer when CI green on pr_open without an explicit decision", () => {
   assert.equal(
-    deriveCiOwner(baseOwnerParams({ factoryState: "pr_open", gateCheckStatus: "success" })),
+    deriveCiOwner(baseOwnerParams({ gateCheckStatus: "success" })),
     "reviewer",
   );
 });

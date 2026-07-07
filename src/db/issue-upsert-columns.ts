@@ -51,8 +51,6 @@ export const ISSUE_COLUMN_DEFS: Record<IssueColumnKey, IssueColumnDef> = {
   currentLinearState: { column: "current_linear_state", coalesce: true },
   currentLinearStateType: { column: "current_linear_state_type", coalesce: true },
   factoryState: { column: "factory_state", insertDefault: "delegated" },
-  pendingRunType: { column: "pending_run_type" },
-  pendingRunContextJson: { column: "pending_run_context_json" },
   branchName: { column: "branch_name", coalesce: true },
   worktreePath: { column: "worktree_path", coalesce: true },
   threadId: { column: "thread_id" },

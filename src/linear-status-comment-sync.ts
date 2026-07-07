@@ -7,6 +7,17 @@ import { isClosedPrState } from "./pr-state.ts";
 import { derivePrDisplayContext } from "./pr-display-context.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
+import { peekRunnableWorkflowTaskRunType } from "./pending-workflow-task.ts";
+import {
+  isIssueAwaitingInputProjection,
+  isIssueCiRepairProjection,
+  isIssueDoneProjection,
+  isIssueDownstreamOwnedProjection,
+  isIssueDelegatedProjection,
+  isIssueImplementingProjection,
+  isIssueRequestedChangesProjection,
+  isIssueTerminalFailureProjection,
+} from "./issue-execution-state.ts";
 import type { LinearClientProvider } from "./types.ts";
 
 const WRITER = "linear-status-comment-sync";
@@ -75,13 +86,13 @@ export function shouldSyncVisibleIssueComment(
   if (!hasAgentSession) {
     return true;
   }
-  if (issue.sessionState === "waiting_input" || issue.factoryState === "awaiting_input") {
+  if (issue.sessionState === "waiting_input" || isIssueAwaitingInputProjection(issue)) {
     return true;
   }
-  if (issue.sessionState === "failed" || issue.factoryState === "failed" || issue.factoryState === "escalated") {
+  if (issue.sessionState === "failed" || isIssueTerminalFailureProjection(issue)) {
     return true;
   }
-  if (issue.factoryState === "done") {
+  if (isIssueDoneProjection(issue)) {
     return issue.prState !== "merged";
   }
   return false;
@@ -125,6 +136,7 @@ function renderStatusComment(
   const activeRunType = issue.activeRunId !== undefined
     ? (options?.activeRunType ?? activeRun?.runType)
     : undefined;
+  const runnableTaskRunType = peekRunnableWorkflowTaskRunType(db, issue.projectId, issue.linearIssueId);
   const waitingReason = trackedIssue?.waitingReason ?? derivePatchRelayWaitingReason({
     delegatedToPatchRelay: issue.delegatedToPatchRelay,
     currentLinearState: issue.currentLinearState,
@@ -132,7 +144,7 @@ function renderStatusComment(
     ...(activeRunType ? { activeRunType } : {}),
     ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
     factoryState: issue.factoryState,
-    pendingRunType: issue.pendingRunType,
+    ...(runnableTaskRunType ? { runnableTaskRunType } : {}),
     orchestrationSettleUntil: issue.orchestrationSettleUntil,
     ...(issue.prNumber !== undefined ? { prNumber: issue.prNumber } : {}),
     ...(issue.prState ? { prState: issue.prState } : {}),
@@ -165,8 +177,8 @@ function renderStatusComment(
     lines.push("", `Waiting: ${waitingReason}`);
   }
   if (statusNote && statusNote !== waitingReason) {
-    const label = trackedIssue?.sessionState === "waiting_input" || issue.factoryState === "awaiting_input" ? "Input needed"
-      : trackedIssue?.sessionState === "failed" || issue.factoryState === "failed" || issue.factoryState === "escalated" ? "Action needed"
+    const label = trackedIssue?.sessionState === "waiting_input" || isIssueAwaitingInputProjection(issue) ? "Input needed"
+      : trackedIssue?.sessionState === "failed" || isIssueTerminalFailureProjection(issue) ? "Action needed"
       : "Note";
     lines.push("", `${label}: ${statusNote}`);
   }
@@ -197,7 +209,7 @@ function renderStatusComment(
     lines.push("", prLine);
   }
 
-  if (issue.lastGitHubFailureCheckName && (issue.factoryState === "repairing_ci" || issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure")) {
+  if (issue.lastGitHubFailureCheckName && isIssueCiRepairProjection(issue)) {
     lines.push("", `Latest failing check: ${issue.lastGitHubFailureCheckName}`);
   }
 
@@ -241,22 +253,22 @@ function statusHeadline(
     if (prContext.kind === "closed_pr_paused") {
       return `Closed PR #${prContext.prNumber} is waiting for redelegation before replacement`;
     }
-    if (issue.factoryState === "awaiting_queue" || issue.prReviewState === "approved") {
+    if (isIssueDownstreamOwnedProjection(issue)) {
       return `PR #${issue.prNumber} is awaiting downstream merge while PatchRelay is paused`;
     }
-    if (issue.factoryState === "changes_requested" || issue.prReviewState === "changes_requested") {
+    if (isIssueRequestedChangesProjection(issue)) {
       return `PR #${issue.prNumber} has requested changes while PatchRelay is paused`;
     }
-    if (issue.factoryState === "repairing_ci" || issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure") {
+    if (isIssueCiRepairProjection(issue)) {
       return `PR #${issue.prNumber} has failing CI while PatchRelay is paused`;
     }
     return `PR #${issue.prNumber} is awaiting review while PatchRelay is paused`;
   }
   if (!issue.delegatedToPatchRelay) {
-    if (issue.factoryState === "implementing") {
+    if (isIssueImplementingProjection(issue)) {
       return "Implementation is paused because the issue is undelegated";
     }
-    if (issue.factoryState === "delegated") {
+    if (isIssueDelegatedProjection(issue)) {
       return "Queued to start work while PatchRelay is paused";
     }
   }

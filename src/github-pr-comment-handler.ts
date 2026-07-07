@@ -2,12 +2,14 @@ import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { InputMessageEventPayload } from "./issue-session-events.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
-import type { WakeDispatcher } from "./wake-dispatcher.ts";
+import type { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
+import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
+import { HUMAN_INPUT_OBSERVATION } from "./workflow-model.ts";
 
 export class GitHubPrCommentHandler {
   constructor(
     private readonly db: PatchRelayDatabase,
-    private readonly wakeDispatcher: WakeDispatcher,
+    private readonly workflowTaskDispatcher: WorkflowTaskDispatcher,
     private readonly logger: Logger,
     private readonly codex: { steerTurn(options: { threadId: string; turnId: string; input: string }): Promise<void> },
     private readonly feed?: OperatorEventFeed,
@@ -58,7 +60,23 @@ export class GitHubPrCommentHandler {
       }
     }
 
-    this.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
+    const commentId = typeof comment.id === "number" || typeof comment.id === "string"
+      ? String(comment.id)
+      : `${prNumber}:${body}`;
+    this.db.workflowObservations.appendObservation({
+      projectId: issue.projectId,
+      subjectId: issue.linearIssueId,
+      source: "github",
+      type: HUMAN_INPUT_OBSERVATION,
+      payloadJson: JSON.stringify({
+        body,
+        inputKind: "followup_comment",
+        author,
+      }),
+      dedupeKey: `github_pr_comment:${commentId}`,
+    });
+    reconcileWorkflowTasksForIssue(this.db, issue);
+    this.workflowTaskDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
       eventType: "followup_comment",
       eventJson: JSON.stringify({ body, author } satisfies InputMessageEventPayload),
     });

@@ -18,7 +18,7 @@ const telemetry = new FanoutPatchRelayTelemetry([
 
 The logger sink receives every telemetry event. The operator-feed sink translates only high-signal events into persisted human activity rows, such as dependency unblocks, actionable run skips, and health invariant warnings or repairs.
 
-Telemetry sink failures must never affect workflow execution. New sinks should be called through `emitTelemetry`, either directly or by being added to `FanoutPatchRelayTelemetry`, so a broken sink cannot block a wake, run, lease, or webhook path.
+Telemetry sink failures must never affect workflow execution. New sinks should be called through `emitTelemetry`, either directly or by being added to `FanoutPatchRelayTelemetry`, so a broken sink cannot block a dispatch, run, lease, or webhook path.
 
 ## Adding an OpenTelemetry sink
 
@@ -53,7 +53,6 @@ Useful initial OpenTelemetry mappings:
 
 - `run.started`, `run.completed`, `run.failed` as run lifecycle span events and counters.
 - `run.skipped` as a counter labeled by `reason` and `runType`.
-- `wake.suppressed` as a counter labeled by `reason`.
+- `dispatch.suppressed` as a counter labeled by `reason`.
 - `health.invariant` as a counter labeled by `invariant` and `status`.
 - `lease.acquire_failed` and `lease.expired` as lease-health counters.
-

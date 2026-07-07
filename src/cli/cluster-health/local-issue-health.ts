@@ -1,6 +1,5 @@
-import { ACTIVE_RUN_STATES } from "../../factory-state.ts";
 import type { IssueDependencyRecord, IssueRecord } from "../../db-types.ts";
-import { isUndelegatedPausedNoPrWork } from "../../paused-issue-state.ts";
+import { isIssueDoneProjection, isIssueTerminalFailureProjection } from "../../issue-execution-state.ts";
 import { hasOpenPr } from "../../pr-state.ts";
 import { DOWNSTREAM_STALE_MS, RECONCILIATION_GRACE_MS } from "./shared.ts";
 import type { ClusterHealthCheck, IssueSnapshot } from "./types.ts";
@@ -16,23 +15,29 @@ export function isResolvedDependency(dep: IssueDependencyRecord): boolean {
     || state === "cancelled";
 }
 
-export function needsReviewAutomation(issue: IssueRecord): boolean {
-  if (issue.factoryState === "awaiting_queue" || !isActiveWorkflowIssue(issue)) {
+export function needsReviewAutomation(snapshot: IssueSnapshot): boolean {
+  if (
+    snapshot.executionState.kind === "idle_awaiting_external"
+    && (snapshot.executionState.waitingOn === "merge_queue" || snapshot.executionState.waitingOn === "downstream_automation")
+  ) {
     return false;
   }
-  return hasOpenPr(issue.prNumber, issue.prState);
+  if (snapshot.executionState.kind === "terminal" || snapshot.executionState.kind === "undelegated") {
+    return false;
+  }
+  return hasOpenPr(snapshot.issue.prNumber, snapshot.issue.prState);
 }
 
 export function isActiveWorkflowIssue(issue: IssueRecord): boolean {
-  return issue.factoryState !== "done" && !isTerminalFailureIssue(issue);
+  return !isIssueDoneProjection(issue) && !isTerminalFailureIssue(issue);
 }
 
 export function isTerminalFailureIssue(issue: IssueRecord): boolean {
-  return issue.factoryState === "failed" || issue.factoryState === "escalated";
+  return isIssueTerminalFailureProjection(issue);
 }
 
 export function evaluateTerminalIssueHealth(issue: IssueRecord): ClusterHealthCheck | undefined {
-  if (issue.factoryState === "failed" || issue.factoryState === "escalated") {
+  if (isIssueTerminalFailureProjection(issue)) {
     return {
       status: "warn",
       scope: "issue:terminal",
@@ -43,8 +48,7 @@ export function evaluateTerminalIssueHealth(issue: IssueRecord): ClusterHealthCh
 }
 
 export function evaluateLocalIssueHealth(snapshot: IssueSnapshot): ClusterHealthCheck | undefined {
-  const { issue, session, missingTrackedBlockers, blockedBy, ageMs, readyForExecution } = snapshot;
-  const pausedNoPrWork = isUndelegatedPausedNoPrWork(issue);
+  const { issue, session, missingTrackedBlockers, blockedBy, ageMs, executionState } = snapshot;
   if (missingTrackedBlockers.length > 0) {
     return {
       status: "fail",
@@ -73,7 +77,7 @@ export function evaluateLocalIssueHealth(snapshot: IssueSnapshot): ClusterHealth
     return undefined;
   }
 
-  if (readyForExecution && issue.activeRunId === undefined && ageMs >= RECONCILIATION_GRACE_MS) {
+  if (executionState.kind === "ready" && ageMs >= RECONCILIATION_GRACE_MS) {
     return {
       status: "fail",
       scope: "issue:dispatch",
@@ -81,23 +85,28 @@ export function evaluateLocalIssueHealth(snapshot: IssueSnapshot): ClusterHealth
     };
   }
 
-  if (!pausedNoPrWork && ACTIVE_RUN_STATES.has(issue.factoryState) && issue.activeRunId === undefined && ageMs >= RECONCILIATION_GRACE_MS) {
+  if (executionState.kind === "awaiting_followup" && ageMs >= RECONCILIATION_GRACE_MS) {
     return {
       status: "fail",
       scope: "issue:dispatch",
-      message: `Issue is parked in ${issue.factoryState} without an active run`,
+      message: `Issue owes ${executionState.followup} work but no runnable workflow task is queued`,
     };
   }
 
-  if (!pausedNoPrWork && issue.factoryState === "delegated" && issue.activeRunId === undefined && !readyForExecution && ageMs >= RECONCILIATION_GRACE_MS) {
+  if (
+    executionState.kind === "idle"
+    && issue.delegatedToPatchRelay !== false
+    && !hasOpenPr(issue.prNumber, issue.prState)
+    && ageMs >= RECONCILIATION_GRACE_MS
+  ) {
     return {
       status: "fail",
       scope: "issue:dispatch",
-      message: "Delegated issue is idle but no wake is queued",
+      message: "Delegated issue is idle but no workflow task is queued",
     };
   }
 
-  if (issue.factoryState === "awaiting_input" && ageMs >= RECONCILIATION_GRACE_MS) {
+  if (executionState.kind === "waiting_input" && ageMs >= RECONCILIATION_GRACE_MS) {
     return {
       status: "warn",
       scope: "issue:operator",
@@ -105,7 +114,11 @@ export function evaluateLocalIssueHealth(snapshot: IssueSnapshot): ClusterHealth
     };
   }
 
-  if (issue.factoryState === "awaiting_queue" && ageMs >= DOWNSTREAM_STALE_MS) {
+  if (
+    executionState.kind === "idle_awaiting_external"
+    && (executionState.waitingOn === "merge_queue" || executionState.waitingOn === "downstream_automation")
+    && ageMs >= DOWNSTREAM_STALE_MS
+  ) {
     return {
       status: "warn",
       scope: "issue:downstream",

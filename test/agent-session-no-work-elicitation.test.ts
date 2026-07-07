@@ -39,9 +39,9 @@ function run(factoryState: FactoryState, fn: (activities: Array<{ content: { typ
       normalized,
       project: { id: PROJECT } as never,
       trackedIssue: undefined,
-      wakeRunType: undefined,
+      runnableTaskRunType: undefined,
       delegated: true,
-      peekPendingSessionWakeRunType: () => undefined,
+      peekRunnableWorkflowTaskRunType: () => undefined,
       isDirectReplyToOutstandingQuestion: () => false,
     });
 
@@ -57,9 +57,9 @@ test("an in-progress issue does not get the misleading 'no work queued' nudge", 
   });
 });
 
-test("a delegated-but-idle issue still gets the 'no work queued' nudge", async () => {
+test("a delegated-but-idle issue is not nudged synchronously on session creation", async () => {
   await run("delegated", async (activities) => {
     const bodies = activities.map((a) => a.content.body ?? "");
-    assert.ok(bodies.some((b) => b.includes("no work is queued")), "idle delegated issue should still be nudged");
+    assert.ok(!bodies.some((b) => b.includes("no work is queued")), "creation can race task projection and must not conclude idle");
   });
 });

@@ -3,8 +3,8 @@ import { parseGitHubFailureContext, summarizeGitHubFailureContext } from "./gith
 import type { GitHubCiSnapshotRecord } from "./db-types.ts";
 import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
-import { isIssueSessionReadyForExecution } from "./issue-session.ts";
 import { hasDetachedActiveLatestRun } from "./effective-active-run.ts";
+import { deriveIssueExecutionState, isIssueExecutionReadyForExecution } from "./issue-execution-state.ts";
 
 function shouldSuppressStatusNote(params: {
   activeRunType?: string | null | undefined;
@@ -96,7 +96,7 @@ export class TrackedIssueListQuery {
     readyForExecution: boolean;
     currentLinearState?: string;
     activeRunType?: string;
-    pendingRunType?: string;
+    runnableTaskRunType?: string;
     latestRunType?: string;
     latestRunStatus?: string;
     prNumber?: number;
@@ -133,12 +133,9 @@ export class TrackedIssueListQuery {
         typeof row.blocked_by_keys_json === "string" ? row.blocked_by_keys_json : undefined,
       );
       const blockedByCount = Number(row.blocked_by_count ?? 0);
-      const hasPendingSessionEvents = Number(row.pending_session_event_count ?? 0) > 0;
-      const hasRunnableWorkflowTask = this.db.workflowTasks
+      const runnableWorkflowTask = this.db.workflowTasks
         .listOpenRunnableTasks(String(row.project_id))
-        .some((task) => task.subjectId === String(row.linear_issue_id));
-      const hasPendingWake = hasPendingSessionEvents
-        || hasRunnableWorkflowTask;
+        .find((task) => task.subjectId === String(row.linear_issue_id));
       const detachedActiveRun = hasDetachedActiveLatestRun({
         activeRunId: row.active_run_type !== null ? 1 : undefined,
         latestRun: row.latest_run_status !== null
@@ -150,25 +147,31 @@ export class TrackedIssueListQuery {
         : detachedActiveRun && row.latest_run_type !== null
           ? String(row.latest_run_type)
           : undefined;
-      const readyForExecution = isIssueSessionReadyForExecution({
-        ...(typeof row.session_state === "string"
-          ? { sessionState: detachedActiveRun ? "running" as never : String(row.session_state) as never }
-          : {}),
+      const effectiveActiveRunStatus = row.active_run_status !== null && row.active_run_status !== undefined
+        ? String(row.active_run_status)
+        : detachedActiveRun && row.latest_run_status !== null
+          ? String(row.latest_run_status)
+          : undefined;
+      const executionState = deriveIssueExecutionState({
         factoryState: String(row.factory_state ?? "delegated") as never,
         ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
         ...(row.current_linear_state_type !== null ? { currentLinearStateType: String(row.current_linear_state_type) } : {}),
         ...(row.delegated_to_patchrelay !== null ? { delegatedToPatchRelay: Number(row.delegated_to_patchrelay) !== 0 } : {}),
         ...((row.active_run_type !== null || detachedActiveRun) ? { activeRunId: 1 } : {}),
-        blockedByCount,
-        hasPendingWake,
-        hasLegacyPendingRun: row.pending_run_type !== null && row.pending_run_type !== undefined,
+        ...(effectiveActiveRunType ? { activeRunType: effectiveActiveRunType } : {}),
+        ...(effectiveActiveRunStatus ? { activeRunStatus: effectiveActiveRunStatus } : {}),
+        blockedByKeys,
+        ...(runnableWorkflowTask?.runType ? { runnableTaskRunType: runnableWorkflowTask.runType } : {}),
         ...(row.orchestration_settle_until !== null ? { orchestrationSettleUntil: String(row.orchestration_settle_until) } : {}),
         ...(row.pr_number !== null ? { prNumber: Number(row.pr_number) } : {}),
         ...(row.pr_state !== null ? { prState: String(row.pr_state) } : {}),
+        ...(row.pr_head_sha !== null ? { prHeadSha: String(row.pr_head_sha) } : {}),
         ...(row.pr_review_state !== null ? { prReviewState: String(row.pr_review_state) } : {}),
         ...(row.pr_check_status !== null ? { prCheckStatus: String(row.pr_check_status) } : {}),
-        ...(row.last_github_failure_source !== null ? { latestFailureSource: String(row.last_github_failure_source) } : {}),
+        ...(row.last_blocking_review_head_sha !== null ? { lastBlockingReviewHeadSha: String(row.last_blocking_review_head_sha) } : {}),
+        ...(row.last_github_failure_check_name !== null ? { latestFailureCheckName: String(row.last_github_failure_check_name) } : {}),
       });
+      const readyForExecution = isIssueExecutionReadyForExecution(executionState);
       const failureSummary = summarizeGitHubFailureContext(failureContext);
       const sessionWaitingReason = typeof row.waiting_reason === "string" && row.waiting_reason.trim().length > 0
         ? row.waiting_reason
@@ -183,7 +186,7 @@ export class TrackedIssueListQuery {
         ...((row.active_run_type !== null || detachedActiveRun) ? { activeRunId: 1 } : {}),
         blockedByKeys,
         factoryState: String(row.factory_state ?? "delegated"),
-        ...(row.pending_run_type !== null ? { pendingRunType: String(row.pending_run_type) } : {}),
+        ...(runnableWorkflowTask?.runType ? { runnableTaskRunType: runnableWorkflowTask.runType } : {}),
         ...(row.orchestration_settle_until !== null ? { orchestrationSettleUntil: String(row.orchestration_settle_until) } : {}),
         ...(row.pr_number !== null ? { prNumber: Number(row.pr_number) } : {}),
         ...(row.pr_state !== null ? { prState: String(row.pr_state) } : {}),
@@ -264,7 +267,7 @@ export class TrackedIssueListQuery {
         readyForExecution,
         ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
         ...(effectiveActiveRunType ? { activeRunType: effectiveActiveRunType } : {}),
-        ...(row.pending_run_type !== null ? { pendingRunType: String(row.pending_run_type) } : {}),
+        ...(runnableWorkflowTask?.runType ? { runnableTaskRunType: runnableWorkflowTask.runType } : {}),
         ...(row.latest_run_type !== null ? { latestRunType: String(row.latest_run_type) } : {}),
         ...(row.latest_run_status !== null ? { latestRunStatus: String(row.latest_run_status) } : {}),
         ...(row.pr_number !== null ? { prNumber: Number(row.pr_number) } : {}),

@@ -6,7 +6,7 @@ import pino from "pino";
 import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { IdleIssueReconciler } from "../src/idle-reconciliation.ts";
-import { WakeDispatcher } from "../src/wake-dispatcher.ts";
+import { WorkflowTaskDispatcher } from "../src/workflow-task-dispatcher.ts";
 import { MemoryPatchRelayTelemetry } from "../src/telemetry.ts";
 import type { AppConfig } from "../src/config-types.ts";
 
@@ -16,7 +16,7 @@ function createHarness() {
   const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true, telemetry);
   db.runMigrations();
   const logger = pino({ enabled: false });
-  const wake = new WakeDispatcher(db, () => undefined, () => undefined, logger);
+  const workflowTask = new WorkflowTaskDispatcher(db, () => undefined, () => undefined, logger);
   const config = {
     projects: [{
       id: "proj",
@@ -26,7 +26,7 @@ function createHarness() {
       github: { repoFullName: "owner/repo", baseBranch: "main" },
     }],
   } as unknown as AppConfig;
-  const reconciler = new IdleIssueReconciler(db, config, wake, logger);
+  const reconciler = new IdleIssueReconciler(db, config, workflowTask, logger);
   return { baseDir, db, telemetry, reconciler };
 }
 

@@ -1,21 +1,19 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import { appendDelegationObservedEvent } from "./delegation-audit.ts";
-import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
+import { deriveReactiveWorkflowIntent } from "./reactive-workflow-intent.ts";
 import type { IssueSessionLeaseService } from "./issue-session-lease-service.ts";
-import { hasPendingWake as computeHasPendingWake } from "./pending-wake.ts";
-import { RunWakePlanner } from "./run-wake-planner.ts";
+import { hasRunnableWorkflowTask } from "./pending-workflow-task.ts";
 import type { AppConfig, LinearClientProvider, LinearIssueSnapshot, ProjectConfig } from "./types.ts";
 import type { LinearSessionSync } from "./linear-session-sync.ts";
 import { isResumablePausedLocalWork } from "./paused-issue-state.ts";
 import { upsertLinearIssueProjection } from "./linear-issue-projection.ts";
+import { deriveIssueTerminalOutcome } from "./issue-execution-state.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
 const WRITER = "service-startup-recovery";
 
 export class ServiceStartupRecovery {
-  private readonly runWakePlanner: RunWakePlanner;
-
   constructor(
     private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
@@ -24,13 +22,11 @@ export class ServiceStartupRecovery {
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
     private readonly logger: Logger,
     private readonly leaseService: IssueSessionLeaseService,
-  ) {
-    this.runWakePlanner = new RunWakePlanner(db, logger);
-  }
+  ) {}
 
   async syncKnownAgentSessions(): Promise<void> {
     for (const issue of this.db.issues.listIssuesWithActiveRun()) {
-      if (issue.factoryState === "done") {
+      if (deriveIssueTerminalOutcome(issue) === "done") {
         continue;
       }
       if (!issue.activeRunId) {
@@ -67,7 +63,6 @@ export class ServiceStartupRecovery {
   }
 
   reconcileKnownWorkflowTasks(): void {
-    this.drainLegacyPendingRunColumns();
     let opened = 0;
     let updated = 0;
     let closed = 0;
@@ -82,60 +77,11 @@ export class ServiceStartupRecovery {
     }
   }
 
-  /**
-   * S6 drain: every legacy writer now routes intent through durable
-   * observations + workflow tasks, but existing rows may still carry a
-   * `pending_run_type` / `pending_run_context_json` value. For each, synthesize
-   * the equivalent session event via the shared
-   * {@link RunWakePlanner.materializeLegacyPendingWake} logic (which also nulls
-   * the columns), then reconcile so a runnable workflow task materializes from
-   * the issue facts. Idempotent — runs every startup; a second pass finds no
-   * rows once the columns are drained. This is what makes S7's live-DB zero-row
-   * check (`pending_run_type IS NULL` everywhere) hold.
-   */
-  private drainLegacyPendingRunColumns(): void {
-    const pending = this.db.issues.listIssuesWithPendingRunType();
-    if (pending.length === 0) return;
-    let drained = 0;
-    for (const issue of pending) {
-      if (!issue.pendingRunType) continue;
-      // A fresh lease gates the session-event append + column-null commit inside
-      // materializeLegacyPendingWake. If the issue is actively leased elsewhere,
-      // skip it this pass — the next startup drains it.
-      const leaseId = this.leaseService.acquire(issue.projectId, issue.linearIssueId);
-      if (!leaseId) continue;
-      try {
-        const after = this.runWakePlanner.materializeLegacyPendingWake(issue, {
-          projectId: issue.projectId,
-          linearIssueId: issue.linearIssueId,
-          leaseId,
-        });
-        const refreshed = this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? after;
-        reconcileWorkflowTasksForIssue(this.db, refreshed);
-        if (!refreshed.pendingRunType) drained += 1;
-      } catch (error) {
-        this.logger.warn(
-          {
-            issueKey: issue.issueKey,
-            linearIssueId: issue.linearIssueId,
-            error: error instanceof Error ? error.message : String(error),
-          },
-          "Failed to drain legacy pending-run columns for issue",
-        );
-      } finally {
-        this.leaseService.release(issue.projectId, issue.linearIssueId);
-      }
-    }
-    if (drained > 0) {
-      this.logger.info({ drained }, "Drained legacy pending-run columns into durable workflow tasks");
-    }
-  }
-
   async recoverDelegatedIssueStateFromLinear(): Promise<void> {
     await this.discoverDelegatedIssuesFromLinear();
 
     for (let issue of this.db.issues.listIssues()) {
-      if (issue.factoryState === "done" || issue.activeRunId !== undefined) {
+      if (deriveIssueTerminalOutcome(issue) === "done" || issue.activeRunId !== undefined) {
         continue;
       }
       const linear = await this.linearProvider.forProject(issue.projectId).catch(() => undefined);
@@ -186,7 +132,7 @@ export class ServiceStartupRecovery {
       }
       const unresolvedBlockers = this.db.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId);
       const latestRun = this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
-      const hasPendingWake = computeHasPendingWake(this.db, issue.projectId, issue.linearIssueId);
+      const hasRunnableTask = hasRunnableWorkflowTask(this.db, issue.projectId, issue.linearIssueId);
       const shouldRecoverPausedLocalWork =
         delegated
         && isResumablePausedLocalWork({
@@ -196,9 +142,9 @@ export class ServiceStartupRecovery {
           },
           latestRun,
         })
-        && !hasPendingWake;
-      const reactiveIntent = delegated && !hasPendingWake
-        ? deriveIssueSessionReactiveIntent({
+        && !hasRunnableTask;
+      const reactiveIntent = delegated && !hasRunnableTask
+        ? deriveReactiveWorkflowIntent({
             delegatedToPatchRelay: delegated,
             prNumber: issue.prNumber,
             prState: issue.prState,

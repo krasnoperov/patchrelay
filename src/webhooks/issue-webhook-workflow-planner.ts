@@ -1,10 +1,10 @@
 import { resolveAwaitingInputReason, type AwaitingInputReason } from "../awaiting-input-reason.ts";
-import { computeOrchestrationSettleUntil as computeDefaultOrchestrationSettleUntil } from "../orchestration-parent-wake.ts";
+import { computeOrchestrationSettleUntil as computeDefaultOrchestrationSettleUntil } from "../orchestration-parent-dispatch.ts";
 import { classifyIssue } from "../issue-class.ts";
 import type { IssueMetadata, IssueRecord } from "../types.ts";
 import type { RunType } from "../factory-state.ts";
-import type { RunContext } from "../run-context.ts";
 import type { TriggerEvent } from "../workflow-types.ts";
+import type { WorkflowRunIntent } from "../workflow-intent.ts";
 import type { resolveLinkedPrAdoption } from "./linked-pr-adoption.ts";
 import {
   decideActiveRunRelease,
@@ -29,8 +29,8 @@ export interface IssueWebhookWorkflowPlannerInput {
   unresolvedBlockers: number;
   hasActiveRun: boolean;
   activeRunType?: RunType | undefined;
-  hasPendingWake: boolean;
-  existingWakeRunType?: RunType | undefined;
+  hasRunnableWorkflowTask: boolean;
+  existingWorkflowTaskRunType?: RunType | undefined;
   incomingAgentSessionId?: string | undefined;
   childIssueCount: number;
   computeOrchestrationSettleUntil?: () => string;
@@ -44,8 +44,7 @@ export interface IssueWebhookWorkflowPlan {
   undelegation: ReturnType<typeof decideUnDelegation>;
   startupResume: {
     factoryState?: IssueRecord["factoryState"] | undefined;
-    pendingRunType?: RunType | null | undefined;
-    pendingRunContext?: RunContext | undefined;
+    workflowIntent?: WorkflowRunIntent | undefined;
     source: "linked_pr_adoption" | "re_delegated";
   };
   effectiveRunRelease: ReturnType<typeof decideActiveRunRelease>;
@@ -59,8 +58,7 @@ function resolveStartupResume(input: IssueWebhookWorkflowPlannerInput): IssueWeb
   if (input.linkedPrAdoption) {
     return {
       factoryState: input.linkedPrAdoption.factoryState,
-      pendingRunType: input.linkedPrAdoption.pendingRunType,
-      pendingRunContext: input.linkedPrAdoption.pendingRunContext,
+      workflowIntent: input.linkedPrAdoption.workflowIntent,
       source: "linked_pr_adoption",
     };
   }
@@ -104,7 +102,7 @@ export function planIssueWebhookWorkflow(input: IssueWebhookWorkflowPlannerInput
       triggerEvent: input.triggerEvent,
       unresolvedBlockers: input.unresolvedBlockers,
       hasActiveRun: input.hasActiveRun,
-      hasPendingWake: input.hasPendingWake,
+      hasRunnableWorkflowTask: input.hasRunnableWorkflowTask,
       terminal,
       currentState: input.existingIssue?.factoryState,
     });
@@ -147,7 +145,7 @@ export function planIssueWebhookWorkflow(input: IssueWebhookWorkflowPlannerInput
     hasPr: input.existingIssue?.prNumber !== undefined && input.existingIssue?.prState !== "merged",
   });
   const startupResume = resolveStartupResume(input);
-  const clearPending = (input.unresolvedBlockers > 0 && input.existingWakeRunType === "implementation" && !input.hasActiveRun)
+  const clearPending = (input.unresolvedBlockers > 0 && input.existingWorkflowTaskRunType === "implementation" && !input.hasActiveRun)
     || undelegation.clearPending;
   const agentSessionId = decideAgentSession({
     sessionId: input.incomingAgentSessionId,

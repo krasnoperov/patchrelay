@@ -78,7 +78,7 @@ test("settleRun records the terminal outcome and clears the slot in one call", (
       db,
       run,
       finish: { status: "completed", threadId: "thread-1" },
-      buildIssueUpdate: () => ({ factoryState: "pr_open", pendingRunType: null }),
+      buildIssueUpdate: () => ({ factoryState: "pr_open" }),
     });
     assert.equal(result.runFinished, true);
     assert.equal(result.slotCleared, true);
@@ -93,7 +93,7 @@ test("settleRun records the terminal outcome and clears the slot in one call", (
       db,
       run,
       finish: { status: "completed", threadId: "thread-1" },
-      buildIssueUpdate: () => ({ factoryState: "pr_open", pendingRunType: null }),
+      buildIssueUpdate: () => ({ factoryState: "pr_open" }),
     });
     assert.equal(replay.runFinished, false);
     assert.equal(replay.slotCleared, false);

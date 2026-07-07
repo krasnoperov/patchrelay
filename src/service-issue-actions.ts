@@ -2,7 +2,7 @@ import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { AgentInputService } from "./agent-input-service.ts";
-import { hasPendingWake } from "./pending-wake.ts";
+import { hasRunnableWorkflowTask, peekRunnableWorkflowTaskRunType } from "./pending-workflow-task.ts";
 import type { IssueRecord } from "./db-types.ts";
 import type { OperatorClosedEventPayload } from "./issue-session-events.ts";
 import { buildOperatorRetryEvent } from "./operator-retry-event.ts";
@@ -118,7 +118,7 @@ export class ServiceIssueActions {
       prReviewState: issue.prReviewState,
       prCheckStatus: issue.prCheckStatus,
       factoryState: issue.factoryState,
-      pendingRunType: issue.pendingRunType,
+      runnableTaskRunType: peekRunnableWorkflowTaskRunType(this.db, issue.projectId, issue.linearIssueId),
       lastRunType: issueSession?.lastRunType,
       lastGitHubFailureSource: issue.lastGitHubFailureSource,
     });
@@ -154,7 +154,7 @@ export class ServiceIssueActions {
       status: "retry",
       summary: `Retry queued: ${retryTarget.runType}`,
     });
-    if (hasPendingWake(this.db, issue.projectId, issue.linearIssueId)) {
+    if (hasRunnableWorkflowTask(this.db, issue.projectId, issue.linearIssueId)) {
       this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
     }
     return { issueKey, runType: retryTarget.runType };
@@ -204,8 +204,6 @@ export class ServiceIssueActions {
           delegatedToPatchRelay: false,
           factoryState: terminalState,
           activeRunId: null,
-          pendingRunType: null,
-          pendingRunContextJson: null,
         },
       });
       if (run && commit.outcome === "applied") {

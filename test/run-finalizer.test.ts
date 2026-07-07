@@ -9,7 +9,7 @@ import { PatchRelayDatabase } from "../src/db.ts";
 import { RunFinalizer } from "../src/run-finalizer.ts";
 import type { FactoryState } from "../src/factory-state.ts";
 import { reconcileWorkflowTasksForIssue } from "../src/workflow-task-reconciler.ts";
-import { createTestWakeDispatcher } from "./helpers/wake-dispatcher.ts";
+import { createTestWorkflowTaskDispatcher } from "./helpers/workflow-task-dispatcher.ts";
 
 function createDb() {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-run-finalizer-"));
@@ -57,7 +57,7 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
       return event as never;
     },
   };
-  const dispatcher = createTestWakeDispatcher(
+  const dispatcher = createTestWorkflowTaskDispatcher(
     db,
     (projectId, issueId) => {
       enqueueCalls.push({ projectId, issueId });
@@ -174,13 +174,13 @@ test("repair run finalizer continues automatically with a preserved dirty worktr
 
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
     const updatedRun = db.runs.getRunById(run.id)!;
-    const wake = db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics(issue.projectId, issue.linearIssueId);
     assert.equal(updatedIssue.factoryState, "delegated");
     assert.equal(updatedRun.status, "completed");
-    assert.equal(wake?.runType, "branch_upkeep");
-    assert.equal(wake?.resumeThread, true);
-    assert.equal(wake?.context.preserveDirtyWorktree, true);
-    assert.match(String(wake?.context.dirtyWorktreeSummary ?? ""), /tracked\.txt/);
+    assert.equal(workflowTask?.runType, "branch_upkeep");
+    assert.equal(workflowTask?.resumeThread, true);
+    assert.equal(workflowTask?.context.preserveDirtyWorktree, true);
+    assert.match(String(workflowTask?.context.dirtyWorktreeSummary ?? ""), /tracked\.txt/);
     assert.deepEqual(enqueueCalls, [{ projectId: issue.projectId, issueId: issue.linearIssueId }]);
     assert.equal(feedEvents.at(-1)?.status, "dirty_repair_continue");
     assert.match(String(activities.at(-1)?.body ?? ""), /continuing automatically/);
@@ -758,19 +758,19 @@ test("run finalizer queues a same-thread follow-up when completion check says co
     });
 
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
-    const wake = db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics(issue.projectId, issue.linearIssueId);
     const pendingEvent = db.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { pendingOnly: true }).at(-1);
     assert.equal(updatedIssue.factoryState, "delegated");
     assert.equal(db.runs.getRunById(run.id)?.completionCheckOutcome, "continue");
-    assert.equal(wake?.runType, "implementation");
-    assert.equal(wake?.resumeThread, true);
+    assert.equal(workflowTask?.runType, "implementation");
+    assert.equal(workflowTask?.resumeThread, true);
     assert.equal(pendingEvent?.eventType, "completion_check_continue");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("run finalizer re-enqueues a pending requested-changes wake after the active run finishes", async () => {
+test("run finalizer re-enqueues a pending requested-changes workflowTask after the active run finishes", async () => {
   const { baseDir, db } = createDb();
   try {
     const issue = db.upsertIssue({
@@ -838,10 +838,10 @@ test("run finalizer re-enqueues a pending requested-changes wake after the activ
     });
 
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
-    const wake = db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics(issue.projectId, issue.linearIssueId);
     assert.equal(updatedIssue.activeRunId, undefined);
     assert.equal(updatedIssue.factoryState, "pr_open");
-    assert.equal(wake?.runType, "review_fix");
+    assert.equal(workflowTask?.runType, "review_fix");
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-1" }]);
     assert.equal(feedEvents.at(-1)?.status, "deferred_follow_up_queued");
   } finally {
@@ -897,14 +897,14 @@ test("run finalizer continues automatically when no-PR done leaves local changes
 
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
     const updatedRun = db.runs.getRunById(run.id)!;
-    const wake = db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics(issue.projectId, issue.linearIssueId);
     const pendingEvent = db.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { pendingOnly: true }).at(-1);
     assert.equal(updatedIssue.factoryState, "delegated");
     assert.equal(updatedRun.status, "completed");
     assert.equal(updatedRun.completionCheckOutcome, "continue");
     assert.match(String(updatedRun.completionCheckSummary ?? ""), /has not published them yet/);
-    assert.equal(wake?.runType, "implementation");
-    assert.equal(wake?.resumeThread, true);
+    assert.equal(workflowTask?.runType, "implementation");
+    assert.equal(workflowTask?.resumeThread, true);
     assert.equal(pendingEvent?.eventType, "completion_check_continue");
     assert.equal(feedEvents.at(-1)?.status, "completion_check_continue");
   } finally {
@@ -1013,11 +1013,11 @@ test("run finalizer fails no-PR completion checks when the fork says the run sto
 
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
     const updatedRun = db.runs.getRunById(run.id)!;
-    const wake = db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics(issue.projectId, issue.linearIssueId);
     assert.equal(updatedIssue.factoryState, "failed");
     assert.equal(updatedRun.status, "failed");
     assert.equal(updatedRun.completionCheckOutcome, "failed");
-    assert.equal(wake, undefined);
+    assert.equal(workflowTask, undefined);
     assert.equal(feedEvents.at(-1)?.status, "completion_check_failed");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -1072,14 +1072,14 @@ test("run finalizer recovers failed implementation turns when unpublished local 
 
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
     const updatedRun = db.runs.getRunById(run.id)!;
-    const wake = db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics(issue.projectId, issue.linearIssueId);
     assert.equal(recovered, true);
     assert.equal(updatedIssue.factoryState, "delegated");
     assert.equal(updatedRun.status, "failed");
     assert.equal(updatedRun.failureReason, "Codex reported the turn completed in a failed state");
     assert.equal(updatedRun.completionCheckOutcome, "continue");
-    assert.equal(wake?.runType, "implementation");
-    assert.equal(wake?.resumeThread, true);
+    assert.equal(workflowTask?.runType, "implementation");
+    assert.equal(workflowTask?.resumeThread, true);
     assert.equal(feedEvents.at(-1)?.status, "completion_check_continue");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -1131,11 +1131,11 @@ test("run finalizer leaves failed implementation turns alone when no unpublished
     });
 
     const updatedRun = db.runs.getRunById(run.id)!;
-    const wake = db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics(issue.projectId, issue.linearIssueId);
     assert.equal(recovered, false);
     assert.equal(updatedRun.status, "running");
     assert.equal(updatedRun.completionCheckOutcome, undefined);
-    assert.equal(wake, undefined);
+    assert.equal(workflowTask, undefined);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -1162,15 +1162,15 @@ test("run finalizer builds Linear-visible completion text without an extra recap
         reviewBody: "Please tighten the publishing summary.",
       }),
     });
-    const wake = db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics(issue.projectId, issue.linearIssueId);
     const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       runType: "review_fix",
     });
-    db.issueSessions.consumeIssueSessionEvents(issue.projectId, issue.linearIssueId, wake?.eventIds ?? [], run.id);
-    db.issueSessions.setIssueSessionLastWakeReason(issue.projectId, issue.linearIssueId, wake?.wakeReason ?? null);
+    db.issueSessions.consumeIssueSessionEvents(issue.projectId, issue.linearIssueId, workflowTask?.eventIds ?? [], run.id);
+    db.issueSessions.setIssueSessionLastWorkflowReason(issue.projectId, issue.linearIssueId, workflowTask?.workflowReason ?? null);
     db.runs.updateRunThread(run.id, { threadId: "thread-1", turnId: "turn-main" });
 
     const { finalizer, activities, feedEvents } = createFinalizer(db, {

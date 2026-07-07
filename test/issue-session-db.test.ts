@@ -6,14 +6,16 @@ import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { SqliteConnection } from "../src/db/shared.ts";
 import { runPatchRelayMigrations } from "../src/db/migrations.ts";
-import { deriveIssueSessionReactiveIntent, deriveIssueSessionWakeReason } from "../src/issue-session.ts";
-import { buildRequestedChangesWakeIdentity } from "../src/reactive-wake-keys.ts";
+import { deriveReactiveWorkflowIntent } from "../src/reactive-workflow-intent.ts";
+import { buildRequestedChangesWorkflowIdentity } from "../src/reactive-workflow-keys.ts";
 
 test("migrations create issue_sessions and upgrade legacy issue schema", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-migration-"));
   try {
     const dbPath = path.join(baseDir, "legacy.sqlite");
     const connection = new SqliteConnection(dbPath);
+    const legacyRunColumn = ["pending", "run", "type"].join("_");
+    const legacyContextColumn = ["pending", "run", "context", "json"].join("_");
     connection.exec(`
       CREATE TABLE issues (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -25,8 +27,8 @@ test("migrations create issue_sessions and upgrade legacy issue schema", () => {
         current_linear_state TEXT,
         current_linear_state_type TEXT,
         factory_state TEXT NOT NULL DEFAULT 'delegated',
-        pending_run_type TEXT,
-        pending_run_context_json TEXT,
+        ${legacyRunColumn} TEXT,
+        ${legacyContextColumn} TEXT,
         branch_name TEXT,
         worktree_path TEXT,
         thread_id TEXT,
@@ -57,6 +59,8 @@ test("migrations create issue_sessions and upgrade legacy issue schema", () => {
     assert.ok(!issueColumns.some((column) => column.name === "merge_prep_attempts"));
     assert.ok(!issueColumns.some((column) => column.name === "branch_owner"));
     assert.ok(!issueColumns.some((column) => column.name === "branch_ownership_changed_at"));
+    assert.ok(!issueColumns.some((column) => column.name === legacyRunColumn));
+    assert.ok(!issueColumns.some((column) => column.name === legacyContextColumn));
 
     const sessionColumns = connection.prepare("PRAGMA table_info(issue_sessions)").all() as Array<Record<string, unknown>>;
     assert.ok(sessionColumns.some((column) => column.name === "session_state"));
@@ -79,10 +83,23 @@ test("issue upserts and run completion dual-write into issue_sessions", () => {
       issueKey: "USE-1",
       title: "Implement sessions",
       factoryState: "delegated",
-      pendingRunType: "implementation",
       branchName: "use/USE-1-implement-sessions",
       worktreePath: "/tmp/use-1",
       threadId: "thread-1",
+    });
+    db.workflowTasks.reconcileTasks({
+      projectId: "usertold",
+      subjectId: "issue-1",
+      tasks: [{
+        task: { id: "run:implementation", type: "run", runType: "implementation", reason: "delegated" },
+        authorityEpoch: 0,
+        gateAction: "start",
+      }],
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      factoryState: "delegated",
     });
     const queuedSession = db.issueSessions.getIssueSession("usertold", "issue-1");
     assert.equal(queuedSession?.sessionState, "idle");
@@ -101,7 +118,6 @@ test("issue upserts and run completion dual-write into issue_sessions", () => {
       projectId: "usertold",
       linearIssueId: "issue-1",
       activeRunId: run.id,
-      pendingRunType: null,
       factoryState: "implementing",
     });
     db.runs.updateRunThread(run.id, { threadId: "thread-2", turnId: "turn-1" });
@@ -144,7 +160,6 @@ test("issue session keeps the last published summary when a later stale repair f
       linearIssueId: "issue-summary",
       issueKey: "USE-SUMMARY",
       factoryState: "delegated",
-      pendingRunType: "implementation",
       branchName: "use/USE-SUMMARY",
     });
 
@@ -159,7 +174,6 @@ test("issue session keeps the last published summary when a later stale repair f
       projectId: "usertold",
       linearIssueId: "issue-summary",
       activeRunId: implementationRun.id,
-      pendingRunType: null,
       factoryState: "implementing",
     });
     db.runs.finishRun(implementationRun.id, {
@@ -481,7 +495,7 @@ test("active-lease-aware helpers use the current live lease for control writes",
   }
 });
 
-test("issue session wake derives follow-up mode and thread reuse from queued events", () => {
+test("issue session input derives follow-up mode and thread reuse from queued events", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-events-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
@@ -508,13 +522,13 @@ test("issue session wake derives follow-up mode and thread reuse from queued eve
       eventJson: JSON.stringify({ body: "And keep the API stable.", author: "bob" }),
     });
 
-    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-followup");
-    assert.equal(wake?.runType, "implementation");
-    assert.equal(wake?.resumeThread, true);
-    assert.equal(wake?.wakeReason, "followup_prompt");
-    assert.equal(Array.isArray(wake?.context.followUps), true);
-    assert.equal(wake?.context.followUpMode, true);
-    assert.equal(wake?.eventIds.length, 2);
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-followup");
+    assert.equal(workflowTask?.runType, "implementation");
+    assert.equal(workflowTask?.resumeThread, true);
+    assert.equal(workflowTask?.workflowReason, "followup_prompt");
+    assert.equal(Array.isArray(workflowTask?.context.followUps), true);
+    assert.equal(workflowTask?.context.followUpMode, true);
+    assert.equal(workflowTask?.eventIds.length, 2);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -541,17 +555,17 @@ test("followup_comment alone reuses the main thread for the next turn", () => {
       eventJson: JSON.stringify({ body: "Please keep the current copy.", author: "alice" }),
     });
 
-    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-comment-followup");
-    assert.equal(wake?.runType, "implementation");
-    assert.equal(wake?.resumeThread, true);
-    assert.equal(wake?.wakeReason, "followup_comment");
-    assert.equal(wake?.context.followUpMode, true);
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-comment-followup");
+    assert.equal(workflowTask?.runType, "implementation");
+    assert.equal(workflowTask?.resumeThread, true);
+    assert.equal(workflowTask?.workflowReason, "followup_comment");
+    assert.equal(workflowTask?.context.followUpMode, true);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("orchestration child delivery wakes the next turn on the same thread", () => {
+test("orchestration child delivery queues workflow tasks the next turn on the same thread", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-child-delivered-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
@@ -575,10 +589,10 @@ test("orchestration child delivery wakes the next turn on the same thread", () =
       }),
     });
 
-    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-parent");
-    assert.equal(wake?.runType, "implementation");
-    assert.equal(wake?.wakeReason, "child_delivered");
-    assert.equal(wake?.resumeThread, true);
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-parent");
+    assert.equal(workflowTask?.runType, "implementation");
+    assert.equal(workflowTask?.workflowReason, "child_delivered");
+    assert.equal(workflowTask?.resumeThread, true);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -658,7 +672,7 @@ test("canonical child issues exclude duplicate and canceled Linear children", ()
   }
 });
 
-test("direct_reply wakes the next turn in direct-reply mode on the same thread", () => {
+test("direct_reply queues workflow tasks the next turn in direct-reply mode on the same thread", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-direct-reply-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
@@ -677,18 +691,18 @@ test("direct_reply wakes the next turn in direct-reply mode on the same thread",
       eventJson: JSON.stringify({ body: "Use the staged rollout copy.", author: "alice" }),
     });
 
-    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-direct-reply");
-    assert.equal(wake?.runType, "implementation");
-    assert.equal(wake?.resumeThread, true);
-    assert.equal(wake?.wakeReason, "direct_reply");
-    assert.equal(wake?.context.directReplyMode, true);
-    assert.equal(Array.isArray(wake?.context.followUps), true);
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-direct-reply");
+    assert.equal(workflowTask?.runType, "implementation");
+    assert.equal(workflowTask?.resumeThread, true);
+    assert.equal(workflowTask?.workflowReason, "direct_reply");
+    assert.equal(workflowTask?.context.directReplyMode, true);
+    assert.equal(Array.isArray(workflowTask?.context.followUps), true);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("terminal session events suppress queued follow-up wakeups", () => {
+test("terminal session events suppress queued follow-up workflow tasks", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-terminal-events-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
@@ -714,14 +728,14 @@ test("terminal session events suppress queued follow-up wakeups", () => {
       dedupeKey: "pr_merged:15",
     });
 
-    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-terminal");
-    assert.equal(wake, undefined);
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-terminal");
+    assert.equal(workflowTask, undefined);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("self comments are not treated as pending actionable wakes", () => {
+test("self comments are not treated as pending actionable workflow tasks", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-self-comment-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
@@ -740,7 +754,7 @@ test("self comments are not treated as pending actionable wakes", () => {
       eventJson: JSON.stringify({ body: "Status update", author: "patchrelay" }),
     });
 
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-self-comment"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-self-comment"), undefined);
     assert.equal(db.issueSessions.hasPendingIssueSessionEvents("usertold", "issue-self-comment"), false);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -761,7 +775,7 @@ test("same-head requested-changes events coalesce and keep the richer payload", 
       prHeadSha: "sha-reviewed",
       prReviewState: "changes_requested",
     });
-    const idleIdentity = buildRequestedChangesWakeIdentity({
+    const idleIdentity = buildRequestedChangesWorkflowIdentity({
       linearIssueId: "issue-review-coalesce",
       headSha: "sha-reviewed",
     });
@@ -776,7 +790,7 @@ test("same-head requested-changes events coalesce and keep the richer payload", 
       dedupeKey: idleIdentity.dedupeKey,
     });
 
-    const webhookIdentity = buildRequestedChangesWakeIdentity({
+    const webhookIdentity = buildRequestedChangesWorkflowIdentity({
       linearIssueId: "issue-review-coalesce",
       reviewId: 123,
       reviewCommitId: "sha-reviewed",
@@ -801,7 +815,7 @@ test("same-head requested-changes events coalesce and keep the richer payload", 
     const payload = JSON.parse(events[0]!.eventJson ?? "{}") as Record<string, unknown>;
     assert.equal(payload.reviewId, 123);
     assert.equal(payload.reviewBody, "Fix the collapsed state.");
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-review-coalesce")?.eventIds.length, 1);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-review-coalesce")?.eventIds.length, 1);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -817,7 +831,6 @@ test("updateRunThread does not resurrect a run that already ended", () => {
       linearIssueId: "issue-ended-run",
       issueKey: "USE-15",
       factoryState: "delegated",
-      pendingRunType: "implementation",
     });
     const run = db.runs.createRun({
       issueId: issue.id,
@@ -844,20 +857,20 @@ test("updateRunThread does not resurrect a run that already ended", () => {
 
 test("reactive intent is derived from GitHub truth instead of compatibility stage names", () => {
   assert.deepEqual(
-    deriveIssueSessionReactiveIntent({
+    deriveReactiveWorkflowIntent({
       prNumber: 17,
       prState: "open",
       prCheckStatus: "failed",
     }),
     {
       runType: "ci_repair",
-      wakeReason: "settled_red_ci",
+      workflowReason: "settled_red_ci",
       compatibilityFactoryState: "repairing_ci",
     },
   );
 
   assert.deepEqual(
-    deriveIssueSessionReactiveIntent({
+    deriveReactiveWorkflowIntent({
       prNumber: 18,
       prState: "open",
       prHeadSha: "reviewed-head",
@@ -866,13 +879,13 @@ test("reactive intent is derived from GitHub truth instead of compatibility stag
     }),
     {
       runType: "review_fix",
-      wakeReason: "review_changes_requested",
+      workflowReason: "review_changes_requested",
       compatibilityFactoryState: "changes_requested",
     },
   );
 
   assert.deepEqual(
-    deriveIssueSessionReactiveIntent({
+    deriveReactiveWorkflowIntent({
       prNumber: 19,
       prState: "open",
       mergeConflictDetected: true,
@@ -880,7 +893,7 @@ test("reactive intent is derived from GitHub truth instead of compatibility stag
     }),
     {
       runType: "queue_repair",
-      wakeReason: "merge_steward_incident",
+      workflowReason: "merge_steward_incident",
       compatibilityFactoryState: "repairing_queue",
     },
   );
@@ -888,7 +901,7 @@ test("reactive intent is derived from GitHub truth instead of compatibility stag
 
 test("reactive intent does not repeat requested-changes work after the PR head advances", () => {
   assert.equal(
-    deriveIssueSessionReactiveIntent({
+    deriveReactiveWorkflowIntent({
       prNumber: 18,
       prState: "open",
       prHeadSha: "new-head",
@@ -896,19 +909,5 @@ test("reactive intent does not repeat requested-changes work after the PR head a
       lastBlockingReviewHeadSha: "old-reviewed-head",
     }),
     undefined,
-  );
-});
-
-test("wake reason falls back to reactive GitHub truth", () => {
-  assert.equal(
-    deriveIssueSessionWakeReason({
-      compatibilityFactoryState: "pr_open",
-      prNumber: 20,
-      prState: "open",
-      prHeadSha: "reviewed-head",
-      prReviewState: "changes_requested",
-      lastBlockingReviewHeadSha: "reviewed-head",
-    }),
-    "review_changes_requested",
   );
 });

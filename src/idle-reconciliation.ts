@@ -2,12 +2,19 @@ import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
-import { TERMINAL_STATES } from "./factory-state.ts";
 import {
   CLEARED_FAILURE_PROVENANCE,
   mayClearFailureProvenance,
   type ObservedProvenanceEvidence,
 } from "./failure-provenance.ts";
+import {
+  isIssueAwaitingInputProjection,
+  isIssueAwaitingQueueProjection,
+  isIssueDeployingProjection,
+  isIssueDownstreamOwnedProjection,
+  isIssueTerminalFailureProjection,
+  isIssueTerminalDisplayStateProjection,
+} from "./issue-execution-state.ts";
 import { deriveFactoryStateFromPrFacts, type CurrentIssueFacts, type ObservedPrFacts } from "./pr-facts-derivation.ts";
 import type { AppConfig } from "./types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
@@ -30,20 +37,21 @@ import {
 } from "./idle-reconciliation-helpers.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
 import { deriveGateCheckStatusFromRollup } from "./github-rollup.ts";
-import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
+import { deriveReactiveWorkflowIntent } from "./reactive-workflow-intent.ts";
+import { workflowRunIntent, type WorkflowRunIntent } from "./workflow-intent.ts";
 import { serializeRunContext, type RunContext } from "./run-context.ts";
 import { buildClosedPrCleanupFields, resolveClosedPrDisposition } from "./pr-state.ts";
 import { getReviewFixBudget } from "./run-budgets.ts";
-import { queueSettledOrchestrationIssue } from "./orchestration-parent-wake.ts";
+import { queueSettledOrchestrationIssue } from "./orchestration-parent-dispatch.ts";
 import { fetchPullRequestSnapshot } from "./reconcile-pr-fetch.ts";
 import { buildPrStateUpdates } from "./reconcile-pr-state-updates.ts";
-import { buildRepairWakeDedupeKey, buildRequestedChangesWakeIdentity, reactiveWakeEventType } from "./reactive-wake-keys.ts";
+import { buildRepairWorkflowDedupeKey, buildRequestedChangesWorkflowIdentity, reactiveWorkflowEventType } from "./reactive-workflow-keys.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 import { execCommand } from "./utils.ts";
-import type { WakeDispatcher } from "./wake-dispatcher.ts";
+import type { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
 import { LinearIssueProjectionService } from "./linear-issue-projection.ts";
 import type { LinearClientProvider } from "./types.ts";
-import { TerminalWakeReconciler } from "./terminal-wake-reconciler.ts";
+import { TerminalInboxReconciler } from "./terminal-inbox-reconciler.ts";
 
 const BLOCKED_DEPENDENCY_REFRESH_SUCCESS_BACKOFF_MS = 60_000;
 const BLOCKED_DEPENDENCY_REFRESH_FAILURE_BACKOFF_MS = 5 * 60_000;
@@ -52,13 +60,13 @@ const WRITER = "idle-reconciliation";
 
 export class IdleIssueReconciler {
   private readonly blockedDependencyRefreshAfter = new Map<string, number>();
-  private readonly terminalWakeReconciler: TerminalWakeReconciler;
+  private readonly terminalInboxReconciler: TerminalInboxReconciler;
   private readonly linearIssueProjection: LinearIssueProjectionService | undefined;
 
   constructor(
     private readonly db: PatchRelayDatabase,
     private readonly config: AppConfig,
-    private readonly wakeDispatcher: WakeDispatcher,
+    private readonly workflowTaskDispatcher: WorkflowTaskDispatcher,
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
     // Injectable for tests; production uses the real `gh`-backed watcher.
@@ -66,7 +74,7 @@ export class IdleIssueReconciler {
     private readonly syncIssue?: (issue: IssueRecord) => void | Promise<void>,
     private readonly linearProvider?: LinearClientProvider,
   ) {
-    this.terminalWakeReconciler = new TerminalWakeReconciler(db, logger);
+    this.terminalInboxReconciler = new TerminalInboxReconciler(db, logger);
     this.linearIssueProjection = linearProvider
       ? new LinearIssueProjectionService(db, linearProvider, logger)
       : undefined;
@@ -74,13 +82,13 @@ export class IdleIssueReconciler {
 
   async reconcile(): Promise<void> {
     // Wrap the entire reconcile pass in a dispatcher tick. Every
-    // dispatchIfWakePending / recordEventAndDispatch call inside the
+    // dispatchIfWorkflowTaskPending / recordEventAndDispatch call inside the
     // callback automatically shares one dedupe Set, so a single pass
     // produces at most one enqueue per issue even when several sub-
-    // passes detect the same wake. SerialWorkQueue would dedupe anyway,
+    // passes detect the same runnable task. SerialWorkQueue would dedupe anyway,
     // but keeping the call log clean makes orchestrator behaviour
     // easier to inspect from tests and the operator feed.
-    return this.wakeDispatcher.withTick(() => this.reconcileBody());
+    return this.workflowTaskDispatcher.withTick(() => this.reconcileBody());
   }
 
   private async reconcileBody(): Promise<void> {
@@ -107,7 +115,7 @@ export class IdleIssueReconciler {
           // No PR to poll means no fresh GitHub evidence — provenance may
           // only be cleared when nothing concrete is recorded to preserve.
           const clear = hasFailureProvenance(issue) && mayClearFailureProvenance(issue, {});
-          if (issue.factoryState !== "awaiting_queue" || clear) {
+          if (!isIssueAwaitingQueueProjection(issue) || clear) {
             this.advanceIdleIssue(issue, "awaiting_queue", clear ? { clearFailureProvenance: true } : {});
           }
         }
@@ -131,7 +139,7 @@ export class IdleIssueReconciler {
       await this.reconcileFromGitHub(issue);
     }
 
-    this.terminalWakeReconciler.reconcile();
+    this.terminalInboxReconciler.reconcile();
 
     for (const issue of this.db.issues.listBlockedDelegatedIssues()) {
       if (!issue.delegatedToPatchRelay) continue;
@@ -151,7 +159,7 @@ export class IdleIssueReconciler {
       }
       const unresolved = this.db.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId);
       if (unresolved === 0) {
-        this.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
+        this.workflowTaskDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
           eventType: "delegated",
           dedupeKey: `delegated:${issue.linearIssueId}`,
         });
@@ -175,43 +183,42 @@ export class IdleIssueReconciler {
       queueSettledOrchestrationIssue({
         db: this.db,
         issue,
-        wakeDispatcher: this.wakeDispatcher,
+        workflowTaskDispatcher: this.workflowTaskDispatcher,
       });
     }
 
     // Safety net: re-enqueue any idle delegated issue that still has
     // unprocessed session events. Until this pass existed, a single
     // dropped enqueueIssue (lease race, in-memory queue lost across
-    // restart) left review_fix / ci_repair / queue_repair wakes stuck
+    // restart) left review_fix / ci_repair / queue_repair tasks stuck
     // for hours until an external event re-poked the issue. The
     // surrounding withTick scope ensures the call log shows at most one
     // enqueue per issue per pass even when earlier passes also queued.
-    for (const issue of this.db.issues.listIdleIssuesWithPendingWake()) {
-      this.wakeDispatcher.dispatchIfWakePending(issue.projectId, issue.linearIssueId);
+    for (const issue of this.db.issues.listIdleIssuesWithRunnableWorkflowTask()) {
+      this.workflowTaskDispatcher.dispatchIfWorkflowTaskPending(issue.projectId, issue.linearIssueId);
     }
   }
 
   private shouldProbeTerminalIssueFromGitHub(issue: IssueRecord): boolean {
     if (issue.prNumber === undefined) return false;
     if (issue.activeRunId !== undefined) return false;
-    if (issue.pendingRunType !== undefined) return false;
     // A merged PR cannot be un-merged: never re-probe it back toward the
     // queue. This matters for deploy-failed issues (escalated while
     // prState === "merged") — recovery-to-awaiting_queue would be wrong.
     if (issue.prState === "merged") return false;
-    return issue.factoryState === "escalated" || issue.factoryState === "failed";
+    return isIssueTerminalFailureProjection(issue);
   }
 
   // PR3: route a merged PR either into post-merge deploy tracking or
   // straight to done. Called from both the idle pass and the GitHub
   // reconcile path, so the deploying-vs-done decision lives in one place.
   private async handleMergedIssue(issue: IssueRecord): Promise<void> {
-    if (issue.factoryState === "deploying") {
+    if (isIssueDeployingProjection(issue)) {
       await this.watchDeploy(issue);
       return;
     }
     // Already finalized (done/escalated/failed) — never re-open it.
-    if (TERMINAL_STATES.has(issue.factoryState)) return;
+    if (isIssueTerminalDisplayStateProjection(issue)) return;
     const project = this.config.projects.find((candidate) => candidate.id === issue.projectId);
     if (isDeployTrackingEnabled(project)) {
       if (this.advanceIdleIssue(issue, "deploying", { clearFailureProvenance: true }) !== "skipped") {
@@ -307,12 +314,17 @@ export class IdleIssueReconciler {
     issue: IssueRecord,
     newState: FactoryState,
     options?: {
-      pendingRunType?: RunType;
-      pendingRunContext?: RunContext;
+      workflowIntent?: WorkflowRunIntent;
       clearFailureProvenance?: boolean;
+      failureProvenance?: {
+        source: "branch_ci" | "queue_eviction";
+        headSha?: string | undefined;
+        signature?: string | undefined;
+        contextJson?: string | undefined;
+      } | undefined;
     },
   ): "applied" | "noop" | "skipped" {
-    if (issue.factoryState === newState && !options?.pendingRunType && !options?.clearFailureProvenance) {
+    if (issue.factoryState === newState && !options?.workflowIntent && !options?.clearFailureProvenance) {
       return "noop";
     }
     const commit = this.db.issueSessions.commitIssueState({
@@ -322,14 +334,16 @@ export class IdleIssueReconciler {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         factoryState: newState,
-        ...((options?.pendingRunType || newState === "awaiting_queue" || newState === "delegated" || newState === "done")
-          ? {
-              pendingRunType: null,
-              pendingRunContextJson: null,
-            }
-          : {}),
         ...(options?.clearFailureProvenance
           ? { ...CLEARED_FAILURE_PROVENANCE }
+          : {}),
+        ...(options?.failureProvenance
+          ? {
+              lastGitHubFailureSource: options.failureProvenance.source,
+              ...(options.failureProvenance.headSha ? { lastGitHubFailureHeadSha: options.failureProvenance.headSha } : {}),
+              ...(options.failureProvenance.signature ? { lastGitHubFailureSignature: options.failureProvenance.signature } : {}),
+              ...(options.failureProvenance.contextJson ? { lastGitHubFailureContextJson: options.failureProvenance.contextJson } : {}),
+            }
           : {}),
       },
       // A writer that landed mid-tick (almost always a webhook) is newer
@@ -344,7 +358,7 @@ export class IdleIssueReconciler {
       return "skipped";
     }
     this.logger.info(
-      { issueKey: issue.issueKey, from: issue.factoryState, to: newState, pendingRunType: options?.pendingRunType },
+      { issueKey: issue.issueKey, from: issue.factoryState, to: newState, workflowRunType: options?.workflowIntent?.runType },
       "Reconciliation: advancing idle issue",
     );
     const updatedIssue = commit.issue;
@@ -356,8 +370,10 @@ export class IdleIssueReconciler {
         );
       });
     }
-    if (options?.pendingRunType) {
-      this.recordWakeEvent(issue, options.pendingRunType, options.pendingRunContext, "idle_reconciliation");
+    if (options?.workflowIntent) {
+      this.recordWorkflowIntentEvent(issue, options.workflowIntent.runType, options.workflowIntent.context, "idle_reconciliation");
+      reconcileWorkflowTasksForIssue(this.db, updatedIssue);
+      this.workflowTaskDispatcher.dispatchIfWorkflowTaskPending(updatedIssue.projectId, updatedIssue.linearIssueId);
     }
     this.feed?.publish({
       level: "info",
@@ -368,22 +384,22 @@ export class IdleIssueReconciler {
       status: "reconciled",
       summary: `Reconciliation: ${issue.factoryState} \u2192 ${newState}`,
     });
-    // The dispatcher's recordEventAndDispatch in recordWakeEvent already
+    // The dispatcher's recordEventAndDispatch in recordWorkflowIntentEvent already
     // handles the enqueue when no run is in flight, so no extra poke
     // is needed here.
     return "applied";
   }
 
-  private recordWakeEvent(
+  private recordWorkflowIntentEvent(
     issue: Pick<IssueRecord, "projectId" | "linearIssueId" | "prHeadSha" | "lastGitHubFailureHeadSha" | "lastGitHubFailureSignature">,
     runType: RunType,
     context?: RunContext,
     dedupeScope = "idle_reconciliation",
   ): void {
-    const eventType = reactiveWakeEventType(runType);
+    const eventType = reactiveWorkflowEventType(runType);
     let dedupeKey: string;
     if (runType === "queue_repair" || runType === "ci_repair") {
-      dedupeKey = buildRepairWakeDedupeKey({
+      dedupeKey = buildRepairWorkflowDedupeKey({
         scope: dedupeScope,
         runType,
         linearIssueId: issue.linearIssueId,
@@ -392,7 +408,7 @@ export class IdleIssueReconciler {
         failureHeadSha: issue.lastGitHubFailureHeadSha,
       });
     } else if (runType === "review_fix" || runType === "branch_upkeep") {
-      dedupeKey = buildRequestedChangesWakeIdentity({
+      dedupeKey = buildRequestedChangesWorkflowIdentity({
         linearIssueId: issue.linearIssueId,
         runType,
         headSha: issue.prHeadSha,
@@ -401,13 +417,15 @@ export class IdleIssueReconciler {
       dedupeKey = `${dedupeScope}:implementation:${issue.linearIssueId}`;
     }
     const requestedChangesIdentity = eventType === "review_changes_requested"
-      ? buildRequestedChangesWakeIdentity({
+      ? buildRequestedChangesWorkflowIdentity({
           linearIssueId: issue.linearIssueId,
           runType: runType === "branch_upkeep" ? "branch_upkeep" : "review_fix",
           headSha: issue.prHeadSha,
         })
       : undefined;
-    this.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
+    this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
       eventType,
       ...(context || requestedChangesIdentity ? {
         eventJson: serializeRunContext({
@@ -416,7 +434,7 @@ export class IdleIssueReconciler {
             requestedChangesCoalesceKey: requestedChangesIdentity.coalesceKey,
             ...(requestedChangesIdentity.headSha ? { requestedChangesHeadSha: requestedChangesIdentity.headSha } : {}),
           } : {}),
-        }, "reconciliation wake context"),
+        }, "reconciliation workflow context"),
       } : {}),
       dedupeKey,
     });
@@ -431,7 +449,7 @@ export class IdleIssueReconciler {
     const latestRun = this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
     const ignoreDuplicateAttempt = latestRun?.status === "failed"
       && latestRun.failureReason === "Codex turn was interrupted";
-    const reactiveIntent = deriveIssueSessionReactiveIntent({
+    const reactiveIntent = deriveReactiveWorkflowIntent({
       prNumber: issue.prNumber,
       prState: issue.prState,
       prHeadSha: issue.prHeadSha,
@@ -441,7 +459,7 @@ export class IdleIssueReconciler {
       latestFailureSource: issue.lastGitHubFailureSource,
     });
 
-    if (!reactiveIntent && issue.factoryState === "awaiting_queue") {
+    if (!reactiveIntent && isIssueAwaitingQueueProjection(issue)) {
       const inferred = await this.inferFailureSourceFromGitHub(issue) ?? "branch_ci";
       const inferRunType = inferred === "queue_eviction" ? "queue_repair" : "ci_repair";
       const inferState = inferred === "queue_eviction" ? "repairing_queue" : "repairing_ci";
@@ -449,10 +467,18 @@ export class IdleIssueReconciler {
         { issueKey: issue.issueKey, prNumber: issue.prNumber, inferred },
         "Inferred failure provenance for awaiting_queue issue",
       );
-      const pendingRunContext = buildFailureContext(issue);
+      const workflowRunContext = buildFailureContext(issue);
+      const failureHeadSha = issue.lastGitHubFailureHeadSha ?? issue.prHeadSha;
+      const failureSignature = issue.lastGitHubFailureSignature
+        ?? (failureHeadSha ? `${inferred}:${failureHeadSha}` : undefined);
       this.advanceIdleIssue(issue, inferState as never, {
-        pendingRunType: inferRunType,
-        ...(pendingRunContext ? { pendingRunContext } : {}),
+        workflowIntent: workflowRunIntent(inferRunType, workflowRunContext),
+        failureProvenance: {
+          source: inferred,
+          ...(failureHeadSha ? { headSha: failureHeadSha } : {}),
+          ...(failureSignature ? { signature: failureSignature } : {}),
+          ...(workflowRunContext ? { contextJson: serializeRunContext(workflowRunContext, "inferred failure context") } : {}),
+        },
       });
       return;
     }
@@ -461,16 +487,15 @@ export class IdleIssueReconciler {
       return;
     }
 
-    const pendingRunContext = buildFailureContext(issue);
+    const workflowRunContext = buildFailureContext(issue);
     const duplicateRepair = reactiveIntent.runType !== "review_fix"
       && !ignoreDuplicateAttempt
-      && isDuplicateRepairAttempt(issue, pendingRunContext);
+      && isDuplicateRepairAttempt(issue, workflowRunContext);
     if (duplicateRepair) {
       this.advanceIdleIssue(issue, reactiveIntent.compatibilityFactoryState);
     } else {
       this.advanceIdleIssue(issue, reactiveIntent.compatibilityFactoryState, {
-        pendingRunType: reactiveIntent.runType,
-        ...(pendingRunContext ? { pendingRunContext } : {}),
+        workflowIntent: workflowRunIntent(reactiveIntent.runType, workflowRunContext),
       });
     }
   }
@@ -517,7 +542,7 @@ export class IdleIssueReconciler {
   }
 
   private async reclassifyStaleBranchFailure(issue: IssueRecord): Promise<IssueRecord> {
-    const downstreamOwned = issue.factoryState === "awaiting_queue" || issue.prReviewState === "approved";
+    const downstreamOwned = isIssueDownstreamOwnedProjection(issue);
     if (issue.lastGitHubFailureSource !== "branch_ci" || !downstreamOwned) {
       return issue;
     }
@@ -580,7 +605,7 @@ export class IdleIssueReconciler {
         mergeable?: string;
         mergeStateStatus?: string;
       };
-      const downstreamOwned = issue.factoryState === "awaiting_queue" || issue.prReviewState === "approved";
+      const downstreamOwned = isIssueDownstreamOwnedProjection(issue);
       if ((pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY")
         && downstreamOwned) {
         return "queue_eviction";
@@ -589,7 +614,7 @@ export class IdleIssueReconciler {
         return undefined;
       }
     } catch {
-      return issue.factoryState === "awaiting_queue" || issue.prReviewState === "approved" ? "branch_ci" : undefined;
+      return isIssueDownstreamOwnedProjection(issue) ? "branch_ci" : undefined;
     }
     return "branch_ci";
   }
@@ -614,7 +639,7 @@ export class IdleIssueReconciler {
         // recorded failure provenance on this path (a green-looking local
         // row must not swallow a pending repair).
         const clear = hasFailureProvenance(issue) && mayClearFailureProvenance(issue, {});
-        if (issue.factoryState !== "awaiting_queue" || clear) {
+        if (!isIssueAwaitingQueueProjection(issue) || clear) {
           this.advanceIdleIssue(issue, "awaiting_queue", clear ? { clearFailureProvenance: true } : {});
         }
       }
@@ -742,7 +767,7 @@ export class IdleIssueReconciler {
             "Reconciliation: PR was closed on unfinished delegated work, re-delegating for implementation",
           );
           this.advanceIdleIssue(issue, "delegated" as never, {
-            pendingRunType: "implementation",
+            workflowIntent: workflowRunIntent("implementation"),
             clearFailureProvenance: true,
           });
         } else {
@@ -755,8 +780,8 @@ export class IdleIssueReconciler {
         return;
       }
 
-      if (issue.factoryState !== "awaiting_input"
-        && (issue.factoryState === "escalated" || issue.factoryState === "failed")) {
+      if (!isIssueAwaitingInputProjection(issue)
+        && isIssueTerminalFailureProjection(issue)) {
         const terminalRecoveryState = deriveFactoryStateFromPrFacts(observed, currentFacts(issue));
         if (terminalRecoveryState) {
           this.logger.info(
@@ -798,10 +823,10 @@ export class IdleIssueReconciler {
         return;
       }
 
-      const downstreamOwned = issue.factoryState === "awaiting_queue" || issue.prReviewState === "approved" || pr.reviewDecision === "APPROVED";
+      const downstreamOwned = isIssueDownstreamOwnedProjection(issue) || pr.reviewDecision === "APPROVED";
       const mergeConflictDetected = pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY";
       const refreshedIssue = this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
-      const reactiveIntent = deriveIssueSessionReactiveIntent({
+      const reactiveIntent = deriveReactiveWorkflowIntent({
         prNumber: refreshedIssue.prNumber,
         prState: refreshedIssue.prState,
         prHeadSha: refreshedIssue.prHeadSha,
@@ -813,7 +838,7 @@ export class IdleIssueReconciler {
         downstreamOwned,
       });
       if (issue.delegatedToPatchRelay
-        && (issue.factoryState === "escalated" || issue.factoryState === "failed")
+        && isIssueTerminalFailureProjection(issue)
         && (reactiveIntent?.runType === "review_fix" || reactiveIntent?.runType === "branch_upkeep")) {
         const reviewFixBudget = getReviewFixBudget(project);
         if (issue.reviewFixAttempts >= reviewFixBudget) {
@@ -830,7 +855,7 @@ export class IdleIssueReconciler {
           );
           return;
         }
-        const pendingRunContext = reactiveIntent.runType === "branch_upkeep"
+        const workflowRunContext = reactiveIntent.runType === "branch_upkeep"
           ? buildBranchUpkeepContext(
               prNumber,
               project.github?.baseBranch ?? "main",
@@ -849,8 +874,7 @@ export class IdleIssueReconciler {
           "Reconciliation: recovered terminal requested-changes issue from GitHub truth",
         );
         this.advanceIdleIssue(issue, reactiveIntent.compatibilityFactoryState, {
-          pendingRunType: reactiveIntent.runType,
-          ...(pendingRunContext ? { pendingRunContext } : {}),
+          workflowIntent: workflowRunIntent(reactiveIntent.runType, workflowRunContext),
           ...(mayClearFailureProvenance(issue, provenanceEvidence) ? { clearFailureProvenance: true } : {}),
         });
         return;
@@ -878,7 +902,7 @@ export class IdleIssueReconciler {
         const currentIssue = this.db.issues.getIssue(issue.projectId, issue.linearIssueId);
         if (currentIssue) {
           reconcileWorkflowTasksForIssue(this.db, currentIssue);
-          this.wakeDispatcher.dispatchIfWakePending(currentIssue.projectId, currentIssue.linearIssueId);
+          this.workflowTaskDispatcher.dispatchIfWorkflowTaskPending(currentIssue.projectId, currentIssue.linearIssueId);
         }
         this.feed?.publish({
           level: "warn",
@@ -897,12 +921,14 @@ export class IdleIssueReconciler {
           "Reconciliation: PR still needs branch upkeep after requested changes",
         );
         this.advanceIdleIssue(issue, reactiveIntent.compatibilityFactoryState, {
-          pendingRunType: reactiveIntent.runType,
-          pendingRunContext: buildBranchUpkeepContext(
-            prNumber,
-            project.github?.baseBranch ?? "main",
-            pr.mergeStateStatus,
-            pr.headRefOid,
+          workflowIntent: workflowRunIntent(
+            reactiveIntent.runType,
+            buildBranchUpkeepContext(
+              prNumber,
+              project.github?.baseBranch ?? "main",
+              pr.mergeStateStatus,
+              pr.headRefOid,
+            ),
           ),
         });
         this.feed?.publish({
@@ -922,11 +948,16 @@ export class IdleIssueReconciler {
           "Reconciliation: PR needs queue repair from fresh GitHub truth",
         );
         this.advanceIdleIssue(issue, reactiveIntent.compatibilityFactoryState, {
-          pendingRunType: reactiveIntent.runType,
-          pendingRunContext: {
+          workflowIntent: workflowRunIntent(reactiveIntent.runType, {
             source: "idle_reconciliation",
             failureReason: "merge_conflict_detected",
             failureSignature: `conflict:${issue.prNumber}`,
+            ...(pr.headRefOid ? { failureHeadSha: pr.headRefOid } : {}),
+          }),
+          failureProvenance: {
+            source: "queue_eviction",
+            ...(pr.headRefOid ? { headSha: pr.headRefOid } : {}),
+            signature: `conflict:${issue.prNumber}`,
           },
         });
         this.feed?.publish({
@@ -962,7 +993,7 @@ export class IdleIssueReconciler {
           // Provenance survives unless the polled evidence is newer than the
           // recorded failure (head advanced, gate green on the failure head).
           const clear = hasFailureProvenance(issue) && mayClearFailureProvenance(issue, provenanceEvidence);
-          if (issue.factoryState !== "awaiting_queue" || clear) {
+          if (!isIssueAwaitingQueueProjection(issue) || clear) {
             this.advanceIdleIssue(issue, "awaiting_queue", clear ? { clearFailureProvenance: true } : undefined);
           }
         }

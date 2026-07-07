@@ -2,7 +2,7 @@ import type { Logger } from "pino";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import { appendDelegationObservedEvent, appendRunReleasedAuthorityEvent } from "./delegation-audit.ts";
-import { TERMINAL_STATES } from "./factory-state.ts";
+import { isIssueTerminalProjection } from "./issue-execution-state.ts";
 import { resolveAuthoritativeLinearStopState } from "./linear-workflow.ts";
 import { buildRunFailureActivity } from "./linear-session-reporting.ts";
 import type { LinearSessionSync } from "./linear-session-sync.ts";
@@ -107,7 +107,7 @@ export class RunReconciler {
       }
     }
 
-    if (TERMINAL_STATES.has(effectiveIssue.factoryState)) {
+    if (isIssueTerminalProjection(effectiveIssue)) {
       this.logger.info(
         { issueKey: effectiveIssue.issueKey, runId: run.id, factoryState: effectiveIssue.factoryState },
         "Reconciliation: terminal issue state observed while run is active; keeping run until Codex turn completes",
@@ -221,7 +221,7 @@ export class RunReconciler {
 
     // A failed turn found during reconciliation (the live notification was
     // lost, e.g. across a restart) whose error is a Codex capacity outage:
-    // defer the same wake instead of leaving the run dangling or burning a
+    // defer the same workflow task instead of leaving the run dangling or burning a
     // budget. Non-capacity failed turns keep the existing behavior — the
     // notification path owns live settlement.
     if (latestTurn?.status === "failed") {

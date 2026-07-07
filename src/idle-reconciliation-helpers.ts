@@ -35,7 +35,7 @@ export function buildBranchUpkeepContext(
   return {
     branchUpkeepRequired: true,
     reviewFixMode: "branch_upkeep",
-    wakeReason: "branch_upkeep",
+    workflowReason: "branch_upkeep",
     promptContext,
     ...(mergeStateStatus ? { mergeStateStatus } : {}),
     ...(headSha ? { failingHeadSha: headSha } : {}),

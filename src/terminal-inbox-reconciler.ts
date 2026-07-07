@@ -1,36 +1,33 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
-import { TERMINAL_STATES } from "./factory-state.ts";
+import { isIssueTerminalProjection } from "./issue-execution-state.ts";
 import { NON_ACTIONABLE_SESSION_EVENTS } from "./issue-session-events.ts";
 
-export class TerminalWakeReconciler {
+export class TerminalInboxReconciler {
   constructor(
     private readonly db: PatchRelayDatabase,
     private readonly logger: Logger,
   ) {}
 
   reconcile(): void {
-    for (const issue of this.db.issues.listTerminalIssuesWithPendingWake([...NON_ACTIONABLE_SESSION_EVENTS])) {
-      if (!TERMINAL_STATES.has(issue.factoryState) || issue.activeRunId !== undefined) {
+    for (const issue of this.db.issues.listTerminalIssuesWithStaleInbox([...NON_ACTIONABLE_SESSION_EVENTS])) {
+      if (!isIssueTerminalProjection(issue) || issue.activeRunId !== undefined) {
         continue;
       }
-      if (!this.db.issueSessions.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId)
-        && issue.pendingRunType === undefined) {
+      if (!this.db.issueSessions.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId)) {
         continue;
       }
       const pendingEvents = this.db.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { pendingOnly: true });
       const clearUpdate = {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
-        pendingRunType: null,
-        pendingRunContextJson: null,
       };
       const commit = this.db.issueSessions.commitIssueState({
-        writer: "terminal-wake-reconciler",
+        writer: "terminal-inbox-reconciler",
         expectedVersion: issue.version,
         update: clearUpdate,
         // Only clear if the issue is still terminal on the fresh row.
-        onConflict: (current) => (TERMINAL_STATES.has(current.factoryState) ? clearUpdate : undefined),
+        onConflict: (current) => (isIssueTerminalProjection(current) ? clearUpdate : undefined),
       });
       if (commit.outcome !== "applied") continue;
       this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
@@ -40,10 +37,9 @@ export class TerminalWakeReconciler {
         {
           issueKey: issue.issueKey,
           factoryState: issue.factoryState,
-          droppedPendingRunType: issue.pendingRunType,
           droppedEventTypes: pendingEvents.map((event) => event.eventType),
         },
-        "Reconciliation: cleared stale terminal wake",
+        "Reconciliation: cleared stale terminal inbox",
       );
     }
   }

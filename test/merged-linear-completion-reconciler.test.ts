@@ -91,8 +91,6 @@ test("reconciler reopens stale local done issues back into requested-changes rep
     const issue = db.getIssue("usertold", "issue-review-fix");
     assert.equal(issue?.factoryState, "changes_requested");
     // S6: reopening restores the PR-fact-derived factoryState and reconciles the
-    // equivalent runnable workflow task instead of writing pending_run_type.
-    assert.equal(issue?.pendingRunType, undefined);
     const reviewFixTask = db.workflowTasks.listOpenRunnableTasks("usertold")
       .find((task) => task.subjectId === "issue-review-fix" && task.taskId === "run:review_fix");
     assert.ok(reviewFixTask, "expected an open runnable run:review_fix task after reopen");
@@ -146,7 +144,6 @@ test("reconciler reopens stale blocked local done issues back into delegated sta
 
     const issue = db.getIssue("usertold", "issue-blocked-done");
     assert.equal(issue?.factoryState, "delegated");
-    assert.equal(issue?.pendingRunType, undefined);
     assert.equal(issue?.currentLinearState, "Todo");
     assert.equal(db.countUnresolvedBlockers("usertold", "issue-blocked-done"), 1);
   } finally {
@@ -191,7 +188,6 @@ test("reconciler keeps canceled issues buried instead of reopening stale local d
     const issue = db.getIssue("usertold", "issue-canceled-done");
     assert.equal(issue?.factoryState, "done");
     assert.equal(issue?.delegatedToPatchRelay, false);
-    assert.equal(issue?.pendingRunType, undefined);
     assert.equal(issue?.currentLinearState, "Canceled");
     assert.equal(issue?.currentLinearStateType, "canceled");
   } finally {

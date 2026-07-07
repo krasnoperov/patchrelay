@@ -53,7 +53,7 @@ export function buildReviewFixBranchUpkeepContext(
     ...context,
     branchUpkeepRequired: true,
     reviewFixMode: "branch_upkeep",
-    wakeReason: "branch_upkeep",
+    workflowReason: "branch_upkeep",
     promptContext,
     ...(pr.mergeStateStatus ? { mergeStateStatus: pr.mergeStateStatus } : {}),
     ...(pr.headRefOid ? { failingHeadSha: pr.headRefOid } : {}),

@@ -11,6 +11,7 @@ import {
   appendDeltaToTimelineItem,
 } from "./timeline-builder.ts";
 import type { CodexThreadSummary } from "../../types.ts";
+import { isIssueDoneProjection, isIssueTerminalFailureProjection } from "../../issue-execution-state.ts";
 
 // Re-export for consumers
 export type { TimelineEntry, TimelineItemPayload, TimelineRunInput } from "./timeline-builder.ts";
@@ -31,7 +32,7 @@ export interface WatchIssue {
   readyForExecution: boolean;
   currentLinearState?: string | undefined;
   activeRunType?: string | undefined;
-  pendingRunType?: string | undefined;
+  runnableTaskRunType?: string | undefined;
   latestRunType?: string | undefined;
   latestRunStatus?: string | undefined;
   prNumber?: number | undefined;
@@ -224,8 +225,8 @@ export function computeAggregates(issues: WatchIssue[]): IssueAggregates {
   let failed = 0;
   for (const issue of issues) {
     const sessionState = effectiveSessionState(issue);
-    const isDone = sessionState === "done" || DONE_STATES.has(issue.factoryState);
-    const isFailed = sessionState === "failed" || FAILED_STATES.has(issue.factoryState);
+    const isDone = sessionState === "done" || isIssueDoneProjection(issue);
+    const isFailed = sessionState === "failed" || isIssueTerminalFailureProjection(issue);
     if (issue.activeRunType) active++;
     if (!issue.activeRunType && issue.blockedByCount > 0) blocked++;
     if (!issue.activeRunType && issue.prNumber === undefined && issue.readyForExecution && !isDone && !isFailed) ready++;

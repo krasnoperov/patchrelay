@@ -18,9 +18,9 @@ import { maybeCloseLatePublishedImplementationPr } from "./github-webhook-late-p
 import { projectGitHubWebhookState } from "./github-webhook-state-projector.ts";
 import { resolveGitHubRequestedChangesContext } from "./github-review-context.ts";
 import { maybeRunSequenceBackstop } from "./github-webhook-sequence-backstop.ts";
-import { maybeFanChildRebaseWakes } from "./github-webhook-stack-coordination.ts";
+import { maybeFanChildRebaseDispatches } from "./github-webhook-stack-coordination.ts";
 import { handleGitHubTerminalPrEvent } from "./github-webhook-terminal-handler.ts";
-import { WakeDispatcher } from "./wake-dispatcher.ts";
+import { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
 type FetchLike = typeof fetch;
@@ -28,13 +28,13 @@ type FetchLike = typeof fetch;
 export class GitHubWebhookHandler {
   private readonly prCommentHandler: GitHubPrCommentHandler;
 
-  private readonly wakeDispatcher: WakeDispatcher;
+  private readonly workflowTaskDispatcher: WorkflowTaskDispatcher;
 
   constructor(
     private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
     private readonly linearProvider: LinearClientProvider,
-    wakeDispatcherOrEnqueueIssue: WakeDispatcher | ((projectId: string, issueId: string) => void),
+    workflowTaskDispatcherOrEnqueueIssue: WorkflowTaskDispatcher | ((projectId: string, issueId: string) => void),
     private readonly logger: Logger,
     private readonly codex: { steerTurn(options: { threadId: string; turnId: string; input: string }): Promise<void> },
     private readonly feed?: OperatorEventFeed,
@@ -44,12 +44,12 @@ export class GitHubWebhookHandler {
   ) {
     // GitHub webhook handlers never release leases either — see
     // WebhookHandler for the same rationale.
-    this.wakeDispatcher = wakeDispatcherOrEnqueueIssue instanceof WakeDispatcher
-      ? wakeDispatcherOrEnqueueIssue
-      : new WakeDispatcher(db, wakeDispatcherOrEnqueueIssue, () => undefined, logger, feed);
+    this.workflowTaskDispatcher = workflowTaskDispatcherOrEnqueueIssue instanceof WorkflowTaskDispatcher
+      ? workflowTaskDispatcherOrEnqueueIssue
+      : new WorkflowTaskDispatcher(db, workflowTaskDispatcherOrEnqueueIssue, () => undefined, logger, feed);
     this.prCommentHandler = new GitHubPrCommentHandler(
       db,
-      this.wakeDispatcher,
+      this.workflowTaskDispatcher,
       logger,
       codex,
       feed,
@@ -233,9 +233,9 @@ export class GitHubWebhookHandler {
     const shouldDispatchWorkflowTask = event.triggerEvent === "review_changes_requested"
       || event.triggerEvent === "check_failed"
       || event.triggerEvent === "pr_closed";
-    await this.wakeDispatcher.withTick(async () => {
+    await this.workflowTaskDispatcher.withTick(async () => {
       if (shouldDispatchWorkflowTask && changedRunnableWorkflowTask) {
-        this.wakeDispatcher.dispatchIfWakePending(freshIssue.projectId, freshIssue.linearIssueId);
+        this.workflowTaskDispatcher.dispatchIfWorkflowTaskPending(freshIssue.projectId, freshIssue.linearIssueId);
       }
     });
 
@@ -256,11 +256,11 @@ export class GitHubWebhookHandler {
     // declared base — enqueue a `branch_upkeep` run on each child
     // so it rebases onto the new parent head.
     if (event.triggerEvent === "pr_synchronize") {
-      maybeFanChildRebaseWakes({
+      maybeFanChildRebaseDispatches({
         db: this.db,
         logger: this.logger,
         ...(this.feed ? { feed: this.feed } : {}),
-        wakeDispatcher: this.wakeDispatcher,
+        workflowTaskDispatcher: this.workflowTaskDispatcher,
         event,
       });
     }
@@ -270,7 +270,7 @@ export class GitHubWebhookHandler {
         config: this.config,
         db: this.db,
         linearProvider: this.linearProvider,
-        wakeDispatcher: this.wakeDispatcher,
+        workflowTaskDispatcher: this.workflowTaskDispatcher,
         logger: this.logger,
         codex: this.codex,
         feed: this.feed,

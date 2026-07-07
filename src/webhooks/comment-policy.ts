@@ -53,7 +53,7 @@ export function isPatchRelayGeneratedActivityComment(body: string): boolean {
     || body === "This thread is for an agent session with patchrelay.";
 }
 
-export function hasExplicitPatchRelayWakeIntent(body: string): boolean {
+export function hasExplicitPatchRelayWorkflowIntent(body: string): boolean {
   return extractPatchRelayAddressedText(body) !== undefined;
 }
 

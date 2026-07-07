@@ -1,5 +1,10 @@
 import type { WatchIssue } from "./watch-state.ts";
 import { isUndelegatedPausedIssue } from "../../paused-issue-state.ts";
+import {
+  deriveIssueTerminalOutcome,
+  isIssueAwaitingInputProjection,
+  isIssueDelegatedProjection,
+} from "../../issue-execution-state.ts";
 import { derivePrDisplayContext } from "../../pr-display-context.ts";
 import {
   hasFailedPrChecks,
@@ -54,19 +59,20 @@ export function issueTokenFor(issue: WatchIssue): IssueToken {
   if (isUndelegatedPausedIssue(issue)) {
     return { glyph: GLYPH.queued, color: COLOR.queued, kind: "queued", phrase: phraseForPaused(issue) };
   }
-  if (issue.factoryState === "done") {
+  const terminalOutcome = deriveIssueTerminalOutcome(issue);
+  if (terminalOutcome === "done") {
     return { glyph: GLYPH.approved, color: COLOR.approved, kind: "approved", phrase: "done" };
   }
-  if (issue.factoryState === "failed") {
+  if (terminalOutcome === "failed") {
     return { glyph: GLYPH.declined, color: COLOR.declined, kind: "declined", phrase: "failed" };
   }
-  if (issue.factoryState === "escalated") {
+  if (terminalOutcome === "escalated") {
     return { glyph: GLYPH.attention, color: COLOR.attention, kind: "attention", phrase: "escalated" };
   }
-  if (issue.factoryState === "awaiting_input" || issue.sessionState === "waiting_input") {
+  if (isIssueAwaitingInputProjection(issue) || issue.sessionState === "waiting_input") {
     return { glyph: GLYPH.attention, color: COLOR.attention, kind: "attention", phrase: "needs human" };
   }
-  if (issue.factoryState === "delegated") {
+  if (isIssueDelegatedProjection(issue)) {
     return { glyph: GLYPH.queued, color: COLOR.queued, kind: "queued", phrase: "delegated" };
   }
   return {

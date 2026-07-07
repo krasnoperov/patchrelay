@@ -5,7 +5,7 @@ PatchRelay classifies delegated issues into two issue classes:
 - `implementation`
 - `orchestration`
 
-Issue class is separate from run type. A normal implementation issue can still run `implementation`, `review_fix`, `ci_repair`, and `queue_repair` loops. Orchestration issues use the implementation run type today, but their prompt, plan, and wake context are orchestration-shaped.
+Issue class is separate from run type. A normal implementation issue can still run `implementation`, `review_fix`, `ci_repair`, and `queue_repair` loops. Orchestration issues use the implementation run type today, but their prompt, plan, and workflow context are orchestration-shaped.
 
 ## Why This Exists
 
@@ -47,7 +47,7 @@ Related child or parent context can be advisory, but it should not turn a concre
 Orchestration sessions should:
 
 - inspect the parent goal and current child set
-- understand why this wake happened
+- understand why this workflow task exists
 - avoid opening an overlapping umbrella PR by default
 - wait when child work is still in motion
 - audit delivered child work against the parent goal
@@ -57,9 +57,9 @@ Orchestration sessions should:
 
 Small direct cleanup PRs are allowed only when the parent clearly owns the cleanup and the work does not duplicate a child issue.
 
-## Wake Reasons
+## Workflow Reasons
 
-Useful orchestration wake reasons:
+Useful orchestration workflow reasons:
 
 - `initial_delegate`
 - `child_changed`
@@ -85,7 +85,7 @@ Orchestration prompt context:
 
 - parent issue details
 - compact child issue summaries
-- current wake reason
+- current workflow reason
 - recent relevant human comments
 - prior orchestration summary when available
 
@@ -142,7 +142,7 @@ Relevant code lives in:
 - `src/run-orchestrator.ts`
 - `src/agent-session-plan.ts`
 - `src/no-pr-completion-check.ts`
-- `src/orchestration-parent-wake.ts`
+- `src/orchestration-parent-dispatch.ts`
 - `src/prompting/patchrelay.ts`
 - `src/db/issue-session-store.ts`
 

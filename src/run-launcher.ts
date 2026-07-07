@@ -16,9 +16,9 @@ import {
   mergePromptCustomizationLayers,
   resolvePromptLayers,
 } from "./prompting/patchrelay.ts";
-import type { PendingRunWake } from "./run-wake-planner.ts";
+import type { RunnableWorkflowIntent } from "./run-task-planner.ts";
 import type { RunContext } from "./run-context.ts";
-import { SIGNAL_CONSUMED_OBSERVATION } from "./workflow-runtime.ts";
+import { SIGNAL_CONSUMED_OBSERVATION } from "./workflow-model.ts";
 import type { AppConfig, LinearAgentActivityContent } from "./types.ts";
 import type { WorktreeManager } from "./worktree-manager.ts";
 import { sanitizeDiagnosticText } from "./utils.ts";
@@ -264,11 +264,7 @@ export class RunLauncher {
     sourceHeadSha?: string;
     authorityEpoch?: number;
     effectiveContext?: RunContext;
-    materializeLegacyPendingWake: (
-      issue: IssueRecord,
-      lease: { projectId: string; linearIssueId: string; leaseId: string },
-    ) => IssueRecord;
-    resolveRunWake: (issue: IssueRecord) => PendingRunWake | undefined;
+    resolveRunTask: (issue: IssueRecord) => RunnableWorkflowIntent | undefined;
     branchName: string;
     worktreePath: string;
   }): RunRecord | undefined {
@@ -276,13 +272,8 @@ export class RunLauncher {
       return this.db.batchIssueSessionProjections(() => {
         const fresh = this.db.issues.getIssue(params.item.projectId, params.item.issueId);
         if (!fresh || fresh.activeRunId !== undefined) return undefined;
-        const wakeIssue = params.materializeLegacyPendingWake(fresh, {
-          projectId: params.item.projectId,
-          linearIssueId: params.item.issueId,
-          leaseId: params.leaseId,
-        });
-        const freshWake = params.resolveRunWake(wakeIssue);
-        if (!freshWake || freshWake.runType !== params.runType) return undefined;
+        const freshRunTask = params.resolveRunTask(fresh);
+        if (!freshRunTask || freshRunTask.runType !== params.runType) return undefined;
 
         const created = this.db.runs.createRun({
           issueId: fresh.id,
@@ -298,8 +289,6 @@ export class RunLauncher {
         const claimUpdate = {
           projectId: params.item.projectId,
           linearIssueId: params.item.issueId,
-          pendingRunType: null,
-          pendingRunContextJson: null,
           activeRunId: created.id,
           branchName: params.branchName,
           worktreePath: params.worktreePath,
@@ -318,18 +307,16 @@ export class RunLauncher {
         };
         const claimCommit = this.db.issueSessions.commitIssueState({
           writer: WRITER,
-          // `wakeIssue` is the freshest row this claim transaction has seen
-          // (materializeLegacyPendingWake may have bumped the version).
-          expectedVersion: wakeIssue.version,
+          expectedVersion: fresh.version,
           update: claimUpdate,
           // Never steal a slot another writer claimed concurrently.
           onConflict: (current) => (current.activeRunId == null ? claimUpdate : undefined),
         });
         if (claimCommit.outcome !== "applied") return undefined;
-        // Dual path (S5): session events still get consumed so the legacy rung
-        // stays coherent while the inbox path lands.
-        this.db.issueSessions.consumeIssueSessionEvents(params.item.projectId, params.item.issueId, freshWake.eventIds, created.id);
-        this.db.issueSessions.setIssueSessionLastWakeReason(params.item.projectId, params.item.issueId, freshWake.wakeReason ?? null);
+        // Session events are consumed for session-history coherence; the
+        // claimed workflow task is the runnable-work authority.
+        this.db.issueSessions.consumeIssueSessionEvents(params.item.projectId, params.item.issueId, freshRunTask.eventIds, created.id);
+        this.db.issueSessions.setIssueSessionLastWorkflowReason(params.item.projectId, params.item.issueId, freshRunTask.workflowReason ?? null);
         // S5 CLAIM consumption: stamp the workflow task id on the run and, when
         // the claimed task carries inbox observations, record their exactly-once
         // consumption as a `workflow.signal_consumed` observation (never a
@@ -337,7 +324,7 @@ export class RunLauncher {
         // run id, so a retried claim of the same run is idempotent, and once the
         // input observations are consumed the task self-closes on the next
         // reconcile — a re-claim cannot spawn a second run against the same input.
-        const claimedTaskId = freshWake.wakeReason;
+        const claimedTaskId = freshRunTask.workflowReason;
         if (claimedTaskId) {
           const claimedTask = this.db.workflowTasks.getTask(params.item.projectId, params.item.issueId, claimedTaskId);
           if (claimedTask?.status === "open") {

@@ -1,5 +1,5 @@
 import type { IssueRecord } from "./db-types.ts";
-import { buildRequestedChangesWakeIdentity } from "./reactive-wake-keys.ts";
+import { buildRequestedChangesWorkflowIdentity } from "./reactive-workflow-keys.ts";
 import { tryParseRunContextValue, type RunContext } from "./run-context.ts";
 
 // Boundary over the stored failure/incident columns: malformed JSON or a
@@ -52,7 +52,7 @@ export function buildOperatorRetryEvent(issue: IssueRecord, runType: string, sou
   }
 
   if (runType === "review_fix" || runType === "branch_upkeep") {
-    const identity = buildRequestedChangesWakeIdentity({
+    const identity = buildRequestedChangesWorkflowIdentity({
       linearIssueId: issue.linearIssueId,
       runType,
       headSha: issue.prHeadSha,
@@ -65,7 +65,7 @@ export function buildOperatorRetryEvent(issue: IssueRecord, runType: string, sou
         ...(runType === "branch_upkeep"
           ? { reviewBody: `${humanizeSource(source)} requested retry of branch upkeep after requested changes.` }
           : { promptContext: `${humanizeSource(source)} requested retry of review-fix work.` }),
-        ...(runType === "branch_upkeep" ? { branchUpkeepRequired: true, wakeReason: "branch_upkeep" } : {}),
+        ...(runType === "branch_upkeep" ? { branchUpkeepRequired: true, workflowReason: "branch_upkeep" } : {}),
         source,
       } satisfies RunContext),
       dedupeKey: identity.dedupeKey,

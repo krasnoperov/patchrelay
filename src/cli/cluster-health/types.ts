@@ -1,4 +1,5 @@
 import type { IssueDependencyRecord, IssueRecord, IssueSessionRecord } from "../../db-types.ts";
+import type { IssueExecutionState } from "../../issue-execution-state.ts";
 
 export interface ClusterHealthCheck {
   status: "pass" | "warn" | "fail";
@@ -69,6 +70,7 @@ export interface IssueSnapshot {
   missingTrackedBlockers: IssueDependencyRecord[];
   ageMs: number;
   readyForExecution: boolean;
+  executionState: IssueExecutionState;
 }
 
 export interface ReviewQuillAttemptOwnership {

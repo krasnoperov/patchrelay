@@ -5,7 +5,7 @@ import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry, type Projection
 export interface IssueSessionProjectionOptions {
   summaryText?: string | undefined;
   lastRunType?: RunType | undefined;
-  lastWakeReason?: string | undefined;
+  lastWorkflowReason?: string | undefined;
 }
 
 export interface IssueSessionProjectionInvalidator {

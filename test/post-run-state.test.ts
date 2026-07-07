@@ -15,6 +15,7 @@ import {
 //   - outcome "recovered"  ≙ the old resolveRecoverablePostRunState
 const RUN_TYPES: RunType[] = ["implementation", "ci_repair", "review_fix", "branch_upkeep", "queue_repair"];
 const OUTCOMES: PostRunOutcome[] = ["completed", "recovered"];
+const RUN_ID = 1;
 
 interface Case {
   name: string;
@@ -26,7 +27,7 @@ const CASES: Case[] = [
   // ─── No PR: nothing derivable from PR truth in either mode ───────
   {
     name: "no PR, active state",
-    issue: { factoryState: "implementing" },
+    issue: { factoryState: "implementing", activeRunId: RUN_ID },
     expected: { completed: undefined, recovered: undefined },
   },
   {
@@ -38,32 +39,32 @@ const CASES: Case[] = [
   // ─── Merged PR ────────────────────────────────────────────────────
   {
     name: "merged PR, active state",
-    issue: { factoryState: "implementing", prNumber: 7, prState: "merged" },
+    issue: { factoryState: "implementing", activeRunId: RUN_ID, prNumber: 7, prState: "merged" },
     expected: { completed: "done", recovered: "done" },
   },
   {
-    // Divergence: completed gates on ACTIVE_RUN_STATES so a state advanced
-    // concurrently (deploying, done, ...) is never clobbered; recovered
-    // treats GitHub truth as authoritative.
+    // Divergence: completed gates on the issue still pointing at this exact
+    // run so a concurrently advanced row is never clobbered; recovered treats
+    // GitHub truth as authoritative.
     name: "merged PR, non-active state (deploying)",
     issue: { factoryState: "deploying", prNumber: 7, prState: "merged" },
     expected: { completed: undefined, recovered: "done" },
   },
   {
     name: "merged PR, changes_requested review verdict still cached",
-    issue: { factoryState: "repairing_ci", prNumber: 7, prState: "merged", prReviewState: "changes_requested" },
+    issue: { factoryState: "repairing_ci", activeRunId: RUN_ID, prNumber: 7, prState: "merged", prReviewState: "changes_requested" },
     expected: { completed: "done", recovered: "done" },
   },
 
   // ─── Open PR, no reactive signal ──────────────────────────────────
   {
     name: "open PR, active state, no review verdict",
-    issue: { factoryState: "implementing", prNumber: 7, prState: "open" },
+    issue: { factoryState: "implementing", activeRunId: RUN_ID, prNumber: 7, prState: "open" },
     expected: { completed: "pr_open", recovered: "pr_open" },
   },
   {
     name: "open PR, active state, approved",
-    issue: { factoryState: "implementing", prNumber: 7, prState: "open", prReviewState: "approved" },
+    issue: { factoryState: "implementing", activeRunId: RUN_ID, prNumber: 7, prState: "open", prReviewState: "approved" },
     expected: { completed: "awaiting_queue", recovered: "awaiting_queue" },
   },
   {
@@ -84,29 +85,29 @@ const CASES: Case[] = [
     // verdict refers to (re-deriving would loop the fix); a recovered run
     // did not do its work, so the original problem is routed again.
     name: "open PR, changes_requested",
-    issue: { factoryState: "changes_requested", prNumber: 7, prState: "open", prReviewState: "changes_requested" },
+    issue: { factoryState: "changes_requested", activeRunId: RUN_ID, prNumber: 7, prState: "open", prReviewState: "changes_requested" },
     expected: { completed: "pr_open", recovered: "changes_requested" },
   },
   {
     name: "open PR, red CI",
-    issue: { factoryState: "repairing_ci", prNumber: 7, prState: "open", prCheckStatus: "failed" },
+    issue: { factoryState: "repairing_ci", activeRunId: RUN_ID, prNumber: 7, prState: "open", prCheckStatus: "failed" },
     expected: { completed: "pr_open", recovered: "repairing_ci" },
   },
   {
     name: "open PR, branch CI failure source",
-    issue: { factoryState: "implementing", prNumber: 7, prState: "open", lastGitHubFailureSource: "branch_ci" },
+    issue: { factoryState: "implementing", activeRunId: RUN_ID, prNumber: 7, prState: "open", lastGitHubFailureSource: "branch_ci" },
     expected: { completed: "pr_open", recovered: "repairing_ci" },
   },
   {
     name: "open PR, queue eviction",
-    issue: { factoryState: "repairing_queue", prNumber: 7, prState: "open", lastGitHubFailureSource: "queue_eviction" },
+    issue: { factoryState: "repairing_queue", activeRunId: RUN_ID, prNumber: 7, prState: "open", lastGitHubFailureSource: "queue_eviction" },
     expected: { completed: "pr_open", recovered: "repairing_queue" },
   },
   {
     // Reactive intent outranks the approved verdict in recovery — the queue
     // eviction is on the approved head, so the repair must run first.
     name: "open PR, approved but queue-evicted",
-    issue: { factoryState: "repairing_queue", prNumber: 7, prState: "open", prReviewState: "approved", lastGitHubFailureSource: "queue_eviction" },
+    issue: { factoryState: "repairing_queue", activeRunId: RUN_ID, prNumber: 7, prState: "open", prReviewState: "approved", lastGitHubFailureSource: "queue_eviction" },
     expected: { completed: "awaiting_queue", recovered: "repairing_queue" },
   },
   {
@@ -118,12 +119,12 @@ const CASES: Case[] = [
   // ─── Closed PR: both modes fall back to the factory-state-gated rule ──
   {
     name: "closed PR, active state, no verdict",
-    issue: { factoryState: "implementing", prNumber: 7, prState: "closed" },
+    issue: { factoryState: "implementing", activeRunId: RUN_ID, prNumber: 7, prState: "closed" },
     expected: { completed: "pr_open", recovered: "pr_open" },
   },
   {
     name: "closed PR, active state, approved",
-    issue: { factoryState: "changes_requested", prNumber: 7, prState: "closed", prReviewState: "approved" },
+    issue: { factoryState: "changes_requested", activeRunId: RUN_ID, prNumber: 7, prState: "closed", prReviewState: "approved" },
     expected: { completed: "awaiting_queue", recovered: "awaiting_queue" },
   },
   {
@@ -135,7 +136,7 @@ const CASES: Case[] = [
   // ─── Unknown prState (no snapshot yet) behaves like closed ────────
   {
     name: "PR number without prState, active state",
-    issue: { factoryState: "implementing", prNumber: 7 },
+    issue: { factoryState: "implementing", activeRunId: RUN_ID, prNumber: 7 },
     expected: { completed: "pr_open", recovered: "pr_open" },
   },
   {
@@ -163,7 +164,7 @@ for (const entry of CASES) {
       // run's type must never change the answer.
       for (const runType of RUN_TYPES) {
         assert.equal(
-          resolvePostRunFactoryState(buildIssue(entry.issue), { runType }, { outcome }),
+          resolvePostRunFactoryState(buildIssue(entry.issue), { id: RUN_ID, runType }, { outcome }),
           entry.expected[outcome],
           `runType=${runType}`,
         );
@@ -174,9 +175,9 @@ for (const entry of CASES) {
 
 test("resolvePostRunFactoryState defaults to the completed outcome", () => {
   const issue = buildIssue({ factoryState: "pr_open", prNumber: 7, prState: "open", prCheckStatus: "failed" });
-  assert.equal(resolvePostRunFactoryState(issue, { runType: "implementation" }), undefined);
+  assert.equal(resolvePostRunFactoryState(issue, { id: RUN_ID, runType: "implementation" }), undefined);
   assert.equal(
-    resolvePostRunFactoryState(issue, { runType: "implementation" }, { outcome: "recovered" }),
+    resolvePostRunFactoryState(issue, { id: RUN_ID, runType: "implementation" }, { outcome: "recovered" }),
     "repairing_ci",
   );
 });

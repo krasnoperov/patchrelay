@@ -68,8 +68,12 @@ flowchart TB
 
 The codebase uses focused top-level modules with small subdirectories where a responsibility has grown enough to need internal structure:
 
-- `factory-state.ts` — compatibility state names and transition helpers still used by parts of the runtime
-- `issue-session.ts`, `issue-session-events.ts`, `issue-session-projector.ts` — the newer session/event model
+- `factory-state.ts` — compatibility/display state names for operator-facing projections and legacy API fields
+- `issue-session-events.ts`, `issue-session-projector.ts`, `issue-session-state.ts` — session event parsing and session read-model projection
+- `reactive-workflow-intent.ts` — PR-derived follow-up intent used to create durable workflow signals/tasks
+- `workflow-model.ts`, `workflow-observation-context.ts`, `workflow-snapshot.ts`, `workflow-task-derivation.ts`, `workflow-gates.ts` — the durable workflow model: observations plus issue facts become a snapshot, open workflow tasks, and gate decisions
+- `workflow-task-reconciler.ts` — materializes open workflow tasks from the current snapshot
+- `pending-workflow-task.ts` — helper for asking whether an open runnable workflow task exists
 - `run-orchestrator.ts`, `run-launcher.ts`, `run-finalizer.ts`, `run-reconciler.ts` — run lifecycle, Codex thread management, and completion handling
 - `webhook-handler.ts` — Linear webhook processing, delegation, agent sessions
 - `github-webhook-handler.ts` — GitHub webhook processing, reactive run triggers
@@ -145,7 +149,10 @@ This keeps stable harness policy out of every task turn while still letting Patc
 
 PatchRelay keeps ownership simple:
 
-- workflow truth comes from factory state plus GitHub facts
+- workflow truth comes from observations plus current issue facts projected into a workflow snapshot
+- runnable PatchRelay work comes only from open `workflow_tasks` with `task_type = 'run'` and `gate_action = 'start'`
+- run ownership comes from `runs` plus the active issue slot
+- human-facing state comes from projections (`issue_sessions`, tracked issue rows, Linear status), not a second lifecycle model
 - automation authority comes from current Linear delegation to PatchRelay
 
 PatchRelay persists one explicit authority bit:
@@ -160,7 +167,7 @@ That PR may have been opened by PatchRelay, a human, or another external system.
 When an issue is undelegated:
 
 - active PatchRelay runs must stop
-- pending PatchRelay wakes must clear
+- open runnable workflow tasks must stop dispatching
 - PatchRelay must stop starting new implementation or repair runs
 - PatchRelay must continue ingesting GitHub truth for the issue
 - local no-PR work should keep its literal state such as `delegated` or `implementing`
@@ -235,9 +242,33 @@ Behavior:
 
 This loop must also respect `delegatedToPatchRelay`. merge-steward may continue reporting queue truth on undelegated PRs, but PatchRelay should only repair when authority is restored.
 
-## Factory state machine
+## Workflow Model
 
-**Current**, as defined in `factory-state.ts`:
+The runtime has one operational path:
+
+```text
+external facts / human input
+-> workflow_observations + current issue facts
+-> WorkflowSnapshot
+-> workflow_tasks
+-> runs
+-> projections
+```
+
+`WorkflowSnapshot` contains the authority epoch, current artifacts, active run,
+blockers, child workflow counts, and derived context for the next task. Task
+derivation decides whether the workflow is waiting, ready to run, asking for
+input, verifying, or escalating. The dispatcher and run planner only launch
+from open runnable workflow tasks. Session events are inbox/history facts and
+diagnostics; they do not dispatch runs by themselves.
+
+## Compatibility Factory State
+
+`factoryState` remains a compatibility/debug/projection field on `issues`.
+It is useful for old API fields, concise operator display, and Linear
+workflow-state mapping, but it is not executor admission authority. Executor
+admission is open runnable rows in `workflow_tasks`. The equivalent display
+vocabulary is:
 
 ```mermaid
 stateDiagram-v2
@@ -261,7 +292,7 @@ stateDiagram-v2
 
 ### Mapping to Linear workflow states
 
-PatchRelay maps internal `factoryState` codes onto the four-state Linear vocabulary the operator already reads. See [concepts.md](./concepts.md#four-states) for the model and the per-state owners.
+PatchRelay maps compatibility `factoryState` codes onto the four-state Linear vocabulary the operator already reads. See [concepts.md](./concepts.md#four-states) for the model and the per-state owners.
 
 | Linear state | `factoryState` codes |
 |-|-|
@@ -271,7 +302,7 @@ PatchRelay maps internal `factoryState` codes onto the four-state Linear vocabul
 | Done | `done` |
 | Cancelled | `failed` (closed-without-merge variant) |
 
-The mapping is consolidated in `src/linear-workflow-state-sync.ts:resolveDesiredActiveWorkflowState()`. When a project's Linear workflow does not include an In Deploy state, the issue stays in In Review with the configured `queued-for-deploy` sub-label so operators can distinguish "in review, awaiting verdict" from "in review, queued for landing." The label name is configurable via project config; see [github-queue-contract.md](./github-queue-contract.md#configurable-names-per-service).
+The mapping is rendered from `IssueExecutionState` plus PR facts in `src/linear-workflow-state-sync.ts`. When a project's Linear workflow does not include an In Deploy state, the issue stays in In Review with the configured `queued-for-deploy` sub-label so operators can distinguish "in review, awaiting verdict" from "in review, queued for landing." The label name is configurable via project config; see [github-queue-contract.md](./github-queue-contract.md#configurable-names-per-service).
 
 ### Run lifecycle and `superseded` cancellation
 
@@ -289,13 +320,13 @@ Accepted natural-language input is routed through the Codex conversation adapter
 
 When a run is active, accepted follow-up input is delivered to the active Codex turn instead of being dropped. The steering prompt carries a checkpoint contract: finish any non-interruptible command, then fold the new instruction into the next decision before the next meaningful side effect when possible. Status questions during an active run are answered as ephemeral `thought` activity so they do not close the agent session; idle status questions can use a normal `response`.
 
-Delivery success or failure is recorded as a non-actionable `prompt_delivered` session event for diagnostics. Failed delivery is also surfaced as operator/feed activity and Linear-visible activity, then the input is queued for the next wake. Terminal run summaries include the count of delivered and failed steering attempts when any occurred.
+Delivery success or failure is recorded as a non-actionable `prompt_delivered` session event for diagnostics. Failed delivery is also surfaced as operator/feed activity and Linear-visible activity, then the input is recorded as durable inbox work for the next workflow-task reconciliation. Terminal run summaries include the count of delivered and failed steering attempts when any occurred.
 
 If a completed issue with a published PR receives a new accepted prompt, PatchRelay reopens the issue as replacement work. The old PR facts are kept as context, current PR fields are cleared, and the next implementation run is instructed to create a fresh replacement PR rather than mutate or republish the completed one.
 
 ### Requested-changes repair context
 
-Requested-changes repair owns its GitHub review context directly. Before a `review_fix` run starts, PatchRelay always refreshes the live PR state and hydrates the wake context from GitHub with the latest requested-changes review id, review body, inline comments, review commit SHA, current PR head SHA, and reviewer login when available. Existing Linear issue text or agent-session history can add context, but it cannot suppress the GitHub refresh and is not the source of truth for review feedback. If GitHub review context cannot be fetched, the launch context is explicitly marked degraded so the worker re-reads the review before changing code.
+Requested-changes repair owns its GitHub review context directly. Before a `review_fix` run starts, PatchRelay always refreshes the live PR state and hydrates the task/run context from GitHub with the latest requested-changes review id, review body, inline comments, review commit SHA, current PR head SHA, and reviewer login when available. Existing Linear issue text or agent-session history can add context, but it cannot suppress the GitHub refresh and is not the source of truth for review feedback. If GitHub review context cannot be fetched, the launch context is explicitly marked degraded so the worker re-reads the review before changing code.
 
 Each review-fix run emits a review-round start activity that identifies the round number, reviewer, and captured comment count when known. The final Linear response for the run includes the review round and concise addressed outcome without commit hashes or empty boilerplate sections.
 
@@ -336,23 +367,28 @@ That keeps operator-facing state truthful without letting PatchRelay continue wr
 
 ### Failure-source classification
 
-The `factoryState` rule table and the workflow-task projector both consult a `failureSource` field on incoming `check_failed` events:
+The GitHub fact projector and workflow-task derivation both consult a `failureSource` field on incoming `check_failed` events:
 
 | `failureSource` | Source | Routes to |
 |-|-|-|
 | `branch_ci` | A required check on the PR head | `repairing_ci` (only when *not* In Deploy) |
 | `queue_eviction` | The configured eviction check (`merge-steward/queue`) | `repairing_queue` |
 
-While the issue is **In Deploy** (`factoryState === "awaiting_queue"`), `branch_ci` failures are metadata only — no `ci_repair` run is launched, no `settled_red_ci` wake is appended. The lander owns the integration tree on a different SHA; branch CI on the PR head does not block landing. The only signal that returns the issue to In Progress in this window is the `queue_eviction` source.
+While the issue is **In Deploy** (display state `awaiting_queue`), `branch_ci` failures are metadata only: no `ci_repair` task is launched. The lander owns the integration tree on a different SHA; branch CI on the PR head does not block landing. The only signal that returns the issue to In Progress in this window is the `queue_eviction` source.
 
-Classification happens in `resolveGitHubFactoryStateForEvent` (which calls `isQueueEvictionFailure` once and forwards the result) and is enforced again in `src/workflow-runtime.ts` task derivation so the state-machine table and the workflow-task enqueue path cannot drift.
+Classification happens in GitHub fact derivation (which calls `isQueueEvictionFailure` once and forwards the result) and is enforced again in workflow-task derivation so the display projection and the workflow-task path cannot drift.
 
 ## State storage
 
 PatchRelay uses SQLite. Current tables:
 
 - `issues` — one record per tracked issue: compatibility factory state, PR state, run pointers, repair counters
-- `issue_sessions` and `issue_session_events` — session state, waiting reason, lease, and wake-event inbox
+- `workflow_observations` — append-only workflow facts and inbox signals
+- `workflow_tasks` — derived open/closed tasks; open runnable run tasks are the executor admission source
+- `issue_sessions` — session/read-model projection: visible state, waiting reason, summaries, and display fields
+- `issue_session_events` — session-history/event inbox; runnable work is derived through workflow observations/tasks, not directly from these rows
+- `issue_session_leases` — executor lease truth (`lease_id`, `worker_id`, `leased_until`)
+- `issue_session_threads` — resumable thread pointer and generation/compaction state
 - `runs` — one record per Codex run (`implementation`, `review_fix`, `ci_repair`, `queue_repair`)
 - `webhook_events` — deduplication and audit log for incoming webhooks (see below)
 - `run_thread_events` — per-run transcript of Codex thread events (when extended history is enabled)

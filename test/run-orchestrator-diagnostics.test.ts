@@ -131,8 +131,8 @@ test("orchestrator.run() logs reason=active_run_present when an active run is in
   }
 });
 
-test("orchestrator.run() logs reason=no_wake_derivable when nothing is pending", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-orchestrator-no-wake-"));
+test("orchestrator.run() logs reason=no_workflow_task_derivable when nothing is pending", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-orchestrator-no-workflowTask-"));
   const { logger, entries } = captureLogger();
   try {
     const { db, orchestrator } = buildOrchestrator(baseDir, logger);
@@ -149,7 +149,7 @@ test("orchestrator.run() logs reason=no_wake_derivable when nothing is pending",
 
     await orchestrator.run({ projectId: "proj", issueId: "issue-quiet" });
     const reasons = reasonsFor(entries, /^Skipped issue run/);
-    assert.ok(reasons.includes("no_wake_derivable"), `got reasons: ${JSON.stringify(reasons)}`);
+    assert.ok(reasons.includes("no_workflow_task_derivable"), `got reasons: ${JSON.stringify(reasons)}`);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

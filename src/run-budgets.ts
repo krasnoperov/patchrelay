@@ -2,7 +2,7 @@ import type { ProjectConfig } from "./workflow-types.ts";
 
 // Plan §B4: the single budget table. Every retry/attempt budget in the
 // system lives here — the per-runType repair budgets consulted by the
-// wake planner before a launch, and the zombie-recovery budget consulted
+// input planner before a launch, and the zombie-recovery budget consulted
 // by the RunFailurePolicy when a run dies without doing its work.
 export interface RunBudgetTable {
   ciRepair: number;

@@ -71,7 +71,7 @@ test("low-confidence classifier control intents downgrade to unknown", async () 
     activeRunType: "implementation",
     factoryState: "implementing",
     delegatedToPatchRelay: true,
-    explicitWakeIntent: true,
+    explicitWorkflowIntent: true,
   });
 
   assert.equal(classification.intent, "unknown_needs_ack");
@@ -87,9 +87,9 @@ test("buildFollowupIntentPrompt carries state facts without encoding keyword rou
     directReply: false,
     delegatedToPatchRelay: true,
     prReviewState: "changes_requested",
-    explicitWakeIntent: true,
+    explicitWorkflowIntent: true,
   });
   assert.match(prompt, /Return exactly one JSON object/);
   assert.match(prompt, /Active run type: review_fix/);
-  assert.match(prompt, /Explicit PatchRelay wake context: yes/);
+  assert.match(prompt, /Explicit PatchRelay workflow intent: yes/);
 });

@@ -1,6 +1,7 @@
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, TrackedIssueRecord } from "./db-types.ts";
 import type { RunType } from "./factory-state.ts";
+import { deriveIssueExecutionStateFromRecords, type IssueExecutionState } from "./issue-execution-state.ts";
 import {
   resolvePreferredQueuedLinearState,
   resolvePreferredCompletedLinearState,
@@ -11,6 +12,7 @@ import {
   resolvePreferredReviewingLinearState,
 } from "./linear-workflow.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
+import { peekRunnableWorkflowTaskRunType } from "./pending-workflow-task.ts";
 import { isCompletedLinearState } from "./pr-state.ts";
 import { hasTrustedNoPrCompletion } from "./trusted-no-pr-completion.ts";
 import type { LinearClientProvider } from "./types.ts";
@@ -26,7 +28,7 @@ export async function syncActiveWorkflowState(params: {
   options?: { activeRunType?: RunType } | undefined;
   project?: ProjectConfig | undefined;
 }): Promise<void> {
-  const { db, issue, linear, trackedIssue, options, project } = params;
+  const { db, issue, linear, options, project } = params;
   const liveIssue = await linear.getIssue(issue.linearIssueId).catch(() => undefined);
   if (!liveIssue) return;
 
@@ -48,17 +50,19 @@ export async function syncActiveWorkflowState(params: {
     return;
   }
 
+  const executionState = deriveLinearExecutionState(db, issue);
+
   // Plan §4.6: keep the queued-for-deploy label in sync UNCONDITIONALLY,
   // before the state-equality early-return. When a project lacks an
   // In Deploy state the deploying-Linear-state collapses to the same
   // value as In Review — meaning when an awaiting_queue issue is sitting
   // in the In Review state, the early-return below skips the state
   // write but the label still needs to be added/removed to reflect
-  // factoryState. Running first guarantees the label tracks reality
+  // the rendered execution state. Running first guarantees the label tracks reality
   // even when the state name doesn't change.
-  await syncQueuedForDeployLabel({ issue, liveIssue, linear, project }).catch(() => undefined);
+  await syncQueuedForDeployLabel({ issue, executionState, liveIssue, linear, project }).catch(() => undefined);
 
-  const targetState = resolveDesiredActiveWorkflowState(issue, trackedIssue, options, liveIssue);
+  const targetState = resolveDesiredActiveWorkflowState(issue, executionState, options, liveIssue);
   if (!targetState) return;
 
   const normalizedCurrent = liveIssue.stateName?.trim().toLowerCase();
@@ -71,8 +75,9 @@ export async function syncActiveWorkflowState(params: {
   refreshCachedLinearState(db, issue, updated.stateName, updated.stateType);
 }
 
-// Plan §4.6: when the issue's factoryState says it's In Deploy but the
-// project's Linear workflow has no In Deploy-equivalent state, we want
+// Plan §4.6: when the rendered execution state says the issue is waiting on
+// landing/deploy automation but the project's Linear workflow has no
+// In Deploy-equivalent state, we want
 // the dashboard to be able to distinguish "in review, awaiting verdict"
 // from "in review, queued for landing". A configurable PR/Linear label
 // (`queuedForDeployLabel`, default `queued-for-deploy`) carries that
@@ -80,7 +85,8 @@ export async function syncActiveWorkflowState(params: {
 // state and only calls the API when there's a delta — safe to run on
 // every sync invocation.
 async function syncQueuedForDeployLabel(params: {
-  issue: Pick<IssueRecord, "linearIssueId" | "factoryState">;
+  issue: Pick<IssueRecord, "linearIssueId">;
+  executionState: IssueExecutionState;
   liveIssue: {
     workflowStates: Array<{ name: string; type?: string }>;
     labels: Array<{ id: string; name: string }>;
@@ -88,9 +94,9 @@ async function syncQueuedForDeployLabel(params: {
   linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>;
   project: ProjectConfig | undefined;
 }): Promise<void> {
-  const { issue, liveIssue, linear, project } = params;
+  const { issue, executionState, liveIssue, linear, project } = params;
   const labelName = resolveMergeQueueProtocol(project).queuedForDeployLabel;
-  const want = isQueuedForDeployFallback(issue, liveIssue);
+  const want = isQueuedForDeployFallback(executionState, liveIssue);
   const currentLabels = (liveIssue.labels ?? [])
     .map((label) => label.name.trim().toLowerCase())
     .filter(Boolean);
@@ -110,10 +116,13 @@ async function syncQueuedForDeployLabel(params: {
 // Queue (or Deploying) state, `setIssueState` flows the issue there and
 // the label is unnecessary.
 function isQueuedForDeployFallback(
-  issue: Pick<IssueRecord, "factoryState">,
+  executionState: IssueExecutionState,
   liveIssue: { workflowStates: Array<{ name: string; type?: string }> },
 ): boolean {
-  if (issue.factoryState !== "awaiting_queue") return false;
+  if (
+    executionState.kind !== "idle_awaiting_external"
+    || (executionState.waitingOn !== "merge_queue" && executionState.waitingOn !== "downstream_automation")
+  ) return false;
   const mergeQueue = resolvePreferredMergeQueueLinearState(liveIssue);
   const reviewing = resolvePreferredReviewingLinearState(liveIssue);
   if (!mergeQueue || !reviewing) return false;
@@ -183,77 +192,65 @@ function shouldAutoAdvanceLinearState(issue: {
 }
 
 type WorkflowStateIssue = Pick<IssueRecord,
-  | "factoryState" | "prNumber" | "prUrl" | "prState" | "prIsDraft" | "prReviewState"
+  | "prNumber" | "prUrl" | "prState" | "prIsDraft" | "prReviewState"
   | "prCheckStatus" | "lastGitHubCiSnapshotJson" | "delegatedToPatchRelay">;
-type WorkflowTracked = Pick<TrackedIssueRecord, "sessionState" | "blockedByCount" | "readyForExecution">;
 
-// ─── Unified PR-lifecycle → Linear-state mapping ─────────────────────
-//
-// Five phases, in lifecycle order:
-//   Implementing → Reviewing → In Merge Queue → Deploying → Done
-//
-// Every phase is decided from DURABLE signals (factoryState, prState,
-// prReviewState) — never the ephemeral activeRunId / sessionState / run
-// type. That is what kills the Implementing↔Reviewing flap: the state
-// only moves on a real lifecycle handoff (a review verdict, an approval,
-// a merge), not on whichever transient webhook happens to recompute it
-// while a run briefly holds a lease.
-//
-// Branches are ordered "furthest along the lifecycle wins" so a stale
-// earlier signal can never pull a more-advanced issue backwards.
+function deriveLinearExecutionState(db: PatchRelayDatabase, issue: IssueRecord): IssueExecutionState {
+  const latestRun = db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+  const activeRun = issue.activeRunId !== undefined ? db.runs.getRunById(issue.activeRunId) : undefined;
+  const blockedByKeys = db.issues.listIssueDependencies(issue.projectId, issue.linearIssueId)
+    .filter((entry) => entry.blockerCurrentLinearStateType !== "completed"
+      && entry.blockerCurrentLinearState?.trim().toLowerCase() !== "done")
+    .map((entry) => entry.blockerIssueKey ?? entry.blockerLinearIssueId);
+  const runnableTaskRunType = peekRunnableWorkflowTaskRunType(
+    { workflowTasks: db.workflowTasks },
+    issue.projectId,
+    issue.linearIssueId,
+  );
+  return deriveIssueExecutionStateFromRecords(issue, {
+    ...(activeRun ? { activeRun } : {}),
+    ...(latestRun ? { latestRun } : {}),
+    blockedByKeys,
+    ...(runnableTaskRunType ? { runnableTaskRunType } : {}),
+  });
+}
+
 function resolveDesiredActiveWorkflowState(
   issue: WorkflowStateIssue,
-  trackedIssue: WorkflowTracked | undefined,
+  executionState: IssueExecutionState,
   _options: { activeRunType?: RunType } | undefined,
   liveIssue: {
     workflowStates: Array<{ name: string; type?: string }>;
   },
 ): string | undefined {
-  // 1. Operator must act — overrides everything.
-  if (needsHumanAttention(issue, trackedIssue)) {
+  if (needsHumanAttention(executionState)) {
     return resolvePreferredHumanNeededLinearState(liveIssue);
   }
 
-  // 2. Completed → Done. Covers today's merge→done path (the factory has
-  //    no post-merge state yet), so a done issue never reads as Deploying.
-  if (issue.factoryState === "done") {
+  if (executionState.kind === "terminal" && executionState.outcome === "done") {
     return resolvePreferredCompletedLinearState(liveIssue);
   }
 
-  // 3. Paused with no PR and nothing for us to do → backlog.
-  const blocked = (trackedIssue?.blockedByCount ?? 0) > 0;
   const noPr = issue.prNumber === undefined && !issue.prUrl;
-  if (noPr && (issue.delegatedToPatchRelay === false || blocked)) {
+  if (noPr && (executionState.kind === "undelegated" || executionState.kind === "blocked")) {
     return resolvePreferredQueuedLinearState(liveIssue);
   }
 
-  // 4. Post-merge: the change is on main, deploy running → Deploying.
-  //    Durable signals: factoryState === "deploying" (post-merge deploy
-  //    watch in progress) or the PR is merged but not yet done.
-  if (issue.factoryState === "deploying" || normalize(issue.prState) === "merged") {
+  if (normalize(issue.prState) === "merged") {
     return resolvePreferredDeployingLinearState(liveIssue);
   }
 
-  // 5. Patchrelay is actively addressing review/CI/queue feedback →
-  //    Implementing. These factory states persist for the run's whole
-  //    duration, so this is stable, not flappy — and it is exactly the
-  //    "show when patchrelay handles feedback" behavior we want.
-  if (isAddressingFeedback(issue)) {
+  if (shouldRenderAuthorPhase(issue, executionState)) {
     return resolvePreferredImplementingLinearState(liveIssue);
   }
 
-  // 6. Approved / admitted to the merge queue → In Merge Queue.
-  if (isInMergeQueue(issue)) {
+  if (executionState.kind === "idle_awaiting_external" && executionState.waitingOn === "merge_queue") {
+    return resolvePreferredMergeQueueLinearState(liveIssue);
+  }
+  if (normalize(issue.prReviewState) === "approved") {
     return resolvePreferredMergeQueueLinearState(liveIssue);
   }
 
-  // 7. Pre-review-feedback implementation work (incl. a draft PR) →
-  //    Implementing.
-  if (isImplementing(issue, trackedIssue)) {
-    return resolvePreferredImplementingLinearState(liveIssue);
-  }
-
-  // 8. PR exists and is under review → Reviewing.
   if (isReviewBound(issue)) {
     return resolvePreferredReviewingLinearState(liveIssue);
   }
@@ -267,55 +264,30 @@ function normalize(value: string | undefined): string | undefined {
 }
 
 function needsHumanAttention(
-  issue: Pick<WorkflowStateIssue, "factoryState">,
-  trackedIssue: Pick<WorkflowTracked, "sessionState"> | undefined,
+  state: IssueExecutionState,
 ): boolean {
-  return issue.factoryState === "awaiting_input"
-    || issue.factoryState === "failed"
-    || issue.factoryState === "escalated"
-    || trackedIssue?.sessionState === "waiting_input"
-    || trackedIssue?.sessionState === "failed";
+  return state.kind === "waiting_input"
+    || (state.kind === "terminal" && state.outcome !== "done");
 }
 
-// Active code work to address feedback. Durable factory states +
-// changes-requested review verdict — no run-id involvement. Gated on
-// delegation: an undelegated PR (operator paused us) is not being worked
-// by patchrelay, so it must not read as Implementing.
-function isAddressingFeedback(issue: Pick<WorkflowStateIssue, "factoryState" | "prReviewState" | "delegatedToPatchRelay">): boolean {
-  if (issue.delegatedToPatchRelay === false) return false;
-  return issue.factoryState === "changes_requested"
-    || issue.factoryState === "repairing_ci"
-    || issue.factoryState === "repairing_queue"
-    || normalize(issue.prReviewState) === "changes_requested";
-}
-
-// Approved and heading to / sitting in the merge queue. Not yet merged
-// (branch 4 catches merged first).
-function isInMergeQueue(issue: Pick<WorkflowStateIssue, "factoryState" | "prReviewState">): boolean {
-  return issue.factoryState === "awaiting_queue"
-    || normalize(issue.prReviewState) === "approved";
-}
-
-// Initial implementation, before review starts. A draft PR still counts
-// as implementing. Gated on delegation so we never claim Implementing
-// for work that isn't ours.
-function isImplementing(
-  issue: Pick<WorkflowStateIssue, "factoryState" | "prIsDraft" | "delegatedToPatchRelay">,
-  trackedIssue: Pick<WorkflowTracked, "blockedByCount" | "readyForExecution"> | undefined,
+function shouldRenderAuthorPhase(
+  issue: Pick<WorkflowStateIssue, "prIsDraft" | "prNumber" | "prUrl" | "delegatedToPatchRelay">,
+  state: IssueExecutionState,
 ): boolean {
   if (issue.delegatedToPatchRelay === false) return false;
-  if (issue.factoryState === "implementing") return true;
-  if (issue.factoryState === "delegated") {
-    const blocked = (trackedIssue?.blockedByCount ?? 0) > 0;
-    return !blocked && trackedIssue?.readyForExecution !== false;
+  if (issue.prIsDraft === true) return true;
+  if (state.kind === "awaiting_followup") return true;
+  if (state.kind === "ready") return true;
+  if (state.kind === "running") {
+    const noPr = issue.prNumber === undefined && !issue.prUrl;
+    return noPr || state.run.runType === "implementation" || state.run.runType === "ci_repair" || state.run.runType === "queue_repair" || state.run.runType === "branch_upkeep";
   }
-  return issue.prIsDraft === true;
+  return false;
 }
 
-function isReviewBound(issue: Pick<WorkflowStateIssue, "factoryState" | "prNumber" | "prUrl" | "prReviewState" | "prCheckStatus" | "lastGitHubCiSnapshotJson">): boolean {
+function isReviewBound(issue: Pick<WorkflowStateIssue, "prNumber" | "prUrl" | "prReviewState" | "prCheckStatus" | "lastGitHubCiSnapshotJson">): boolean {
   return issue.prNumber !== undefined
     || Boolean(issue.prUrl)
-    || issue.factoryState === "pr_open"
     || issue.prReviewState !== undefined
     || issue.prCheckStatus !== undefined
     || hasPendingReviewQuillVerdict(issue.lastGitHubCiSnapshotJson);

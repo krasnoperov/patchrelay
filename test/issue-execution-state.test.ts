@@ -72,8 +72,8 @@ function legacyWaitingReason(params: IssueExecutionStateInput): string | undefin
   if (hasOpenPr(params.prNumber, params.prState)) {
     return PATCHRELAY_WAITING_REASONS.waitingForExternalReview;
   }
-  if (params.pendingRunType) {
-    return `Ready to run ${humanize(params.pendingRunType)}`;
+  if (params.runnableTaskRunType) {
+    return `Ready to run ${humanize(params.runnableTaskRunType)}`;
   }
   return undefined;
 }
@@ -171,8 +171,8 @@ const TABLE: Row[] = [
   },
   {
     name: "expired settle window falls through",
-    input: { factoryState: "delegated", orchestrationSettleUntil: "2020-01-01T00:00:00.000Z", pendingRunType: "implementation" },
-    expected: { kind: "ready", pendingRunType: "implementation" },
+    input: { factoryState: "delegated", orchestrationSettleUntil: "2020-01-01T00:00:00.000Z", runnableTaskRunType: "implementation" },
+    expected: { kind: "ready", runnableTaskRunType: "implementation" },
   },
   {
     name: "blocked by dependencies",
@@ -243,9 +243,9 @@ const TABLE: Row[] = [
     expected: { kind: "idle_awaiting_external", waitingOn: "external_review" },
   },
   {
-    name: "legacy pending run slot is ready",
-    input: { factoryState: "delegated", pendingRunType: "queue_repair" },
-    expected: { kind: "ready", pendingRunType: "queue_repair" },
+    name: "runnable workflow task is ready",
+    input: { factoryState: "delegated", runnableTaskRunType: "queue_repair" },
+    expected: { kind: "ready", runnableTaskRunType: "queue_repair" },
   },
   {
     name: "nothing pending at all",
@@ -286,7 +286,7 @@ test("deriveIssueExecutionStateFromRecords maps records onto the same input", ()
     delegatedToPatchRelay: true,
     factoryState: "implementing",
     activeRunId: 11,
-    pendingRunType: undefined,
+    runnableTaskRunType: undefined,
     orchestrationSettleUntil: undefined,
     prNumber: undefined,
     prState: undefined,

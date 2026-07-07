@@ -13,7 +13,7 @@ function baseInputs(overrides: Partial<IssueUpdatePlanInputs> = {}): IssueUpdate
     existingIssue: true,
     delegated: true,
     incomingAgentSessionId: undefined,
-    startupResume: { factoryState: undefined, pendingRunType: undefined, pendingRunContext: undefined },
+    startupResume: { factoryState: undefined, workflowIntent: undefined },
     desiredStage: undefined,
     terminalRunRelease: false,
     blockerPausedImplementation: false,
@@ -82,52 +82,38 @@ test("resolveFactoryState: no signals → no state change", () => {
   assert.equal(resolveFactoryState(baseInputs()), undefined);
 });
 
-test("resolveIssueUpdatePlan: clears pending when desiredStage advances a fresh delegation", () => {
+test("resolveIssueUpdatePlan: desiredStage advances a fresh delegation without pending-column writes", () => {
   const plan = resolveIssueUpdatePlan(baseInputs({ desiredStage: "implementation" }));
   assert.equal(plan.factoryState, "delegated");
-  assert.equal(plan.pendingRunType, null);
-  assert.equal(plan.pendingRunContextJson, null);
 });
 
-test("resolveIssueUpdatePlan: startup resume always nulls both legacy pending columns (S6)", () => {
-  // S6: the resume run context is no longer persisted to the legacy
-  // `pending_run_context_json` column — `DesiredStageRecorder.record` folds a
-  // branch_upkeep resume into a durable observation and the run task is
-  // re-derived from PR facts. Both columns are always nulled here now.
+test("resolveIssueUpdatePlan: startup resume carries workflow intent without pending-column writes", () => {
   const plan = resolveIssueUpdatePlan(baseInputs({
     startupResume: {
       factoryState: "pr_open",
-      pendingRunType: "review_fix",
-      pendingRunContext: { reason: "operator_retry" },
+      workflowIntent: { kind: "run", runType: "review_fix", context: { reason: "operator_retry" } },
     },
   }));
   assert.equal(plan.factoryState, "pr_open");
-  assert.equal(plan.pendingRunType, null);
-  assert.equal(plan.pendingRunContextJson, null);
 });
 
-test("resolveIssueUpdatePlan: startup resume without context produces a null contextJson", () => {
+test("resolveIssueUpdatePlan: startup resume without context does not write contextJson", () => {
   const plan = resolveIssueUpdatePlan(baseInputs({
-    startupResume: { factoryState: "pr_open", pendingRunType: "review_fix" },
+    startupResume: { factoryState: "pr_open", workflowIntent: { kind: "run", runType: "review_fix" } },
   }));
-  assert.equal(plan.pendingRunType, null);
-  assert.equal(plan.pendingRunContextJson, null);
 });
 
-test("resolveIssueUpdatePlan: clearPending alone clears without setting context", () => {
+test("resolveIssueUpdatePlan: clearPending alone is a no-op after pending-column removal", () => {
   const plan = resolveIssueUpdatePlan(baseInputs({ clearPending: true }));
-  assert.equal(plan.pendingRunType, null);
-  assert.equal(plan.pendingRunContextJson, null);
   assert.equal(plan.factoryState, undefined);
 });
 
-test("resolveIssueUpdatePlan: terminal run release clears pending without marking done", () => {
+test("resolveIssueUpdatePlan: terminal run release clears active run without pending-column writes", () => {
   const plan = resolveIssueUpdatePlan(baseInputs({
     terminalRunRelease: true,
     effectiveRunRelease: { release: true },
   }));
   assert.equal(plan.factoryState, undefined);
-  assert.equal(plan.pendingRunType, null);
   assert.equal(plan.activeRunId, null);
 });
 

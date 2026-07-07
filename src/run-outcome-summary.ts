@@ -2,7 +2,7 @@ import type { FactoryState, RunType } from "./factory-state.ts";
 import { sanitizeOperatorFacingText } from "./presentation-text.ts";
 
 export interface RunOutcomeFacts {
-  wakeReason?: string | undefined;
+  workflowReason?: string | undefined;
   postRunState?: FactoryState | undefined;
   prNumber?: number | undefined;
   reviewerName?: string | undefined;

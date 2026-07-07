@@ -1,6 +1,7 @@
 import { extractCompletionCheck } from "./completion-check.ts";
 import type { IssueRecord, IssueSessionEventRecord, RunRecord } from "./db-types.ts";
 import { extractLatestAssistantSummary, parseIssueSessionEventOrWarn } from "./issue-session-events.ts";
+import { isIssueDoneProjection, isIssueDownstreamOrDoneProjection } from "./issue-execution-state.ts";
 import { sanitizeOperatorFacingText } from "./presentation-text.ts";
 import { assertNever } from "./utils.ts";
 
@@ -89,11 +90,11 @@ export function deriveIssueStatusNote(params: {
   const latestEventNote = clean(eventStatusNote(params.latestEvent));
   const failureSummary = clean(params.failureSummary);
   const waitingReason = clean(params.waitingReason);
-  if (params.issue.factoryState !== "done" && waitingReason === "PatchRelay work is complete") {
+  if (!isIssueDoneProjection(params.issue) && waitingReason === "PatchRelay work is complete") {
     return undefined;
   }
   const staleRunNoLongerCurrent =
-    (params.issue.factoryState === "awaiting_queue" || params.issue.factoryState === "done")
+    isIssueDownstreamOrDoneProjection(params.issue)
     && (params.latestRun?.status === "failed" || params.latestRun?.status === "superseded");
   if (staleRunNoLongerCurrent) {
     return undefined;

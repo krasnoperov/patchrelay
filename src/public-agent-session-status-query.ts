@@ -2,6 +2,7 @@ import type { PatchRelayDatabase } from "./db.ts";
 import { extractStageSummary, summarizeCurrentThread } from "./run-reporting.ts";
 import { parseStageReport } from "./issue-overview-query.ts";
 import type { IssueOverviewQuery } from "./issue-overview-query.ts";
+import { isIssueDownstreamOrDoneProjection } from "./issue-execution-state.ts";
 
 export class PublicAgentSessionStatusQuery {
   constructor(
@@ -16,7 +17,7 @@ export class PublicAgentSessionStatusQuery {
     const issueRecord = this.db.issues.getIssueByKey(issueKey);
     const latestRunReport = parseStageReport(overview.latestRun?.reportJson, overview.latestRun?.status ?? "unknown");
     const latestRunNoLongerCurrent =
-      isDownstreamOrTerminalState(overview.issue.factoryState)
+      isIssueDownstreamOrDoneProjection(overview.issue)
       && (overview.latestRun?.status === "failed" || overview.latestRun?.status === "superseded");
     const runs = (overview.runs ?? this.overviewQuery.buildRuns(overview.issue.projectId, overview.issue.linearIssueId)).map((run) => ({
       run: {
@@ -44,7 +45,7 @@ export class PublicAgentSessionStatusQuery {
         ...(issueRecord ? { ciRepairAttempts: issueRecord.ciRepairAttempts, queueRepairAttempts: issueRecord.queueRepairAttempts } : {}),
         ...(overview.issue.waitingReason ? { waitingReason: overview.issue.waitingReason } : {}),
         ...(overview.issue.statusNote ? { statusNote: overview.issue.statusNote } : {}),
-        ...(overview.session?.lastWakeReason ? { lastWakeReason: overview.session.lastWakeReason } : {}),
+        ...(overview.session?.lastWorkflowReason ? { lastWorkflowReason: overview.session.lastWorkflowReason } : {}),
       },
       ...(overview.activeRun ? { activeRun: overview.activeRun } : {}),
       ...(overview.latestRun && !latestRunNoLongerCurrent ? { latestRun: overview.latestRun } : {}),
@@ -54,8 +55,4 @@ export class PublicAgentSessionStatusQuery {
       generatedAt: new Date().toISOString(),
     };
   }
-}
-
-function isDownstreamOrTerminalState(factoryState: string | undefined): boolean {
-  return factoryState === "awaiting_queue" || factoryState === "done";
 }

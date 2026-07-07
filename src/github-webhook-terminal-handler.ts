@@ -9,8 +9,8 @@ import { resolvePostMergeFactoryState } from "./post-merge-deploy.ts";
 import { resolvePreferredCompletedLinearState } from "./linear-workflow.ts";
 import { syncGitHubLinearSession } from "./github-linear-session-sync.ts";
 import type { AppConfig } from "./types.ts";
-import { wakeOrchestrationParentsForChildEvent } from "./orchestration-parent-wake.ts";
-import type { WakeDispatcher } from "./wake-dispatcher.ts";
+import { dispatchOrchestrationParentsForChildEvent } from "./orchestration-parent-dispatch.ts";
+import type { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
 
 const WRITER = "github-webhook-terminal-handler";
 
@@ -18,14 +18,14 @@ export async function handleGitHubTerminalPrEvent(params: {
   config: AppConfig;
   db: PatchRelayDatabase;
   linearProvider: LinearClientProvider;
-  wakeDispatcher: WakeDispatcher;
+  workflowTaskDispatcher: WorkflowTaskDispatcher;
   logger: Logger;
   codex: { steerTurn(options: { threadId: string; turnId: string; input: string }): Promise<void> };
   feed: OperatorEventFeed | undefined;
   issue: IssueRecord;
   event: NormalizedGitHubEvent;
 }): Promise<void> {
-  const { db, linearProvider, wakeDispatcher, logger, codex, issue, event, config } = params;
+  const { db, linearProvider, workflowTaskDispatcher, logger, codex, issue, event, config } = params;
   const eventType = event.triggerEvent === "pr_merged" ? "pr_merged" : "pr_closed";
   // PR3: when the project configures a deploy workflow, a merge enters the
   // `deploying` watch state instead of completing immediately. Linear
@@ -88,17 +88,17 @@ export async function handleGitHubTerminalPrEvent(params: {
   db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(issue.projectId, issue.linearIssueId);
   const updatedIssue = db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
   if (event.triggerEvent === "pr_closed" && resolveClosedPrDisposition(issue) === "redelegate") {
-    wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
+    workflowTaskDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
       eventType: "delegated",
       dedupeKey: `github_pr_closed:implementation:${issue.linearIssueId}`,
     });
   }
   if (event.triggerEvent === "pr_merged") {
-    wakeOrchestrationParentsForChildEvent({
+    dispatchOrchestrationParentsForChildEvent({
       db,
       child: updatedIssue,
       eventType: "child_delivered",
-      wakeDispatcher,
+      workflowTaskDispatcher,
     });
     // Only complete Linear now when there's no deploy to watch. While
     // `deploying`, the issue stays in the Deploying state and the idle
