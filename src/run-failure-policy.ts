@@ -377,6 +377,8 @@ export class RunFailurePolicy {
       return;
     }
     const issue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? params.issue;
+    reconcileWorkflowTasksForIssue(this.db, issue);
+    this.workflowTaskDispatcher.dispatchIfWorkflowTaskPending(run.projectId, run.linearIssueId);
     this.logger.warn(
       { issueKey: issue.issueKey, runType: run.runType, detail: capacity.detail, capacityBackoffUntil },
       "Codex capacity limit - deferring retry without consuming budget",

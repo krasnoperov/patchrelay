@@ -9,6 +9,7 @@ import { RunOrchestrator } from "../src/run-orchestrator.ts";
 import type { CodexTurnSummary } from "../src/codex-types.ts";
 import type { RunRecord } from "../src/db-types.ts";
 import type { AppConfig } from "../src/types.ts";
+import { peekRunnableWorkflowTaskRunType } from "../src/pending-workflow-task.ts";
 
 // The real production string from the LSR-837 incident.
 const USAGE_LIMIT_MESSAGE =
@@ -194,6 +195,44 @@ test("capacity-failed ci_repair refunds the attempt, holds the repair state, and
     assert.ok(updatedIssue.capacityBackoffUntil);
     assert.ok(Date.parse(updatedIssue.capacityBackoffUntil!) > Date.now());
     assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-cap-1")?.runType, "ci_repair");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("capacity-failed implementation materializes and dispatches a runnable workflow task", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-capacity-implementation-"));
+  try {
+    const failedTurn: CodexTurnSummary = {
+      id: "turn-cap-impl",
+      status: "failed",
+      error: { message: USAGE_LIMIT_MESSAGE },
+      items: [],
+    };
+    const { db, orchestrator, enqueueCalls } = createHarness(baseDir, failedTurn, "thread-cap-impl");
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-cap-impl",
+      issueKey: "USE-205",
+      branchName: "feat-cap-impl",
+      factoryState: "implementing",
+      delegatedToPatchRelay: true,
+    });
+    const run = createActiveRun(db, {
+      linearIssueId: "issue-cap-impl",
+      runType: "implementation",
+      threadId: "thread-cap-impl",
+      turnId: "turn-cap-impl",
+    });
+
+    await reconcileRun(orchestrator, run);
+
+    const updatedIssue = db.getIssue("usertold", "issue-cap-impl")!;
+    assert.equal(updatedIssue.factoryState, "delegated");
+    assert.equal(updatedIssue.activeRunId, undefined);
+    assert.ok(updatedIssue.capacityBackoffUntil);
+    assert.equal(peekRunnableWorkflowTaskRunType(db, "usertold", "issue-cap-impl"), "implementation");
+    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-cap-impl" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
