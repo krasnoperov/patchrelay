@@ -1,5 +1,5 @@
 import type { FastifyRequest } from "fastify";
-import fastify from "fastify";
+import fastify, { LogController } from "fastify";
 import rawBody from "fastify-raw-body";
 import type { Logger } from "pino";
 import { getBuildInfo } from "./build-info.ts";
@@ -20,7 +20,7 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
   const app = fastify({
     loggerInstance: logger,
     bodyLimit: config.ingress.maxBodyBytes,
-    disableRequestLogging: true,
+    logController: new LogController({ disableRequestLogging: true }),
   });
 
   await app.register(rawBody, {
