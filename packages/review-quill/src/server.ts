@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import fastify from "fastify";
+import fastify, { LogController } from "fastify";
 import rawBody from "fastify-raw-body";
 import pino from "pino";
 import { loadConfig } from "./config.ts";
@@ -116,7 +116,7 @@ export async function startServer(configPath = process.env.REVIEW_QUILL_CONFIG ?
   const runner = new ReviewRunner(config, logger.child({ component: "review-runner" }));
   const service = new ReviewQuillService(config, store, github, runner, logger.child({ component: "service" }), appSlug);
 
-  const app = fastify({ loggerInstance: logger, disableRequestLogging: true });
+  const app = fastify({ loggerInstance: logger, logController: new LogController({ disableRequestLogging: true }) });
   await app.register(rawBody, { runFirst: true });
 
   app.get("/health", async () => {

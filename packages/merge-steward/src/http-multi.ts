@@ -1,4 +1,4 @@
-import fastify from "fastify";
+import fastify, { LogController } from "fastify";
 import rawBody from "fastify-raw-body";
 import type { Logger } from "pino";
 import { z } from "zod";
@@ -55,7 +55,7 @@ export async function buildMultiRepoHttpServer(options: {
     byRepoId.set(record.config.repoId, record);
   }
 
-  const app = fastify({ loggerInstance: logger, disableRequestLogging: true });
+  const app = fastify({ loggerInstance: logger, logController: new LogController({ disableRequestLogging: true }) });
   await app.register(rawBody, { runFirst: true });
 
   // --- Health ---
