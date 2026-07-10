@@ -1,10 +1,10 @@
 import type { FactoryState, RunType } from "../factory-state.ts";
-import { type RunContext } from "../run-context.ts";
+import type { WorkflowRunIntent } from "../workflow-intent.ts";
 
 /**
  * The 14-conditional-spread cascade inside DesiredStageRecorder.record was
  * structurally fragile: multiple branches all wrote to `factoryState`,
- * `pendingRunType`, and `pendingRunContextJson`, relying on JavaScript spread
+ * workflow intent, and old compatibility columns, relying on JavaScript spread
  * order to encode priority. The architecture review (architecture_assessment
  * _apr2026) flagged this as a top-of-list cleanup.
  *
@@ -22,8 +22,7 @@ export interface IssueUpdatePlanInputs {
   /** Resume-after-restart resolution, if any. `factoryState` here wins over `desiredStage`. */
   startupResume: {
     factoryState?: FactoryState | undefined;
-    pendingRunType?: RunType | null | undefined;
-    pendingRunContext?: RunContext | undefined;
+    workflowIntent?: WorkflowRunIntent | undefined;
   };
   /** Fresh run intent computed for a delegated issue. */
   desiredStage?: RunType | undefined;
@@ -36,7 +35,7 @@ export interface IssueUpdatePlanInputs {
     factoryState?: FactoryState | undefined;
     clearPending?: boolean | undefined;
   };
-  /** Any other condition that should clear the pending run (e.g. unresolved blockers). */
+  /** Compatibility input retained while callers converge; no DB column is written. */
   clearPending: boolean;
   effectiveRunRelease: { release: boolean };
   shouldEnterOrchestrationSettle: boolean;
@@ -47,8 +46,6 @@ export interface IssueUpdatePlanInputs {
 
 export interface ResolvedIssueUpdate {
   factoryState?: FactoryState;
-  pendingRunType?: null;
-  pendingRunContextJson?: string | null;
   activeRunId?: null;
   agentSessionId?: string | null;
   orchestrationSettleUntil?: string;
@@ -78,34 +75,12 @@ export function resolveFactoryState(input: IssueUpdatePlanInputs): FactoryState 
   return undefined;
 }
 
-/**
- * Should we clear `pendingRunType` + `pendingRunContextJson`? Several upstream
- * conditions can independently request this; the resolver folds them into one
- * predicate.
- */
-function shouldClearPending(input: IssueUpdatePlanInputs): boolean {
-  if (input.terminalRunRelease) return true;
-  if (input.clearPending) return true;
-  if (input.desiredStage && !input.startupResume.factoryState) return true;
-  if (input.startupResume.pendingRunType !== undefined) return true;
-  return false;
-}
-
 export function resolveIssueUpdatePlan(input: IssueUpdatePlanInputs): ResolvedIssueUpdate {
   const resolved: ResolvedIssueUpdate = {};
 
   const factoryState = resolveFactoryState(input);
   if (factoryState) {
     resolved.factoryState = factoryState;
-  }
-
-  if (shouldClearPending(input)) {
-    // S6: both legacy pending columns are always nulled now. The startup-resume
-    // run context is no longer persisted here — the caller
-    // (`DesiredStageRecorder.record`) folds a branch_upkeep resume into a
-    // durable `github.parent_head_moved` observation and reconciles the run task.
-    resolved.pendingRunType = null;
-    resolved.pendingRunContextJson = null;
   }
 
   if (input.effectiveRunRelease.release) {

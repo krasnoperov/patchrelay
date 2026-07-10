@@ -99,7 +99,7 @@ export class RunNotificationHandler {
       const turnErrorMessage = extractTurnErrorMessage(notification.params);
       const failureReason = buildFailedTurnFailureReason(turnErrorMessage);
       // A capacity outage (usage limit / rate limit / quota) is not evidence
-      // about the work: defer the same wake behind a backoff instead of
+      // about the work: defer the same workflow task behind a backoff instead of
       // consuming an attempt budget or escalating. Only an actual error
       // message classifies — interrupted turns stay on their own path.
       const capacity = classifyCodexFailure(turnErrorMessage);

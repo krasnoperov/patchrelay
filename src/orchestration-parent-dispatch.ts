@@ -1,11 +1,11 @@
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
 import { classifyIssue } from "./issue-class.ts";
-import type { WakeDispatcher } from "./wake-dispatcher.ts";
+import type { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
 import type { RunContext } from "./run-context.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
-const WRITER = "orchestration-parent-wake";
+const WRITER = "orchestration-parent-dispatch";
 
 export const ORCHESTRATION_SETTLE_WINDOW_MS = 10_000;
 
@@ -73,7 +73,7 @@ export function startOrchestrationSettleWindow(
 export function queueSettledOrchestrationIssue(params: {
   db: PatchRelayDatabase;
   issue: Pick<IssueRecord, "projectId" | "linearIssueId">;
-  wakeDispatcher: WakeDispatcher;
+  workflowTaskDispatcher: WorkflowTaskDispatcher;
   promptContext?: string | undefined;
 }): boolean {
   params.db.issueSessions.commitIssueState({
@@ -84,7 +84,7 @@ export function queueSettledOrchestrationIssue(params: {
       orchestrationSettleUntil: null,
     },
   });
-  const dispatched = params.wakeDispatcher.recordEventAndDispatch(
+  const dispatched = params.workflowTaskDispatcher.recordEventAndDispatch(
     params.issue.projectId,
     params.issue.linearIssueId,
     {
@@ -98,12 +98,12 @@ export function queueSettledOrchestrationIssue(params: {
   return dispatched !== undefined;
 }
 
-export function wakeOrchestrationParentsForChildEvent(params: {
+export function dispatchOrchestrationParentsForChildEvent(params: {
   db: PatchRelayDatabase;
   child: Pick<IssueRecord, "projectId" | "linearIssueId" | "parentLinearIssueId" | "issueKey" | "title" | "factoryState" | "currentLinearState" | "prNumber" | "prState">;
   eventType: "child_changed" | "child_delivered" | "child_regressed";
   changeKind?: "attached" | "detached" | "duplicate" | "canceled" | "updated" | undefined;
-  wakeDispatcher: WakeDispatcher;
+  workflowTaskDispatcher: WorkflowTaskDispatcher;
   now?: number | undefined;
 }): string[] {
   const parentIds: string[] = [];
@@ -138,9 +138,8 @@ export function wakeOrchestrationParentsForChildEvent(params: {
     } satisfies RunContext;
     const childDedupeKey = `${params.eventType}:${parent.linearIssueId}:${params.child.linearIssueId}:${params.child.factoryState}:${params.changeKind ?? params.child.prState ?? "no-pr"}`;
 
-    // S5: append the durable orchestration child-update observation (dual path
-    // with the legacy session event below). The reconcile inside
-    // parentHasRunnableWorkflowTask can now materialize a
+    // Append the durable orchestration child-update observation. The reconcile
+    // inside parentHasRunnableWorkflowTask can materialize a
     // run:orchestration_followup for a parent that already has a thread; a
     // thread-less parent keeps absorbing the update under its structural
     // wait:children gate (the observation persists and re-derives later).
@@ -159,7 +158,7 @@ export function wakeOrchestrationParentsForChildEvent(params: {
       continue;
     }
 
-    params.wakeDispatcher.recordEventAndDispatch(parent.projectId, parent.linearIssueId, {
+    params.workflowTaskDispatcher.recordEventAndDispatch(parent.projectId, parent.linearIssueId, {
       eventType: params.eventType,
       eventJson: JSON.stringify(childEventPayload),
       dedupeKey: childDedupeKey,

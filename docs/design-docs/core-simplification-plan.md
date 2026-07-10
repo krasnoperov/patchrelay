@@ -1,6 +1,6 @@
 # Core simplification plan
 
-Status: proposed (2026-06-10)
+Status: historical/superseded (2026-06-10); retained as the review inventory that led to the current observations -> snapshot -> workflow_tasks -> runs -> projections runtime.
 
 Goal: remove the murky/overlapping logic identified in the June 2026 core review while
 strengthening the two properties the service is built around: **surviving reboots** and

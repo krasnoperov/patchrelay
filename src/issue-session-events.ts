@@ -48,13 +48,13 @@ export interface IssueSessionEventRecord {
 // same doctrine as D1 applies: malformed payloads fail loudly at parse, and
 // boundary callers that iterate possibly-old DB rows degrade gracefully via
 // `parseIssueSessionEventOrWarn`. All payload schemas are loose objects:
-// legacy rows carry fields newer code no longer writes, and wake payloads are
+// legacy rows carry fields newer code no longer writes, and workflow-intent payloads are
 // merged wholesale into the run context (which tolerates unknown keys too).
 
 /** Human input payload for direct_reply / followup_prompt / followup_comment
  * / operator_prompt. Produced by agent-input-service.ts,
  * github-pr-comment-handler.ts and webhooks/agent-session-handler.ts;
- * consumed by deriveSessionWakePlan (followUps + replacement-PR facts). */
+ * consumed by deriveSessionInputPlan (followUps + replacement-PR facts). */
 const inputMessagePayloadSchema = z.looseObject({
   text: z.string().optional(),
   body: z.string().optional(),
@@ -124,10 +124,10 @@ const freeFormPayloadSchema = z.looseObject({});
 export type FreeFormEventPayload = z.infer<typeof freeFormPayloadSchema>;
 
 /**
- * The discriminated union over session events. Wake-carrying events
+ * The discriminated union over session events. Run-intent events
  * (delegated, child_*, completion_check_continue, review_changes_requested,
  * settled_red_ci, merge_steward_incident) use the RunContext schema because
- * deriveSessionWakePlan merges their payloads wholesale into the wake's run
+ * deriveSessionInputPlan merges their payloads wholesale into the input plan's run
  * context.
  */
 export type TypedIssueSessionEvent =
@@ -266,10 +266,10 @@ export function parseIssueSessionEventOrWarn(
   }
 }
 
-export interface SessionWakePlan {
+export interface SessionInputPlan {
   eventIds: number[];
   runType?: RunType | undefined;
-  wakeReason?: string | undefined;
+  workflowReason?: string | undefined;
   resumeThread: boolean;
   context: RunContext;
 }
@@ -290,21 +290,21 @@ export const NON_ACTIONABLE_SESSION_EVENTS = new Set<IssueSessionEventType>([
   "run_released_authority",
 ]);
 
-// "main_repair" was removed as a run type; legacy session-event payloads carrying it
+// "main_repair" was removed as a run type; old payloads carrying it
 // are not in this set, so parseRunType returns undefined and callers fall back to
-// "implementation" (see deriveSessionWakePlan below).
+// "implementation" (see deriveSessionInputPlan below).
 const RUN_TYPES = new Set<RunType>(["implementation", "review_fix", "branch_upkeep", "ci_repair", "queue_repair"]);
 
 function parseRunType(value: unknown): RunType | undefined {
   return typeof value === "string" && RUN_TYPES.has(value as RunType) ? value as RunType : undefined;
 }
 
-// A run type carried in a wake payload (a `delegated` or `completion_check_continue`
+// A run type carried in an input payload (a `delegated` or `completion_check_continue`
 // event recording the run that was in flight) can go stale: if it names a
 // review_fix but the PR is no longer in changes_requested (the review was
 // dismissed, approved, or only commented), there is nothing to "fix". Carrying
-// it forward would produce a review_fix wake the orchestrator rejects as an
-// inactive requested-changes wake — and if the triggering event is not itself a
+// it forward would produce a review_fix input the orchestrator rejects as an
+// inactive requested-changes input — and if the triggering event is not itself a
 // review_changes_requested event, that rejection cannot clear it, stranding the
 // issue in an enqueue→skip loop. Downgrade such a stale fix to a plain
 // implementation run so it can publish/finish instead.
@@ -320,11 +320,11 @@ export function resolvePayloadRunType(payloadRunType: unknown, issue: Pick<Issue
   return parsed;
 }
 
-export function deriveSessionWakePlan(
+export function deriveSessionInputPlan(
   issue: IssueRecord,
   events: IssueSessionEventRecord[],
   onPayloadError?: (event: IssueSessionEventRecord, message: string) => void,
-): SessionWakePlan | undefined {
+): SessionInputPlan | undefined {
   const actionableEvents = events.filter((event) => !NON_ACTIONABLE_SESSION_EVENTS.has(event.eventType));
   if (actionableEvents.length === 0) return undefined;
   if (actionableEvents.some((event) => TERMINAL_SESSION_EVENTS.has(event.eventType))) {
@@ -334,14 +334,14 @@ export function deriveSessionWakePlan(
   const context: RunContext = {};
   const followUps: Array<{ type: string; text: string; author?: string }> = [];
   let eventIds: number[] = [];
-  let wakeReason: string | undefined;
+  let workflowReason: string | undefined;
   let runType: RunType | undefined;
   let resumeThread = false;
 
   for (const event of actionableEvents) {
     // Boundary over DB rows: a payload written by an older version that no
     // longer matches the schema degrades to "no payload" instead of wedging
-    // wake derivation for the whole issue.
+    // workflow task derivation for the whole issue.
     const typed = parseIssueSessionEventOrWarn(
       event,
       onPayloadError ? (message) => onPayloadError(event, message) : undefined,
@@ -350,14 +350,14 @@ export function deriveSessionWakePlan(
     switch (typed.eventType) {
       case "merge_steward_incident":
         runType = "queue_repair";
-        wakeReason = "merge_steward_incident";
+        workflowReason = "merge_steward_incident";
         eventIds = [event.id];
         Object.assign(context, typed.payload ?? {});
         break;
       case "settled_red_ci":
         if (runType !== "queue_repair") {
           runType = "ci_repair";
-          wakeReason = "settled_red_ci";
+          workflowReason = "settled_red_ci";
           eventIds = [event.id];
           Object.assign(context, typed.payload ?? {});
         }
@@ -368,7 +368,7 @@ export function deriveSessionWakePlan(
         }
         if (runType !== "queue_repair" && runType !== "ci_repair") {
           runType = typed.payload?.branchUpkeepRequired === true ? "branch_upkeep" : "review_fix";
-          wakeReason = typed.payload?.branchUpkeepRequired === true ? "branch_upkeep" : "review_changes_requested";
+          workflowReason = typed.payload?.branchUpkeepRequired === true ? "branch_upkeep" : "review_changes_requested";
           eventIds = [event.id];
           Object.assign(context, typed.payload ?? {});
         }
@@ -376,7 +376,7 @@ export function deriveSessionWakePlan(
       case "delegated":
         if (!runType) {
           runType = resolvePayloadRunType(typed.payload?.runType, issue) ?? "implementation";
-          wakeReason = issue.issueClass === "orchestration" ? "initial_delegate" : "delegated";
+          workflowReason = issue.issueClass === "orchestration" ? "initial_delegate" : "delegated";
           eventIds = [event.id];
         } else {
           eventIds.push(event.id);
@@ -388,7 +388,7 @@ export function deriveSessionWakePlan(
       case "child_regressed":
         if (!runType) {
           runType = "implementation";
-          wakeReason = typed.eventType;
+          workflowReason = typed.eventType;
           eventIds = [event.id];
         } else {
           eventIds.push(event.id);
@@ -399,7 +399,7 @@ export function deriveSessionWakePlan(
       case "direct_reply": {
         if (!runType) {
           runType = issue.prReviewState === "changes_requested" ? "review_fix" : "implementation";
-          wakeReason = "direct_reply";
+          workflowReason = "direct_reply";
           eventIds = [event.id];
         } else {
           eventIds.push(event.id);
@@ -424,7 +424,7 @@ export function deriveSessionWakePlan(
           // type when the payload carried no run type.
           runType = resolvePayloadRunType(typed.payload?.runType, issue)
             ?? (issue.prReviewState === "changes_requested" ? "review_fix" : "implementation");
-          wakeReason = "completion_check_continue";
+          workflowReason = "completion_check_continue";
           eventIds = [event.id];
         } else {
           eventIds.push(event.id);
@@ -442,7 +442,7 @@ export function deriveSessionWakePlan(
       case "operator_prompt": {
         if (!runType) {
           runType = issue.prReviewState === "changes_requested" ? "review_fix" : "implementation";
-          wakeReason = issue.issueClass === "orchestration" ? "human_instruction" : typed.eventType;
+          workflowReason = issue.issueClass === "orchestration" ? "human_instruction" : typed.eventType;
           eventIds = [event.id];
         } else {
           eventIds.push(event.id);
@@ -479,7 +479,7 @@ export function deriveSessionWakePlan(
       case "pr_merged":
         break;
       default:
-        assertNever(typed, "Unhandled issue session event in wake derivation");
+        assertNever(typed, "Unhandled issue session event in workflow task derivation");
     }
   }
 
@@ -489,11 +489,11 @@ export function deriveSessionWakePlan(
     context.followUpMode = true;
     context.followUpCount = followUps.length;
   }
-  if (wakeReason) {
-    context.wakeReason = wakeReason;
+  if (workflowReason) {
+    context.workflowReason = workflowReason;
   }
 
-  return { eventIds, runType, wakeReason, resumeThread, context };
+  return { eventIds, runType, workflowReason, resumeThread, context };
 }
 
 function isStaleRequestedChangesEvent(

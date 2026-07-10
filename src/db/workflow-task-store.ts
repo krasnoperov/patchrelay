@@ -1,5 +1,5 @@
 import type { WorkflowTaskRecord } from "../db-types.ts";
-import type { WorkflowTask } from "../workflow-runtime.ts";
+import type { WorkflowTask } from "../workflow-model.ts";
 import { isoNow, type DatabaseConnection } from "./shared.ts";
 
 export interface WorkflowTaskProjection {

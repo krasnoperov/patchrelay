@@ -2,6 +2,8 @@
 
 Date: 2026-05-22
 
+Status: historical implementation plan; retained as archive, not current workflow architecture.
+
 This is a temporary implementation plan, not durable architecture. Its job is to turn the Linear-agent research pass into focused PatchRelay work. The bias is: keep PatchRelay a GitHub-centered delivery harness with a good Linear operator surface, not a generic Linear agent clone.
 
 ## Implementation Status

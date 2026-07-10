@@ -25,7 +25,7 @@ export interface FollowupIntentContext {
   directReply?: boolean | undefined;
   delegatedToPatchRelay?: boolean | undefined;
   prReviewState?: string | undefined;
-  explicitWakeIntent?: boolean | undefined;
+  explicitWorkflowIntent?: boolean | undefined;
 }
 
 export interface FollowupIntentClassification {
@@ -145,7 +145,7 @@ export function buildFollowupIntentPrompt(input: string, context: FollowupIntent
     `- Direct reply to outstanding PatchRelay question: ${context.directReply ? "yes" : "no"}`,
     `- Delegated to PatchRelay: ${context.delegatedToPatchRelay ? "yes" : "no"}`,
     `- PR review state: ${context.prReviewState ?? "none"}`,
-    `- Explicit PatchRelay wake context: ${context.explicitWakeIntent ? "yes" : "no"}`,
+    `- Explicit PatchRelay workflow intent: ${context.explicitWorkflowIntent ? "yes" : "no"}`,
     "",
     "Follow-up text:",
     input.trim(),

@@ -5,7 +5,7 @@ import type {
   IssueDependencyRecord,
   IssueRecord,
 } from "../db-types.ts";
-import { FACTORY_STATES, isFactoryState, type FactoryState, type RunType } from "../factory-state.ts";
+import { FACTORY_STATES, isFactoryState, type FactoryState } from "../factory-state.ts";
 import type { IssueSessionProjectionInvalidator } from "../issue-session-projection-invalidator.ts";
 import type { IssueClass, IssueClassSource } from "../issue-class.ts";
 import { buildInsertBindings, buildUpdateAssignments } from "./issue-upsert-columns.ts";
@@ -30,8 +30,6 @@ export interface UpsertIssueParams {
   currentLinearState?: string;
   currentLinearStateType?: string;
   factoryState?: FactoryState;
-  pendingRunType?: RunType | null;
-  pendingRunContextJson?: string | null;
   branchName?: string;
   worktreePath?: string;
   threadId?: string | null;
@@ -184,7 +182,6 @@ export class IssueStore {
          WHERE factory_state IN ('escalated', 'failed')
            AND pr_number IS NOT NULL
            AND active_run_id IS NULL
-           AND pending_run_type IS NULL
            AND (pr_state IS NULL OR pr_state != 'merged')`,
       )
       .all() as Array<Record<string, unknown>>;
@@ -224,16 +221,6 @@ export class IssueStore {
     return rows.map(mapIssueRow);
   }
 
-  // S6 drain: issues still carrying a legacy `pending_run_type` column value.
-  // The startup drain sweep synthesizes the equivalent durable observation /
-  // workflow task for each and nulls the columns, so S7 can drop them.
-  listIssuesWithPendingRunType(): IssueRecord[] {
-    const rows = this.connection
-      .prepare(`SELECT * FROM issues WHERE pending_run_type IS NOT NULL`)
-      .all() as Array<Record<string, unknown>>;
-    return rows.map(mapIssueRow);
-  }
-
   // Issues whose durable workflow tasks may need reconciling. A done/failed
   // issue produces no tasks (deriveWorkflowTasks short-circuits), so the only
   // terminal issues worth visiting are those that still hold an open task to
@@ -256,14 +243,13 @@ export class IssueStore {
     return rows.map(mapIssueRow);
   }
 
-  // Terminal, run-free issues the terminal-wake reconciler must evaluate:
-  // those with a pending run type, or with an unprocessed *actionable* session
-  // event. Iterating the whole table every tick to find these few was wasteful
+  // Terminal, run-free issues whose stale inbox events should be cleared.
+  // Iterating the whole table every tick was wasteful
   // (non-actionable events like self_comment/delegation_observed accumulate on
   // done issues and would otherwise be re-checked forever). `nonActionable` is
   // passed from NON_ACTIONABLE_SESSION_EVENTS so the actionable definition has
   // one home; the caller keeps its exact JS guards as the source of truth.
-  listTerminalIssuesWithPendingWake(nonActionable: readonly string[]): IssueRecord[] {
+  listTerminalIssuesWithStaleInbox(nonActionable: readonly string[]): IssueRecord[] {
     const placeholders = nonActionable.map(() => "?").join(", ");
     const exclusion = placeholders ? `AND e.event_type NOT IN (${placeholders})` : "";
     const rows = this.connection
@@ -271,15 +257,12 @@ export class IssueStore {
         `SELECT * FROM issues AS i
          WHERE i.active_run_id IS NULL
            AND i.factory_state IN ('done', 'escalated', 'failed', 'awaiting_input')
-           AND (
-             i.pending_run_type IS NOT NULL
-             OR EXISTS (
-                  SELECT 1 FROM issue_session_events e
-                  WHERE e.project_id = i.project_id
-                    AND e.linear_issue_id = i.linear_issue_id
-                    AND e.processed_at IS NULL
-                    ${exclusion}
-                )
+           AND EXISTS (
+             SELECT 1 FROM issue_session_events e
+             WHERE e.project_id = i.project_id
+               AND e.linear_issue_id = i.linear_issue_id
+               AND e.processed_at IS NULL
+               ${exclusion}
            )`,
       )
       .all(...nonActionable) as Array<Record<string, unknown>>;
@@ -301,7 +284,6 @@ export class IssueStore {
         `SELECT * FROM issues
          WHERE factory_state NOT IN ('done', 'escalated', 'failed', 'awaiting_input')
          AND active_run_id IS NULL
-         AND pending_run_type IS NULL
          AND pr_number IS NOT NULL`,
       )
       .all() as Array<Record<string, unknown>>;
@@ -313,7 +295,7 @@ export class IssueStore {
   // terminal status. This happens when the post-run finalize never ran
   // to completion — almost always a service restart landing between
   // `finishRun` (which marks the run terminal) and the issue write that
-  // clears `active_run_id` and arms the next wake. The Codex
+  // clears `active_run_id` and arms the next workflow task. The Codex
   // `turn/completed` notification that would finalize it never re-fires
   // after restart, and every idle/recovery pass gates on
   // `active_run_id IS NULL`, so the issue is invisible to all of them
@@ -331,34 +313,15 @@ export class IssueStore {
     return rows.map(mapIssueRow);
   }
 
-  // Safety net for orphaned wakes: any delegated, non-terminal issue
-  // with at least one unprocessed session event but no active run.
-  // The orchestrator's enqueueIssue is the only path that drains these
-  // events, and a prior enqueueIssue call can be silently lost (worker
-  // race, lease contention, in-memory queue cleared by service restart).
-  // The idle reconciler iterates this set and re-enqueues each one.
   // The idle reconciler's safety-net sweep: idle, delegated, non-terminal
-  // issues that carry a pending wake the direct dispatch may have missed (lease
-  // race, restart). A wake now lives in one of two places: an unprocessed
-  // *actionable* session event, OR — since the v2 bridge — an open runnable
-  // workflow task with no backing session event (GitHub-repair wakes:
-  // review_fix / ci_repair / queue_repair / branch_upkeep exist only as tasks).
-  // Selecting on session events alone stranded task-only wakes when a webhook's
-  // direct dispatch lost the issue-session lease (USE-478 stalled 2h), so the
-  // sweep unions both sources under the same idle guards.
-  listIdleIssuesWithPendingWake(): IssueRecord[] {
+  // issues that carry a runnable workflow task the direct dispatch may have
+  // missed (lease race, restart). Session events are inbox/audit facts; they do
+  // not make an issue scheduler-ready unless task reconciliation materializes a
+  // runnable workflow task from durable facts.
+  listIdleIssuesWithRunnableWorkflowTask(): IssueRecord[] {
     const rows = this.connection
       .prepare(
         `SELECT DISTINCT i.* FROM issues i
-         INNER JOIN issue_session_events e
-           ON e.project_id = i.project_id
-          AND e.linear_issue_id = i.linear_issue_id
-         WHERE e.processed_at IS NULL
-           AND i.active_run_id IS NULL
-           AND i.delegated_to_patchrelay = 1
-           AND i.factory_state NOT IN ('done', 'escalated', 'failed', 'awaiting_input')
-         UNION
-         SELECT DISTINCT i.* FROM issues i
          INNER JOIN workflow_tasks t
            ON t.project_id = i.project_id
           AND t.subject_id = i.linear_issue_id
@@ -380,8 +343,7 @@ export class IssueStore {
         `SELECT DISTINCT i.* FROM issues i
          JOIN issue_dependencies d ON d.project_id = i.project_id AND d.linear_issue_id = i.linear_issue_id
          WHERE i.factory_state = 'delegated'
-         AND i.active_run_id IS NULL
-         AND i.pending_run_type IS NULL`,
+         AND i.active_run_id IS NULL`,
       )
       .all() as Array<Record<string, unknown>>;
     return rows.map(mapIssueRow);
@@ -393,7 +355,6 @@ export class IssueStore {
         `SELECT * FROM issues
          WHERE factory_state = 'awaiting_queue'
          AND active_run_id IS NULL
-         AND pending_run_type IS NULL
          AND pr_number IS NOT NULL`,
       )
       .all() as Array<Record<string, unknown>>;
@@ -421,7 +382,6 @@ export class IssueStore {
         `SELECT * FROM issues
          WHERE factory_state = 'pr_open'
          AND active_run_id IS NULL
-         AND pending_run_type IS NULL
          AND pr_number IS NOT NULL
          AND pr_review_state = 'approved'
          AND pr_check_status = 'failure'`,
@@ -775,8 +735,6 @@ export function mapIssueRow(row: Record<string, unknown>): IssueRecord {
       ? { currentLinearStateType: String(row.current_linear_state_type) }
       : {}),
     factoryState,
-    ...(row.pending_run_type !== null && row.pending_run_type !== undefined ? { pendingRunType: String(row.pending_run_type) as RunType } : {}),
-    ...(row.pending_run_context_json !== null && row.pending_run_context_json !== undefined ? { pendingRunContextJson: String(row.pending_run_context_json) } : {}),
     ...(row.branch_name !== null ? { branchName: String(row.branch_name) } : {}),
     ...(row.worktree_path !== null ? { worktreePath: String(row.worktree_path) } : {}),
     ...(row.thread_id !== null ? { threadId: String(row.thread_id) } : {}),

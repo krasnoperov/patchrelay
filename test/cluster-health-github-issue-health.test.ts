@@ -71,6 +71,7 @@ test("evaluateGitHubIssueHealth flags approved awaiting_queue PRs with failed de
       missingTrackedBlockers: [],
       ageMs: 10 * 60_000,
       readyForExecution: false,
+      executionState: { kind: "idle_awaiting_external", waitingOn: "merge_queue" },
     },
     config(),
     runCommand,

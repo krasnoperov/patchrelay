@@ -218,7 +218,7 @@ test("feed-event appends to timeline when in detail view", () => {
 test("computeAggregates counts blocked and ready issues separately", () => {
   const issues = [
     makeIssue("USE-1", { blockedByCount: 1, blockedByKeys: ["USE-0"], factoryState: "delegated" }),
-    makeIssue("USE-2", { readyForExecution: true, pendingRunType: "implementation", factoryState: "delegated" }),
+    makeIssue("USE-2", { readyForExecution: true, runnableTaskRunType: "implementation", factoryState: "delegated" }),
     makeIssue("USE-3", { activeRunType: "implementation" }),
   ];
 

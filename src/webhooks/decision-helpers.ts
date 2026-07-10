@@ -1,8 +1,10 @@
 import { TERMINAL_STATES, type FactoryState } from "../factory-state.ts";
 import type { PatchRelayDatabase } from "../db.ts";
 import type { IssueMetadata, RunType } from "../types.ts";
-import { deriveIssueSessionReactiveIntent } from "../issue-session.ts";
+import { deriveReactiveWorkflowIntent } from "../reactive-workflow-intent.ts";
 import type { AwaitingInputReason } from "../awaiting-input-reason.ts";
+import { isIssueAwaitingInputProjection, isIssueTerminalProjection } from "../issue-execution-state.ts";
+import { workflowRunIntent, type WorkflowRunIntent } from "../workflow-intent.ts";
 
 export function decideRunIntent(p: {
   delegated: boolean;
@@ -10,11 +12,11 @@ export function decideRunIntent(p: {
   triggerEvent: string;
   unresolvedBlockers: number;
   hasActiveRun: boolean;
-  hasPendingWake: boolean;
+  hasRunnableWorkflowTask: boolean;
   terminal: boolean;
   currentState?: FactoryState | undefined;
 }): RunType | undefined {
-  const wakeEligibleState =
+  const taskEligibleState =
     p.currentState === undefined
     || p.currentState === "delegated"
     || p.currentState === "awaiting_input";
@@ -23,7 +25,7 @@ export function decideRunIntent(p: {
     && p.currentState === "awaiting_input"
     && p.triggerEvent === "issueCreated";
   if (p.delegated && (p.triggerAllowed || delegatedStartupRecovery) && p.unresolvedBlockers === 0
-      && !p.hasActiveRun && !p.hasPendingWake && !p.terminal && wakeEligibleState) {
+      && !p.hasActiveRun && !p.hasRunnableWorkflowTask && !p.terminal && taskEligibleState) {
     return "implementation";
   }
   return undefined;
@@ -67,23 +69,23 @@ export function resolveReDelegationResume(p: {
   prCheckStatus?: string | undefined;
   lastBlockingReviewHeadSha?: string | undefined;
   latestFailureSource?: string | undefined;
-}): { factoryState?: FactoryState | undefined; pendingRunType?: RunType | null } {
+}): { factoryState?: FactoryState | undefined; workflowIntent?: WorkflowRunIntent | undefined } {
   if (!p.delegated || p.previouslyDelegated !== false) {
     return {};
   }
 
   if (p.prState === "merged") {
-    return { factoryState: "done", pendingRunType: null };
+    return { factoryState: "done" };
   }
 
   if (p.prNumber !== undefined && (p.prState === undefined || p.prState === "open") && p.prIsDraft) {
     return {
       factoryState: "delegated",
-      pendingRunType: (p.unresolvedBlockers ?? 0) === 0 ? "implementation" : null,
+      ...((p.unresolvedBlockers ?? 0) === 0 ? { workflowIntent: workflowRunIntent("implementation") } : {}),
     };
   }
 
-  const reactiveIntent = deriveIssueSessionReactiveIntent({
+  const reactiveIntent = deriveReactiveWorkflowIntent({
     delegatedToPatchRelay: true,
     prNumber: p.prNumber,
     prState: p.prState,
@@ -97,28 +99,27 @@ export function resolveReDelegationResume(p: {
   if (reactiveIntent) {
     return {
       factoryState: reactiveIntent.compatibilityFactoryState,
-      pendingRunType: reactiveIntent.runType,
+      workflowIntent: workflowRunIntent(reactiveIntent.runType),
     };
   }
 
   if (p.prNumber !== undefined && (p.prState === undefined || p.prState === "open")) {
     if (p.prReviewState === "approved") {
-      return { factoryState: "awaiting_queue", pendingRunType: null };
+      return { factoryState: "awaiting_queue" };
     }
-    return { factoryState: "pr_open", pendingRunType: null };
+    return { factoryState: "pr_open" };
   }
 
   if (p.currentState === "awaiting_input" && p.awaitingInputReason === "completion_check_question") {
     return {
       factoryState: "awaiting_input",
-      pendingRunType: null,
     };
   }
 
   if (p.currentState === "awaiting_input" || p.currentState === "delegated" || p.currentState === "implementing") {
     return {
       factoryState: "delegated",
-      pendingRunType: (p.unresolvedBlockers ?? 0) === 0 ? "implementation" : null,
+      ...((p.unresolvedBlockers ?? 0) === 0 ? { workflowIntent: workflowRunIntent("implementation") } : {}),
     };
   }
 
@@ -146,7 +147,7 @@ export function isTerminalDelegationState(
   if (existingIssue?.prState === "merged") {
     return true;
   }
-  if (existingIssue?.factoryState && existingIssue.factoryState !== "awaiting_input" && TERMINAL_STATES.has(existingIssue.factoryState)) {
+  if (existingIssue && !isIssueAwaitingInputProjection(existingIssue) && isIssueTerminalProjection(existingIssue)) {
     return true;
   }
   return isResolvedLinearState(hydratedIssue.stateType, hydratedIssue.stateName);

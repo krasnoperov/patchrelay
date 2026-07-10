@@ -4,15 +4,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
-import { maybeFanChildRebaseWakes } from "../src/github-webhook-stack-coordination.ts";
-import { createTestWakeDispatcher } from "./helpers/wake-dispatcher.ts";
+import { maybeFanChildRebaseDispatches } from "../src/github-webhook-stack-coordination.ts";
+import { createTestWorkflowTaskDispatcher } from "./helpers/workflow-task-dispatcher.ts";
 
 function silentLogger() {
   const logger = {
     info() {}, warn() {}, error() {}, debug() {}, fatal() {}, trace() {},
     child() { return logger; },
   };
-  return logger as unknown as Parameters<typeof maybeFanChildRebaseWakes>[0]["logger"];
+  return logger as unknown as Parameters<typeof maybeFanChildRebaseDispatches>[0]["logger"];
 }
 
 function withDb<T>(fn: (db: PatchRelayDatabase) => T): T {
@@ -54,7 +54,7 @@ test("listIssuesWithParentBranch returns active children of a parent branch", ()
   });
 });
 
-test("maybeFanChildRebaseWakes enqueues branch_upkeep on stacked children for pr_synchronize", () => {
+test("maybeFanChildRebaseDispatches enqueues branch_upkeep on stacked children for pr_synchronize", () => {
   withDb((db) => {
     db.issues.upsertIssue({
       projectId: "p", linearIssueId: "PARENT",
@@ -67,10 +67,10 @@ test("maybeFanChildRebaseWakes enqueues branch_upkeep on stacked children for pr
     });
 
     const enqueued: Array<[string, string]> = [];
-    const fan = () => maybeFanChildRebaseWakes({
+    const fan = () => maybeFanChildRebaseDispatches({
       db,
       logger: silentLogger(),
-      wakeDispatcher: createTestWakeDispatcher(db, (projectId, issueId) => enqueued.push([projectId, issueId])),
+      workflowTaskDispatcher: createTestWorkflowTaskDispatcher(db, (projectId, issueId) => enqueued.push([projectId, issueId])),
       event: {
         triggerEvent: "pr_synchronize",
         repoFullName: "owner/repo",
@@ -82,10 +82,8 @@ test("maybeFanChildRebaseWakes enqueues branch_upkeep on stacked children for pr
 
     assert.deepEqual(enqueued, [["p", "CHILD"]]);
 
-    // S6: the legacy `pending_run_type` column write is gone — the durable
     // workflow task is now the only dispatch source.
     const child = db.issues.getIssue("p", "CHILD")!;
-    assert.equal(child.pendingRunType, undefined);
 
     // The durable v2 signal is appended and materialized into a runnable
     // workflow task, so the workflow_task dispatch rung drives the run.
@@ -104,7 +102,7 @@ test("maybeFanChildRebaseWakes enqueues branch_upkeep on stacked children for pr
   });
 });
 
-test("maybeFanChildRebaseWakes is a no-op for non-pr_synchronize events", () => {
+test("maybeFanChildRebaseDispatches is a no-op for non-pr_synchronize events", () => {
   withDb((db) => {
     db.issues.upsertIssue({
       projectId: "p", linearIssueId: "CHILD",
@@ -113,10 +111,10 @@ test("maybeFanChildRebaseWakes is a no-op for non-pr_synchronize events", () => 
     });
 
     const enqueued: Array<[string, string]> = [];
-    maybeFanChildRebaseWakes({
+    maybeFanChildRebaseDispatches({
       db,
       logger: silentLogger(),
-      wakeDispatcher: createTestWakeDispatcher(db, (projectId, issueId) => enqueued.push([projectId, issueId])),
+      workflowTaskDispatcher: createTestWorkflowTaskDispatcher(db, (projectId, issueId) => enqueued.push([projectId, issueId])),
       event: {
         triggerEvent: "review_approved",
         repoFullName: "owner/repo",
@@ -129,7 +127,7 @@ test("maybeFanChildRebaseWakes is a no-op for non-pr_synchronize events", () => 
   });
 });
 
-test("maybeFanChildRebaseWakes skips children with an active run", () => {
+test("maybeFanChildRebaseDispatches skips children with an active run", () => {
   withDb((db) => {
     db.issues.upsertIssue({
       projectId: "p", linearIssueId: "CHILD",
@@ -149,10 +147,10 @@ test("maybeFanChildRebaseWakes skips children with an active run", () => {
     });
 
     const enqueued: Array<[string, string]> = [];
-    maybeFanChildRebaseWakes({
+    maybeFanChildRebaseDispatches({
       db,
       logger: silentLogger(),
-      wakeDispatcher: createTestWakeDispatcher(db, (projectId, issueId) => enqueued.push([projectId, issueId])),
+      workflowTaskDispatcher: createTestWorkflowTaskDispatcher(db, (projectId, issueId) => enqueued.push([projectId, issueId])),
       event: {
         triggerEvent: "pr_synchronize",
         repoFullName: "owner/repo",
@@ -163,6 +161,5 @@ test("maybeFanChildRebaseWakes skips children with an active run", () => {
 
     assert.deepEqual(enqueued, []);
     const after = db.issues.getIssue("p", "CHILD")!;
-    assert.equal(after.pendingRunType, undefined, "should not stomp on an in-flight run");
   });
 });

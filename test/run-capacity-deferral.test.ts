@@ -9,6 +9,7 @@ import { RunOrchestrator } from "../src/run-orchestrator.ts";
 import type { CodexTurnSummary } from "../src/codex-types.ts";
 import type { RunRecord } from "../src/db-types.ts";
 import type { AppConfig } from "../src/types.ts";
+import { peekRunnableWorkflowTaskRunType } from "../src/pending-workflow-task.ts";
 
 // The real production string from the LSR-837 incident.
 const USAGE_LIMIT_MESSAGE =
@@ -141,7 +142,7 @@ async function reconcileRun(orchestrator: RunOrchestrator, run: RunRecord): Prom
   await (orchestrator as unknown as { reconcileRun: (target: RunRecord) => Promise<void> }).reconcileRun(run);
 }
 
-test("capacity-failed ci_repair refunds the attempt, holds the repair state, and re-enqueues the wake", async () => {
+test("capacity-failed ci_repair refunds the attempt, holds the repair state, and re-enqueues the workflowTask", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-capacity-ci-"));
   try {
     const failedTurn: CodexTurnSummary = {
@@ -193,13 +194,51 @@ test("capacity-failed ci_repair refunds the attempt, holds the repair state, and
     assert.equal(updatedIssue.lastAttemptedFailureSignature, undefined);
     assert.ok(updatedIssue.capacityBackoffUntil);
     assert.ok(Date.parse(updatedIssue.capacityBackoffUntil!) > Date.now());
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-cap-1")?.runType, "ci_repair");
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-cap-1")?.runType, "ci_repair");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("capacity-failed queue_repair refunds the attempt, holds the repair state, and re-enqueues the wake", async () => {
+test("capacity-failed implementation materializes and dispatches a runnable workflow task", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-capacity-implementation-"));
+  try {
+    const failedTurn: CodexTurnSummary = {
+      id: "turn-cap-impl",
+      status: "failed",
+      error: { message: USAGE_LIMIT_MESSAGE },
+      items: [],
+    };
+    const { db, orchestrator, enqueueCalls } = createHarness(baseDir, failedTurn, "thread-cap-impl");
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-cap-impl",
+      issueKey: "USE-205",
+      branchName: "feat-cap-impl",
+      factoryState: "implementing",
+      delegatedToPatchRelay: true,
+    });
+    const run = createActiveRun(db, {
+      linearIssueId: "issue-cap-impl",
+      runType: "implementation",
+      threadId: "thread-cap-impl",
+      turnId: "turn-cap-impl",
+    });
+
+    await reconcileRun(orchestrator, run);
+
+    const updatedIssue = db.getIssue("usertold", "issue-cap-impl")!;
+    assert.equal(updatedIssue.factoryState, "delegated");
+    assert.equal(updatedIssue.activeRunId, undefined);
+    assert.ok(updatedIssue.capacityBackoffUntil);
+    assert.equal(peekRunnableWorkflowTaskRunType(db, "usertold", "issue-cap-impl"), "implementation");
+    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-cap-impl" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("capacity-failed queue_repair refunds the attempt, holds the repair state, and re-enqueues the workflowTask", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-capacity-queue-"));
   try {
     const failedTurn: CodexTurnSummary = {
@@ -246,7 +285,7 @@ test("capacity-failed queue_repair refunds the attempt, holds the repair state, 
     assert.equal(updatedIssue.lastAttemptedFailureSignature, undefined);
     assert.ok(updatedIssue.capacityBackoffUntil);
     assert.ok(Date.parse(updatedIssue.capacityBackoffUntil!) > Date.now());
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-cap-2")?.runType, "queue_repair");
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-cap-2")?.runType, "queue_repair");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -365,7 +404,7 @@ test("capacity-failed turn via the notification path defers with the parsed retr
     // backoff lands within the next day rather than the fixed fallback.
     assert.ok(Date.parse(updatedIssue.capacityBackoffUntil!) > Date.now());
     assert.ok(Date.parse(updatedIssue.capacityBackoffUntil!) < Date.now() + 25 * 60 * 60 * 1000);
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-cap-3")?.runType, "ci_repair");
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-cap-3")?.runType, "ci_repair");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

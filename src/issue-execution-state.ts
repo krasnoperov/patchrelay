@@ -1,5 +1,6 @@
 import type { IssueRecord, RunRecord } from "./db-types.ts";
-import { hasOpenPr, isCanceledLinearState, isCompletedLinearState } from "./pr-state.ts";
+import { isCanceledLinearState, isCompletedLinearState } from "./linear-state.ts";
+import { hasOpenPr } from "./pr-lifecycle.ts";
 
 /**
  * D3 (core simplification plan): the single derived answer to "why is this
@@ -36,7 +37,7 @@ export type IssueExternalWait =
   | "downstream_automation"
   | "external_review";
 
-/** Repair work PatchRelay still owes the issue (wake pending or imminent). */
+/** Repair work PatchRelay still owes the issue (workflow task pending or imminent). */
 export type IssueFollowupRepair = "review_fix" | "ci_repair" | "queue_repair";
 
 export type IssueExecutionState =
@@ -56,8 +57,8 @@ export type IssueExecutionState =
   | { kind: "terminal"; outcome: "done" | "failed" | "escalated" }
   /** No run and nothing for PatchRelay to do: waiting on GitHub/downstream truth. */
   | { kind: "idle_awaiting_external"; waitingOn: IssueExternalWait; checkName?: string | undefined }
-  /** Legacy pending-run slot is populated; ready to launch. */
-  | { kind: "ready"; pendingRunType: string }
+  /** A runnable workflow task exists; ready to launch. */
+  | { kind: "ready"; runnableTaskRunType: string }
   /** Nothing pending, nothing blocking — no wait reason at all. */
   | { kind: "idle" }
   /**
@@ -67,6 +68,8 @@ export type IssueExecutionState =
    * while reconciliation repairs the row.
    */
   | { kind: "inconsistent"; description: string; run: IssueExecutionRunFacts };
+
+export type IssueTerminalOutcome = "done" | "failed" | "escalated";
 
 export interface IssueExecutionStateInput {
   delegatedToPatchRelay?: boolean | undefined;
@@ -79,7 +82,8 @@ export interface IssueExecutionStateInput {
   activeRunStatus?: string | undefined;
   /** Completion-check outcome of the latest run (types the awaiting_input reason). */
   latestRunCompletionCheckOutcome?: string | undefined;
-  pendingRunType?: string | undefined;
+  /** Run type resolved from an open runnable workflow task. */
+  runnableTaskRunType?: string | undefined;
   blockedByKeys?: string[] | undefined;
   orchestrationSettleUntil?: string | undefined;
   prNumber?: number | undefined;
@@ -95,6 +99,120 @@ export interface IssueExecutionStateInput {
 
 /** Run statuses that may legally occupy an issue's active-run slot. */
 const ACTIVE_RUN_STATUSES: ReadonlySet<string> = new Set(["queued", "running"]);
+
+export function deriveIssueTerminalOutcome(
+  params: Pick<IssueExecutionStateInput, "factoryState" | "currentLinearState" | "currentLinearStateType" | "prState">,
+): IssueTerminalOutcome | undefined {
+  if (
+    params.factoryState === "done"
+    || params.prState === "merged"
+    || isCompletedLinearState(params.currentLinearStateType, params.currentLinearState)
+  ) return "done";
+  if (isCanceledLinearState(params.currentLinearStateType, params.currentLinearState)) return "failed";
+  if (params.factoryState === "failed") return "failed";
+  if (params.factoryState === "escalated") return "escalated";
+  return undefined;
+}
+
+export function isIssueTerminalProjection(
+  params: Pick<IssueExecutionStateInput, "factoryState" | "currentLinearState" | "currentLinearStateType" | "prState">,
+): boolean {
+  return deriveIssueTerminalOutcome(params) !== undefined;
+}
+
+export function isIssueDoneProjection(
+  params: Pick<IssueExecutionStateInput, "factoryState" | "currentLinearState" | "currentLinearStateType" | "prState">,
+): boolean {
+  return deriveIssueTerminalOutcome(params) === "done";
+}
+
+export function isIssueTerminalFailureProjection(
+  params: Pick<IssueExecutionStateInput, "factoryState" | "currentLinearState" | "currentLinearStateType" | "prState">,
+): boolean {
+  const outcome = deriveIssueTerminalOutcome(params);
+  return outcome === "failed" || outcome === "escalated";
+}
+
+export function isIssueAwaitingInputProjection(params: Pick<IssueExecutionStateInput, "factoryState">): boolean {
+  return params.factoryState === "awaiting_input";
+}
+
+export function isIssuePrePrOpenDisplayStateProjection(params: Pick<IssueExecutionStateInput, "factoryState">): boolean {
+  return params.factoryState === "awaiting_input" || params.factoryState === "delegated";
+}
+
+export function isIssueDeployingProjection(params: Pick<IssueExecutionStateInput, "factoryState">): boolean {
+  return params.factoryState === "deploying";
+}
+
+export function isIssueDownstreamOwnedProjection(params: Pick<IssueExecutionStateInput, "factoryState" | "prReviewState">): boolean {
+  return params.factoryState === "awaiting_queue" || params.prReviewState === "approved";
+}
+
+export function isIssueAwaitingQueueProjection(params: Pick<IssueExecutionStateInput, "factoryState">): boolean {
+  return params.factoryState === "awaiting_queue";
+}
+
+export function isIssueTerminalDisplayStateProjection(params: Pick<IssueExecutionStateInput, "factoryState">): boolean {
+  return params.factoryState === "done" || params.factoryState === "failed" || params.factoryState === "escalated";
+}
+
+export function deriveClosedPrDispositionProjection(
+  params: Pick<IssueExecutionStateInput, "factoryState" | "currentLinearState" | "currentLinearStateType">,
+): "done" | "terminal" | "redelegate" {
+  const outcome = deriveIssueTerminalOutcome(params);
+  if (outcome === "done") return "done";
+  if (
+    outcome === "failed"
+    || outcome === "escalated"
+    || params.factoryState === "awaiting_input"
+  ) return "terminal";
+  return "redelegate";
+}
+
+export function isIssueDownstreamOrDoneProjection(
+  params: Pick<IssueExecutionStateInput, "factoryState" | "currentLinearState" | "currentLinearStateType" | "prState">,
+): boolean {
+  return params.factoryState === "awaiting_queue" || isIssueDoneProjection(params);
+}
+
+export function isIssueLocalWorkProjection(params: Pick<IssueExecutionStateInput, "factoryState">): boolean {
+  return params.factoryState === "delegated" || params.factoryState === "implementing";
+}
+
+export function isIssuePublishedOrDownstreamOrDoneProjection(
+  params: Pick<IssueExecutionStateInput, "factoryState" | "currentLinearState" | "currentLinearStateType" | "prState">,
+): boolean {
+  return params.factoryState === "pr_open" || params.factoryState === "awaiting_queue" || isIssueDoneProjection(params);
+}
+
+export function isIssuePublishedOrDownstreamProjection(params: Pick<IssueExecutionStateInput, "factoryState">): boolean {
+  return params.factoryState === "pr_open" || params.factoryState === "awaiting_queue";
+}
+
+export function isIssuePrOpenProjection(params: Pick<IssueExecutionStateInput, "factoryState">): boolean {
+  return params.factoryState === "pr_open";
+}
+
+export function isIssueDelegatedProjection(params: Pick<IssueExecutionStateInput, "factoryState">): boolean {
+  return params.factoryState === "delegated";
+}
+
+export function isIssueImplementingProjection(params: Pick<IssueExecutionStateInput, "factoryState">): boolean {
+  return params.factoryState === "implementing";
+}
+
+export function isIssueRequestedChangesProjection(params: Pick<IssueExecutionStateInput, "factoryState" | "prReviewState">): boolean {
+  return params.factoryState === "changes_requested" || params.prReviewState === "changes_requested";
+}
+
+export function isIssueCiRepairProjection(params: Pick<IssueExecutionStateInput, "factoryState" | "prCheckStatus">): boolean {
+  return params.factoryState === "repairing_ci" || params.prCheckStatus === "failed" || params.prCheckStatus === "failure";
+}
+
+export function isIssueQueueRepairProjection(params: Pick<IssueExecutionStateInput, "factoryState">): boolean {
+  return params.factoryState === "repairing_queue";
+}
 
 export function deriveIssueExecutionState(params: IssueExecutionStateInput): IssueExecutionState {
   const factoryState = params.factoryState;
@@ -161,6 +279,10 @@ export function deriveIssueExecutionState(params: IssueExecutionStateInput): Iss
     return { kind: "blocked", blockedByKeys };
   }
 
+  if (params.runnableTaskRunType) {
+    return { kind: "ready", runnableTaskRunType: params.runnableTaskRunType };
+  }
+
   switch (factoryState) {
     case "awaiting_input":
       return {
@@ -211,10 +333,11 @@ export function deriveIssueExecutionState(params: IssueExecutionStateInput): Iss
   if (hasOpenPr(params.prNumber, params.prState)) {
     return { kind: "idle_awaiting_external", waitingOn: "external_review" };
   }
-  if (params.pendingRunType) {
-    return { kind: "ready", pendingRunType: params.pendingRunType };
-  }
   return { kind: "idle" };
+}
+
+export function isIssueExecutionReadyForExecution(state: IssueExecutionState): boolean {
+  return state.kind === "ready";
 }
 
 function resolveRunPhase(
@@ -238,7 +361,6 @@ export function issueExecutionStateInputFromRecords(
     | "currentLinearState"
     | "currentLinearStateType"
     | "activeRunId"
-    | "pendingRunType"
     | "orchestrationSettleUntil"
     | "prNumber"
     | "prState"
@@ -252,6 +374,7 @@ export function issueExecutionStateInputFromRecords(
     activeRun?: Pick<RunRecord, "id" | "runType" | "status"> | undefined;
     latestRun?: Pick<RunRecord, "completionCheckOutcome"> | undefined;
     blockedByKeys?: string[] | undefined;
+    runnableTaskRunType?: string | undefined;
   },
 ): IssueExecutionStateInput {
   return {
@@ -263,7 +386,7 @@ export function issueExecutionStateInputFromRecords(
     activeRunType: extras?.activeRun?.runType,
     activeRunStatus: extras?.activeRun?.status,
     latestRunCompletionCheckOutcome: extras?.latestRun?.completionCheckOutcome,
-    pendingRunType: issue.pendingRunType,
+    runnableTaskRunType: extras?.runnableTaskRunType,
     blockedByKeys: extras?.blockedByKeys,
     orchestrationSettleUntil: issue.orchestrationSettleUntil,
     prNumber: issue.prNumber,

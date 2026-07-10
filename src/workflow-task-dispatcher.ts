@@ -5,6 +5,7 @@ import type { RunType } from "./run-type.ts";
 import type { ReleaseIssueSessionLease } from "./issue-session-lease-service.ts";
 import type { IssueSessionEventType } from "./issue-session-events.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
+import { isIssueTerminalProjection } from "./issue-execution-state.ts";
 import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
@@ -14,44 +15,22 @@ export interface DispatchableSessionEvent {
   dedupeKey?: string | undefined;
 }
 
-export interface WakeDispatchResult {
+export interface WorkflowTaskDispatchResult {
   runType: RunType;
-  wakeReason?: string | undefined;
+  workflowReason?: string | undefined;
 }
 
-interface DispatchableWake {
+interface DispatchableWorkflowTaskDispatch {
   runType: RunType;
-  wakeReason?: string | undefined;
+  workflowReason?: string | undefined;
   eventIds: number[];
-  source: "session_event" | "legacy_pending_run_type" | "workflow_task";
-}
-
-// S5: the human-input / completion-check / orchestration child-update wake
-// reasons that the durable inbox tasks (run:input / run:orchestration_followup)
-// are meant to own. If the session-event rung answers one of these, the inbox
-// task should have covered it first — a proving instrument for S6/S7.
-const INPUT_FAMILY_WAKE_REASONS = new Set<string>([
-  "direct_reply",
-  "followup_prompt",
-  "followup_comment",
-  "human_instruction",
-  "operator_prompt",
-  "completion_check_continue",
-  "child_changed",
-  "child_delivered",
-  "child_regressed",
-]);
-
-function isInputFamilyWakeReason(wakeReason: string | undefined): boolean {
-  return wakeReason !== undefined && INPUT_FAMILY_WAKE_REASONS.has(wakeReason);
+  source: "workflow_task";
 }
 
 // Single owner of "append a session event and tell the orchestrator
-// something might be runnable", and of "release a finished run so the
-// next wake fires." Until this existed, 8+ call sites each made their
-// own decision about whether to call `enqueueIssue`. A missed enqueue
-// (lease race, in-memory queue cleared by restart) left events orphaned
-// for hours — we lost 6.5h on LSR-495 to exactly this.
+// something might be runnable", and of "release a finished run so the next
+// workflow task fires." Until this existed, 8+ call sites each made their own
+// decision about whether to call `enqueueIssue`.
 //
 // Idempotency comes from two layers:
 //   - `issue_session_events.dedupe_key` dedupes the event itself.
@@ -61,9 +40,9 @@ function isInputFamilyWakeReason(wakeReason: string | undefined): boolean {
 // dedupe enqueues within that scope — every call into the dispatcher
 // during the callback contributes to the same Set, so a single
 // reconcile pass produces at most one enqueue per issue even when
-// many sub-passes detect the same wake. The `enqueuedThisTick` option
+// many sub-passes detect the same runnable task. The `enqueuedThisTick` option
 // on individual methods is for callers that thread their own Set.
-export class WakeDispatcher {
+export class WorkflowTaskDispatcher {
   private currentTick: Set<string> | undefined;
 
   constructor(
@@ -93,7 +72,7 @@ export class WakeDispatcher {
           ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
           error: error instanceof Error ? error.message : String(error),
         },
-        "Workflow task reconciliation failed while resolving wake",
+        "Workflow task reconciliation failed while resolving dispatchable task",
       );
       return this.listOpenWorkflowTasks(issue.projectId, issue.linearIssueId);
     }
@@ -109,58 +88,18 @@ export class WakeDispatcher {
       ));
   }
 
-  private workflowAuthorityObserved(projectId: string, linearIssueId: string): boolean {
-    return this.db.workflowObservations
-      .listObservations(projectId, linearIssueId)
-      .some((observation) => (
-        observation.type === "linear.delegated"
-        || observation.type === "linear.undelegated"
-        || observation.type === "operator.authority_changed"
-      ));
-  }
-
-  private sessionWakeCanAnswerInputWait(openTasks: WorkflowTaskRecord[], wakeReason: string | undefined): boolean {
-    if (openTasks.length === 0 || !openTasks.every((task) => task.taskId === "wait:input")) {
-      return false;
-    }
-    return wakeReason === "direct_reply"
-      || wakeReason === "followup_prompt"
-      || wakeReason === "followup_comment"
-      || wakeReason === "human_instruction"
-      || wakeReason === "operator_prompt"
-      || wakeReason === "completion_check_continue";
-  }
-
-  private workflowTasksSuppressSessionWake(openTasks: WorkflowTaskRecord[], wakeReason: string | undefined): boolean {
-    if (openTasks.length === 0) return false;
-    if (this.peekRunnableWorkflowTask(openTasks[0]!.projectId, openTasks[0]!.subjectId, openTasks)) return false;
-    if (!openTasks.some((task) => this.isBlockingWorkflowGate(task))) return false;
-    return !this.sessionWakeCanAnswerInputWait(openTasks, wakeReason);
-  }
-
-  private isBlockingWorkflowGate(task: WorkflowTaskRecord): boolean {
-    if (task.taskId === "wait:input") return true;
-    if (task.taskId === "wait:children" || task.taskId === "wait:blockers" || task.taskId.startsWith("wait:active-run:")) {
-      return true;
-    }
-    if (task.taskId === "wait:authority") {
-      return this.workflowAuthorityObserved(task.projectId, task.subjectId);
-    }
-    return task.taskType === "verify" || task.taskType === "ask" || task.taskType === "escalate" || task.taskType === "publish";
-  }
-
-  private resolveDispatchableWake(
+  private resolveDispatchableWorkflowTaskDispatch(
     projectId: string,
     linearIssueId: string,
     issue: IssueRecord,
     options?: { ignoreDetachedActiveRuns?: boolean | undefined },
-  ): DispatchableWake | undefined {
+  ): DispatchableWorkflowTaskDispatch | undefined {
     const existingWorkflowTasks = this.listOpenWorkflowTasks(projectId, linearIssueId);
     const existingWorkflowTask = this.peekRunnableWorkflowTask(projectId, linearIssueId, existingWorkflowTasks);
     if (existingWorkflowTask?.runType) {
       return {
         runType: existingWorkflowTask.runType,
-        wakeReason: existingWorkflowTask.taskId,
+        workflowReason: existingWorkflowTask.taskId,
         eventIds: [],
         source: "workflow_task",
       };
@@ -172,67 +111,9 @@ export class WakeDispatcher {
     if (workflowTask?.runType) {
       return {
         runType: workflowTask.runType,
-        wakeReason: workflowTask.taskId,
+        workflowReason: workflowTask.taskId,
         eventIds: [],
         source: "workflow_task",
-      };
-    }
-
-    const sessionWake = this.db.issueSessions.peekIssueSessionWake(projectId, linearIssueId);
-    if (sessionWake) {
-      if (this.workflowTasksSuppressSessionWake(openWorkflowTasks, sessionWake.wakeReason)) {
-        return undefined;
-      }
-      if (isInputFamilyWakeReason(sessionWake.wakeReason)) {
-        emitTelemetry(this.telemetry, {
-          type: "health.invariant",
-          invariant: "session_wake_answered_input",
-          status: "observed",
-          projectId,
-          linearIssueId,
-          ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
-          detail: `Session-event rung answered ${sessionWake.wakeReason} — the durable inbox task should have covered it`,
-        });
-      }
-      // S6: the union superset — every session-event dispatch (any wake reason)
-      // should now be covered by a durable workflow task. Firing means a task
-      // failed to materialize; silence on the live service is the S7 go signal.
-      emitTelemetry(this.telemetry, {
-        type: "health.invariant",
-        invariant: "session_event_dispatch",
-        status: "observed",
-        projectId,
-        linearIssueId,
-        ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
-        detail: `Session-event rung won the dispatch${sessionWake.wakeReason ? ` (${sessionWake.wakeReason})` : ""} — a durable workflow task should have covered it`,
-      });
-      return {
-        runType: sessionWake.runType,
-        ...(sessionWake.wakeReason ? { wakeReason: sessionWake.wakeReason } : {}),
-        eventIds: sessionWake.eventIds,
-        source: "session_event",
-      };
-    }
-    if (this.workflowTasksSuppressSessionWake(openWorkflowTasks, undefined)) {
-      return undefined;
-    }
-    if (issue.pendingRunType) {
-      // S6: the legacy column rung. All writers now redirect to durable
-      // observations+tasks and the startup drain nulls surviving rows, so this
-      // should never win — fire the invariant to prove it before S7 drops it.
-      emitTelemetry(this.telemetry, {
-        type: "health.invariant",
-        invariant: "legacy_pending_dispatch",
-        status: "observed",
-        projectId,
-        linearIssueId,
-        ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
-        detail: `Legacy pending_run_type column (${issue.pendingRunType}) won the dispatch — a durable workflow task should have covered it`,
-      });
-      return {
-        runType: issue.pendingRunType,
-        eventIds: [],
-        source: "legacy_pending_run_type",
       };
     }
     return undefined;
@@ -251,9 +132,9 @@ export class WakeDispatcher {
     }
   }
 
-  // Append a session event and dispatch the issue if a wake is derivable
+  // Append a session event and dispatch the issue if a workflow task is derivable
   // and no run is currently in flight. Returns the runType the next run
-  // would have, or undefined if the event is non-actionable / no wake
+  // would have, or undefined if the event is non-actionable / no workflow task
   // exists / a run is already running (the finalizer will drain it).
   recordEventAndDispatch(
     projectId: string,
@@ -269,7 +150,7 @@ export class WakeDispatcher {
     const issue = this.db.issues.getIssue(projectId, linearIssueId);
     if (appended) {
       emitTelemetry(this.telemetry, {
-        type: "wake.created",
+        type: "dispatch.created",
         projectId,
         linearIssueId,
         ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
@@ -281,7 +162,7 @@ export class WakeDispatcher {
     // Honour the active tick scope (set via withTick) so callers nested
     // inside a reconcile pass automatically dedupe without threading
     // the Set through every helper signature.
-    return this.dispatchIfWakePending(
+    return this.dispatchIfWorkflowTaskPending(
       projectId,
       linearIssueId,
       options ?? (this.currentTick ? { enqueuedThisTick: this.currentTick } : undefined),
@@ -289,13 +170,11 @@ export class WakeDispatcher {
   }
 
   // "Make sure the orchestrator looks at this issue, if anything is worth
-  // looking at." Used by the idle reconciler safety net for orphan
-  // recovery, by dependency-readiness flows that don't append a new
-  // event but want to poke, and by the stack-coordination fan-out that
-  // sets the legacy `pending_run_type` column on the issue. Suppressed
-  // when an active run is in flight — the run finalizer owns the
+  // looking at." Used by recovery and dependency-readiness flows that want to
+  // poke the orchestrator after durable workflow-task reconciliation.
+  // Suppressed when an active run is in flight — the run finalizer owns the
   // post-run drain via releaseRunAndDispatch.
-  dispatchIfWakePending(
+  dispatchIfWorkflowTaskPending(
     projectId: string,
     linearIssueId: string,
     options?: { enqueuedThisTick?: Set<string> },
@@ -303,7 +182,7 @@ export class WakeDispatcher {
     const issue = this.db.issues.getIssue(projectId, linearIssueId);
     if (!issue) {
       emitTelemetry(this.telemetry, {
-        type: "wake.suppressed",
+        type: "dispatch.suppressed",
         projectId,
         linearIssueId,
         reason: "issue_missing",
@@ -313,7 +192,7 @@ export class WakeDispatcher {
     if (issue.activeRunId !== undefined) {
       const blockerCount = this.db.issues.countUnresolvedBlockers(projectId, linearIssueId);
       emitTelemetry(this.telemetry, {
-        type: "wake.suppressed",
+        type: "dispatch.suppressed",
         projectId,
         linearIssueId,
         ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
@@ -331,7 +210,7 @@ export class WakeDispatcher {
           ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
           runId: issue.activeRunId,
           blockerCount,
-          detail: "Wake suppressed because an active run exists while blockers are unresolved",
+          detail: "Dispatch suppressed because an active run exists while blockers are unresolved",
         });
       }
       return undefined;
@@ -340,7 +219,7 @@ export class WakeDispatcher {
     if (unresolvedBlockers > 0) {
       const blockerKeys = this.unresolvedBlockerKeys(projectId, linearIssueId);
       emitTelemetry(this.telemetry, {
-        type: "wake.suppressed",
+        type: "dispatch.suppressed",
         projectId,
         linearIssueId,
         ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
@@ -348,29 +227,29 @@ export class WakeDispatcher {
         blockerCount: unresolvedBlockers,
         blockerKeys,
       });
-      const pendingBlockedWake = this.db.issueSessions.peekIssueSessionWake(projectId, linearIssueId) ?? issue.pendingRunType;
-      if (pendingBlockedWake) {
+      const blockedRunnableTask = this.peekRunnableWorkflowTask(projectId, linearIssueId);
+      if (blockedRunnableTask) {
         emitTelemetry(this.telemetry, {
           type: "health.invariant",
-          invariant: "blocked_issue_with_pending_wake",
+          invariant: "blocked_issue_with_pending_workflow_task",
           status: "observed",
           projectId,
           linearIssueId,
           ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
           blockerCount: unresolvedBlockers,
-          detail: "Wake remains pending while blockers are unresolved",
+          detail: "Runnable workflow task remains pending while blockers are unresolved",
         });
       }
       return undefined;
     }
-    const dispatchable = this.resolveDispatchableWake(projectId, linearIssueId, issue);
+    const dispatchable = this.resolveDispatchableWorkflowTaskDispatch(projectId, linearIssueId, issue);
     if (!dispatchable) {
       emitTelemetry(this.telemetry, {
-        type: "wake.suppressed",
+        type: "dispatch.suppressed",
         projectId,
         linearIssueId,
         ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
-        reason: "no_wake_derivable",
+        reason: "no_workflow_task_derivable",
       });
       if (this.db.listIssuesReadyForExecution().some((entry) => entry.projectId === projectId && entry.linearIssueId === linearIssueId)) {
         emitTelemetry(this.telemetry, {
@@ -380,18 +259,18 @@ export class WakeDispatcher {
           projectId,
           linearIssueId,
           ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
-          detail: "Issue appears ready for execution but no wake was derivable for enqueue",
+          detail: "Issue appears ready for execution but no workflow task was derivable for enqueue",
         });
       }
       return undefined;
     }
     emitTelemetry(this.telemetry, {
-      type: "wake.derived",
+      type: "dispatch.derived",
       projectId,
       linearIssueId,
       ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
       runType: dispatchable.runType,
-      ...(dispatchable.wakeReason ? { wakeReason: dispatchable.wakeReason } : {}),
+      ...(dispatchable.workflowReason ? { workflowReason: dispatchable.workflowReason } : {}),
       eventIds: dispatchable.eventIds,
       source: dispatchable.source,
     });
@@ -399,12 +278,12 @@ export class WakeDispatcher {
     const key = `${projectId}:${linearIssueId}`;
     if (tick?.has(key)) {
       emitTelemetry(this.telemetry, {
-        type: "wake.deduped",
+        type: "dispatch.deduped",
         projectId,
         linearIssueId,
         ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
         runType: dispatchable.runType,
-        ...(dispatchable.wakeReason ? { wakeReason: dispatchable.wakeReason } : {}),
+        ...(dispatchable.workflowReason ? { workflowReason: dispatchable.workflowReason } : {}),
         eventIds: dispatchable.eventIds,
       });
       emitTelemetry(this.telemetry, {
@@ -419,12 +298,12 @@ export class WakeDispatcher {
     tick?.add(key);
     this.enqueueIssue(projectId, linearIssueId);
     emitTelemetry(this.telemetry, {
-      type: "wake.dispatched",
+      type: "dispatch.dispatched",
       projectId,
       linearIssueId,
       ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
       runType: dispatchable.runType,
-      ...(dispatchable.wakeReason ? { wakeReason: dispatchable.wakeReason } : {}),
+      ...(dispatchable.workflowReason ? { workflowReason: dispatchable.workflowReason } : {}),
       eventIds: dispatchable.eventIds,
     });
     emitTelemetry(this.telemetry, {
@@ -437,7 +316,7 @@ export class WakeDispatcher {
     return dispatchable.runType;
   }
 
-  // Release the lease for a finished run, then drain any wake that
+  // Release the lease for a finished run, then dispatch any workflow task that
   // landed during the run. The single owner of "run is over, what's
   // next?". Lease is released BEFORE the dispatch so the orchestrator's
   // lease guard succeeds on dequeue. Every code path that ends a run
@@ -451,7 +330,7 @@ export class WakeDispatcher {
     run: Pick<RunRecord, "projectId" | "linearIssueId" | "runType" | "id">;
     issueKey?: string | undefined;
     publishDeferredFollowUp?: boolean;
-  }): WakeDispatchResult | undefined {
+  }): WorkflowTaskDispatchResult | undefined {
     this.releaseLease(params.run.projectId, params.run.linearIssueId);
     emitTelemetry(this.telemetry, {
       type: "run.released",
@@ -462,9 +341,9 @@ export class WakeDispatcher {
       runType: params.run.runType,
     });
     const issue = this.db.issues.getIssue(params.run.projectId, params.run.linearIssueId);
-    if (issue?.factoryState === "done" || issue?.factoryState === "failed" || issue?.factoryState === "escalated" || issue?.prState === "merged") {
+    if (issue && isIssueTerminalProjection(issue)) {
       emitTelemetry(this.telemetry, {
-        type: "wake.suppressed",
+        type: "dispatch.suppressed",
         projectId: params.run.projectId,
         linearIssueId: params.run.linearIssueId,
         ...(params.issueKey ? { issueKey: params.issueKey } : {}),
@@ -472,38 +351,38 @@ export class WakeDispatcher {
       });
       return undefined;
     }
-    const wake = issue ? this.resolveDispatchableWake(
+    const dispatchable = issue ? this.resolveDispatchableWorkflowTaskDispatch(
       params.run.projectId,
       params.run.linearIssueId,
       issue,
       { ignoreDetachedActiveRuns: true },
     ) : undefined;
-    if (!wake) {
+    if (!dispatchable) {
       emitTelemetry(this.telemetry, {
-        type: "wake.suppressed",
+        type: "dispatch.suppressed",
         projectId: params.run.projectId,
         linearIssueId: params.run.linearIssueId,
         ...(params.issueKey ? { issueKey: params.issueKey } : {}),
-        reason: "no_wake_derivable",
+        reason: "no_workflow_task_derivable",
       });
       return undefined;
     }
     this.enqueueIssue(params.run.projectId, params.run.linearIssueId);
     emitTelemetry(this.telemetry, {
-      type: "wake.dispatched",
+      type: "dispatch.dispatched",
       projectId: params.run.projectId,
       linearIssueId: params.run.linearIssueId,
       ...(params.issueKey ? { issueKey: params.issueKey } : {}),
-      runType: wake.runType,
-      ...(wake.wakeReason ? { wakeReason: wake.wakeReason } : {}),
-      eventIds: wake.eventIds,
+      runType: dispatchable.runType,
+      ...(dispatchable.workflowReason ? { workflowReason: dispatchable.workflowReason } : {}),
+      eventIds: dispatchable.eventIds,
     });
     emitTelemetry(this.telemetry, {
       type: "queue.enqueued",
       projectId: params.run.projectId,
       linearIssueId: params.run.linearIssueId,
       ...(params.issueKey ? { issueKey: params.issueKey } : {}),
-      runType: wake.runType,
+      runType: dispatchable.runType,
     });
     if (params.publishDeferredFollowUp) {
       this.feed?.publish({
@@ -511,15 +390,15 @@ export class WakeDispatcher {
         kind: "stage",
         ...(params.issueKey ? { issueKey: params.issueKey } : {}),
         projectId: params.run.projectId,
-        stage: wake.runType,
+        stage: dispatchable.runType,
         status: "deferred_follow_up_queued",
-        summary: `${wake.runType} queued after ${params.run.runType} released authority`,
-        ...(wake.wakeReason ? { detail: `wake reason: ${wake.wakeReason}` } : {}),
+        summary: `${dispatchable.runType} queued after ${params.run.runType} released authority`,
+        ...(dispatchable.workflowReason ? { detail: `workflow reason: ${dispatchable.workflowReason}` } : {}),
       });
     }
     return {
-      runType: wake.runType,
-      ...(wake.wakeReason ? { wakeReason: wake.wakeReason } : {}),
+      runType: dispatchable.runType,
+      ...(dispatchable.workflowReason ? { workflowReason: dispatchable.workflowReason } : {}),
     };
   }
 

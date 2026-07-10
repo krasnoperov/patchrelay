@@ -3,6 +3,7 @@ import path from "node:path";
 import type { PatchRelayDatabase } from "../../db.ts";
 import type { GitProbe, SequenceCandidate, SequenceRecommendation } from "../../pr-sequencing.ts";
 import { detectStackingTarget } from "../../pr-sequencing.ts";
+import { isIssuePublishedOrDownstreamProjection } from "../../issue-execution-state.ts";
 import type { CliDataAccess } from "../data.ts";
 import { CliUsageError } from "../errors.ts";
 import { formatJson } from "../formatters/json.ts";
@@ -115,7 +116,7 @@ function collectCandidates(db: PatchRelayDatabase, selfBranch: string): Sequence
   const candidates: SequenceCandidate[] = [];
   const now = Date.now();
   for (const issue of issues) {
-    if (issue.factoryState !== "pr_open" && issue.factoryState !== "awaiting_queue") continue;
+    if (!isIssuePublishedOrDownstreamProjection(issue)) continue;
     if (!issue.branchName || !issue.prHeadSha || !issue.prNumber) continue;
     if (issue.branchName === selfBranch) continue;
     const queueAgeMs = issue.updatedAt

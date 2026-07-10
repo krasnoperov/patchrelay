@@ -2,14 +2,14 @@ import type { Logger } from "pino";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { UpsertIssueParams } from "./db/issue-store.ts";
-import { hasPendingWake } from "./pending-wake.ts";
+import { hasRunnableWorkflowTask } from "./pending-workflow-task.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
 import type { ReleaseIssueSessionLease, WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import { buildRunFailureActivity } from "./linear-session-reporting.ts";
 import type { LinearSessionSync } from "./linear-session-sync.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
-import type { AppendWakeEventWithLease } from "./run-wake-planner.ts";
-import type { WakeDispatcher } from "./wake-dispatcher.ts";
+import type { AppendRunIntentEventWithLease } from "./run-task-planner.ts";
+import type { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
 import type { CodexCapacityFailure } from "./codex-capacity.ts";
 import { getRemainingZombieRecoveryDelayMs, getZombieRecoveryBudget, resolveCapacityBackoffUntil } from "./run-budgets.ts";
 import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
@@ -24,6 +24,20 @@ import type { ProjectConfig } from "./workflow-types.ts";
 
 const WRITER = "run-failure-policy";
 
+function retryFactoryStateForRunType(runType: RunType): FactoryState {
+  switch (runType) {
+    case "implementation":
+      return "delegated";
+    case "ci_repair":
+      return "repairing_ci";
+    case "queue_repair":
+      return "repairing_queue";
+    case "review_fix":
+    case "branch_upkeep":
+      return "changes_requested";
+  }
+}
+
 type AttemptRefundFields = Partial<Pick<
   UpsertIssueParams,
   | "ciRepairAttempts"
@@ -37,7 +51,7 @@ type AttemptRefundFields = Partial<Pick<
 // Roll back the attempt counter consumed at launch and clear the
 // attempted-failure provenance for repair runs, so a run that died without
 // evidence about the work (interrupted turn, capacity outage) neither burns
-// a budget unit nor blocks the same failure from re-deriving a wake.
+// a budget unit nor blocks the same failure from re-deriving a workflow task.
 function buildAttemptRefundFields(
   runType: RunType,
   issue: Pick<IssueRecord, "ciRepairAttempts" | "queueRepairAttempts" | "reviewFixAttempts">,
@@ -104,7 +118,7 @@ function resolveRetryRunType(runType: RunType, context: RunContext | undefined):
 // Ownership: run-reconciler and service-startup-recovery only DETECT
 // stranded states and hand them here; this policy DECIDES; execution of
 // the run/slot writes goes through settleRun, and dispatch of follow-up
-// work goes through the WakeDispatcher.
+// work goes through the WorkflowTaskDispatcher.
 export class RunFailurePolicy {
   constructor(
     private readonly db: PatchRelayDatabase,
@@ -112,8 +126,8 @@ export class RunFailurePolicy {
     private readonly linearSync: LinearSessionSync,
     private readonly withHeldLease: WithHeldIssueSessionLease,
     private readonly releaseLease: ReleaseIssueSessionLease,
-    private readonly appendWakeEventWithLease: AppendWakeEventWithLease,
-    private readonly wakeDispatcher: WakeDispatcher,
+    private readonly appendRunIntentEventWithLease: AppendRunIntentEventWithLease,
+    private readonly workflowTaskDispatcher: WorkflowTaskDispatcher,
     private readonly restoreIdleWorktree: (issue: Pick<IssueRecord, "issueKey" | "worktreePath" | "branchName">) => Promise<void>,
     private readonly completionPolicy: RunCompletionPolicy,
     private readonly resolveProject: (projectId: string) => ProjectConfig | undefined,
@@ -149,8 +163,8 @@ export class RunFailurePolicy {
   /**
    * Decide what happens after a run died without doing its work: PR
    * already merged → done; zombie budget exhausted → escalate; backoff
-   * not elapsed → keep the wake but defer; otherwise consume one budget
-   * unit, append a recovery wake, and dispatch.
+   * not elapsed -> keep the workflow task but defer; otherwise consume one budget
+   * unit, append a recovery intent, and dispatch.
    */
   recoverOrEscalate(params: {
     issue: IssueRecord;
@@ -170,8 +184,6 @@ export class RunFailurePolicy {
           update: {
             projectId: fresh.projectId,
             linearIssueId: fresh.linearIssueId,
-            pendingRunType: null,
-            pendingRunContextJson: null,
             factoryState: "escalated",
           },
         });
@@ -262,8 +274,19 @@ export class RunFailurePolicy {
       );
       if (remainingDelayMs > 0) {
         this.withHeldLease(fresh.projectId, fresh.linearIssueId, (lease) => {
-          this.appendWakeEventWithLease(lease, fresh, runType, undefined, `recovery:${attempts}`);
+          this.db.issueSessions.commitIssueState({
+            writer: WRITER,
+            lease,
+            update: {
+              projectId: fresh.projectId,
+              linearIssueId: fresh.linearIssueId,
+              factoryState: retryFactoryStateForRunType(runType),
+            },
+          });
+          this.appendRunIntentEventWithLease(lease, fresh, runType, undefined, `recovery:${attempts}`);
         });
+        const deferred = this.db.issues.getIssue(fresh.projectId, fresh.linearIssueId) ?? fresh;
+        reconcileWorkflowTasksForIssue(this.db, deferred);
         this.logger.debug(
           { issueKey: fresh.issueKey, attempts: fresh.zombieRecoveryAttempts, remainingDelayMs },
           "Recovery: backoff not elapsed, deferring retry",
@@ -278,8 +301,7 @@ export class RunFailurePolicy {
       const buildRequeueUpdate = (record: Pick<IssueRecord, "zombieRecoveryAttempts">) => ({
         projectId: fresh.projectId,
         linearIssueId: fresh.linearIssueId,
-        pendingRunType: null,
-        pendingRunContextJson: null,
+        factoryState: retryFactoryStateForRunType(runType),
         zombieRecoveryAttempts: record.zombieRecoveryAttempts + 1,
         lastZombieRecoveryAt: new Date().toISOString(),
       });
@@ -290,14 +312,16 @@ export class RunFailurePolicy {
         update: buildRequeueUpdate(fresh),
         onConflict: (current) => buildRequeueUpdate(current),
       });
-      return this.appendWakeEventWithLease(lease, fresh, runType, undefined, `recovery:${attempts}`);
+      return this.appendRunIntentEventWithLease(lease, fresh, runType, undefined, `recovery:${attempts}`);
     });
     if (!requeued) {
       this.logger.warn({ issueKey: fresh.issueKey, attempts, reason }, "Skipping recovery re-enqueue after losing issue-session lease");
       this.releaseLease(fresh.projectId, fresh.linearIssueId);
       return;
     }
-    this.wakeDispatcher.dispatchIfWakePending(fresh.projectId, fresh.linearIssueId);
+    const recovered = this.db.issues.getIssue(fresh.projectId, fresh.linearIssueId) ?? fresh;
+    reconcileWorkflowTasksForIssue(this.db, recovered);
+    this.workflowTaskDispatcher.dispatchIfWorkflowTaskPending(fresh.projectId, fresh.linearIssueId);
     this.logger.info({ issueKey: fresh.issueKey, attempts, reason }, "Recovery: re-enqueued with backoff");
   }
 
@@ -308,7 +332,7 @@ export class RunFailurePolicy {
    * evidence that the work is impossible: settle the run as failed with the
    * real error text, refund the attempt counter consumed at launch, return
    * the issue to the state that routes the same work, and re-enqueue the
-   * same wake behind a capacity backoff — never a budget burn, never an
+   * same workflow task behind a capacity backoff — never a budget burn, never an
    * escalation.
    */
   deferCapacityLimitedRun(params: CapacityDeferralParams): void {
@@ -333,8 +357,6 @@ export class RunFailurePolicy {
           capacityBackoffUntil = resolveCapacityBackoffUntil(capacity.retryAtIso, capacityBackoffAttempts);
           return {
             ...buildAttemptRefundFields(run.runType, record),
-            pendingRunType: null,
-            pendingRunContextJson: null,
             // The hold state that routes this work again, resolved from fresh
             // GitHub truth like the interrupted-run recovery path. Never a
             // terminal state: an unresolvable hold keeps the current one.
@@ -345,8 +367,8 @@ export class RunFailurePolicy {
           };
         },
       });
-      const wakeIssue = settled.issue ?? params.issue;
-      return this.appendWakeEventWithLease(lease, wakeIssue, run.runType, undefined, `capacity:${run.id}`);
+      const workflowIssue = settled.issue ?? params.issue;
+      return this.appendRunIntentEventWithLease(lease, workflowIssue, run.runType, undefined, `capacity:${run.id}`);
     });
     this.linearSync.clearProgress(run.id);
     if (!deferred) {
@@ -355,6 +377,8 @@ export class RunFailurePolicy {
       return;
     }
     const issue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? params.issue;
+    reconcileWorkflowTasksForIssue(this.db, issue);
+    this.workflowTaskDispatcher.dispatchIfWorkflowTaskPending(run.projectId, run.linearIssueId);
     this.logger.warn(
       { issueKey: issue.issueKey, runType: run.runType, detail: capacity.detail, capacityBackoffUntil },
       "Codex capacity limit - deferring retry without consuming budget",
@@ -388,8 +412,6 @@ export class RunFailurePolicy {
       // holds the slot, settleRun owns the paired run-release + slot-clear;
       // it refuses to clear a slot that was re-pointed at another run.
       const escalateFields = {
-        pendingRunType: null,
-        pendingRunContextJson: null,
         factoryState: "escalated" as const,
       };
       if (issue.activeRunId !== undefined) {
@@ -540,8 +562,9 @@ export class RunFailurePolicy {
       eventType: "delegated",
       dedupeKey: `interrupted_implementation:implementation:${run.linearIssueId}`,
     });
+    reconcileWorkflowTasksForIssue(this.db, refreshedIssue);
 
-    if (!hasPendingWake(this.db, run.projectId, run.linearIssueId)) {
+    if (!hasRunnableWorkflowTask(this.db, run.projectId, run.linearIssueId)) {
       const failedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? refreshedIssue;
       this.feed?.publish({
         level: "error",
@@ -569,21 +592,21 @@ export class RunFailurePolicy {
     });
     const recoveredIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? refreshedIssue;
     void this.linearSync.syncSession(recoveredIssue, { activeRunType: run.runType });
-    this.wakeDispatcher.dispatchIfWakePending(run.projectId, run.linearIssueId);
+    this.workflowTaskDispatcher.dispatchIfWorkflowTaskPending(run.projectId, run.linearIssueId);
     this.releaseLease(run.projectId, run.linearIssueId);
   }
 
   private async handleInterruptedRequestedChangesRun(run: RunRecord, issue: IssueRecord): Promise<void> {
     const freshIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
     const refreshedIssue = await this.completionPolicy.refreshIssueAfterReactivePublish(run, freshIssue);
-    const retryContext = await this.completionPolicy.resolveRequestedChangesWakeContext(
+    const retryContext = await this.completionPolicy.resolveRequestedChangesWorkflowContext(
       refreshedIssue,
       run.runType,
       run.runType === "branch_upkeep"
         ? {
             branchUpkeepRequired: true,
             reviewFixMode: "branch_upkeep",
-            wakeReason: "branch_upkeep",
+            workflowReason: "branch_upkeep",
           }
         : undefined,
     );
@@ -595,9 +618,8 @@ export class RunFailurePolicy {
     const recoveredIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? refreshedIssue;
 
     if (recoveredState === "changes_requested") {
-      // S6: fold the retry intent into the durable observation the workflow-task
-      // path derives the retry run from, instead of the legacy `pending_run_type`
-      // column. A `branch_upkeep` retry needs the `github.parent_head_moved`
+      // Fold the retry intent into the durable observation the workflow-task
+      // path derives the retry run from. A `branch_upkeep` retry needs the `github.parent_head_moved`
       // signal to derive `run:branch_upkeep`; a `review_fix` retry is already
       // fact-derived from the requested-changes facts on the row (the original
       // review's observation carries the context). `reconcile` materializes the
@@ -623,7 +645,7 @@ export class RunFailurePolicy {
         status: "retry_queued",
         summary: "Requested-changes run was interrupted; PatchRelay will retry from fresh GitHub truth",
       });
-      this.wakeDispatcher.dispatchIfWakePending(run.projectId, run.linearIssueId);
+      this.workflowTaskDispatcher.dispatchIfWorkflowTaskPending(run.projectId, run.linearIssueId);
     } else {
       this.feed?.publish({
         level: "error",

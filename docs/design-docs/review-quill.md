@@ -53,7 +53,7 @@ By default, a PR head is reviewable when:
 
 Repositories may opt into `waitForGreenChecks`, in which case configured required checks must be settled green before review.
 
-Do not treat a single webhook as authoritative. Webhooks wake reconciliation; GitHub truth decides eligibility.
+Do not treat a single webhook as authoritative. Webhooks trigger reconciliation; GitHub truth decides eligibility.
 
 ## Runtime Shape
 

@@ -5,13 +5,13 @@ import path from "node:path";
 import test from "node:test";
 import pino from "pino";
 import { PatchRelayDatabase } from "../src/db.ts";
-import { WakeDispatcher } from "../src/wake-dispatcher.ts";
+import { WorkflowTaskDispatcher } from "../src/workflow-task-dispatcher.ts";
 import { reconcileWorkflowTasksForIssue } from "../src/workflow-task-reconciler.ts";
 import { MemoryPatchRelayTelemetry } from "../src/telemetry.ts";
 
 function withDb<T>(fn: (db: PatchRelayDatabase, baseDir: string) => Promise<T>): Promise<T> {
   return (async () => {
-    const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-wake-dispatcher-"));
+    const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-workflow-task-dispatcher-"));
     try {
       const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
       db.runMigrations();
@@ -47,7 +47,7 @@ test("recordEventAndDispatch appends event and enqueues when no run is active", 
   await withDb(async (db) => {
     makeIssue(db, { prReviewState: "changes_requested", prHeadSha: "sha-1" });
     const enqueueCalls: Array<[string, string]> = [];
-    const dispatcher = new WakeDispatcher(
+    const dispatcher = new WorkflowTaskDispatcher(
       db,
       (p, i) => enqueueCalls.push([p, i]),
       () => undefined,
@@ -71,7 +71,7 @@ test("recordEventAndDispatch dedupes both the event and the enqueue when called 
   await withDb(async (db) => {
     makeIssue(db, { prReviewState: "changes_requested", prHeadSha: "sha-1" });
     const enqueueCalls: Array<[string, string]> = [];
-    const dispatcher = new WakeDispatcher(
+    const dispatcher = new WorkflowTaskDispatcher(
       db,
       (p, i) => enqueueCalls.push([p, i]),
       () => undefined,
@@ -89,7 +89,7 @@ test("recordEventAndDispatch dedupes both the event and the enqueue when called 
 
     const events = db.issueSessions.listIssueSessionEvents("proj", "issue-1", { pendingOnly: true });
     assert.equal(events.length, 1, "dedupeKey should collapse the two appends into one event");
-    // Both dispatches enqueue (the second peek still finds a wake), but
+    // Both dispatches enqueue (the second peek still finds a workflowTask), but
     // SerialWorkQueue dedupes by key in production.
     assert.equal(enqueueCalls.length, 2);
   });
@@ -107,7 +107,7 @@ test("recordEventAndDispatch does NOT enqueue while an active run is in flight",
     db.upsertIssue({ projectId: "proj", linearIssueId: "issue-1", activeRunId: run.id });
 
     const enqueueCalls: Array<[string, string]> = [];
-    const dispatcher = new WakeDispatcher(
+    const dispatcher = new WorkflowTaskDispatcher(
       db,
       (p, i) => enqueueCalls.push([p, i]),
       () => undefined,
@@ -127,7 +127,7 @@ test("recordEventAndDispatch does NOT enqueue while an active run is in flight",
   });
 });
 
-test("releaseRunAndDispatch releases the lease and enqueues if a wake is pending", async () => {
+test("releaseRunAndDispatch releases the lease and enqueues if a workflowTask is pending", async () => {
   await withDb(async (db) => {
     const issue = makeIssue(db, { prReviewState: "changes_requested", prHeadSha: "sha-1" });
     const run = db.runs.createRun({
@@ -148,7 +148,7 @@ test("releaseRunAndDispatch releases the lease and enqueues if a wake is pending
 
     const enqueueCalls: Array<[string, string]> = [];
     let releaseCallCount = 0;
-    const dispatcher = new WakeDispatcher(
+    const dispatcher = new WorkflowTaskDispatcher(
       db,
       (p, i) => enqueueCalls.push([p, i]),
       () => { releaseCallCount += 1; },
@@ -159,11 +159,11 @@ test("releaseRunAndDispatch releases the lease and enqueues if a wake is pending
 
     assert.equal(releaseCallCount, 1, "lease release fires unconditionally");
     assert.equal(result?.runType, "review_fix");
-    assert.deepEqual(enqueueCalls, [["proj", "issue-1"]], "wake gets enqueued after release");
+    assert.deepEqual(enqueueCalls, [["proj", "issue-1"]], "workflowTask gets enqueued after release");
   });
 });
 
-test("releaseRunAndDispatch is a no-op enqueue when no wake is pending", async () => {
+test("releaseRunAndDispatch is a no-op enqueue when no workflowTask is pending", async () => {
   await withDb(async (db) => {
     const issue = makeIssue(db);
     const run = db.runs.createRun({
@@ -175,7 +175,7 @@ test("releaseRunAndDispatch is a no-op enqueue when no wake is pending", async (
 
     const enqueueCalls: Array<[string, string]> = [];
     let releaseCallCount = 0;
-    const dispatcher = new WakeDispatcher(
+    const dispatcher = new WorkflowTaskDispatcher(
       db,
       (p, i) => enqueueCalls.push([p, i]),
       () => { releaseCallCount += 1; },
@@ -195,7 +195,7 @@ test("withTick scopes per-pass dedupe across nested dispatch calls", async () =>
     makeIssue(db, { prReviewState: "changes_requested", prHeadSha: "sha-1" });
 
     const enqueueCalls: Array<[string, string]> = [];
-    const dispatcher = new WakeDispatcher(
+    const dispatcher = new WorkflowTaskDispatcher(
       db,
       (p, i) => enqueueCalls.push([p, i]),
       () => undefined,
@@ -203,15 +203,15 @@ test("withTick scopes per-pass dedupe across nested dispatch calls", async () =>
     );
 
     await dispatcher.withTick(async () => {
-      // Two sub-passes detect the same wake. The first appends an event
+      // Two sub-passes detect the same workflowTask. The first appends an event
       // and dispatches; the second only peeks. Tick dedupe means only
       // the first call records an enqueue.
       dispatcher.recordEventAndDispatch("proj", "issue-1", {
         eventType: "review_changes_requested",
         dedupeKey: "rcr::sha-1::reviewbot",
       });
-      dispatcher.dispatchIfWakePending("proj", "issue-1");
-      dispatcher.dispatchIfWakePending("proj", "issue-1");
+      dispatcher.dispatchIfWorkflowTaskPending("proj", "issue-1");
+      dispatcher.dispatchIfWorkflowTaskPending("proj", "issue-1");
     });
 
     assert.deepEqual(
@@ -222,31 +222,26 @@ test("withTick scopes per-pass dedupe across nested dispatch calls", async () =>
   });
 });
 
-test("dispatchIfWakePending falls back to legacy pendingRunType when no event exists", async () => {
+test("dispatchIfWorkflowTaskPending does not dispatch without a runnable workflow task", async () => {
   await withDb(async (db) => {
     makeIssue(db);
-    db.upsertIssue({
-      projectId: "proj",
-      linearIssueId: "issue-1",
-      pendingRunType: "branch_upkeep",
-    });
 
     const enqueueCalls: Array<[string, string]> = [];
-    const dispatcher = new WakeDispatcher(
+    const dispatcher = new WorkflowTaskDispatcher(
       db,
       (p, i) => enqueueCalls.push([p, i]),
       () => undefined,
       pino({ enabled: false }),
     );
 
-    const runType = dispatcher.dispatchIfWakePending("proj", "issue-1");
+    const runType = dispatcher.dispatchIfWorkflowTaskPending("proj", "issue-1");
 
-    assert.equal(runType, "branch_upkeep");
-    assert.deepEqual(enqueueCalls, [["proj", "issue-1"]]);
+    assert.equal(runType, undefined);
+    assert.deepEqual(enqueueCalls, []);
   });
 });
 
-test("dispatchIfWakePending resolves branch_upkeep from a workflow task with source workflow_task", async () => {
+test("dispatchIfWorkflowTaskPending resolves branch_upkeep from a workflow task with source workflow_task", async () => {
   await withDb(async (db) => {
     makeIssue(db, { prNumber: 101, prState: "open", prHeadSha: "child-head-1" });
     db.workflowObservations.appendObservation({
@@ -266,7 +261,7 @@ test("dispatchIfWakePending resolves branch_upkeep from a workflow task with sou
 
     const telemetry = new MemoryPatchRelayTelemetry();
     const enqueueCalls: Array<[string, string]> = [];
-    const dispatcher = new WakeDispatcher(
+    const dispatcher = new WorkflowTaskDispatcher(
       db,
       (p, i) => enqueueCalls.push([p, i]),
       () => undefined,
@@ -275,24 +270,21 @@ test("dispatchIfWakePending resolves branch_upkeep from a workflow task with sou
       telemetry,
     );
 
-    const runType = dispatcher.dispatchIfWakePending("proj", "issue-1");
+    const runType = dispatcher.dispatchIfWorkflowTaskPending("proj", "issue-1");
 
     assert.equal(runType, "branch_upkeep");
     assert.deepEqual(enqueueCalls, [["proj", "issue-1"]]);
-    assert.equal(telemetry.list("wake.derived").at(-1)?.source, "workflow_task");
+    assert.equal(telemetry.list("dispatch.derived").at(-1)?.source, "workflow_task");
   });
 });
 
-test("legacy pending_run_type rung fires the legacy_pending_dispatch invariant (S6)", async () => {
+test("PR facts without a derived workflow task are not a dispatch source", async () => {
   await withDb(async (db) => {
-    // No runnable task, no session wake — only the legacy column. The rung still
-    // works (dual-path) but must fire the proving invariant for the S7 cutover.
     makeIssue(db, { factoryState: "pr_open" });
-    db.upsertIssue({ projectId: "proj", linearIssueId: "issue-1", pendingRunType: "review_fix" });
 
     const telemetry = new MemoryPatchRelayTelemetry();
     const enqueueCalls: Array<[string, string]> = [];
-    const dispatcher = new WakeDispatcher(
+    const dispatcher = new WorkflowTaskDispatcher(
       db,
       (p, i) => enqueueCalls.push([p, i]),
       () => undefined,
@@ -301,19 +293,16 @@ test("legacy pending_run_type rung fires the legacy_pending_dispatch invariant (
       telemetry,
     );
 
-    const runType = dispatcher.dispatchIfWakePending("proj", "issue-1");
+    const runType = dispatcher.dispatchIfWorkflowTaskPending("proj", "issue-1");
 
-    assert.equal(runType, "review_fix");
-    assert.equal(telemetry.list("wake.derived").at(-1)?.source, "legacy_pending_run_type");
-    const invariant = telemetry.list("health.invariant").find((e) => e.invariant === "legacy_pending_dispatch");
-    assert.ok(invariant, "legacy_pending_dispatch invariant should fire");
+    assert.equal(runType, undefined);
+    assert.deepEqual(enqueueCalls, []);
+    assert.equal(telemetry.list("dispatch.derived").length, 0);
   });
 });
 
-test("session-event rung fires the session_event_dispatch invariant (S6)", async () => {
+test("session-event workflowTask is not a dispatch source without a runnable workflow task", async () => {
   await withDb(async (db) => {
-    // A session-event wake with no backing workflow task: still dispatches
-    // (dual-path) but fires the union invariant that must be silent for S7.
     makeIssue(db, { factoryState: "pr_open" });
     db.issueSessions.appendIssueSessionEventRespectingActiveLease("proj", "issue-1", {
       projectId: "proj",
@@ -323,7 +312,7 @@ test("session-event rung fires the session_event_dispatch invariant (S6)", async
     });
 
     const telemetry = new MemoryPatchRelayTelemetry();
-    const dispatcher = new WakeDispatcher(
+    const dispatcher = new WorkflowTaskDispatcher(
       db,
       () => undefined,
       () => undefined,
@@ -332,16 +321,14 @@ test("session-event rung fires the session_event_dispatch invariant (S6)", async
       telemetry,
     );
 
-    const runType = dispatcher.dispatchIfWakePending("proj", "issue-1");
+    const runType = dispatcher.dispatchIfWorkflowTaskPending("proj", "issue-1");
 
-    assert.equal(runType, "implementation");
-    assert.equal(telemetry.list("wake.derived").at(-1)?.source, "session_event");
-    const invariant = telemetry.list("health.invariant").find((e) => e.invariant === "session_event_dispatch");
-    assert.ok(invariant, "session_event_dispatch invariant should fire");
+    assert.equal(runType, undefined);
+    assert.equal(telemetry.list("dispatch.derived").length, 0);
   });
 });
 
-test("dispatchIfWakePending enqueues an already materialized runnable workflow task", async () => {
+test("dispatchIfWorkflowTaskPending enqueues an already materialized runnable workflow task", async () => {
   await withDb(async (db) => {
     const issue = db.upsertIssue({
       projectId: "proj",
@@ -354,14 +341,14 @@ test("dispatchIfWakePending enqueues an already materialized runnable workflow t
     reconcileWorkflowTasksForIssue(db, issue);
 
     const enqueueCalls: Array<[string, string]> = [];
-    const dispatcher = new WakeDispatcher(
+    const dispatcher = new WorkflowTaskDispatcher(
       db,
       (p, i) => enqueueCalls.push([p, i]),
       () => undefined,
       pino({ enabled: false }),
     );
 
-    const runType = dispatcher.dispatchIfWakePending("proj", "issue-1");
+    const runType = dispatcher.dispatchIfWorkflowTaskPending("proj", "issue-1");
 
     assert.equal(runType, "implementation");
     assert.deepEqual(enqueueCalls, [["proj", "issue-1"]]);

@@ -450,35 +450,35 @@ function buildQueueRepairContext(context?: RunContext): string {
 
 function buildFollowUpContextLines(issue: IssueRecord, runType: RunType, context?: RunContext): string[] {
   const prContext = derivePrDisplayContext(issue);
-  const wakeReason = context?.wakeReason;
+  const workflowReason = context?.workflowReason;
   const followUpLines = (context?.followUps ?? [])
     .map((entry) => `${entry.type ?? "follow_up"} from ${entry.author ?? "unknown"}: ${(entry.text ?? "").trim()}`.trim())
     .filter((line) => !line.endsWith(":"));
 
   const lines: string[] = [];
-  const turnReason = wakeReason === "direct_reply"
+  const turnReason = workflowReason === "direct_reply"
     ? "Human reply to the previous question."
-    : wakeReason === "initial_delegate"
+    : workflowReason === "initial_delegate"
       ? "Initial orchestration turn after delegation."
-      : wakeReason === "child_delivered"
+      : workflowReason === "child_delivered"
         ? "A child issue was delivered."
-        : wakeReason === "child_changed"
+        : workflowReason === "child_changed"
           ? "A child issue changed state."
-          : wakeReason === "child_regressed"
+          : workflowReason === "child_regressed"
             ? "A child issue regressed."
-            : wakeReason === "human_instruction"
+            : workflowReason === "human_instruction"
               ? "A human added new orchestration guidance."
-              : wakeReason === "completion_check_continue"
+              : workflowReason === "completion_check_continue"
                 ? "The previous turn ended without a PR and PatchRelay chose to continue automatically."
-                : wakeReason === "branch_upkeep"
+                : workflowReason === "branch_upkeep"
                   ? "GitHub still shows the PR branch as needing upkeep."
-                  : wakeReason === "followup_comment"
+                  : workflowReason === "followup_comment"
                     ? "A human follow-up comment arrived after the previous turn."
                     : `Continue the existing ${runType} run from the latest issue state.`;
 
   lines.push(`Turn reason: ${turnReason}`);
 
-  if (wakeReason === "completion_check_continue" && context?.completionCheckSummary?.trim()) {
+  if (workflowReason === "completion_check_continue" && context?.completionCheckSummary?.trim()) {
     lines.push(`Completion check summary: ${context.completionCheckSummary.trim()}`);
   }
 
@@ -608,7 +608,7 @@ function buildOrchestrationWorkflowGuidance(): string {
   return [
     "## Workflow",
     "",
-    "Use the wake reason and child issue summaries to decide the next orchestration step.",
+    "Use the workflow reason and child issue summaries to decide the next orchestration step.",
     "Prefer supervising, auditing, and unblocking existing child work over creating more issues.",
     "If the parent goal now depends on an integration fix between delivered child slices, own that convergence work here without restating already-owned child implementation.",
     "Keep outputs concise and observable in Linear.",
@@ -798,8 +798,8 @@ function renderPromptSections(sections: PatchRelayPromptSection[]): string {
 function shouldBuildFollowUpPrompt(runType: RunType, context?: RunContext): boolean {
   if (context?.followUpMode) return true;
   if (runType !== "implementation") return true;
-  const wakeReason = context?.wakeReason;
-  return Boolean(wakeReason && wakeReason !== "delegated");
+  const workflowReason = context?.workflowReason;
+  return Boolean(workflowReason && workflowReason !== "delegated");
 }
 
 export function resolvePromptLayers(

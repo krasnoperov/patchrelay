@@ -1,11 +1,8 @@
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
-import type { GateDecision, WorkflowTask } from "./workflow-runtime.ts";
-import {
-  evaluateTaskStart,
-  projectWorkflowSnapshot,
-  type WorkflowSnapshot,
-} from "./workflow-runtime.ts";
+import { evaluateTaskStart } from "./workflow-gates.ts";
+import type { GateDecision, WorkflowSnapshot, WorkflowTask } from "./workflow-model.ts";
+import { projectWorkflowSnapshot } from "./workflow-snapshot.ts";
 
 function isActiveRun(run: Pick<RunRecord, "status">): boolean {
   return run.status === "queued" || run.status === "running";

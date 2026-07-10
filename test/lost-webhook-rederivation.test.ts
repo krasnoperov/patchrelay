@@ -14,10 +14,10 @@ import type { GitHubTriggerEvent } from "../src/github-types.ts";
 import { GitHubWebhookHandler } from "../src/github-webhook-handler.ts";
 import { IdleIssueReconciler } from "../src/idle-reconciliation.ts";
 import { QueueHealthMonitor } from "../src/queue-health-monitor.ts";
-import { RunWakePlanner } from "../src/run-wake-planner.ts";
+import { RunTaskPlanner } from "../src/run-task-planner.ts";
 import type { UpsertIssueParams } from "../src/db/issue-store.ts";
 import type { AppConfig } from "../src/types.ts";
-import { WakeDispatcher } from "../src/wake-dispatcher.ts";
+import { WorkflowTaskDispatcher } from "../src/workflow-task-dispatcher.ts";
 
 // Lost-webhook re-derivation suite (core simplification plan, phase C exit
 // criteria; docs/architecture.md "Recovery doctrine: re-derivation, not
@@ -32,7 +32,7 @@ import { WakeDispatcher } from "../src/wake-dispatcher.ts";
 //     the event (faked `gh pr view` / `gh api`).
 //
 // The doctrine holds when both worlds converge on the factory-state-relevant
-// fields (factoryState, prState, prNumber, prReviewState, wake runType) and
+// fields (factoryState, prState, prNumber, prReviewState, workflowTask runType) and
 // failure provenance follows `mayClearFailureProvenance` identically.
 // Genuinely asymmetric pairs assert the documented difference explicitly.
 //
@@ -165,7 +165,7 @@ function createWorld(baseDir: string, name: string): World {
   db.runMigrations();
   const logger = pino({ enabled: false });
   const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
-  const wake = new WakeDispatcher(
+  const workflowTask = new WorkflowTaskDispatcher(
     db,
     (projectId, issueId) => {
       enqueueCalls.push({ projectId, issueId });
@@ -178,7 +178,7 @@ function createWorld(baseDir: string, name: string): World {
     config,
     db,
     { forProject: async () => undefined } as never,
-    wake,
+    workflowTask,
     logger,
     { steerTurn: async () => undefined } as never,
     undefined,
@@ -188,7 +188,7 @@ function createWorld(baseDir: string, name: string): World {
       throw new Error("network disabled in tests");
     }) as never,
   );
-  const reconciler = new IdleIssueReconciler(db, config, wake, logger);
+  const reconciler = new IdleIssueReconciler(db, config, workflowTask, logger);
   const queueMonitor = new QueueHealthMonitor(
     db,
     config,
@@ -196,7 +196,7 @@ function createWorld(baseDir: string, name: string): World {
       advanceIdleIssue: (issue, newState, options) => {
         reconciler.advanceIdleIssue(issue, newState, options);
       },
-      wakeDispatcher: wake,
+      workflowTaskDispatcher: workflowTask,
     },
     logger,
   );
@@ -238,7 +238,7 @@ async function runReconciliationPass(world: World): Promise<void> {
 function captureConvergedFacts(world: World) {
   const issue = world.db.getIssue(PROJECT, ISSUE);
   assert.ok(issue, `${world.name}: issue row must exist`);
-  const wake = new RunWakePlanner(world.db).resolveRunWake(issue);
+  const workflowTask = new RunTaskPlanner(world.db).resolveRunTask(issue);
   return {
     factoryState: issue.factoryState,
     prState: issue.prState ?? null,
@@ -247,7 +247,7 @@ function captureConvergedFacts(world: World) {
     prCheckStatus: issue.prCheckStatus ?? null,
     failureSource: issue.lastGitHubFailureSource ?? null,
     failureHeadSha: issue.lastGitHubFailureHeadSha ?? null,
-    wakeRunType: wake?.runType ?? null,
+    runnableTaskRunType: workflowTask?.runType ?? null,
   };
 }
 
@@ -421,7 +421,7 @@ test("lost review_approved: poll converges to awaiting_queue identically", { con
 
 // ─── review_changes_requested ────────────────────────────────────────
 
-test("lost review_changes_requested: poll converges to changes_requested with the same review_fix wake", { concurrency: false }, async () => {
+test("lost review_changes_requested: poll converges to changes_requested with the same review_fix workflowTask", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-lost-changes-"));
   const restoreGh = installFakeGh(baseDir, {
     prView: {
@@ -464,20 +464,20 @@ test("lost review_changes_requested: poll converges to changes_requested with th
     const a = captureConvergedFacts(pair.delivered);
     const b = captureConvergedFacts(pair.lost);
     assert.equal(b.factoryState, "changes_requested");
-    assert.equal(b.wakeRunType, "review_fix");
+    assert.equal(b.runnableTaskRunType, "review_fix");
     assert.deepEqual(b, a, "lost review_changes_requested must re-derive the delivered state");
 
     // Documented asymmetry (cosmetic, not behavior-driving): the webhook
     // carries the review body for the run prompt; the poll only knows the
-    // review decision. Both wakes still dispatch the same review_fix run.
+    // review decision. Both workflow-task queues still dispatch the same review_fix run.
     const deliveredIssue = pair.delivered.db.getIssue(PROJECT, ISSUE);
     const lostIssue = pair.lost.db.getIssue(PROJECT, ISSUE);
     assert.ok(deliveredIssue);
     assert.ok(lostIssue);
-    const deliveredWake = new RunWakePlanner(pair.delivered.db).resolveRunWake(deliveredIssue);
-    const lostWake = new RunWakePlanner(pair.lost.db).resolveRunWake(lostIssue);
-    assert.equal(deliveredWake?.context.reviewBody, "Please tighten this up.");
-    assert.equal(lostWake?.context.reviewBody, undefined);
+    const deliveredTask = new RunTaskPlanner(pair.delivered.db).resolveRunTask(deliveredIssue);
+    const lostTask = new RunTaskPlanner(pair.lost.db).resolveRunTask(lostIssue);
+    assert.equal(deliveredTask?.context.reviewBody, "Please tighten this up.");
+    assert.equal(lostTask?.context.reviewBody, undefined);
   } finally {
     if (oldGithubToken !== undefined) process.env.GITHUB_TOKEN = oldGithubToken;
     if (oldGhToken !== undefined) process.env.GH_TOKEN = oldGhToken;
@@ -642,7 +642,7 @@ test("lost check_failed (branch_ci): poll records equivalent failure provenance 
     assert.equal(b.factoryState, "repairing_ci");
     assert.equal(b.failureSource, "branch_ci");
     assert.equal(b.failureHeadSha, "sha-red1");
-    assert.equal(b.wakeRunType, "ci_repair");
+    assert.equal(b.runnableTaskRunType, "ci_repair");
     assert.deepEqual(b, a, "behavior-driving failure facts must converge");
 
     // Documented asymmetry (cosmetic, not behavior-driving): the webhook
@@ -720,38 +720,29 @@ test("lost check_failed (queue_eviction): queue health probe routes the same que
     const a = captureConvergedFacts(pair.delivered);
     const b = captureConvergedFacts(pair.lost);
     // The behavior-driving outcome converges: both worlds hold a pending
-    // queue_repair wake that was dispatched to the work queue.
-    assert.equal(a.wakeRunType, "queue_repair");
-    assert.equal(b.wakeRunType, "queue_repair");
+    // queue_repair workflowTask that was dispatched to the work queue.
+    assert.equal(a.runnableTaskRunType, "queue_repair");
+    assert.equal(b.runnableTaskRunType, "queue_repair");
     assert.ok(pair.delivered.enqueueCalls.some((call) => call.issueId === ISSUE));
     assert.ok(pair.lost.enqueueCalls.some((call) => call.issueId === ISSUE));
 
-    // Documented asymmetry 1: the webhook records full queue-eviction
-    // provenance (lastGitHubFailureSource + the steward incident payload);
-    // the queue-health probe proves the eviction from the check-runs API
-    // and records the attempted-failure markers + a requiresFreshHead
-    // repair context instead. Both worlds route the identical repair run;
+    // Documented asymmetry 1: the webhook records full steward incident detail;
+    // the queue-health probe records the durable queue_eviction source plus a
+    // requiresFreshHead repair context. Both worlds route the same repair run;
     // the lost world's incident detail is the poll-side minimum.
     assert.equal(a.failureSource, "queue_eviction");
-    assert.equal(b.failureSource, null);
-    // The probe's incident identity lives in the wake context (the
-    // attempted-failure row markers it also writes are wiped again by the
-    // idle pass's approved-branch provenance clear — nothing concrete is
-    // recorded in lastGitHubFailure*, so clearing is considered harmless).
-    const lostWake = new RunWakePlanner(pair.lost.db).resolveRunWake(pair.lost.db.getIssue(PROJECT, ISSUE)!);
-    assert.equal(lostWake?.context.failureSignature, "same_head_queue_eviction:sha-evict");
-    assert.equal(lostWake?.context.requiresFreshHead, true);
+    assert.equal(b.failureSource, "queue_eviction");
+    // The probe's incident identity lives in the workflowTask context while the durable
+    // queue_eviction fact keeps the compatibility state from flipping back to
+    // awaiting_queue in the same pass.
+    const lostTask = new RunTaskPlanner(pair.lost.db).resolveRunTask(pair.lost.db.getIssue(PROJECT, ISSUE)!);
+    assert.equal(lostTask?.context.failureSignature, "same_head_queue_eviction:sha-evict");
+    assert.equal(lostTask?.context.requiresFreshHead, true);
 
-    // Documented asymmetry 2 (consequence of asymmetry 1): the delivered
-    // world keeps the repairing_queue compatibility state because the
-    // recorded provenance re-routes it on every idle pass; the lost world's
-    // monitor sets repairing_queue but — having recorded NO provenance —
-    // the idle poll's approved rule flips the row back to awaiting_queue in
-    // the SAME pass. The dispatched wake (asserted above) still drives the
-    // repair, so the divergence is the operator-facing state label, not the
-    // routed work.
+    // Both worlds now keep the same compatibility state because the poll-side
+    // monitor records a durable queue_eviction fact before routing.
     assert.equal(a.factoryState, "repairing_queue");
-    assert.equal(b.factoryState, "awaiting_queue");
+    assert.equal(b.factoryState, "repairing_queue");
   } finally {
     pair.close();
     restoreGh();
@@ -885,7 +876,7 @@ test("lost check_passed: green BRANCH gate does NOT clear queue_eviction provena
     const b = captureConvergedFacts(pair.lost);
     assert.equal(b.factoryState, "repairing_queue");
     assert.equal(b.failureSource, "queue_eviction");
-    assert.equal(b.wakeRunType, "queue_repair");
+    assert.equal(b.runnableTaskRunType, "queue_repair");
     assert.deepEqual(b, a, "the preserved queue provenance must drive the same repair in both worlds");
   } finally {
     pair.close();
@@ -1025,7 +1016,7 @@ test("lost pr_merged: poll converges to done and clears provenance identically",
 
 // ─── pr_closed ───────────────────────────────────────────────────────
 
-test("lost pr_closed: poll converges to the redelegate disposition with the same implementation wake", { concurrency: false }, async () => {
+test("lost pr_closed: poll converges to the redelegate disposition with the same implementation workflowTask", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-lost-closed-"));
   const restoreGh = installFakeGh(baseDir, {
     prView: {
@@ -1069,7 +1060,7 @@ test("lost pr_closed: poll converges to the redelegate disposition with the same
     assert.equal(b.factoryState, "delegated");
     assert.equal(b.prState, "closed");
     assert.equal(b.prReviewState, null);
-    assert.equal(b.wakeRunType, "implementation");
+    assert.equal(b.runnableTaskRunType, "implementation");
     assert.deepEqual(b, a);
   } finally {
     pair.close();

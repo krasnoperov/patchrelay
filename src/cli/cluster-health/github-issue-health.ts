@@ -1,4 +1,5 @@
 import type { AppConfig } from "../../types.ts";
+import { isIssueDelegatedProjection, isIssueDoneProjection } from "../../issue-execution-state.ts";
 import { resolveClosedPrDisposition } from "../../pr-state.ts";
 import type { CommandRunner } from "../command-types.ts";
 import {
@@ -79,7 +80,7 @@ export async function evaluateGitHubIssueHealth(
   const mergeConflictDetected = pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY";
   const reviewQuillAttempt = issue.issueKey ? reviewQuillAttemptOwners?.get(issue.issueKey) : undefined;
 
-  if (pr.state === "MERGED" && issue.factoryState !== "done" && ageMs >= RECONCILIATION_GRACE_MS) {
+  if (pr.state === "MERGED" && !isIssueDoneProjection(issue) && ageMs >= RECONCILIATION_GRACE_MS) {
     return {
       finding: {
         status: "fail",
@@ -91,7 +92,7 @@ export async function evaluateGitHubIssueHealth(
 
   if (pr.state === "CLOSED") {
     const closedPrDisposition = resolveClosedPrDisposition(issue);
-    if (closedPrDisposition === "redelegate" && issue.factoryState !== "delegated" && ageMs >= RECONCILIATION_GRACE_MS) {
+    if (closedPrDisposition === "redelegate" && !isIssueDelegatedProjection(issue) && ageMs >= RECONCILIATION_GRACE_MS) {
       return {
         finding: {
           status: "fail",
@@ -107,6 +108,7 @@ export async function evaluateGitHubIssueHealth(
     issue,
     delegatedToPatchRelay: issue.delegatedToPatchRelay,
     gateCheckStatus,
+    executionState: snapshot.executionState,
     reviewDecision,
     reviewRequested,
     currentHeadSha: pr.headRefOid,
@@ -115,7 +117,7 @@ export async function evaluateGitHubIssueHealth(
     reviewQuillAttempt,
   });
 
-  if (pr.state === "MERGED" && issue.factoryState !== "done" && ageMs >= RECONCILIATION_GRACE_MS) {
+  if (pr.state === "MERGED" && !isIssueDoneProjection(issue) && ageMs >= RECONCILIATION_GRACE_MS) {
     return {
       ciEntry,
       finding: {
@@ -126,7 +128,7 @@ export async function evaluateGitHubIssueHealth(
     };
   }
 
-  if (pr.state === "CLOSED" && issue.factoryState !== "delegated" && issue.factoryState !== "done" && ageMs >= RECONCILIATION_GRACE_MS) {
+  if (pr.state === "CLOSED" && !isIssueDelegatedProjection(issue) && !isIssueDoneProjection(issue) && ageMs >= RECONCILIATION_GRACE_MS) {
     return {
       ciEntry,
       finding: {
@@ -140,7 +142,7 @@ export async function evaluateGitHubIssueHealth(
   if (
     issue.delegatedToPatchRelay
     && gateCheckStatus === "failure"
-    && issue.factoryState !== "repairing_ci"
+    && ciEntry.owner !== "patchrelay"
     && issue.activeRunId === undefined
     && ageMs >= RECONCILIATION_GRACE_MS
   ) {
@@ -169,7 +171,14 @@ export async function evaluateGitHubIssueHealth(
     };
   }
 
-  if (reviewDecision === "APPROVED" && issue.factoryState !== "awaiting_queue" && issue.factoryState !== "done" && ageMs >= RECONCILIATION_GRACE_MS) {
+  const waitingOnDownstream = snapshot.executionState.kind === "idle_awaiting_external"
+    && (snapshot.executionState.waitingOn === "merge_queue" || snapshot.executionState.waitingOn === "downstream_automation");
+  if (
+    reviewDecision === "APPROVED"
+    && !waitingOnDownstream
+    && snapshot.executionState.kind !== "terminal"
+    && ageMs >= RECONCILIATION_GRACE_MS
+  ) {
     return {
       ciEntry,
       finding: {
@@ -185,7 +194,7 @@ export async function evaluateGitHubIssueHealth(
     && reviewDecision === "CHANGES_REQUESTED"
     && mergeConflictDetected
     && issue.delegatedToPatchRelay
-    && issue.factoryState !== "changes_requested"
+    && ciEntry.owner !== "patchrelay"
     && issue.activeRunId === undefined
     && ageMs >= RECONCILIATION_GRACE_MS
   ) {
@@ -205,7 +214,7 @@ export async function evaluateGitHubIssueHealth(
     && latestBlockingReviewHeadSha === pr.headRefOid
     && !reviewQuillAttempt
     && issue.delegatedToPatchRelay
-    && issue.factoryState !== "changes_requested"
+    && ciEntry.owner !== "patchrelay"
     && ageMs >= RECONCILIATION_GRACE_MS
   ) {
     return {
@@ -231,7 +240,7 @@ export async function evaluateGitHubIssueHealth(
 
   if (
     issue.delegatedToPatchRelay
-    && issue.factoryState === "awaiting_queue"
+    && ciEntry.owner !== "patchrelay"
     && mergeConflictDetected
     && issue.activeRunId === undefined
     && ageMs >= RECONCILIATION_GRACE_MS
@@ -246,7 +255,12 @@ export async function evaluateGitHubIssueHealth(
     };
   }
 
-  if (issue.factoryState === "awaiting_queue" && mergeStewardProbe && mergeStewardProbe.status !== "pass" && ageMs >= RECONCILIATION_GRACE_MS) {
+  if (
+    waitingOnDownstream
+    && mergeStewardProbe
+    && mergeStewardProbe.status !== "pass"
+    && ageMs >= RECONCILIATION_GRACE_MS
+  ) {
     return {
       ciEntry,
       finding: {

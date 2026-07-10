@@ -18,6 +18,7 @@ import { hasFreshSuccessfulGateCheck } from "./github-rollup.ts";
 import type { RunContext } from "./run-context.ts";
 import type { AppConfig } from "./types.ts";
 import type { PostRunFollowUp } from "./run-completion-policy.ts";
+import { workflowRunIntent } from "./workflow-intent.ts";
 
 const WRITER = "reactive-run-policy";
 
@@ -274,7 +275,7 @@ export class ReactiveRunPolicy {
     return this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
   }
 
-  async resolveRequestedChangesWakeContext(
+  async resolveRequestedChangesWorkflowContext(
     issue: IssueRecord,
     runType: RunType,
     context: RunContext | undefined,
@@ -308,7 +309,7 @@ export class ReactiveRunPolicy {
           ...(snapshot.headSha ? { prHeadSha: snapshot.headSha } : {}),
           ...(snapshot.reviewState ? { prReviewState: snapshot.reviewState } : {}),
         },
-        "review-fix wake refresh",
+        "review-fix workflow context refresh",
       );
 
       if (snapshot.prState !== "open") return refreshedContext;
@@ -326,7 +327,7 @@ export class ReactiveRunPolicy {
         issueKey: issue.issueKey,
         prNumber: issue.prNumber,
         error: error instanceof Error ? error.message : String(error),
-      }, "Failed to resolve requested-changes wake context");
+      }, "Failed to resolve requested-changes workflow context");
       return context;
     }
   }
@@ -366,22 +367,21 @@ export class ReactiveRunPolicy {
       if (snapshot.reviewState && snapshot.reviewState !== "changes_requested") return undefined;
       if (!isDirtyMergeStateStatus(snapshot.pr.mergeStateStatus)) return undefined;
 
-      // S2: append the durable signal the v2 workflow-task path derives
-      // `run:branch_upkeep` from, and reconcile so a runnable workflow task is
-      // materialized. The follow-up below (consumed by run-finalizer as a
-      // legacy session-event wake) is kept intentionally this stage — the
-      // `workflow_task` rung outranks it in both resolvers, so the task wins.
-      // Self-closes once a new head is pushed past the current dirty head.
+      // Append the durable signal that derives `run:branch_upkeep`, then
+      // reconcile so a runnable workflow task is materialized. The follow-up
+      // result lets the finalizer record session history; the workflow task is
+      // the runnable-work authority. Self-closes once a new head is pushed past
+      // the current dirty head.
       this.appendBranchUpkeepSignalAndReconcile(issue, snapshot.baseBranch, snapshot.headSha);
 
-      return {
-        pendingRunType: "branch_upkeep",
-        factoryState: "changes_requested",
-        context: buildReviewFixBranchUpkeepContext(
+      const context = buildReviewFixBranchUpkeepContext(
           issue.prNumber,
           snapshot.baseBranch,
           snapshot.pr,
-        ),
+      );
+      return {
+        workflowIntent: workflowRunIntent("branch_upkeep", context),
+        factoryState: "changes_requested",
         summary: `PR #${issue.prNumber} is still dirty after review fix; queued branch upkeep`,
       };
     } catch (error) {

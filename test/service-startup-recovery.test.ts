@@ -141,7 +141,7 @@ test("startup recovery repairs re-delegated paused local work even without an ag
     const task = db.workflowTasks.getTask("usertold", "issue-redelegated", "run:implementation");
     const authorityObservation = db.workflowObservations.listObservations("usertold", "issue-redelegated")
       .find((observation) => observation.type === "linear.delegated");
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-redelegated"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-redelegated"), undefined);
     assert.equal(task?.runType, "implementation");
     assert.equal(task?.gateAction, "start");
     assert.ok(authorityObservation, "startup recovery should persist the live Linear delegation as workflow authority");
@@ -228,7 +228,7 @@ test("startup recovery discovers delegated Linear issues missing from the local 
     assert.equal(issue?.delegatedToPatchRelay, true);
     assert.equal(issue?.factoryState, "delegated");
     const task = db.workflowTasks.getTask("usertold", "issue-missed", "run:implementation");
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-missed"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-missed"), undefined);
     assert.equal(task?.runType, "implementation");
     assert.equal(task?.gateAction, "start");
     assert.deepEqual(enqueued, [{ projectId: "usertold", issueId: "issue-missed" }]);
@@ -305,7 +305,7 @@ test("startup recovery re-queues delegated requested-changes work after a restar
     const task = db.workflowTasks.getTask("usertold", "issue-reactive-review", "run:review_fix");
     assert.equal(issue?.delegatedToPatchRelay, true);
     assert.equal(issue?.factoryState, "changes_requested");
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-reactive-review"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-reactive-review"), undefined);
     assert.equal(task?.runType, "review_fix");
     assert.equal(task?.gateAction, "start");
     assert.deepEqual(enqueued, [{ projectId: "usertold", issueId: "issue-reactive-review" }]);
@@ -451,14 +451,13 @@ test("startup recovery still resyncs active runs with agent sessions", async () 
   }
 });
 
-test("startup recovery drains legacy pending_run_type rows into durable workflow tasks (S6)", () => {
+test("startup recovery reconciles PR facts into durable workflow tasks", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-startup-recovery-drain-"));
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
     db.runMigrations();
 
-    // A pre-S6 row that still carries the legacy pending columns.
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-drain",
@@ -470,11 +469,6 @@ test("startup recovery drains legacy pending_run_type rows into durable workflow
       prHeadSha: "sha-drain",
       prReviewState: "changes_requested",
       lastBlockingReviewHeadSha: "sha-drain",
-      pendingRunType: "review_fix",
-      pendingRunContextJson: JSON.stringify({
-        requestedChangesHeadSha: "sha-drain",
-        wakeReason: "review_changes_requested",
-      }),
     });
 
     const recovery = new ServiceStartupRecovery(
@@ -489,19 +483,14 @@ test("startup recovery drains legacy pending_run_type rows into durable workflow
 
     recovery.reconcileKnownWorkflowTasks();
 
-    // Columns drained…
     const drained = db.getIssue("usertold", "issue-drain");
-    assert.equal(drained?.pendingRunType, undefined);
-    assert.equal(drained?.pendingRunContextJson, undefined);
-    // …and the equivalent runnable workflow task exists.
+    assert.equal(drained?.factoryState, "changes_requested");
     const tasks = db.workflowTasks.listOpenRunnableTasks("usertold")
       .filter((task) => task.subjectId === "issue-drain" && task.taskId === "run:review_fix");
     assert.equal(tasks.length, 1);
 
-    // A second sweep is a no-op: no columns to drain, task unchanged.
+    // A second sweep is a no-op: task unchanged.
     recovery.reconcileKnownWorkflowTasks();
-    const afterSecond = db.getIssue("usertold", "issue-drain");
-    assert.equal(afterSecond?.pendingRunType, undefined);
     const stillOne = db.workflowTasks.listOpenRunnableTasks("usertold")
       .filter((task) => task.subjectId === "issue-drain" && task.taskId === "run:review_fix");
     assert.equal(stillOne.length, 1);

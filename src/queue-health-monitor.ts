@@ -1,14 +1,15 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
-import type { FactoryState, RunType } from "./factory-state.ts";
+import type { FactoryState } from "./factory-state.ts";
 import type { AppConfig } from "./types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
-import { buildRepairWakeDedupeKey } from "./reactive-wake-keys.ts";
+import { buildRepairWorkflowDedupeKey } from "./reactive-workflow-keys.ts";
 import { serializeRunContext, type RunContext } from "./run-context.ts";
 import { execCommand } from "./utils.ts";
-import type { WakeDispatcher } from "./wake-dispatcher.ts";
+import type { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
+import { workflowRunIntent, type WorkflowRunIntent } from "./workflow-intent.ts";
 
 const WRITER = "queue-health-monitor";
 
@@ -25,12 +26,11 @@ export interface QueueHealthAdvancer {
     issue: IssueRecord,
     newState: FactoryState,
     options?: {
-      pendingRunType?: RunType;
-      pendingRunContext?: RunContext;
+      workflowIntent?: WorkflowRunIntent;
       clearFailureProvenance?: boolean;
     },
   ): void;
-  wakeDispatcher: WakeDispatcher;
+  workflowTaskDispatcher: WorkflowTaskDispatcher;
 }
 
 function isDuplicateProbe(
@@ -181,7 +181,7 @@ export class QueueHealthMonitor {
       const signature = hasEvictionCheckRun
         ? `same_head_queue_eviction:${headRefOid}`
         : `preemptive_queue_conflict:${headRefOid}`;
-      const pendingRunContext: RunContext = {
+      const workflowRunContext: RunContext = {
         source: "queue_health_monitor",
         failureReason: reason,
         failureHeadSha: headRefOid,
@@ -199,7 +199,7 @@ export class QueueHealthMonitor {
           : {}),
       };
 
-      if (isDuplicateProbe(issue, pendingRunContext)) {
+      if (isDuplicateProbe(issue, workflowRunContext)) {
         return;
       }
 
@@ -208,22 +208,18 @@ export class QueueHealthMonitor {
         update: {
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
+          lastGitHubFailureSource: "queue_eviction",
+          lastGitHubFailureHeadSha: headRefOid,
+          lastGitHubFailureSignature: signature,
+          lastGitHubFailureContextJson: serializeRunContext(workflowRunContext, "queue health repair context"),
           lastAttemptedFailureHeadSha: headRefOid,
           lastAttemptedFailureSignature: signature,
         },
       });
       const probed = probedCommit.outcome === "applied" ? probedCommit.issue : issue;
-      this.advancer.wakeDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
-        eventType: "merge_steward_incident",
-        eventJson: serializeRunContext(pendingRunContext, "queue health repair context"),
-        dedupeKey: buildRepairWakeDedupeKey({
-          scope: "queue_health",
-          runType: "queue_repair",
-          linearIssueId: issue.linearIssueId,
-          signature,
-        }),
+      this.advancer.advanceIdleIssue(probed, "repairing_queue", {
+        workflowIntent: workflowRunIntent("queue_repair", workflowRunContext),
       });
-      this.advancer.advanceIdleIssue(probed, "repairing_queue");
       this.logger.info(
         { issueKey: issue.issueKey, prNumber: issue.prNumber, headRefOid, reason },
         "Queue health: queue issue detected, dispatching repair",

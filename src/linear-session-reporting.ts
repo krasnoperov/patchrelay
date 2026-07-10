@@ -90,13 +90,13 @@ export function buildFollowupStatusActivity(params: {
   issue: Pick<IssueRecord, "issueKey" | "factoryState" | "prNumber">;
   statusNote?: string | undefined;
   activeRunType?: RunType | undefined;
-  pendingRunType?: RunType | undefined;
+  runnableTaskRunType?: RunType | undefined;
   activityType?: "thought" | "response" | undefined;
 }): LinearAgentActivityContent {
   const subject = params.issue.issueKey ? `${params.issue.issueKey}` : "this issue";
   const runNote = params.activeRunType
     ? ` Active workflow: ${lowerRunTypeLabel(params.activeRunType)}.`
-    : params.pendingRunType ? ` Queued workflow: ${lowerRunTypeLabel(params.pendingRunType)}.` : "";
+    : params.runnableTaskRunType ? ` Queued workflow: ${lowerRunTypeLabel(params.runnableTaskRunType)}.` : "";
   const prNote = params.issue.prNumber ? ` PR #${params.issue.prNumber}.` : "";
   const statusNote = params.statusNote ? ` ${params.statusNote}` : "";
   return {

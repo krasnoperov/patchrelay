@@ -67,7 +67,6 @@ test("agent session plans reflect implementation, review, checks, queue, and mer
   assert.deepEqual(
     buildAgentSessionPlan({
       factoryState: "delegated",
-      pendingRunType: "implementation",
     }),
     [
       { content: "Prepare workspace", status: "inProgress" },

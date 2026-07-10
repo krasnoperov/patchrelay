@@ -272,7 +272,6 @@ test("delegated blocked issue is tracked but does not queue implementation until
 
     const blockedIssue = db.getIssue("krasnoperov/mafia", "issue-maf-40");
     assert.ok(blockedIssue);
-    assert.equal(blockedIssue?.pendingRunType, undefined);
     assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-40"), 1);
     assert.deepEqual(db.listIssuesReadyForExecution(), []);
     assert.deepEqual(enqueued, []);
@@ -317,8 +316,7 @@ test("delegated blocked issue is tracked but does not queue implementation until
 
     const unblockedIssue = db.getIssue("krasnoperov/mafia", "issue-maf-40");
     const unblockedTask = db.workflowTasks.getTask("krasnoperov/mafia", "issue-maf-40", "run:implementation");
-    assert.equal(unblockedIssue?.pendingRunType, undefined);
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-40"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-40"), undefined);
     assert.equal(unblockedTask?.runType, "implementation");
     assert.equal(unblockedTask?.gateAction, "start");
     assert.deepEqual(db.listIssuesReadyForExecution(), [{ projectId: "krasnoperov/mafia", linearIssueId: "issue-maf-40" }]);
@@ -404,10 +402,9 @@ test("delegated issue with only completed blockers queues implementation immedia
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-completed-blocker");
     const workflowTask = db.workflowTasks.getTask("krasnoperov/mafia", "issue-maf-completed-blocker", "run:implementation");
     assert.equal(issue?.factoryState, "delegated");
-    assert.equal(issue?.pendingRunType, undefined);
     assert.equal(db.listIssueDependencies("krasnoperov/mafia", "issue-maf-completed-blocker").length, 1);
     assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-completed-blocker"), 0);
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-completed-blocker"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-completed-blocker"), undefined);
     assert.equal(workflowTask?.runType, "implementation");
     assert.equal(workflowTask?.gateAction, "start");
     assert.deepEqual(db.listIssuesReadyForExecution(), [{ projectId: "krasnoperov/mafia", linearIssueId: "issue-maf-completed-blocker" }]);
@@ -524,10 +521,9 @@ test("delegated blocked agent session is acknowledged without queueing implement
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-blocked-session");
     assert.equal(issue?.factoryState, "delegated");
-    assert.equal(issue?.pendingRunType, undefined);
     assert.equal(issue?.agentSessionId, "session-blocked-97");
     assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-blocked-session"), 1);
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-blocked-session"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-blocked-session"), undefined);
     assert.deepEqual(enqueued, []);
     assert.deepEqual(sessionUpdates, [{ agentSessionId: "session-blocked-97", planLength: 4 }]);
     assert.equal(operations[0], "activity:thought");
@@ -770,7 +766,7 @@ test("external blocker completion releases delegated dependents without tracking
     const unblockedTask = db.workflowTasks.getTask("krasnoperov/mafia", "issue-maf-40", "run:implementation");
     assert.equal(db.getIssue("krasnoperov/mafia", "issue-maf-39"), undefined);
     assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-40"), 0);
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-40"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-40"), undefined);
     assert.equal(unblockedTask?.runType, "implementation");
     assert.equal(unblockedTask?.gateAction, "start");
     assert.deepEqual(db.listIssuesReadyForExecution(), [{ projectId: "krasnoperov/mafia", linearIssueId: "issue-maf-40" }]);
@@ -780,8 +776,8 @@ test("external blocker completion releases delegated dependents without tracking
   }
 });
 
-test("delegated issue webhooks enqueue implementation wake immediately when the issue is unblocked", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-delegation-wake-"));
+test("delegated issue webhooks enqueue implementation workflowTask immediately when the issue is unblocked", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-delegation-workflowTask-"));
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
@@ -798,7 +794,7 @@ test("delegated issue webhooks enqueue implementation wake immediately when the 
       getIssue: async () => ({
         id: "issue-maf-delegated",
         identifier: "MAF-41",
-        title: "Unblocked delegation wake",
+        title: "Unblocked delegation workflowTask",
         teamId: "team-maf",
         teamKey: "MAF",
         delegateId: "patchrelay-actor",
@@ -833,7 +829,7 @@ test("delegated issue webhooks enqueue implementation wake immediately when the 
       data: {
         id: "issue-maf-delegated",
         identifier: "MAF-41",
-        title: "Unblocked delegation wake",
+        title: "Unblocked delegation workflowTask",
         team: { id: "team-maf", key: "MAF" },
         state: { id: "state-start", name: "Start", type: "started" },
         delegate: { id: "patchrelay-actor", name: "PatchRelay" },
@@ -841,7 +837,7 @@ test("delegated issue webhooks enqueue implementation wake immediately when the 
     };
 
     const stored = db.webhookEvents.insertFullWebhookEvent({
-      webhookId: "delivery-delegation-wake",
+      webhookId: "delivery-delegation-workflowTask",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
     });
@@ -850,8 +846,7 @@ test("delegated issue webhooks enqueue implementation wake immediately when the 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-delegated");
     const workflowTask = db.workflowTasks.getTask("krasnoperov/mafia", "issue-maf-delegated", "run:implementation");
     assert.equal(issue?.factoryState, "delegated");
-    assert.equal(issue?.pendingRunType, undefined);
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-delegated"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-delegated"), undefined);
     assert.equal(workflowTask?.runType, "implementation");
     assert.equal(workflowTask?.gateAction, "start");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-delegated" }]);
@@ -970,7 +965,7 @@ test("issue becoming blocked during implementation releases the active run and p
     assert.equal(issue?.activeRunId, undefined);
     assert.equal(issue?.delegatedToPatchRelay, true);
     assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-blocked-active"), 1);
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-blocked-active"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-blocked-active"), undefined);
     assert.deepEqual(enqueued, []);
     assert.equal(session?.waitingReason, "Blocked by MAF-10");
     assert.equal(tracked?.waitingReason, "Blocked by MAF-10");
@@ -1092,7 +1087,7 @@ test("completed blocker added during implementation does not release the active 
     assert.equal(issue?.activeRunId, run.id);
     assert.equal(db.listIssueDependencies("krasnoperov/mafia", "issue-maf-completed-blocked-active").length, 1);
     assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-completed-blocked-active"), 0);
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-completed-blocked-active"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-completed-blocked-active"), undefined);
     assert.deepEqual(enqueued, []);
     assert.equal(tracked?.blockedByCount, 0);
     assert.deepEqual(tracked?.blockedByKeys, []);
@@ -1284,7 +1279,6 @@ test("incomplete webhook relations do not clear existing blockers when live hydr
       db.listIssueDependencies("krasnoperov/mafia", "issue-maf-40").map((entry) => entry.blockerIssueKey),
       ["MAF-39"],
     );
-    assert.equal(db.getIssue("krasnoperov/mafia", "issue-maf-40")?.pendingRunType, undefined);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -1352,7 +1346,6 @@ test("done delegated issue does not requeue implementation after merged status e
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-38");
     assert.equal(issue?.factoryState, "done");
-    assert.equal(issue?.pendingRunType, undefined);
     assert.deepEqual(enqueued, []);
     assert.deepEqual(db.listIssuesReadyForExecution(), []);
   } finally {
@@ -1422,7 +1415,6 @@ test("in-review status echo does not requeue implementation for an open delegate
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-39");
     assert.equal(issue?.factoryState, "awaiting_queue");
-    assert.equal(issue?.pendingRunType, undefined);
     assert.deepEqual(enqueued, []);
     assert.deepEqual(db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-39", { pendingOnly: true }), []);
   } finally {
@@ -1509,7 +1501,6 @@ test("un-delegation during active run releases run and preserves implementing st
     assert.equal(issue?.factoryState, "implementing");
     assert.equal(issue?.delegatedToPatchRelay, false);
     assert.equal(issue?.activeRunId, undefined);
-    assert.equal(issue?.pendingRunType, undefined);
 
     const finishedRun = db.runs.getRunById(run.id);
     assert.equal(finishedRun?.status, "released");
@@ -1667,8 +1658,6 @@ test("terminal Linear completion during active run records Linear state but keep
       currentLinearState: "In Progress",
       currentLinearStateType: "started",
       factoryState: "implementing",
-      pendingRunType: "implementation",
-      pendingRunContextJson: JSON.stringify({ note: "stale wake" }),
     });
     const run = db.runs.createRun({
       issueId: issueRecord.id,
@@ -1722,8 +1711,6 @@ test("terminal Linear completion during active run records Linear state but keep
     assert.equal(issue?.currentLinearStateType, "completed");
     assert.equal(issue?.factoryState, "implementing");
     assert.equal(issue?.activeRunId, run.id);
-    assert.equal(issue?.pendingRunType, "implementation");
-    assert.equal(issue?.pendingRunContextJson, JSON.stringify({ note: "stale wake" }));
     assert.deepEqual(enqueued, []);
 
     const finishedRun = db.runs.getRunById(run.id);
@@ -1896,6 +1883,7 @@ test("re-delegation resumes requested-changes issue from PR state instead of res
       factoryState: "awaiting_input",
       prNumber: 121,
       prState: "open",
+      prHeadSha: "sha-redelegate-review",
       prReviewState: "changes_requested",
     });
 
@@ -1936,8 +1924,8 @@ test("re-delegation resumes requested-changes issue from PR state instead of res
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-52");
     assert.equal(issue?.delegatedToPatchRelay, true);
     assert.equal(issue?.factoryState, "changes_requested");
-    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-52");
-    assert.equal(wake?.runType, "review_fix");
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-52");
+    assert.equal(workflowTask?.runType, "review_fix");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-52" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -2030,7 +2018,7 @@ test("delegateChanged adopts a linked same-repo PR with requested changes", { co
     assert.equal(issue?.prReviewState, "changes_requested");
     assert.equal(issue?.prCheckStatus, "success");
     assert.equal(issue?.prIsDraft, false);
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-adopt-review")?.runType, "review_fix");
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-adopt-review")?.runType, "review_fix");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-adopt-review" }]);
   } finally {
     restorePath();
@@ -2122,7 +2110,7 @@ test("statusChanged adopts a linked same-repo PR before starting implementation"
     assert.equal(issue?.branchName, "fix/existing-review-repair");
     assert.equal(issue?.prHeadSha, "sha-linked-status-review");
     assert.equal(issue?.prReviewState, "changes_requested");
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-adopt-status")?.runType, "review_fix");
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-adopt-status")?.runType, "review_fix");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-adopt-status" }]);
   } finally {
     restorePath();
@@ -2210,7 +2198,7 @@ test("delegateChanged adopts a linked same-repo PR with failing CI", { concurren
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-adopt-ci");
     assert.equal(issue?.factoryState, "repairing_ci");
     assert.equal(issue?.prCheckStatus, "failure");
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-adopt-ci")?.runType, "ci_repair");
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-adopt-ci")?.runType, "ci_repair");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-adopt-ci" }]);
   } finally {
     restorePath();
@@ -2299,14 +2287,12 @@ test("delegateChanged adopts a linked draft PR as implementation work", { concur
     assert.equal(issue?.factoryState, "delegated");
     assert.equal(issue?.prIsDraft, true);
     assert.equal(issue?.branchName, "feat-linked-draft");
-    // S6: the legacy pending_run_type column is no longer written; the draft PR
-    // drives a durable run:implementation workflow task (the session wake below
+    // drives a durable run:implementation workflow task (the session input below
     // is diagnostic dual-path only).
-    assert.equal(issue?.pendingRunType, undefined);
     const implementationTask = db.workflowTasks.listOpenRunnableTasks("krasnoperov/mafia")
       .filter((task) => task.subjectId === "issue-maf-adopt-draft" && task.taskId === "run:implementation");
     assert.equal(implementationTask.length, 1);
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-adopt-draft")?.runType, "implementation");
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-adopt-draft")?.runType, "implementation");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-adopt-draft" }]);
   } finally {
     restorePath();
@@ -2395,7 +2381,7 @@ test("delegateChanged adopts a linked closed same-repo PR as replacement impleme
     assert.equal(issue?.factoryState, "delegated");
     assert.equal(issue?.prNumber, 1260);
     assert.equal(issue?.prState, "closed");
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-adopt-closed")?.runType, "implementation");
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-adopt-closed")?.runType, "implementation");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-adopt-closed" }]);
   } finally {
     restorePath();
@@ -2483,7 +2469,7 @@ test("delegateChanged moves linked cross-repo PR adoption to awaiting_input", { 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-adopt-cross");
     assert.equal(issue?.factoryState, "awaiting_input");
     assert.equal(issue?.prNumber, 127);
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-adopt-cross"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-adopt-cross"), undefined);
     assert.deepEqual(enqueued, []);
   } finally {
     restorePath();
@@ -2553,7 +2539,7 @@ test("delegateChanged pauses for multiple linked PRs instead of guessing", async
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-adopt-ambiguous");
     assert.equal(issue?.factoryState, "awaiting_input");
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-adopt-ambiguous"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-adopt-ambiguous"), undefined);
     assert.deepEqual(enqueued, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -2587,6 +2573,7 @@ test("later issue webhooks recover missed re-delegation from live Linear delegat
       factoryState: "escalated",
       prNumber: 122,
       prState: "open",
+      prHeadSha: "sha-redelegate-repair-review",
       prReviewState: "changes_requested",
     });
 
@@ -2653,10 +2640,10 @@ test("later issue webhooks recover missed re-delegation from live Linear delegat
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-52c");
     assert.equal(issue?.delegatedToPatchRelay, true);
     assert.equal(issue?.factoryState, "changes_requested");
-    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-52c");
-    assert.equal(wake?.runType, "review_fix");
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-52c");
+    assert.equal(workflowTask?.runType, "review_fix");
     // The recovery comment must enqueue the re-delegated issue so the
-    // orchestrator picks up the captured wake on the next drain. The
+    // orchestrator picks up the captured workflowTask on the next drain. The
     // SerialWorkQueue dedupes if other passes also enqueue.
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-52c" }]);
   } finally {
@@ -2742,7 +2729,7 @@ test("re-delegation preserves completion-check questions instead of restarting i
     const updatedIssue = db.getIssue("krasnoperov/mafia", "issue-maf-52b");
     assert.equal(updatedIssue?.delegatedToPatchRelay, true);
     assert.equal(updatedIssue?.factoryState, "awaiting_input");
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-52b"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-52b"), undefined);
     assert.deepEqual(enqueued, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -2809,8 +2796,8 @@ test("re-delegation resumes paused local work from implementing state", async ()
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-52c");
     assert.equal(issue?.delegatedToPatchRelay, true);
     assert.equal(issue?.factoryState, "delegated");
-    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-52c");
-    assert.equal(wake?.runType, "implementation");
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-52c");
+    assert.equal(workflowTask?.runType, "implementation");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-52c" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -2893,7 +2880,7 @@ test("issueRemoved releases active run and transitions to failed", async () => {
   }
 });
 
-test("issueRemoved without an active run marks the issue failed and clears pending wakeups", async () => {
+test("issueRemoved without an active run marks the issue failed and clears pending workflow tasks", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-removed-idle-"));
   try {
     const config = createConfig(baseDir);
@@ -2913,8 +2900,6 @@ test("issueRemoved without an active run marks the issue failed and clears pendi
       issueKey: "MAF-53",
       title: "Removed while idle",
       factoryState: "delegated",
-      pendingRunType: "implementation",
-      pendingRunContextJson: JSON.stringify({ note: "queued before removal" }),
     });
 
     const handler = new WebhookHandler(
@@ -2950,8 +2935,7 @@ test("issueRemoved without an active run marks the issue failed and clears pendi
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-53");
     assert.equal(issue?.factoryState, "failed");
-    assert.equal(issue?.pendingRunType, undefined);
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-53"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-53"), undefined);
     assert.equal(db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-53", { pendingOnly: true }).length, 0);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -3030,11 +3014,10 @@ test("idle delegated comments with explicit PatchRelay intent queue a follow-up 
     await handler.processWebhookEvent(stored.id);
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-comment");
-    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-comment");
-    assert.equal(issue?.pendingRunContextJson, undefined);
-    assert.equal(wake?.runType, "implementation");
-    assert.equal(Array.isArray(wake?.context.followUps), true);
-    assert.equal(wake?.context.followUps?.[0]?.text, "please keep this compatible with the old contract.");
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-comment");
+    assert.equal(workflowTask?.runType, "implementation");
+    assert.equal(Array.isArray(workflowTask?.context.followUps), true);
+    assert.equal(workflowTask?.context.followUps?.[0]?.text, "please keep this compatible with the old contract.");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-comment" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -3112,7 +3095,7 @@ test("idle comments without explicit PatchRelay intent are ignored", async () =>
     });
     await handler.processWebhookEvent(stored.id);
 
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-comment-ignored"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-comment-ignored"), undefined);
     assert.equal(db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-comment-ignored").length, 0);
     assert.deepEqual(enqueued, []);
   } finally {
@@ -3193,7 +3176,7 @@ test("idle delegated comments with PatchRelay status intent do not queue impleme
     });
     await handler.processWebhookEvent(stored.id);
 
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-comment-status"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-comment-status"), undefined);
     assert.equal(db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-comment-status").length, 0);
     assert.deepEqual(enqueued, []);
   } finally {
@@ -3272,9 +3255,9 @@ test("awaiting_input issue comments without explicit PatchRelay address are igno
     });
     await handler.processWebhookEvent(stored.id);
 
-    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-awaiting-input-ignored");
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-awaiting-input-ignored");
     const events = db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-awaiting-input-ignored");
-    assert.equal(wake, undefined);
+    assert.equal(workflowTask, undefined);
     assert.deepEqual(
       events.map((event) => event.eventType).filter((eventType) => eventType === "followup_comment" || eventType === "direct_reply"),
       [],
@@ -3356,12 +3339,12 @@ test("explicit PatchRelay comments on awaiting_input resume work as direct repli
     });
     await handler.processWebhookEvent(stored.id);
 
-    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-awaiting-input");
-    assert.equal(wake?.runType, "implementation");
-    assert.equal(wake?.resumeThread, true);
-    assert.equal(wake?.wakeReason, "direct_reply");
-    assert.equal(wake?.context.directReplyMode, true);
-    assert.equal(wake?.context.followUps?.[0]?.text, "use the staged rollout copy, not the earlier draft.");
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-awaiting-input");
+    assert.equal(workflowTask?.runType, "implementation");
+    assert.equal(workflowTask?.resumeThread, true);
+    assert.equal(workflowTask?.workflowReason, "direct_reply");
+    assert.equal(workflowTask?.context.directReplyMode, true);
+    assert.equal(workflowTask?.context.followUps?.[0]?.text, "use the staged rollout copy, not the earlier draft.");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-awaiting-input" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -3450,11 +3433,11 @@ test("explicit PatchRelay answers to outstanding questions are classified as dir
     });
     await handler.processWebhookEvent(stored.id);
 
-    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-direct-reply");
-    assert.equal(wake?.wakeReason, "direct_reply");
-    assert.equal(wake?.resumeThread, true);
-    assert.equal(wake?.context.directReplyMode, true);
-    assert.equal(wake?.context.followUps?.[0]?.text, "use the staged rollout copy.");
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-direct-reply");
+    assert.equal(workflowTask?.workflowReason, "direct_reply");
+    assert.equal(workflowTask?.resumeThread, true);
+    assert.equal(workflowTask?.context.directReplyMode, true);
+    assert.equal(workflowTask?.context.followUps?.[0]?.text, "use the staged rollout copy.");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-direct-reply" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -3535,7 +3518,7 @@ test("PatchRelay-authored comments are recorded as inert session events without 
     const events = db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-self-comment");
     assert.equal(events.length, 1);
     assert.equal(events[0]?.eventType, "self_comment");
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-self-comment"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-self-comment"), undefined);
     assert.deepEqual(enqueued, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -3623,7 +3606,7 @@ test("PatchRelay managed status comment updates stay inert even when the webhook
     const events = db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-managed-status");
     assert.equal(events.length, 1);
     assert.equal(events[0]?.eventType, "self_comment");
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-managed-status"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-managed-status"), undefined);
     assert.deepEqual(enqueued, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -3705,7 +3688,7 @@ test("PatchRelay-generated escalation activity comments stay inert even when Lin
     const events = db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-escalation-comment");
     assert.equal(events.length, 1);
     assert.equal(events[0]?.eventType, "self_comment");
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-escalation-comment"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-escalation-comment"), undefined);
     assert.deepEqual(enqueued, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -3818,7 +3801,7 @@ test("PatchRelay agent activity echoes do not steer active runs or queue follow-
       events.map((event) => event.eventType).filter((eventType) => eventType === "followup_prompt" || eventType === "direct_reply"),
       [],
     );
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-echo"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-echo"), undefined);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -3930,7 +3913,7 @@ test("real agent prompt events still steer active runs", async () => {
         .some((event) => event.eventType === "prompt_delivered"),
       true,
     );
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-real-prompt"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-real-prompt"), undefined);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -4040,7 +4023,7 @@ test("active delegated agent status prompts answer as thoughts without steering 
 
     assert.deepEqual(codexSteers, []);
     assert.deepEqual(enqueued, []);
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-active-status"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-active-status"), undefined);
     assert.equal(activities.length, 1);
     assert.equal(activities[0]?.type, "thought");
     assert.equal(activities[0]?.ephemeral, true);
@@ -4256,7 +4239,7 @@ test("idle delegated agent status prompts respond without queueing implementatio
     await handler.processWebhookEvent(stored.id);
 
     assert.deepEqual(enqueued, []);
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-status-prompt"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-status-prompt"), undefined);
     assert.deepEqual(
       db.issueSessions
         .listIssueSessionEvents("krasnoperov/mafia", "issue-maf-status-prompt")
@@ -4357,10 +4340,10 @@ test("idle delegated agent retry prompts queue follow-up implementation", async 
     });
     await handler.processWebhookEvent(stored.id);
 
-    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-retry-prompt");
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-retry-prompt");
     const events = db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-retry-prompt");
-    assert.equal(wake?.runType, "implementation");
-    assert.equal(wake?.wakeReason, "followup_prompt");
+    assert.equal(workflowTask?.runType, "implementation");
+    assert.equal(workflowTask?.workflowReason, "followup_prompt");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-retry-prompt" }]);
     assert.equal(events.at(-1)?.eventType, "followup_prompt");
     assert.ok(activities.some((activity) => activity.body?.includes("PatchRelay routed your latest instructions")));
@@ -4461,18 +4444,18 @@ test("agent prompts on completed PRs reopen work as replacement PR runs with pri
     await handler.processWebhookEvent(stored.id);
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-done-replacement");
-    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-done-replacement");
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-done-replacement");
     assert.equal(issue?.factoryState, "delegated");
     assert.equal(issue?.prNumber, undefined);
     assert.match(issue?.branchName ?? "", /^maf\/MAF-92R-replacement-/);
-    assert.equal(wake?.runType, "implementation");
-    assert.equal(wake?.resumeThread, true);
-    assert.equal(wake?.context.replacementPrRequired, true);
-    assert.equal(wake?.context.previousPrNumber, 929);
-    assert.equal(wake?.context.previousPrUrl, "https://github.example/pull/929");
-    assert.equal(wake?.context.previousPrState, "merged");
-    assert.equal(wake?.context.previousPrHeadSha, "abc123");
-    assert.equal(wake?.context.followUps?.[0]?.text, "Please also add the dashboard copy changes.");
+    assert.equal(workflowTask?.runType, "implementation");
+    assert.equal(workflowTask?.resumeThread, true);
+    assert.equal(workflowTask?.context.replacementPrRequired, true);
+    assert.equal(workflowTask?.context.previousPrNumber, 929);
+    assert.equal(workflowTask?.context.previousPrUrl, "https://github.example/pull/929");
+    assert.equal(workflowTask?.context.previousPrState, "merged");
+    assert.equal(workflowTask?.context.previousPrHeadSha, "abc123");
+    assert.equal(workflowTask?.context.followUps?.[0]?.text, "Please also add the dashboard copy changes.");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-done-replacement" }]);
     assert.deepEqual(activities, [{
       type: "action",
@@ -4917,9 +4900,8 @@ test("agent session creation before delegation persists the session id for later
 
     const delegatedIssue = db.getIssue("krasnoperov/mafia", "issue-maf-session");
     assert.equal(delegatedIssue?.agentSessionId, "session-94");
-    const delegatedWake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-session");
-    assert.equal(delegatedIssue?.pendingRunType, undefined);
-    assert.equal(delegatedWake?.runType, "implementation");
+    const delegatedTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-session");
+    assert.equal(delegatedTask?.runType, "implementation");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -5011,7 +4993,6 @@ test("issueCreated recovers delegated startup after an early agent session left 
 
     const preIssue = db.getIssue("krasnoperov/mafia", "issue-maf-startup");
     assert.equal(preIssue?.factoryState, "awaiting_input");
-    assert.equal(preIssue?.pendingRunType, undefined);
 
     hydratedDelegateId = "patchrelay-actor";
     const issueCreatedPayload: LinearWebhookPayload = {
@@ -5037,10 +5018,9 @@ test("issueCreated recovers delegated startup after an early agent session left 
     await handler.processWebhookEvent(issueCreatedEvent.id);
 
     const recoveredIssue = db.getIssue("krasnoperov/mafia", "issue-maf-startup");
-    const recoveredWake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-startup");
-    assert.equal(recoveredIssue?.pendingRunType, undefined);
+    const recoveredTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-startup");
     assert.equal(recoveredIssue?.factoryState, "delegated");
-    assert.equal(recoveredWake?.runType, "implementation");
+    assert.equal(recoveredTask?.runType, "implementation");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-startup" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -5161,7 +5141,6 @@ test("issueCreated recovers delegated blocked startup without queueing implement
     await handler.processWebhookEvent(issueCreatedEvent.id);
 
     const recoveredIssue = db.getIssue("krasnoperov/mafia", "issue-maf-blocked-startup");
-    assert.equal(recoveredIssue?.pendingRunType, undefined);
     assert.equal(recoveredIssue?.factoryState, "delegated");
     assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-blocked-startup"), 1);
     assert.deepEqual(enqueued, []);
@@ -5170,7 +5149,7 @@ test("issueCreated recovers delegated blocked startup without queueing implement
   }
 });
 
-test("orchestration parents do not wake on non-terminal child status churn", async () => {
+test("orchestration parents do not dispatch workflow tasks on non-terminal child status churn", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-orchestration-child-churn-"));
   try {
     const config = createConfig(baseDir);
@@ -5270,7 +5249,7 @@ test("orchestration parents do not wake on non-terminal child status churn", asy
 
     await handler.processWebhookEvent(stored.id);
 
-    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-parent"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-parent"), undefined);
     assert.deepEqual(
       db.issueSessions
         .listIssueSessionEvents("krasnoperov/mafia", "issue-maf-parent")

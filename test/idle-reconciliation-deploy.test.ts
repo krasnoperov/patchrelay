@@ -6,7 +6,7 @@ import pino from "pino";
 import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { IdleIssueReconciler } from "../src/idle-reconciliation.ts";
-import { WakeDispatcher } from "../src/wake-dispatcher.ts";
+import { WorkflowTaskDispatcher } from "../src/workflow-task-dispatcher.ts";
 import type { AppConfig } from "../src/config-types.ts";
 import type { DeployOutcome } from "../src/post-merge-deploy.ts";
 import type { IssueRecord } from "../src/db-types.ts";
@@ -41,8 +41,8 @@ function build(
   syncIssue?: (issue: IssueRecord) => void | Promise<void>,
 ) {
   const logger = pino({ enabled: false });
-  const wake = new WakeDispatcher(db, () => undefined, () => undefined, logger);
-  const reconciler = new IdleIssueReconciler(db, config, wake, logger, undefined, async () => outcome, syncIssue);
+  const workflowTask = new WorkflowTaskDispatcher(db, () => undefined, () => undefined, logger);
+  const reconciler = new IdleIssueReconciler(db, config, workflowTask, logger, undefined, async () => outcome, syncIssue);
   return reconciler;
 }
 

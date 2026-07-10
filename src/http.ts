@@ -585,7 +585,7 @@ function renderAgentSessionStatusPage(params: {
       prReviewState?: string;
       prCheckStatus?: string;
       waitingReason?: string;
-      lastWakeReason?: string;
+      lastWorkflowReason?: string;
       ciRepairAttempts?: number;
       queueRepairAttempts?: number;
     };
@@ -644,7 +644,7 @@ function renderAgentSessionStatusPage(params: {
   const ciAttempts = params.sessionStatus.issue.ciRepairAttempts ?? 0;
   const queueAttempts = params.sessionStatus.issue.queueRepairAttempts ?? 0;
   const waitingReason = params.sessionStatus.issue.waitingReason ?? "No outstanding wait reason.";
-  const lastWakeReason = params.sessionStatus.issue.lastWakeReason ?? "unknown";
+  const lastWorkflowReason = params.sessionStatus.issue.lastWorkflowReason ?? "unknown";
 
   return `<!doctype html>
 <html lang="en">
@@ -735,7 +735,7 @@ function renderAgentSessionStatusPage(params: {
             <tr><th>Review</th><td>${escapeHtml(reviewState)}</td></tr>
             <tr><th>Checks</th><td>${escapeHtml(checkState)}</td></tr>
             <tr><th>Waiting reason</th><td>${escapeHtml(waitingReason)}</td></tr>
-            <tr><th>Last wake</th><td><code>${escapeHtml(lastWakeReason)}</code></td></tr>
+            <tr><th>Last workflow</th><td><code>${escapeHtml(lastWorkflowReason)}</code></td></tr>
             <tr><th>Latest plan</th><td>${escapeHtml(latestPlan)}</td></tr>
             <tr><th>Active command</th><td><code>${escapeHtml(activeCommand)}</code></td></tr>
             <tr><th>Latest summary</th><td>${escapeHtml(latestAgentMessage)}</td></tr>

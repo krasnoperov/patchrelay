@@ -5,12 +5,11 @@ import path from "node:path";
 import pino from "pino";
 import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
-import { peekPendingWakeRunType } from "../src/pending-wake.ts";
+import { peekRunnableWorkflowTaskRunType } from "../src/pending-workflow-task.ts";
 import { IssueOverviewQuery } from "../src/issue-overview-query.ts";
 import { DependencyReadinessHandler } from "../src/webhooks/dependency-readiness-handler.ts";
 import { TrackedIssueListQuery } from "../src/tracked-issue-list-query.ts";
-import { WakeDispatcher } from "../src/wake-dispatcher.ts";
-import type { RunType } from "../src/factory-state.ts";
+import { WorkflowTaskDispatcher } from "../src/workflow-task-dispatcher.ts";
 import { MemoryPatchRelayTelemetry, type PatchRelayTelemetryEvent } from "../src/telemetry.ts";
 
 async function withDb(fn: (db: PatchRelayDatabase, telemetry: MemoryPatchRelayTelemetry) => Promise<void> | void): Promise<void> {
@@ -29,8 +28,8 @@ function makeDispatcher(
   db: PatchRelayDatabase,
   enqueued: Array<{ projectId: string; issueId: string }>,
   telemetry?: MemoryPatchRelayTelemetry,
-): WakeDispatcher {
-  return new WakeDispatcher(
+): WorkflowTaskDispatcher {
+  return new WorkflowTaskDispatcher(
     db,
     (projectId, issueId) => {
       enqueued.push({ projectId, issueId });
@@ -44,13 +43,12 @@ function makeDispatcher(
 
 function makeDependencyReadinessHandler(
   db: PatchRelayDatabase,
-  dispatcher: WakeDispatcher,
+  dispatcher: WorkflowTaskDispatcher,
   telemetry?: MemoryPatchRelayTelemetry,
 ): DependencyReadinessHandler {
   return new DependencyReadinessHandler(
     db,
     dispatcher,
-    (projectId, issueId): RunType | undefined => db.issueSessions.peekIssueSessionWake(projectId, issueId)?.runType,
     telemetry,
   );
 }
@@ -80,8 +78,7 @@ function upsertBlockedImplementationIssue(db: PatchRelayDatabase, params?: {
   issueKey?: string;
   blockerLinearIssueId?: string;
   blockerIssueKey?: string;
-  pendingRunType?: RunType;
-}): void {
+  }): void {
   const linearIssueId = params?.linearIssueId ?? "issue-child";
   const blockerLinearIssueId = params?.blockerLinearIssueId ?? "issue-blocker";
   db.replaceIssueDependencies({
@@ -102,38 +99,37 @@ function upsertBlockedImplementationIssue(db: PatchRelayDatabase, params?: {
     title: "Blocked issue",
     delegatedToPatchRelay: true,
     factoryState: "delegated",
-    ...(params?.pendingRunType ? { pendingRunType: params.pendingRunType } : {}),
   });
 }
 
 test("blocked idle issue has one blocked truth across session, list, overview, and dispatch", async () => {
   await withDb(async (db, telemetry) => {
     const enqueued: Array<{ projectId: string; issueId: string }> = [];
-    upsertBlockedImplementationIssue(db, { pendingRunType: "implementation" });
+    upsertBlockedImplementationIssue(db);
 
     const dispatcher = makeDispatcher(db, enqueued, telemetry);
     const listEntry = getListEntry(db, "USE-2");
 
     assert.equal(db.countUnresolvedBlockers("usertold", "issue-child"), 1);
-    assert.equal(peekPendingWakeRunType(db, "usertold", "issue-child"), undefined);
+    assert.equal(peekRunnableWorkflowTaskRunType(db, "usertold", "issue-child"), undefined);
     assert.deepEqual(db.listIssuesReadyForExecution(), []);
-    assert.equal(dispatcher.dispatchIfWakePending("usertold", "issue-child"), undefined);
+    assert.equal(dispatcher.dispatchIfWorkflowTaskPending("usertold", "issue-child"), undefined);
     assert.deepEqual(enqueued, []);
     assert.equal(db.issueSessions.getIssueSession("usertold", "issue-child")?.waitingReason, "Blocked by USE-1");
     assert.equal(listEntry?.blockedByCount, 1);
     assert.deepEqual(listEntry?.blockedByKeys, ["USE-1"]);
     assert.equal(listEntry?.waitingReason, "Blocked by USE-1");
     assert.equal(await getOverviewWaitingReason(db, "USE-2"), "Blocked by USE-1");
-    assert.ok(eventsOf(telemetry, "wake.suppressed").some((event) => (
+    assert.ok(eventsOf(telemetry, "dispatch.suppressed").some((event) => (
       event.reason === "blocked"
       && event.linearIssueId === "issue-child"
       && event.blockerCount === 1
       && event.blockerKeys?.includes("USE-1")
     )));
-    assert.ok(eventsOf(telemetry, "health.invariant").some((event) => (
-      event.invariant === "blocked_issue_with_pending_wake"
+    assert.equal(eventsOf(telemetry, "health.invariant").some((event) => (
+      event.invariant === "blocked_issue_with_pending_workflow_task"
       && event.linearIssueId === "issue-child"
-    )));
+    )), false);
   });
 });
 
@@ -158,7 +154,7 @@ test("unblock while idle enqueues implementation and clears stale blocked read-m
     const workflowTask = db.workflowTasks.getTask("usertold", "issue-child", "run:implementation");
 
     assert.equal(db.countUnresolvedBlockers("usertold", "issue-child"), 0);
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-child"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-child"), undefined);
     assert.equal(workflowTask?.runType, "implementation");
     assert.equal(workflowTask?.gateAction, "start");
     assert.deepEqual(db.listIssuesReadyForExecution(), [{ projectId: "usertold", linearIssueId: "issue-child" }]);
@@ -184,7 +180,7 @@ test("unblock while idle enqueues implementation and clears stale blocked read-m
       && event.status === "repaired"
       && event.linearIssueId === "issue-child"
     )));
-    assert.equal(eventsOf(telemetry, "wake.dispatched").filter((event) => event.linearIssueId === "issue-child").length, 1);
+    assert.equal(eventsOf(telemetry, "dispatch.dispatched").filter((event) => event.linearIssueId === "issue-child").length, 1);
   });
 });
 
@@ -192,7 +188,7 @@ test("blocked active issue emits invariant telemetry when dispatch is suppressed
   await withDb(async (db, telemetry) => {
     const enqueued: Array<{ projectId: string; issueId: string }> = [];
     const dispatcher = makeDispatcher(db, enqueued, telemetry);
-    upsertBlockedImplementationIssue(db, { pendingRunType: "implementation" });
+    upsertBlockedImplementationIssue(db);
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-child",
@@ -200,7 +196,7 @@ test("blocked active issue emits invariant telemetry when dispatch is suppressed
       factoryState: "implementing",
     });
 
-    assert.equal(dispatcher.dispatchIfWakePending("usertold", "issue-child"), undefined);
+    assert.equal(dispatcher.dispatchIfWorkflowTaskPending("usertold", "issue-child"), undefined);
     assert.deepEqual(enqueued, []);
     assert.ok(eventsOf(telemetry, "health.invariant").some((event) => (
       event.invariant === "active_run_with_unresolved_blocker"
@@ -228,7 +224,7 @@ test("external blocker completion releases dependents without a blocker issue ro
     const listEntry = getListEntry(db, "USE-2");
     const workflowTask = db.workflowTasks.getTask("usertold", "issue-child", "run:implementation");
     assert.equal(db.countUnresolvedBlockers("usertold", "issue-child"), 0);
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-child"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-child"), undefined);
     assert.equal(workflowTask?.runType, "implementation");
     assert.equal(workflowTask?.gateAction, "start");
     assert.deepEqual(enqueued, [{ projectId: "usertold", issueId: "issue-child" }]);
@@ -244,7 +240,7 @@ test("external blocker completion releases dependents without a blocker issue ro
   });
 });
 
-test("multiple blockers keep the remaining blocker until the final unblock wakes work", async () => {
+test("multiple blockers keep the remaining blocker until the final unblock queues workflow work", async () => {
   await withDb(async (db, telemetry) => {
     const enqueued: Array<{ projectId: string; issueId: string }> = [];
     const readiness = makeDependencyReadinessHandler(db, makeDispatcher(db, enqueued, telemetry), telemetry);
@@ -272,7 +268,6 @@ test("multiple blockers keep the remaining blocker until the final unblock wakes
       issueKey: "USE-2",
       delegatedToPatchRelay: true,
       factoryState: "delegated",
-      pendingRunType: "implementation",
     });
 
     db.issues.updateDependencyBlockerSnapshot({
@@ -314,7 +309,7 @@ test("multiple blockers keep the remaining blocker until the final unblock wakes
   });
 });
 
-test("blocked requested-changes work waits until unblock and then wakes review_fix, not implementation", async () => {
+test("blocked requested-changes work waits until unblock and then queues review_fix workflow work, not implementation", async () => {
   await withDb(async (db, telemetry) => {
     const enqueued: Array<{ projectId: string; issueId: string }> = [];
     const dispatcher = makeDispatcher(db, enqueued, telemetry);
@@ -337,7 +332,9 @@ test("blocked requested-changes work waits until unblock and then wakes review_f
       factoryState: "changes_requested",
       prNumber: 44,
       prState: "open",
+      prHeadSha: "sha-review",
       prReviewState: "changes_requested",
+      lastBlockingReviewHeadSha: "sha-review",
       prCheckStatus: "success",
     });
 
@@ -354,9 +351,9 @@ test("blocked requested-changes work waits until unblock and then wakes review_f
       blockerCurrentLinearStateType: "completed",
     });
     assert.deepEqual(readiness.reconcile("usertold", "issue-blocker"), ["issue-review"]);
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-review")?.runType, "review_fix");
+    assert.equal(peekRunnableWorkflowTaskRunType(db, "usertold", "issue-review"), "review_fix");
     assert.deepEqual(enqueued, [{ projectId: "usertold", issueId: "issue-review" }]);
-    assert.ok(eventsOf(telemetry, "wake.suppressed").some((event) => (
+    assert.ok(eventsOf(telemetry, "dispatch.suppressed").some((event) => (
       event.reason === "blocked"
       && event.linearIssueId === "issue-review"
     )));
@@ -367,7 +364,7 @@ test("blocked requested-changes work waits until unblock and then wakes review_f
   });
 });
 
-test("blocked red-CI work waits until unblock and then wakes ci_repair, not implementation", async () => {
+test("blocked red-CI work waits until unblock and then queues ci_repair workflow work, not implementation", async () => {
   await withDb(async (db, telemetry) => {
     const enqueued: Array<{ projectId: string; issueId: string }> = [];
     const dispatcher = makeDispatcher(db, enqueued, telemetry);
@@ -390,6 +387,7 @@ test("blocked red-CI work waits until unblock and then wakes ci_repair, not impl
       factoryState: "repairing_ci",
       prNumber: 55,
       prState: "open",
+      prHeadSha: "sha-1",
       prCheckStatus: "failure",
       lastGitHubFailureSource: "branch_ci",
       lastGitHubFailureHeadSha: "sha-1",
@@ -409,7 +407,7 @@ test("blocked red-CI work waits until unblock and then wakes ci_repair, not impl
       blockerCurrentLinearStateType: "completed",
     });
     assert.deepEqual(readiness.reconcile("usertold", "issue-blocker"), ["issue-ci"]);
-    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-ci")?.runType, "ci_repair");
+    assert.equal(peekRunnableWorkflowTaskRunType(db, "usertold", "issue-ci"), "ci_repair");
     assert.deepEqual(enqueued, [{ projectId: "usertold", issueId: "issue-ci" }]);
     assert.ok(eventsOf(telemetry, "dependency.dependent_unblocked").some((event) => (
       event.linearIssueId === "issue-ci"
@@ -460,8 +458,8 @@ test("unblock under a held lease preserves lease ownership and dedupes enqueue w
     const session = db.issueSessions.getIssueSession("usertold", "issue-child");
     assert.equal(session?.leaseId, "lease-live");
     assert.deepEqual(enqueued, [{ projectId: "usertold", issueId: "issue-child" }]);
-    assert.equal(eventsOf(telemetry, "wake.dispatched").filter((event) => event.linearIssueId === "issue-child").length, 1);
-    assert.ok(eventsOf(telemetry, "wake.deduped").some((event) => event.linearIssueId === "issue-child"));
+    assert.equal(eventsOf(telemetry, "dispatch.dispatched").filter((event) => event.linearIssueId === "issue-child").length, 1);
+    assert.ok(eventsOf(telemetry, "dispatch.deduped").some((event) => event.linearIssueId === "issue-child"));
     assert.ok(eventsOf(telemetry, "queue.deduped").some((event) => event.linearIssueId === "issue-child"));
   });
 });

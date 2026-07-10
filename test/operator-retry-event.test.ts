@@ -64,7 +64,7 @@ test("buildOperatorRetryEvent marks branch upkeep retries explicitly", () => {
   const payload = JSON.parse(event.eventJson) as Record<string, unknown>;
   assert.equal(payload.requestedChangesCoalesceKey, "review_changes_requested:branch_upkeep:issue:issue-review:head:head-review");
   assert.equal(payload.branchUpkeepRequired, true);
-  assert.equal(payload.wakeReason, "branch_upkeep");
+  assert.equal(payload.workflowReason, "branch_upkeep");
   assert.equal(payload.source, "operator_retry");
 });
 

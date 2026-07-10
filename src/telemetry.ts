@@ -10,16 +10,16 @@ export interface PatchRelayTelemetryIds {
   runId?: number | undefined;
   eventIds?: number[] | undefined;
   runType?: RunType | undefined;
-  wakeReason?: string | undefined;
+  workflowReason?: string | undefined;
   correlationId?: string | undefined;
   causationId?: string | undefined;
 }
 
-export type WakeSuppressionReason =
+export type DispatchSuppressionReason =
   | "issue_missing"
   | "active_run_present"
   | "blocked"
-  | "no_wake_derivable"
+  | "no_workflow_task_derivable"
   | "lease_held"
   | "inactive_requested_changes"
   | "terminal_event"
@@ -33,13 +33,13 @@ export type RunSkipReason =
   | "active_run_present_post_classify"
   | "classification_dropped_issue"
   | "lease_acquire_failed"
-  | "no_wake_derivable"
+  | "no_workflow_task_derivable"
   | "blocked"
   | "dependency_refresh_failed"
   | "zombie_backoff"
   | "capacity_backoff"
-  | "inactive_requested_changes_wake"
-  | "lease_lost_dismissing_inactive_requested_changes_wake"
+  | "inactive_requested_changes_task"
+  | "lease_lost_dismissing_inactive_requested_changes_task"
   | "budget_exceeded"
   | "lease_lost_incrementing_attempts"
   | "claim_failed";
@@ -53,26 +53,26 @@ export type ProjectionInvalidationReason =
 
 export type PatchRelayTelemetryEvent =
   | (PatchRelayTelemetryIds & {
-    type: "wake.created";
+    type: "dispatch.created";
     sessionEventType: IssueSessionEventType;
     dedupeKey?: string | undefined;
   })
   | (PatchRelayTelemetryIds & {
-    type: "wake.derived";
-    source: "session_event" | "implicit" | "legacy_pending_run_type" | "workflow_task";
+    type: "dispatch.derived";
+    source: "workflow_task";
   })
   | (PatchRelayTelemetryIds & {
-    type: "wake.suppressed";
-    reason: WakeSuppressionReason;
+    type: "dispatch.suppressed";
+    reason: DispatchSuppressionReason;
     activeRunId?: number | undefined;
     blockerCount?: number | undefined;
     blockerKeys?: string[] | undefined;
   })
-  | (PatchRelayTelemetryIds & { type: "wake.dispatched" })
-  | (PatchRelayTelemetryIds & { type: "wake.deduped" })
-  | (PatchRelayTelemetryIds & { type: "wake.consumed" })
+  | (PatchRelayTelemetryIds & { type: "dispatch.dispatched" })
+  | (PatchRelayTelemetryIds & { type: "dispatch.deduped" })
+  | (PatchRelayTelemetryIds & { type: "dispatch.consumed" })
   | (PatchRelayTelemetryIds & {
-    type: "wake.dismissed";
+    type: "dispatch.dismissed";
     reason: string;
   })
   | (PatchRelayTelemetryIds & {
@@ -142,24 +142,12 @@ export type PatchRelayTelemetryEvent =
   | (PatchRelayTelemetryIds & {
     type: "health.invariant";
     invariant:
-      | "blocked_issue_with_pending_wake"
+      | "blocked_issue_with_pending_workflow_task"
       | "ready_issue_not_enqueued"
       | "stale_blocked_read_model"
       | "active_run_with_unresolved_blocker"
       | "stale_lease_blocking_runnable_work"
-      | "detached_active_run"
-      // S5: the legacy session-event rung answered a human-input / child-update
-      // family wake that the durable inbox task should have covered. A proving
-      // instrument for the S6/S7 cutover (silent ⇒ the inbox path owns input).
-      | "session_wake_answered_input"
-      // S6: the dispatcher chose the session-event rung (any wake reason) or the
-      // legacy `pending_run_type` column rung. Both should now be fully covered by
-      // durable workflow tasks — these fire only if a task failed to materialize.
-      // Silent on the live service ⇒ safe to delete both rungs + drop the column
-      // (S7). `session_event_dispatch` is the union superset of
-      // `session_wake_answered_input` (which stays scoped to the input families).
-      | "session_event_dispatch"
-      | "legacy_pending_dispatch";
+      | "detached_active_run";
     status: "observed" | "repaired";
     detail?: string | undefined;
     blockerCount?: number | undefined;
@@ -240,7 +228,7 @@ export class OperatorFeedTelemetrySink implements PatchRelayTelemetry {
             : "Dependency unblocked",
         };
       case "run.skipped":
-        if (event.reason === "blocked" || event.reason === "lease_acquire_failed" || event.reason === "no_wake_derivable") {
+        if (event.reason === "blocked" || event.reason === "lease_acquire_failed" || event.reason === "no_workflow_task_derivable") {
           return {
             level: event.reason === "blocked" ? "info" : "warn",
             kind: "stage",

@@ -7,21 +7,21 @@ import type { IssueStore } from "./db/issue-store.ts";
 import type { IssueSessionStore } from "./db/issue-session-store.ts";
 import type { RunStore } from "./db/run-store.ts";
 import type { WorkflowTaskStore } from "./db/workflow-task-store.ts";
-import { hasPendingWake, peekPendingWakeRunType } from "./pending-wake.ts";
+import { peekRunnableWorkflowTaskRunType } from "./pending-workflow-task.ts";
 import { isoNow, type DatabaseConnection } from "./db/shared.ts";
 import { buildTrackedIssueRecord } from "./tracked-issue-projector.ts";
 import {
   extractLatestAssistantSummary,
 } from "./issue-session-events.ts";
 import {
-  deriveIssueSessionState,
-  deriveIssueSessionStateLegacy,
-  deriveIssueSessionWakeReason,
-  deriveIssueSessionWakeReasonLegacy,
-} from "./issue-session.ts";
-import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
+  deriveIssueExecutionStateFromRecords,
+  isIssuePublishedOrDownstreamOrDoneProjection,
+  type IssueExecutionState,
+} from "./issue-execution-state.ts";
+import type { IssueSessionState } from "./issue-session-state.ts";
+import type { PatchRelayTelemetry } from "./telemetry.ts";
 
-export function syncIssueSessionFromIssue(params: {
+export function projectIssueSessionReadModel(params: {
   connection: DatabaseConnection;
   issues: IssueStore;
   issueSessions: IssueSessionStore;
@@ -32,70 +32,47 @@ export function syncIssueSessionFromIssue(params: {
   options?: {
     summaryText?: string | undefined;
     lastRunType?: RunType | undefined;
-    lastWakeReason?: string | undefined;
+    lastWorkflowReason?: string | undefined;
   };
 }): void {
   const { connection, issues, issueSessions, runs, workflowTasks, issue, options } = params;
   const existing = issueSessions.getIssueSession(issue.projectId, issue.linearIssueId);
   const latestRun = runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+  const activeRun = issue.activeRunId !== undefined ? runs.getRunById(issue.activeRunId) : undefined;
   const latestRunType = options?.lastRunType ?? latestRun?.runType ?? existing?.lastRunType;
   const summaryText = resolveIssueSessionSummary(issue, runs, latestRun, existing?.summaryText, options?.summaryText);
   const activeThreadId = issue.threadId ?? existing?.activeThreadId;
   const threadGeneration = activeThreadId && activeThreadId !== existing?.activeThreadId
     ? (existing?.threadGeneration ?? 0) + 1
     : (existing?.threadGeneration ?? (activeThreadId ? 1 : 0));
-  // S4 shadow parity: compute both the new PR-fact-based derivation (written)
-  // and the legacy factory-state-keyed one; emit divergence telemetry so the
-  // S8/S9 cutover can be gated on it staying silent.
-  const sessionState = deriveIssueSessionState({
-    ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
-    ...(issue.prState !== undefined ? { prState: issue.prState } : {}),
-    compatibilityFactoryState: issue.factoryState,
-  });
-  const legacySessionState = deriveIssueSessionStateLegacy({
-    ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
-    factoryState: issue.factoryState,
-  });
-  const tracked = buildTrackedIssueRecord({
-    issue,
-    session: existing,
-    blockedBy: issues.listIssueDependencies(issue.projectId, issue.linearIssueId),
-    hasPendingWake: hasPendingWake({ workflowTasks, issueSessions }, issue.projectId, issue.linearIssueId),
-    latestRun,
-    latestEvent: issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 1 }).at(-1),
-  });
-  const pendingWakeRunType = peekPendingWakeRunType(
-    { workflowTasks, issueSessions },
+  const runnableTaskRunType = peekRunnableWorkflowTaskRunType(
+    { workflowTasks },
     issue.projectId,
     issue.linearIssueId,
   );
-  const derivedWakeReason = deriveIssueSessionWakeReason({
-    delegatedToPatchRelay: issue.delegatedToPatchRelay,
-    ...(pendingWakeRunType !== undefined ? { pendingWakeRunType } : {}),
-    compatibilityFactoryState: issue.factoryState,
-    prNumber: issue.prNumber,
-    prState: issue.prState,
-    prReviewState: issue.prReviewState,
-    prCheckStatus: issue.prCheckStatus,
-    latestFailureSource: issue.lastGitHubFailureSource,
+  const blockedBy = issues.listIssueDependencies(issue.projectId, issue.linearIssueId);
+  const executionState = deriveIssueExecutionStateFromRecords(issue, {
+    ...(activeRun ? { activeRun } : {}),
+    ...(latestRun ? { latestRun } : {}),
+    blockedByKeys: blockedBy
+      .filter((entry) => entry.blockerCurrentLinearStateType !== "completed"
+        && entry.blockerCurrentLinearState?.trim().toLowerCase() !== "done")
+      .map((entry) => entry.blockerIssueKey ?? entry.blockerLinearIssueId),
+    ...(runnableTaskRunType ? { runnableTaskRunType: runnableTaskRunType } : {}),
   });
-  const legacyWakeReason = deriveIssueSessionWakeReasonLegacy({
-    delegatedToPatchRelay: issue.delegatedToPatchRelay,
-    pendingRunType: issue.pendingRunType,
-    factoryState: issue.factoryState,
-    prNumber: issue.prNumber,
-    prState: issue.prState,
-    prReviewState: issue.prReviewState,
-    prCheckStatus: issue.prCheckStatus,
-    latestFailureSource: issue.lastGitHubFailureSource,
+  const sessionState = renderIssueSessionState(executionState);
+  const tracked = buildTrackedIssueRecord({
+    issue,
+    session: existing,
+    blockedBy,
+    ...(runnableTaskRunType ? { runnableTaskRunType } : {}),
+    latestRun,
+    latestEvent: issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 1 }).at(-1),
   });
-  emitSessionProjectionDivergence(params.telemetry, issue, [
-    { field: "session_state", oldValue: legacySessionState, newValue: sessionState },
-    { field: "waiting_reason", oldValue: legacyWakeReason ?? null, newValue: derivedWakeReason ?? null },
-  ]);
-  const lastWakeReason = options?.lastWakeReason
-    ?? derivedWakeReason
-    ?? existing?.lastWakeReason;
+  const derivedWorkflowReason = renderIssueSessionWorkflowReason(executionState);
+  const lastWorkflowReason = options?.lastWorkflowReason
+    ?? derivedWorkflowReason
+    ?? existing?.lastWorkflowReason;
   const now = isoNow();
 
   if (existing) {
@@ -111,11 +88,9 @@ export function syncIssueSessionFromIssue(params: {
         session_state = ?,
         waiting_reason = ?,
         summary_text = ?,
-        active_thread_id = ?,
-        thread_generation = ?,
         active_run_id = ?,
         last_run_type = ?,
-        last_wake_reason = ?,
+        last_workflow_reason = ?,
         ci_repair_attempts = ?,
         queue_repair_attempts = ?,
         review_fix_attempts = ?,
@@ -133,11 +108,9 @@ export function syncIssueSessionFromIssue(params: {
       sessionState,
       tracked.waitingReason ?? null,
       summaryText ?? null,
-      activeThreadId ?? null,
-      threadGeneration,
       issue.activeRunId ?? null,
       latestRunType ?? null,
-      lastWakeReason ?? null,
+      lastWorkflowReason ?? null,
       issue.ciRepairAttempts,
       issue.queueRepairAttempts,
       issue.reviewFixAttempts,
@@ -146,6 +119,7 @@ export function syncIssueSessionFromIssue(params: {
       issue.projectId,
       issue.linearIssueId,
     );
+    upsertIssueSessionThreadState(connection, issue, activeThreadId, threadGeneration, now);
     return;
   }
 
@@ -153,10 +127,10 @@ export function syncIssueSessionFromIssue(params: {
     INSERT INTO issue_sessions (
       project_id, linear_issue_id, issue_key, repo_id, branch_name, worktree_path,
       pr_number, pr_head_sha, pr_author_login, session_state, waiting_reason, summary_text,
-      active_thread_id, thread_generation, active_run_id, last_run_type, last_wake_reason,
+      active_run_id, last_run_type, last_workflow_reason,
       ci_repair_attempts, queue_repair_attempts, review_fix_attempts,
       created_at, display_updated_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     issue.projectId,
     issue.linearIssueId,
@@ -170,11 +144,9 @@ export function syncIssueSessionFromIssue(params: {
     sessionState,
     tracked.waitingReason ?? null,
     summaryText ?? null,
-    activeThreadId ?? null,
-    threadGeneration,
     issue.activeRunId ?? null,
     latestRunType ?? null,
-    lastWakeReason ?? null,
+    lastWorkflowReason ?? null,
     issue.ciRepairAttempts,
     issue.queueRepairAttempts,
     issue.reviewFixAttempts,
@@ -182,24 +154,78 @@ export function syncIssueSessionFromIssue(params: {
     now,
     now,
   );
+  upsertIssueSessionThreadState(connection, issue, activeThreadId, threadGeneration, now);
 }
 
-function emitSessionProjectionDivergence(
-  telemetry: PatchRelayTelemetry | undefined,
-  issue: IssueRecord,
-  fields: Array<{ field: "session_state" | "waiting_reason"; oldValue: string | null; newValue: string | null }>,
+function upsertIssueSessionThreadState(
+  connection: DatabaseConnection,
+  issue: Pick<IssueRecord, "projectId" | "linearIssueId">,
+  activeThreadId: string | undefined,
+  threadGeneration: number,
+  now: string,
 ): void {
-  for (const { field, oldValue, newValue } of fields) {
-    if (oldValue === newValue) continue;
-    emitTelemetry(telemetry ?? noopTelemetry, {
-      type: "state.projection_divergence",
-      field,
-      oldValue,
-      newValue,
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
-    });
+  connection.prepare(`
+    INSERT INTO issue_session_threads (
+      project_id,
+      linear_issue_id,
+      active_thread_id,
+      thread_generation,
+      updated_at
+    ) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(project_id, linear_issue_id) DO UPDATE SET
+      active_thread_id = excluded.active_thread_id,
+      thread_generation = excluded.thread_generation,
+      updated_at = excluded.updated_at
+  `).run(
+    issue.projectId,
+    issue.linearIssueId,
+    activeThreadId ?? null,
+    threadGeneration,
+    now,
+  );
+}
+
+function renderIssueSessionState(state: IssueExecutionState): IssueSessionState {
+  switch (state.kind) {
+    case "running":
+    case "inconsistent":
+      return "running";
+    case "waiting_input":
+      return "waiting_input";
+    case "terminal":
+      return state.outcome === "done" ? "done" : "failed";
+    default:
+      return "idle";
+  }
+}
+
+function renderIssueSessionWorkflowReason(state: IssueExecutionState): string | undefined {
+  switch (state.kind) {
+    case "ready":
+      return workflowReasonForRunType(state.runnableTaskRunType);
+    case "awaiting_followup":
+      return workflowReasonForRunType(state.followup);
+    case "waiting_input":
+      return "waiting_for_human_reply";
+    default:
+      return undefined;
+  }
+}
+
+function workflowReasonForRunType(runType: string): string | undefined {
+  switch (runType) {
+    case "implementation":
+      return "delegated";
+    case "review_fix":
+      return "review_changes_requested";
+    case "branch_upkeep":
+      return "branch_upkeep";
+    case "ci_repair":
+      return "settled_red_ci";
+    case "queue_repair":
+      return "merge_steward_incident";
+    default:
+      return undefined;
   }
 }
 
@@ -234,9 +260,7 @@ function shouldKeepPreviousIssueSummary(issue: IssueRecord, latestRun: RunRecord
   if (latestRun.summaryJson || latestRun.reportJson) {
     return false;
   }
-  return issue.factoryState === "pr_open"
-    || issue.factoryState === "awaiting_queue"
-    || issue.factoryState === "done";
+  return isIssuePublishedOrDownstreamOrDoneProjection(issue);
 }
 
 function findLatestCompletedRunSummary(runs: RunStore, projectId: string, linearIssueId: string): string | undefined {

@@ -118,7 +118,7 @@ Configure one webhook per repository pointing to the steward:
 - **Secret**: same as `MERGE_STEWARD_WEBHOOK_SECRET` or the encrypted credential
 - **Events**: Pull requests, Pull request reviews, Check suites, Pushes, Branch protection rules, Repository rulesets
 
-The steward uses a single multi-repo webhook endpoint and routes events by `repository.full_name`. It wakes on:
+The steward uses a single multi-repo webhook endpoint and routes events by `repository.full_name`. It reacts to:
 
 - PR label changes
 - review approvals

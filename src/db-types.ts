@@ -1,6 +1,6 @@
 import type { FactoryState, RunType } from "./factory-state.ts";
 import type { IssueClass, IssueClassSource } from "./issue-class.ts";
-import type { IssueSessionState } from "./issue-session.ts";
+import type { IssueSessionState } from "./issue-session-state.ts";
 import type { CompletionCheckOutcome } from "./completion-check-types.ts";
 
 // Plan §4.4: `superseded` — the run was cancelled mid-flight because
@@ -50,8 +50,6 @@ export interface IssueRecord {
   currentLinearState?: string | undefined;
   currentLinearStateType?: string | undefined;
   factoryState: FactoryState;
-  pendingRunType?: RunType | undefined;
-  pendingRunContextJson?: string | undefined;
   branchName?: string | undefined;
   worktreePath?: string | undefined;
   threadId?: string | undefined;
@@ -97,7 +95,7 @@ export interface IssueRecord {
   // default branch — that base ref names another PR's head branch.
   // Lookups by `parentPrBranch === <branch>` give us the inverse
   // index "given this PR's branch, who is stacked on me?" which is
-  // what `pr_synchronize` needs to fan child-rebase wake events.
+  // what `pr_synchronize` needs to fan child-rebase workflow signals.
   parentPrBranch?: string | undefined;
   ciRepairAttempts: number;
   queueRepairAttempts: number;
@@ -141,7 +139,7 @@ export interface IssueSessionRecord {
   threadGeneration: number;
   activeRunId?: number | undefined;
   lastRunType?: RunType | undefined;
-  lastWakeReason?: string | undefined;
+  lastWorkflowReason?: string | undefined;
   ciRepairAttempts: number;
   queueRepairAttempts: number;
   reviewFixAttempts: number;

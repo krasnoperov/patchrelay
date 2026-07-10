@@ -6,19 +6,18 @@ import type { FactoryState } from "./factory-state.ts";
 import { CLEARED_FAILURE_PROVENANCE } from "./failure-provenance.ts";
 import type { WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import { buildCompletionCheckActivity } from "./linear-session-reporting.ts";
-import { wakeOrchestrationParentsForChildEvent } from "./orchestration-parent-wake.ts";
+import { dispatchOrchestrationParentsForChildEvent } from "./orchestration-parent-dispatch.ts";
 import type { RunContext } from "./run-context.ts";
 import type { buildStageReport } from "./run-reporting.ts";
-import type { WakeDispatcher } from "./wake-dispatcher.ts";
-import { COMPLETION_CHECK_CONTINUE_OBSERVATION } from "./workflow-runtime.ts";
+import type { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
+import { COMPLETION_CHECK_CONTINUE_OBSERVATION } from "./workflow-model.ts";
 
 const WRITER = "no-pr-completion-check";
 
-// S5: land a completion-check "continue" as a durable inbox observation. The
-// run's slot is cleared in the same lease block, so the release path (which
+// Land a completion-check "continue" as a durable inbox observation. The run's
+// slot is cleared in the same lease block, so the release path (which
 // reconciles + dispatches) derives a run:input task carrying this runType.
-// Dual path: the legacy completion_check_continue session event is still
-// written alongside. Idempotent via `cc_continue:<runId>`.
+// The session event written alongside remains session history only.
 function appendCompletionCheckContinueObservation(
   db: PatchRelayDatabase,
   run: Pick<RunRecord, "id" | "projectId" | "linearIssueId" | "runType">,
@@ -115,7 +114,7 @@ export async function handleNoPrCompletionCheck(params: {
     activity: ReturnType<typeof buildCompletionCheckActivity>;
   }) => void;
   clearProgressAndRelease: (run: Pick<RunRecord, "id" | "projectId" | "linearIssueId" | "runType">) => void;
-  wakeDispatcher: WakeDispatcher;
+  workflowTaskDispatcher: WorkflowTaskDispatcher;
 }): Promise<void> {
   const runUpdate = buildRunUpdate({
     status: params.runStatus,
@@ -171,8 +170,6 @@ export async function handleNoPrCompletionCheck(params: {
         linearIssueId: params.run.linearIssueId,
         activeRunId: null,
         factoryState: "delegated",
-        pendingRunType: null,
-        pendingRunContextJson: null,
       })) {
         return false;
       }
@@ -214,8 +211,6 @@ export async function handleNoPrCompletionCheck(params: {
         linearIssueId: params.run.linearIssueId,
         activeRunId: null,
         factoryState: "awaiting_input",
-        pendingRunType: null,
-        pendingRunContextJson: null,
       })) {
         return false;
       }
@@ -249,8 +244,6 @@ export async function handleNoPrCompletionCheck(params: {
           linearIssueId: params.run.linearIssueId,
           activeRunId: null,
           factoryState: "delegated",
-          pendingRunType: null,
-          pendingRunContextJson: null,
         })) {
           return false;
         }
@@ -299,8 +292,6 @@ export async function handleNoPrCompletionCheck(params: {
         linearIssueId: params.run.linearIssueId,
         activeRunId: null,
         factoryState: params.issue.issueClass === "orchestration" && orchestrationOpenChildren > 0 ? "delegated" : "done",
-        pendingRunType: null,
-        pendingRunContextJson: null,
         orchestrationSettleUntil: null,
         ...CLEARED_FAILURE_PROVENANCE,
       })) {
@@ -330,11 +321,11 @@ export async function handleNoPrCompletionCheck(params: {
       activity: buildCompletionCheckActivity("done", completionCheck),
     });
     const doneIssue = params.db.issues.getIssue(params.run.projectId, params.run.linearIssueId) ?? params.issue;
-    wakeOrchestrationParentsForChildEvent({
+    dispatchOrchestrationParentsForChildEvent({
       db: params.db,
       child: doneIssue,
       eventType: "child_delivered",
-      wakeDispatcher: params.wakeDispatcher,
+      workflowTaskDispatcher: params.workflowTaskDispatcher,
     });
     return;
   }
@@ -346,8 +337,6 @@ export async function handleNoPrCompletionCheck(params: {
       linearIssueId: params.run.linearIssueId,
       activeRunId: null,
       factoryState: "failed",
-      pendingRunType: null,
-      pendingRunContextJson: null,
     })) {
       return false;
     }

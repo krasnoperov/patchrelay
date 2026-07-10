@@ -83,7 +83,7 @@ export function waitingReasonForExecutionState(state: IssueExecutionState): Patc
       }
       break;
     case "ready":
-      return `Ready to run ${humanize(state.pendingRunType)}`;
+      return `Ready to run ${humanize(state.runnableTaskRunType)}`;
     case "idle":
       return undefined;
   }

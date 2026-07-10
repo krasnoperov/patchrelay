@@ -155,7 +155,7 @@ test("dirty repair continuation prompt preserves unpublished local work", () => 
       runType: "review_fix",
       repoPath: baseDir,
       context: {
-        wakeReason: "completion_check_continue",
+        workflowReason: "completion_check_continue",
         completionCheckSummary: "Repair run finished with a dirty worktree; Worktree has uncommitted changes: tests/integration/authenticated-ssr.spec.ts",
         preserveDirtyWorktree: true,
         dirtyWorktreeSummary: "Worktree has uncommitted changes: tests/integration/authenticated-ssr.spec.ts, tests/integration/ssr-hydration.spec.ts",
@@ -277,7 +277,7 @@ test("orchestration prompts keep child-reuse and convergence babysitting guidanc
     assert.match(prompt, /TST-4: Migrate public pages to Lingui \(In Progress; implementing; delegated; open PR\)/);
     assert.match(prompt, /TST-5: Audit lingering translation helpers \(Start; delegated; delegated; no open PR\)/);
     assert.match(prompt, /## Workflow/);
-    assert.match(prompt, /Use the wake reason and child issue summaries to decide the next orchestration step\./);
+    assert.match(prompt, /Use the workflow reason and child issue summaries to decide the next orchestration step\./);
     assert.match(prompt, /Prefer supervising, auditing, and unblocking existing child work over creating more issues\./);
     assert.match(prompt, /If the parent goal now depends on an integration fix between delivered child slices, own that convergence work here without restating already-owned child implementation\./);
     assert.match(prompt, /Close the umbrella when the original parent goal is satisfied\./);
@@ -289,7 +289,7 @@ test("orchestration prompts keep child-reuse and convergence babysitting guidanc
   }
 });
 
-test("orchestration follow-up prompts reason explicitly from the wake cause", () => {
+test("orchestration follow-up prompts reason explicitly from the workflowTask cause", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
   try {
     const prompt = buildFollowUpRunPrompt({
@@ -300,7 +300,7 @@ test("orchestration follow-up prompts reason explicitly from the wake cause", ()
       runType: "implementation",
       repoPath: baseDir,
       context: {
-        wakeReason: "child_delivered",
+        workflowReason: "child_delivered",
         trackedDependents: [
           {
             issueKey: "TST-4",
@@ -317,7 +317,7 @@ test("orchestration follow-up prompts reason explicitly from the wake cause", ()
     assert.match(prompt, /## Current Context/);
     assert.match(prompt, /Turn reason: A child issue was delivered\./);
     assert.match(prompt, /## Workflow/);
-    assert.match(prompt, /Use the wake reason and child issue summaries to decide the next orchestration step\./);
+    assert.match(prompt, /Use the workflow reason and child issue summaries to decide the next orchestration step\./);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -342,7 +342,7 @@ test("branch_upkeep prompt folds follow-up and PR facts into current context", (
         branchUpkeepRequired: true,
         mergeStateStatus: "DIRTY",
         baseBranch: "main",
-        wakeReason: "branch_upkeep",
+        workflowReason: "branch_upkeep",
         githubFactsFresh: true,
       },
     });
@@ -512,7 +512,7 @@ test("buildRunPrompt folds implementation follow-ups into current context", () =
       runType: "implementation",
       repoPath: baseDir,
       context: {
-        wakeReason: "followup_comment",
+        workflowReason: "followup_comment",
         followUpMode: true,
         followUps: [
           { type: "followup_comment", text: "Please keep the existing API stable.", author: "alice" },
@@ -549,7 +549,7 @@ test("buildRunPrompt keeps direct-reply follow-ups concise inside current contex
       runType: "implementation",
       repoPath: baseDir,
       context: {
-        wakeReason: "direct_reply",
+        workflowReason: "direct_reply",
         directReplyMode: true,
         followUpCount: 1,
         followUps: [
@@ -613,7 +613,7 @@ test("follow-up prompts describe closed PRs as replacement context instead of cu
       runType: "implementation",
       repoPath: baseDir,
       context: {
-        wakeReason: "followup_comment",
+        workflowReason: "followup_comment",
         followUpMode: true,
       },
     });

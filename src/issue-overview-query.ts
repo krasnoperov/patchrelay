@@ -2,13 +2,13 @@ import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { CodexThreadSummary } from "./codex-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueSessionRecord } from "./db-types.ts";
-import { hasPendingWake } from "./pending-wake.ts";
+import { peekRunnableWorkflowTaskRunType } from "./pending-workflow-task.ts";
 import { parseGitHubFailureContext } from "./github-failure-context.ts";
-import { isIssueSessionReadyForExecution } from "./issue-session.ts";
 import { getLegacyIssueOverview } from "./legacy-issue-overview.ts";
 import type { StageReport, RunRecord, TrackedIssueRecord } from "./types.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
+import { deriveIssueExecutionState, isIssueExecutionReadyForExecution } from "./issue-execution-state.ts";
 
 export interface RunStatusProvider {
   getActiveRunStatus(issueKey: string): Promise<{
@@ -150,6 +150,7 @@ export class IssueOverviewQuery {
     const runCount = runs.length;
     const liveThread = await this.readLiveThread(activeRun);
     const failureContext = parseGitHubFailureContext(issueRecord?.lastGitHubFailureContextJson);
+    const runnableTaskRunType = peekRunnableWorkflowTaskRunType(this.db, session.projectId, session.linearIssueId);
 
     const derivedWaitingReason = derivePatchRelayWaitingReason({
       delegatedToPatchRelay: issueRecord?.delegatedToPatchRelay,
@@ -158,7 +159,7 @@ export class IssueOverviewQuery {
       ...(activeRun ? { activeRunType: activeRun.runType } : {}),
       blockedByKeys,
       factoryState: issueRecord?.factoryState ?? "delegated",
-      pendingRunType: issueRecord?.pendingRunType,
+      ...(runnableTaskRunType ? { runnableTaskRunType: runnableTaskRunType } : {}),
       orchestrationSettleUntil: issueRecord?.orchestrationSettleUntil,
       prNumber: session.prNumber,
       prState: issueRecord?.prState,
@@ -186,16 +187,15 @@ export class IssueOverviewQuery {
       ...(issueRecord?.prCheckStatus ? { prCheckStatus: issueRecord.prCheckStatus } : {}),
       blockedByCount: unresolvedBlockedBy.length,
       blockedByKeys,
-      readyForExecution: isIssueSessionReadyForExecution({
-        sessionState: session.sessionState,
+      readyForExecution: isIssueExecutionReadyForExecution(deriveIssueExecutionState({
         factoryState: issueRecord?.factoryState ?? "delegated",
         currentLinearState: issueRecord?.currentLinearState,
         currentLinearStateType: issueRecord?.currentLinearStateType,
         delegatedToPatchRelay: issueRecord?.delegatedToPatchRelay,
         ...(activeRun ? { activeRunId: activeRun.id } : {}),
-        blockedByCount: unresolvedBlockedBy.length,
-        hasPendingWake: hasPendingWake(this.db, session.projectId, session.linearIssueId),
-        hasLegacyPendingRun: issueRecord?.pendingRunType !== undefined,
+        ...(activeRun ? { activeRunType: activeRun.runType, activeRunStatus: activeRun.status } : {}),
+        blockedByKeys,
+        ...(runnableTaskRunType ? { runnableTaskRunType: runnableTaskRunType } : {}),
         orchestrationSettleUntil: issueRecord?.orchestrationSettleUntil,
         ...(session.prNumber !== undefined ? { prNumber: session.prNumber } : {}),
         ...(issueRecord?.prState ? { prState: issueRecord.prState } : {}),
@@ -203,8 +203,8 @@ export class IssueOverviewQuery {
         ...(issueRecord?.prReviewState ? { prReviewState: issueRecord.prReviewState } : {}),
         ...(issueRecord?.prCheckStatus ? { prCheckStatus: issueRecord.prCheckStatus } : {}),
         ...(issueRecord?.lastBlockingReviewHeadSha ? { lastBlockingReviewHeadSha: issueRecord.lastBlockingReviewHeadSha } : {}),
-        ...(issueRecord?.lastGitHubFailureSource ? { latestFailureSource: issueRecord.lastGitHubFailureSource } : {}),
-      }),
+        ...(issueRecord?.lastGitHubFailureCheckName ? { latestFailureCheckName: issueRecord.lastGitHubFailureCheckName } : {}),
+      })),
       ...(issueRecord?.lastGitHubFailureSource ? { latestFailureSource: issueRecord.lastGitHubFailureSource } : {}),
       ...(issueRecord?.lastGitHubFailureHeadSha ? { latestFailureHeadSha: issueRecord.lastGitHubFailureHeadSha } : {}),
       ...(issueRecord?.lastGitHubFailureCheckName ? { latestFailureCheckName: issueRecord.lastGitHubFailureCheckName } : {}),

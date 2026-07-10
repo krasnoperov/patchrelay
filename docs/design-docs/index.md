@@ -6,10 +6,11 @@ Read order:
 
 1. [core-beliefs.md](./core-beliefs.md)
 2. [issue-classification-and-umbrella-orchestration.md](./issue-classification-and-umbrella-orchestration.md)
-3. [review-quill.md](./review-quill.md)
-4. [merge-steward.md](./merge-steward.md)
-5. [codex-session-source-forensics.md](./codex-session-source-forensics.md)
-6. [../architecture.md](../architecture.md)
+3. [durable-agent-workflow-runtime.md](./durable-agent-workflow-runtime.md)
+4. [review-quill.md](./review-quill.md)
+5. [merge-steward.md](./merge-steward.md)
+6. [codex-session-source-forensics.md](./codex-session-source-forensics.md)
+7. [../architecture.md](../architecture.md)
 
 Known coupling (observation, no fix proposed):
 

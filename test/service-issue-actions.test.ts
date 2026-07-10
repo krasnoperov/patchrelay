@@ -200,7 +200,6 @@ test("retryIssue preserves branch upkeep retries for requested-changes issues", 
       factoryState: "changes_requested",
       prNumber: 42,
       prReviewState: "changes_requested",
-      pendingRunType: "branch_upkeep",
       prHeadSha: "abc123",
     });
     db.unsafeRawConnectionForTests().prepare(`
@@ -214,8 +213,8 @@ test("retryIssue preserves branch upkeep retries for requested-changes issues", 
     assert.deepEqual(result, { issueKey: "USE-2", runType: "branch_upkeep" });
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId);
     assert.equal(updatedIssue?.reviewFixAttempts, 0);
-    const wake = db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
-    assert.ok(wake);
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics(issue.projectId, issue.linearIssueId);
+    assert.ok(workflowTask);
     const events = db.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 10 });
     const latestEvent = events.at(-1);
     assert.equal(latestEvent?.eventType, "review_changes_requested");
@@ -256,9 +255,9 @@ test("retryIssue treats closed PR issues as fresh implementation retries", async
     const result = service.retryIssue("USE-2C");
 
     assert.deepEqual(result, { issueKey: "USE-2C", runType: "implementation" });
-    const wake = db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
-    assert.ok(wake);
-    assert.equal(wake.runType, "implementation");
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics(issue.projectId, issue.linearIssueId);
+    assert.ok(workflowTask);
+    assert.equal(workflowTask.runType, "implementation");
   } finally {
     db?.close();
     rmSync(baseDir, { recursive: true, force: true });
@@ -286,7 +285,6 @@ test("closeIssue releases active runs and clears pending work", async () => {
       issueKey: "USE-CLOSE-1",
       title: "Close me",
       factoryState: "implementing",
-      pendingRunType: "implementation",
     });
     const run = db.runs.createRun({
       issueId: issue.id,
@@ -304,7 +302,7 @@ test("closeIssue releases active runs and clears pending work", async () => {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       eventType: "delegated",
-      dedupeKey: "close-test-wake",
+      dedupeKey: "close-test-workflowTask",
     });
 
     const result = await service.closeIssue("USE-CLOSE-1", { reason: "handled manually" });
@@ -316,11 +314,10 @@ test("closeIssue releases active runs and clears pending work", async () => {
     assert.equal(updatedIssue?.factoryState, "done");
     assert.equal(updatedIssue?.delegatedToPatchRelay, false);
     assert.equal(updatedIssue?.activeRunId, undefined);
-    assert.equal(updatedIssue?.pendingRunType, undefined);
     assert.equal(updatedRun?.status, "released");
     assert.match(updatedRun?.failureReason ?? "", /handled manually/);
     assert.equal(events.some((event) => event.eventType === "operator_closed"), true);
-    assert.equal(db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics(issue.projectId, issue.linearIssueId), undefined);
   } finally {
     db?.close();
     rmSync(baseDir, { recursive: true, force: true });

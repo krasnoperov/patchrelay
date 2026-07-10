@@ -3,8 +3,8 @@ import type { RunType } from "../factory-state.ts";
 import type { IssueSessionProjectionInvalidator } from "../issue-session-projection-invalidator.ts";
 import type { IssueStore, UpsertIssueParams } from "./issue-store.ts";
 import type { RunStore } from "./run-store.ts";
-import { deriveSessionWakePlan, isActionableIssueSessionEventType, type IssueSessionEventType } from "../issue-session-events.ts";
-import { mergeRequestedChangesEventJson, readRequestedChangesCoalesceKey } from "../reactive-wake-keys.ts";
+import { deriveSessionInputPlan, isActionableIssueSessionEventType, type IssueSessionEventType } from "../issue-session-events.ts";
+import { mergeRequestedChangesEventJson, readRequestedChangesCoalesceKey } from "../reactive-workflow-keys.ts";
 import type { RunContext } from "../run-context.ts";
 import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "../telemetry.ts";
 import { isoNow, type DatabaseConnection } from "./shared.ts";
@@ -57,13 +57,45 @@ export class IssueSessionStore {
   getIssueSession(projectId: string, linearIssueId: string): IssueSessionRecord | undefined {
     this.issueSessionProjection.assertNotMidBatch?.("getIssueSession");
     const row = this.connection
-      .prepare("SELECT * FROM issue_sessions WHERE project_id = ? AND linear_issue_id = ?")
+      .prepare(`
+        SELECT
+          s.*,
+          t.active_thread_id AS projected_active_thread_id,
+          t.thread_generation AS projected_thread_generation,
+          l.lease_id AS active_lease_id,
+          l.worker_id AS active_worker_id,
+          l.leased_until AS active_leased_until
+        FROM issue_sessions s
+        LEFT JOIN issue_session_threads t
+          ON t.project_id = s.project_id
+         AND t.linear_issue_id = s.linear_issue_id
+        LEFT JOIN issue_session_leases l
+          ON l.project_id = s.project_id
+         AND l.linear_issue_id = s.linear_issue_id
+        WHERE s.project_id = ? AND s.linear_issue_id = ?
+      `)
       .get(projectId, linearIssueId) as Record<string, unknown> | undefined;
     return row ? this.mapIssueSessionRow(row) : undefined;
   }
 
   getIssueSessionByKey(issueKey: string): IssueSessionRecord | undefined {
-    const row = this.connection.prepare("SELECT * FROM issue_sessions WHERE issue_key = ?").get(issueKey) as Record<string, unknown> | undefined;
+    const row = this.connection.prepare(`
+      SELECT
+        s.*,
+        t.active_thread_id AS projected_active_thread_id,
+        t.thread_generation AS projected_thread_generation,
+        l.lease_id AS active_lease_id,
+        l.worker_id AS active_worker_id,
+        l.leased_until AS active_leased_until
+      FROM issue_sessions s
+      LEFT JOIN issue_session_threads t
+        ON t.project_id = s.project_id
+       AND t.linear_issue_id = s.linear_issue_id
+      LEFT JOIN issue_session_leases l
+        ON l.project_id = s.project_id
+       AND l.linear_issue_id = s.linear_issue_id
+      WHERE s.issue_key = ?
+    `).get(issueKey) as Record<string, unknown> | undefined;
     return row ? this.mapIssueSessionRow(row) : undefined;
   }
 
@@ -202,7 +234,7 @@ export class IssueSessionStore {
     this.issueSessionProjection.issueSessionEventsChanged(projectId, linearIssueId);
     const issue = this.issues.getIssue(projectId, linearIssueId);
     emitTelemetry(this.telemetry, {
-      type: "wake.consumed",
+      type: "dispatch.consumed",
       projectId,
       linearIssueId,
       ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
@@ -222,7 +254,7 @@ export class IssueSessionStore {
     this.issueSessionProjection.issueSessionEventsChanged(projectId, linearIssueId);
     const issue = this.issues.getIssue(projectId, linearIssueId);
     emitTelemetry(this.telemetry, {
-      type: "wake.dismissed",
+      type: "dispatch.dismissed",
       projectId,
       linearIssueId,
       ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
@@ -241,7 +273,7 @@ export class IssueSessionStore {
     this.issueSessionProjection.issueSessionEventsChanged(projectId, linearIssueId);
     const issue = this.issues.getIssue(projectId, linearIssueId);
     emitTelemetry(this.telemetry, {
-      type: "wake.dismissed",
+      type: "dispatch.dismissed",
       projectId,
       linearIssueId,
       ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
@@ -255,23 +287,23 @@ export class IssueSessionStore {
       .some((event) => isActionableIssueSessionEventType(event.eventType));
   }
 
-  peekIssueSessionWake(projectId: string, linearIssueId: string): {
+  peekPendingSessionInputPlanForDiagnostics(projectId: string, linearIssueId: string): {
     eventIds: number[];
     runType: RunType;
     context: RunContext;
-    wakeReason?: string | undefined;
+    workflowReason?: string | undefined;
     resumeThread: boolean;
   } | undefined {
     const issue = this.issues.getIssue(projectId, linearIssueId);
     if (!issue) return undefined;
     const events = this.listIssueSessionEvents(projectId, linearIssueId, { pendingOnly: true });
-    const plan = deriveSessionWakePlan(issue, events);
+    const plan = deriveSessionInputPlan(issue, events);
     if (plan?.runType) {
       return {
         eventIds: plan.eventIds,
         runType: plan.runType,
         context: plan.context,
-        ...(plan.wakeReason ? { wakeReason: plan.wakeReason } : {}),
+        ...(plan.workflowReason ? { workflowReason: plan.workflowReason } : {}),
         resumeThread: plan.resumeThread,
       };
     }
@@ -288,17 +320,23 @@ export class IssueSessionStore {
   }): boolean {
     const now = params.now ?? isoNow();
     const result = this.connection.prepare(`
-      UPDATE issue_sessions
-      SET lease_id = ?, worker_id = ?, leased_until = ?, updated_at = ?
-      WHERE project_id = ? AND linear_issue_id = ?
-        AND (leased_until IS NULL OR leased_until <= ? OR lease_id = ?)
+      INSERT INTO issue_session_leases (
+        project_id, linear_issue_id, lease_id, worker_id, leased_until, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_id, linear_issue_id) DO UPDATE SET
+        lease_id = excluded.lease_id,
+        worker_id = excluded.worker_id,
+        leased_until = excluded.leased_until,
+        updated_at = excluded.updated_at
+      WHERE issue_session_leases.leased_until <= ?
+         OR issue_session_leases.lease_id = ?
     `).run(
+      params.projectId,
+      params.linearIssueId,
       params.leaseId,
       params.workerId,
       params.leasedUntil,
       now,
-      params.projectId,
-      params.linearIssueId,
       now,
       params.leaseId,
     );
@@ -315,16 +353,21 @@ export class IssueSessionStore {
   }): boolean {
     const now = params.now ?? isoNow();
     const result = this.connection.prepare(`
-      UPDATE issue_sessions
-      SET lease_id = ?, worker_id = ?, leased_until = ?, updated_at = ?
-      WHERE project_id = ? AND linear_issue_id = ?
+      INSERT INTO issue_session_leases (
+        project_id, linear_issue_id, lease_id, worker_id, leased_until, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_id, linear_issue_id) DO UPDATE SET
+        lease_id = excluded.lease_id,
+        worker_id = excluded.worker_id,
+        leased_until = excluded.leased_until,
+        updated_at = excluded.updated_at
     `).run(
+      params.projectId,
+      params.linearIssueId,
       params.leaseId,
       params.workerId,
       params.leasedUntil,
       now,
-      params.projectId,
-      params.linearIssueId,
     );
     return Number(result.changes ?? 0) > 0;
   }
@@ -338,7 +381,7 @@ export class IssueSessionStore {
   }): boolean {
     const now = params.now ?? isoNow();
     const result = this.connection.prepare(`
-      UPDATE issue_sessions
+      UPDATE issue_session_leases
       SET leased_until = ?, updated_at = ?
       WHERE project_id = ? AND linear_issue_id = ? AND lease_id = ?
     `).run(
@@ -353,26 +396,23 @@ export class IssueSessionStore {
 
   releaseIssueSessionLease(projectId: string, linearIssueId: string, leaseId?: string): void {
     this.connection.prepare(`
-      UPDATE issue_sessions
-      SET lease_id = NULL, worker_id = NULL, leased_until = NULL, updated_at = ?
+      DELETE FROM issue_session_leases
       WHERE project_id = ? AND linear_issue_id = ? AND (? IS NULL OR lease_id = ?)
-    `).run(isoNow(), projectId, linearIssueId, leaseId ?? null, leaseId ?? null);
+    `).run(projectId, linearIssueId, leaseId ?? null, leaseId ?? null);
   }
 
   releaseExpiredIssueSessionLeases(now = isoNow()): void {
     this.connection.prepare(`
-      UPDATE issue_sessions
-      SET lease_id = NULL, worker_id = NULL, leased_until = NULL, updated_at = ?
-      WHERE leased_until IS NOT NULL AND leased_until <= ?
-    `).run(now, now);
+      DELETE FROM issue_session_leases
+      WHERE leased_until <= ?
+    `).run(now);
   }
 
   hasActiveIssueSessionLease(projectId: string, linearIssueId: string, leaseId: string, now = isoNow()): boolean {
     const row = this.connection.prepare(`
       SELECT 1
-      FROM issue_sessions
+      FROM issue_session_leases
       WHERE project_id = ? AND linear_issue_id = ? AND lease_id = ?
-        AND leased_until IS NOT NULL
         AND leased_until > ?
       LIMIT 1
     `).get(projectId, linearIssueId, leaseId, now) as Record<string, unknown> | undefined;
@@ -382,10 +422,8 @@ export class IssueSessionStore {
   getActiveIssueSessionLease(projectId: string, linearIssueId: string, now = isoNow()): IssueSessionLease | undefined {
     const row = this.connection.prepare(`
       SELECT lease_id
-      FROM issue_sessions
+      FROM issue_session_leases
       WHERE project_id = ? AND linear_issue_id = ?
-        AND lease_id IS NOT NULL
-        AND leased_until IS NOT NULL
         AND leased_until > ?
       LIMIT 1
     `).get(projectId, linearIssueId, now) as Record<string, unknown> | undefined;
@@ -518,19 +556,19 @@ export class IssueSessionStore {
     return this.clearPendingIssueSessionEventsWithLease(lease);
   }
 
-  setIssueSessionLastWakeReasonWithLease(lease: IssueSessionLease, lastWakeReason?: string | null): boolean {
+  setIssueSessionLastWorkflowReasonWithLease(lease: IssueSessionLease, lastWorkflowReason?: string | null): boolean {
     return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
-      this.setIssueSessionLastWakeReason(lease.projectId, lease.linearIssueId, lastWakeReason);
+      this.setIssueSessionLastWorkflowReason(lease.projectId, lease.linearIssueId, lastWorkflowReason);
       return true;
     }) ?? false;
   }
 
-  setIssueSessionLastWakeReason(projectId: string, linearIssueId: string, lastWakeReason?: string | null): void {
+  setIssueSessionLastWorkflowReason(projectId: string, linearIssueId: string, lastWorkflowReason?: string | null): void {
     this.connection.prepare(`
       UPDATE issue_sessions
-      SET last_wake_reason = ?, updated_at = ?
+      SET last_workflow_reason = ?, updated_at = ?
       WHERE project_id = ? AND linear_issue_id = ?
-    `).run(lastWakeReason ?? null, isoNow(), projectId, linearIssueId);
+    `).run(lastWorkflowReason ?? null, isoNow(), projectId, linearIssueId);
   }
 
   releaseIssueSessionLeaseRespectingActiveLease(projectId: string, linearIssueId: string): void {
@@ -550,7 +588,6 @@ export class IssueSessionStore {
         `SELECT
           s.project_id, s.linear_issue_id, s.issue_key, i.title,
           i.current_linear_state, i.current_linear_state_type, i.factory_state, i.delegated_to_patchrelay, s.session_state, s.waiting_reason, s.summary_text, s.display_updated_at,
-          i.pending_run_type,
           i.orchestration_settle_until,
           i.pr_number, i.pr_state, i.pr_head_sha, i.pr_review_state, i.pr_check_status, i.last_blocking_review_head_sha,
           i.last_github_ci_snapshot_json,
@@ -559,6 +596,7 @@ export class IssueSessionStore {
           i.last_github_failure_check_name,
           i.last_github_failure_context_json,
           active_run.run_type AS active_run_type,
+          active_run.status AS active_run_status,
           active_run.completion_check_thread_id AS active_completion_check_thread_id,
           active_run.completion_check_outcome AS active_completion_check_outcome,
           latest_run.run_type AS latest_run_type,

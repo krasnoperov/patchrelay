@@ -1,5 +1,6 @@
 import type { UpsertIssueParams } from "./db/issue-store.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
+import { isIssueDownstreamOwnedProjection } from "./issue-execution-state.ts";
 import { hasOpenPr } from "./pr-state.ts";
 
 export interface ResolvedManualAction {
@@ -13,7 +14,7 @@ export function resolveRetryTarget(params: {
   prReviewState: string | undefined;
   prCheckStatus: string | undefined;
   factoryState: FactoryState | undefined;
-  pendingRunType: RunType | undefined;
+  runnableTaskRunType: RunType | undefined;
   lastRunType: RunType | undefined;
   lastGitHubFailureSource: string | undefined;
 }): ResolvedManualAction {
@@ -27,7 +28,7 @@ export function resolveRetryTarget(params: {
   if (
     hasOpenPr(params.prNumber, params.prState)
     && params.prReviewState === "approved"
-    && (params.factoryState === "awaiting_queue" || params.lastRunType === "queue_repair")
+    && (isIssueDownstreamOwnedProjection(params) || params.lastRunType === "queue_repair")
   ) {
     return { runType: "queue_repair", factoryState: "repairing_queue" };
   }
@@ -39,7 +40,7 @@ export function resolveRetryTarget(params: {
   }
   if (hasOpenPr(params.prNumber, params.prState) && params.prReviewState === "changes_requested") {
     return {
-      runType: params.pendingRunType === "branch_upkeep" || params.lastRunType === "branch_upkeep"
+      runType: params.runnableTaskRunType === "branch_upkeep" || params.lastRunType === "branch_upkeep"
         ? "branch_upkeep"
         : "review_fix",
       factoryState: "changes_requested",

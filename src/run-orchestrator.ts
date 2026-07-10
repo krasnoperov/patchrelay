@@ -30,9 +30,10 @@ import { RunFinalizer } from "./run-finalizer.ts";
 import { RunLauncher } from "./run-launcher.ts";
 import { RunNotificationHandler } from "./run-notification-handler.ts";
 import { RunReconciler } from "./run-reconciler.ts";
-import { RunWakePlanner, type PendingRunWake } from "./run-wake-planner.ts";
+import { RunTaskPlanner, type RunnableWorkflowIntent } from "./run-task-planner.ts";
 import type { RunContext } from "./run-context.ts";
-import { WakeDispatcher } from "./wake-dispatcher.ts";
+import type { WorkflowRunIntent } from "./workflow-intent.ts";
+import { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
 import { settleRun } from "./run-settlement.ts";
 import { getRemainingCapacityBackoffMs, getRemainingZombieRecoveryDelayMs } from "./run-budgets.ts";
 import { classifyIssue } from "./issue-class.ts";
@@ -42,7 +43,7 @@ import { getAdjacentEnvFilePaths, loadConfig } from "./config.ts";
 import { CodexThreadMaterializingError, isThreadMaterializingError } from "./codex-thread-errors.ts";
 import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry, type RunSkipReason } from "./telemetry.ts";
 import { LinearIssueProjectionService } from "./linear-issue-projection.ts";
-import { RunAdmissionController, shouldConsumeWakeOnAdmissionFailure } from "./run-admission-controller.ts";
+import { RunAdmissionController, shouldConsumeWorkflowTaskOnAdmissionFailure } from "./run-admission-controller.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
 const WRITER = "run-orchestrator";
@@ -95,14 +96,14 @@ export class RunOrchestrator {
   private readonly idleReconciler: IdleIssueReconciler;
   readonly linearSync: LinearSessionSync;
   private readonly workerId = `patchrelay:${process.pid}`;
-  // Exposed so the WakeDispatcher (constructed in service.ts) can call
+  // Exposed so the WorkflowTaskDispatcher (constructed in service.ts) can call
   // release on this same lease service. Kept on the orchestrator because
   // its construction depends on Codex thread access.
   readonly leaseService: IssueSessionLeaseService;
   private readonly runFinalizer: RunFinalizer;
   private readonly runLauncher: RunLauncher;
   private readonly runFailurePolicy: RunFailurePolicy;
-  private readonly runWakePlanner: RunWakePlanner;
+  private readonly runTaskPlanner: RunTaskPlanner;
   private readonly runCompletionPolicy: RunCompletionPolicy;
   private readonly completionCheck: CompletionCheckService;
   private readonly issueTriage: IssueTriageService;
@@ -132,7 +133,7 @@ export class RunOrchestrator {
   };
   botIdentity?: GitHubAppBotIdentity;
 
-  private readonly wakeDispatcher: WakeDispatcher;
+  private readonly workflowTaskDispatcher: WorkflowTaskDispatcher;
   private readonly logger: Logger;
   private readonly feed: OperatorEventFeed | undefined;
   private readonly configPath: string | undefined;
@@ -144,7 +145,7 @@ export class RunOrchestrator {
     private readonly codex: CodexAppServerClient,
     private readonly linearProvider: LinearClientProvider,
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
-    wakeDispatcherOrLogger: WakeDispatcher | Logger,
+    workflowTaskDispatcherOrLogger: WorkflowTaskDispatcher | Logger,
     loggerOrFeed?: Logger | OperatorEventFeed,
     feedOrConfigPath?: OperatorEventFeed | string,
     configPathOrUndefined?: string,
@@ -156,20 +157,20 @@ export class RunOrchestrator {
     let feed: OperatorEventFeed | undefined;
     let configPath: string | undefined;
     const telemetry = telemetryOrUndefined ?? noopTelemetry;
-    if (wakeDispatcherOrLogger instanceof WakeDispatcher) {
-      this.wakeDispatcher = wakeDispatcherOrLogger;
+    if (workflowTaskDispatcherOrLogger instanceof WorkflowTaskDispatcher) {
+      this.workflowTaskDispatcher = workflowTaskDispatcherOrLogger;
       logger = loggerOrFeed as Logger;
       feed = feedOrConfigPath as OperatorEventFeed | undefined;
       configPath = configPathOrUndefined;
     } else {
-      logger = wakeDispatcherOrLogger;
+      logger = workflowTaskDispatcherOrLogger;
       feed = loggerOrFeed as OperatorEventFeed | undefined;
       configPath = feedOrConfigPath as string | undefined;
       // Construct a dispatcher with a stub releaseLease — the real one
       // gets wired below once the lease service exists. The stub is
       // never called before the wiring completes because the run()
       // loop is the only consumer of releaseRunAndDispatch.
-      this.wakeDispatcher = new WakeDispatcher(
+      this.workflowTaskDispatcher = new WorkflowTaskDispatcher(
         db,
         enqueueIssue,
         (projectId, linearIssueId) => this.leaseService?.release(projectId, linearIssueId),
@@ -203,10 +204,10 @@ export class RunOrchestrator {
       db,
       logger,
       this.linearSync,
-      this.wakeDispatcher,
+      this.workflowTaskDispatcher,
       this.leasePorts.withHeldLease,
       this.leasePorts.releaseLease,
-      (lease, issue, runType, context, dedupeScope) => this.appendWakeEventWithLease(lease, issue, runType, context, dedupeScope),
+      (lease, issue, runType, context, dedupeScope) => this.appendRunIntentEventWithLease(lease, issue, runType, context, dedupeScope),
       this.recoveryPorts.failRunAndClear,
       this.runCompletionPolicy,
       this.completionCheck,
@@ -236,8 +237,8 @@ export class RunOrchestrator {
       this.linearSync,
       this.leasePorts.withHeldLease,
       this.leasePorts.releaseLease,
-      (lease, issue, runType, context, dedupeScope) => this.appendWakeEventWithLease(lease, issue, runType, context, dedupeScope),
-      this.wakeDispatcher,
+      (lease, issue, runType, context, dedupeScope) => this.appendRunIntentEventWithLease(lease, issue, runType, context, dedupeScope),
+      this.workflowTaskDispatcher,
       this.recoveryPorts.restoreIdleWorktree,
       this.runCompletionPolicy,
       (projectId) => this.config.projects.find((project) => project.id === projectId),
@@ -258,13 +259,13 @@ export class RunOrchestrator {
       feed,
       telemetry,
     );
-    this.runWakePlanner = new RunWakePlanner(db, logger);
+    this.runTaskPlanner = new RunTaskPlanner(db, logger);
     this.linearIssueProjection = new LinearIssueProjectionService(db, linearProvider, logger);
     this.runAdmission = new RunAdmissionController(db, this.linearIssueProjection);
     this.idleReconciler = new IdleIssueReconciler(
       db,
       config,
-      this.wakeDispatcher,
+      this.workflowTaskDispatcher,
       logger,
       feed,
       undefined,
@@ -274,7 +275,7 @@ export class RunOrchestrator {
     this.mergedLinearCompletionReconciler = new MergedLinearCompletionReconciler(db, linearProvider, logger);
     this.queueHealthMonitor = new QueueHealthMonitor(db, config, {
       advanceIdleIssue: (issue, newState, options) => this.idleReconciler.advanceIdleIssue(issue, newState, options),
-      wakeDispatcher: this.wakeDispatcher,
+      workflowTaskDispatcher: this.workflowTaskDispatcher,
     }, logger, feed);
   }
 
@@ -336,25 +337,18 @@ export class RunOrchestrator {
     }
   }
 
-  private resolveRunWake(issue: IssueRecord): PendingRunWake | undefined {
-    return this.runWakePlanner.resolveRunWake(issue);
+  private resolveRunTask(issue: IssueRecord): RunnableWorkflowIntent | undefined {
+    return this.runTaskPlanner.resolveRunTask(issue);
   }
 
-  private appendWakeEventWithLease(
+  private appendRunIntentEventWithLease(
     lease: { projectId: string; linearIssueId: string; leaseId: string },
     issue: Pick<IssueRecord, "projectId" | "linearIssueId" | "prHeadSha" | "lastGitHubFailureSignature" | "lastGitHubFailureHeadSha">,
     runType: RunType,
     context?: RunContext,
     dedupeScope?: string,
   ): boolean {
-    return this.runWakePlanner.appendWakeEventWithLease(lease, issue, runType, context, dedupeScope);
-  }
-
-  private materializeLegacyPendingWake(
-    issue: IssueRecord,
-    lease: { projectId: string; linearIssueId: string; leaseId: string },
-  ): IssueRecord {
-    return this.runWakePlanner.materializeLegacyPendingWake(issue, lease);
+    return this.runTaskPlanner.appendRunIntentEventWithLease(lease, issue, runType, context, dedupeScope);
   }
 
   private buildRelatedIssueContext(issue: IssueRecord): RunContext | undefined {
@@ -477,7 +471,7 @@ export class RunOrchestrator {
 
     // Each early-return below logs `{ issueKey, reason }` so the
     // operator-feed and log streams can explain why an issue with a
-    // pending wake didn't actually run. The original incident
+    // runnable workflow task didn't actually run. The original incident
     // (LSR-495) was undiagnosable because these guards were silent.
     if (this.leaseService.hasLocalLease(item.projectId, item.issueId)) {
       this.emitRunSkipped(item, "lease_held_locally");
@@ -537,62 +531,64 @@ export class RunOrchestrator {
       this.db.issueSessions.commitIssueState({
         writer: WRITER,
         lease: { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId },
-        update: { projectId: issue.projectId, linearIssueId: issue.linearIssueId, pendingRunType: null, factoryState: "done" },
+        update: { projectId: issue.projectId, linearIssueId: issue.linearIssueId, factoryState: "done" },
       });
       this.leaseService.release(item.projectId, item.issueId);
       return;
     }
 
-    let wakeIssue = this.materializeLegacyPendingWake(issue, { projectId: item.projectId, linearIssueId: item.issueId, leaseId });
-    const knownDependencyRowsBeforeWake = this.db.issues.listIssueDependencies(item.projectId, item.issueId).length;
-    const unresolvedBlockersBeforeWake = this.db.issues.countUnresolvedBlockers(item.projectId, item.issueId);
-    const pendingSessionWake = this.db.issueSessions.peekIssueSessionWake(item.projectId, item.issueId);
-    if (pendingSessionWake?.runType === "implementation" && unresolvedBlockersBeforeWake > 0) {
+    let taskIssue = issue;
+    const knownDependencyRowsBeforeTask = this.db.issues.listIssueDependencies(item.projectId, item.issueId).length;
+    const unresolvedBlockersBeforeTask = this.db.issues.countUnresolvedBlockers(item.projectId, item.issueId);
+    const pendingWorkflowTask = this.db.workflowTasks
+      .listOpenRunnableTasks(item.projectId)
+      .find((task) => task.subjectId === item.issueId && task.runType !== undefined);
+    if (pendingWorkflowTask?.runType === "implementation" && unresolvedBlockersBeforeTask > 0) {
       const refresh = await this.linearIssueProjection.refreshIssue(item.projectId, item.issueId);
-      if (!refresh.refreshed && knownDependencyRowsBeforeWake > 0) {
+      if (!refresh.refreshed && knownDependencyRowsBeforeTask > 0) {
         this.releaseIssueSessionLease(item.projectId, item.issueId);
         this.emitRunSkipped(item, "dependency_refresh_failed", issue, {
-          runType: pendingSessionWake.runType,
-          knownDependencyRows: knownDependencyRowsBeforeWake,
+          runType: pendingWorkflowTask.runType,
+          knownDependencyRows: knownDependencyRowsBeforeTask,
         });
         this.logger.info(
-          { issueKey: issue.issueKey, projectId: item.projectId, knownDependencyRows: knownDependencyRowsBeforeWake },
-          "Skipped implementation launch because dependency refresh failed before wake derivation",
+          { issueKey: issue.issueKey, projectId: item.projectId, knownDependencyRows: knownDependencyRowsBeforeTask },
+          "Skipped implementation launch because dependency refresh failed before task derivation",
         );
         return;
       }
 
-      wakeIssue = this.db.issues.getIssue(item.projectId, item.issueId) ?? wakeIssue;
+      taskIssue = this.db.issues.getIssue(item.projectId, item.issueId) ?? taskIssue;
       const blockerCount = this.db.issues.countUnresolvedBlockers(item.projectId, item.issueId);
       if (blockerCount > 0) {
         this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(item.projectId, item.issueId);
         this.releaseIssueSessionLease(item.projectId, item.issueId);
-        this.emitRunSkipped(item, "blocked", wakeIssue, { runType: pendingSessionWake.runType, blockerCount });
+        this.emitRunSkipped(item, "blocked", taskIssue, { runType: pendingWorkflowTask.runType, blockerCount });
         this.logger.info(
-          { issueKey: wakeIssue.issueKey, blockerCount },
+          { issueKey: taskIssue.issueKey, blockerCount },
           "Skipped implementation launch because the issue is blocked after dependency refresh",
         );
         return;
       }
     }
-    const wake = this.resolveRunWake(wakeIssue);
-    if (!wake) {
-      this.emitRunSkipped(item, "no_wake_derivable", issue);
+    const runTask = this.resolveRunTask(taskIssue);
+    if (!runTask) {
+      this.emitRunSkipped(item, "no_workflow_task_derivable", issue);
       this.logger.info(
-        { issueKey: issue.issueKey, projectId: item.projectId, reason: "no_wake_derivable" },
-        "Skipped issue run: no actionable wake derivable from pending events",
+        { issueKey: issue.issueKey, projectId: item.projectId, reason: "no_workflow_task_derivable" },
+        "Skipped issue run: no actionable workflow task derivable from pending facts",
       );
       this.leaseService.release(item.projectId, item.issueId);
       return;
     }
-    const { runType, context, resumeThread } = wake;
+    const { runType, context, resumeThread } = runTask;
     const admission = await this.runAdmission.check({
       projectId: item.projectId,
       linearIssueId: item.issueId,
       runType,
     });
     if (!admission.allowed) {
-      if (shouldConsumeWakeOnAdmissionFailure(admission)) {
+      if (shouldConsumeWorkflowTaskOnAdmissionFailure(admission)) {
         this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(item.projectId, item.issueId);
       }
       this.releaseIssueSessionLease(item.projectId, item.issueId);
@@ -621,7 +617,7 @@ export class RunOrchestrator {
       return;
     }
     // Codex capacity outage backoff: a usage-limit/rate-limit failure left a
-    // pending wake behind; the wake stays queued (the idle reconciler keeps
+    // runnable workflow task behind; the task stays queued (the idle reconciler keeps
     // re-poking it) and the launch waits until the backoff elapses.
     const remainingCapacityDelayMs = getRemainingCapacityBackoffMs(issue.capacityBackoffUntil);
     if (remainingCapacityDelayMs > 0) {
@@ -634,27 +630,27 @@ export class RunOrchestrator {
       return;
     }
     const baseContext = isRequestedChangesRunType(runType)
-      ? await this.runCompletionPolicy.resolveRequestedChangesWakeContext(issue, runType, context)
+      ? await this.runCompletionPolicy.resolveRequestedChangesWorkflowContext(issue, runType, context)
       : context;
     const launchIssue = this.db.issues.getIssue(item.projectId, item.issueId) ?? issue;
-    const inactiveRequestedChangesWakeReason = this.resolveInactiveRequestedChangesWakeReason(launchIssue, runType, baseContext);
-    if (inactiveRequestedChangesWakeReason) {
+    const inactiveRequestedChangesWorkflowReason = this.resolveInactiveRequestedChangesWorkflowReason(launchIssue, runType, baseContext);
+    if (inactiveRequestedChangesWorkflowReason) {
       const lease = { projectId: item.projectId, linearIssueId: item.issueId, leaseId };
       const requestedChangesEventIds = this.db.issueSessions
         .listIssueSessionEvents(item.projectId, item.issueId, { pendingOnly: true })
-        .filter((event) => wake.eventIds.includes(event.id) && event.eventType === "review_changes_requested")
+        .filter((event) => runTask.eventIds.includes(event.id) && event.eventType === "review_changes_requested")
         .map((event) => event.id);
       const dismissed = this.db.issueSessions.dismissIssueSessionEventsWithLease(lease, requestedChangesEventIds);
       if (!dismissed) {
         this.releaseIssueSessionLease(item.projectId, item.issueId);
-        this.emitRunSkipped(item, "lease_lost_dismissing_inactive_requested_changes_wake", issue, { runType });
+        this.emitRunSkipped(item, "lease_lost_dismissing_inactive_requested_changes_task", issue, { runType });
         this.logger.info(
-          { issueKey: issue.issueKey, projectId: item.projectId, reason: "lease_lost_dismissing_inactive_requested_changes_wake" },
-          "Skipped issue run: lost lease while dismissing inactive requested-changes wake",
+          { issueKey: issue.issueKey, projectId: item.projectId, reason: "lease_lost_dismissing_inactive_requested_changes_task" },
+          "Skipped issue run: lost lease while dismissing inactive requested-changes task",
         );
         return;
       }
-      this.db.issueSessions.setIssueSessionLastWakeReasonWithLease(lease, wake.wakeReason ?? null);
+      this.db.issueSessions.setIssueSessionLastWorkflowReasonWithLease(lease, runTask.workflowReason ?? null);
       this.feed?.publish({
         level: "info",
         kind: "stage",
@@ -662,22 +658,22 @@ export class RunOrchestrator {
         projectId: item.projectId,
         stage: runType,
         status: "skipped",
-        summary: inactiveRequestedChangesWakeReason,
+        summary: inactiveRequestedChangesWorkflowReason,
       });
       this.logger.info(
         {
           issueKey: issue.issueKey,
           projectId: item.projectId,
           runType,
-          reason: "inactive_requested_changes_wake",
+          reason: "inactive_requested_changes_task",
           prReviewState: launchIssue.prReviewState,
           prState: launchIssue.prState,
         },
-        "Skipped issue run: requested-changes wake is no longer active",
+        "Skipped issue run: requested-changes workflow task is no longer active",
       );
-      this.emitRunSkipped(item, "inactive_requested_changes_wake", issue, { runType });
+      this.emitRunSkipped(item, "inactive_requested_changes_task", issue, { runType });
       this.releaseIssueSessionLease(item.projectId, item.issueId);
-      this.wakeDispatcher.dispatchIfWakePending(item.projectId, item.issueId);
+      this.workflowTaskDispatcher.dispatchIfWorkflowTaskPending(item.projectId, item.issueId);
       return;
     }
     const recoveredLinearActivityContext = await recoverLinearAgentActivityContext({
@@ -701,14 +697,14 @@ export class RunOrchestrator {
       ?? effectiveContext?.headSha
       ?? issue.prHeadSha;
     const workflowSnapshot = reconcileWorkflowTasksForIssue(this.db, issue).snapshot;
-    const budgetExceeded = this.runWakePlanner.budgetExceeded(issue, project, runType, isRequestedChangesRunType);
+    const budgetExceeded = this.runTaskPlanner.budgetExceeded(issue, project, runType, isRequestedChangesRunType);
     if (budgetExceeded) {
       this.emitRunSkipped(item, "budget_exceeded", issue, { runType });
       this.escalate(issue, runType, budgetExceeded);
       return;
     }
 
-    if (!this.runWakePlanner.incrementAttemptCounters(
+    if (!this.runTaskPlanner.incrementAttemptCounters(
       issue,
       { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId },
       runType,
@@ -735,8 +731,7 @@ export class RunOrchestrator {
       ...(sourceHeadSha ? { sourceHeadSha } : {}),
       authorityEpoch: workflowSnapshot.authority.epoch,
       ...(effectiveContext ? { effectiveContext } : {}),
-      materializeLegacyPendingWake: (targetIssue, lease) => this.materializeLegacyPendingWake(targetIssue, lease),
-      resolveRunWake: (targetIssue) => this.resolveRunWake(targetIssue),
+      resolveRunTask: (targetIssue) => this.resolveRunTask(targetIssue),
       branchName,
       worktreePath,
     });
@@ -935,8 +930,7 @@ export class RunOrchestrator {
     issue: IssueRecord,
     newState: FactoryState,
     options?: {
-      pendingRunType?: RunType;
-      pendingRunContext?: RunContext;
+      workflowIntent?: WorkflowRunIntent;
       clearFailureProvenance?: boolean;
     },
   ): void {
@@ -1020,15 +1014,15 @@ export class RunOrchestrator {
     });
   }
 
-  private async resolveRequestedChangesWakeContext(
+  private async resolveRequestedChangesWorkflowContext(
     issue: IssueRecord,
     runType: RunType,
     context: RunContext | undefined,
   ): Promise<RunContext | undefined> {
-    return await this.runCompletionPolicy.resolveRequestedChangesWakeContext(issue, runType, context);
+    return await this.runCompletionPolicy.resolveRequestedChangesWorkflowContext(issue, runType, context);
   }
 
-  private resolveInactiveRequestedChangesWakeReason(
+  private resolveInactiveRequestedChangesWorkflowReason(
     issue: IssueRecord,
     runType: RunType,
     context: RunContext | undefined,

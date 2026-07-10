@@ -9,7 +9,14 @@ import type { OperatorClosedEventPayload } from "../issue-session-events.ts";
 import { buildManualRetryAttemptReset, resolveRetryTarget } from "../manual-issue-actions.ts";
 import { buildOperatorRetryEvent } from "../operator-retry-event.ts";
 import { buildWorkflowSnapshotForIssue } from "../workflow-task-reconciler.ts";
-import type { WorkflowSnapshot } from "../workflow-runtime.ts";
+import { peekRunnableWorkflowTaskRunType } from "../pending-workflow-task.ts";
+import type { WorkflowSnapshot } from "../workflow-model.ts";
+import {
+  deriveIssueExecutionStateFromRecords,
+  isIssueDownstreamOwnedProjection,
+  isIssueTerminalFailureProjection,
+  type IssueExecutionState,
+} from "../issue-execution-state.ts";
 import { WorktreeManager } from "../worktree-manager.ts";
 import { parseDelegationObservedPayload, parseRunReleasedAuthorityPayload } from "../delegation-audit.ts";
 import { CliOperatorApiClient } from "./operator-client.ts";
@@ -109,6 +116,8 @@ export interface IssueTraceTask extends Omit<WorkflowTaskRecord, "requirementsJs
 export interface IssueTraceResult {
   issue: TrackedIssueRecord;
   snapshot: WorkflowSnapshot;
+  executionState: IssueExecutionState;
+  activeRun: RunRecord | null;
   tasks: IssueTraceTask[];
   observations: IssueTraceObservation[];
 }
@@ -293,7 +302,7 @@ export class CliDataAccess extends CliOperatorApiClient {
     const latestReport = normalizeStageReport(latestRun?.reportJson, latestRun?.status);
     const latestSummary = safeJsonParse(latestRun?.summaryJson);
     const completionCheck = latestRun ? extractCompletionCheck(latestRun) : undefined;
-    const downstreamHandoff = issue.factoryState === "awaiting_queue" || issue.prReviewState === "approved";
+    const downstreamHandoff = isIssueDownstreamOwnedProjection(issue);
     const latestRunNoLongerCurrent =
       downstreamHandoff
       && (latestRun?.status === "failed" || latestRun?.status === "superseded");
@@ -420,7 +429,7 @@ export class CliDataAccess extends CliOperatorApiClient {
         prReviewState: dbIssue.prReviewState,
         prCheckStatus: dbIssue.prCheckStatus,
         factoryState: dbIssue.factoryState,
-        pendingRunType: dbIssue.pendingRunType,
+        runnableTaskRunType: peekRunnableWorkflowTaskRunType(this.db, dbIssue.projectId, dbIssue.linearIssueId),
         lastRunType: issueSession?.lastRunType,
         lastGitHubFailureSource: issue.latestFailureSource,
       }).runType) as RunType;
@@ -433,12 +442,10 @@ export class CliDataAccess extends CliOperatorApiClient {
           ? "changes_requested"
           : "delegated";
 
-    this.appendRetryWake(dbIssue, runType);
+    this.appendRetryWorkflowEvent(dbIssue, runType);
     this.db.issues.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
-      pendingRunType: null,
-      pendingRunContextJson: null,
       factoryState,
       ...buildManualRetryAttemptReset(runType),
     });
@@ -481,8 +488,6 @@ export class CliDataAccess extends CliOperatorApiClient {
       delegatedToPatchRelay: false,
       factoryState: terminalState,
       activeRunId: null,
-      pendingRunType: null,
-      pendingRunContextJson: null,
     });
     this.db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(issue.projectId, issue.linearIssueId);
 
@@ -550,6 +555,20 @@ export class CliDataAccess extends CliOperatorApiClient {
 
     const dbIssue = this.db.issues.getIssueByKey(issueKey)!;
     const snapshot = buildWorkflowSnapshotForIssue(this.db, dbIssue);
+    const runs = this.db.runs.listRunsForIssue(issue.projectId, issue.linearIssueId);
+    const activeRun = dbIssue.activeRunId !== undefined ? this.db.runs.getRunById(dbIssue.activeRunId) : undefined;
+    const latestRun = runs.at(-1);
+    const runnableTaskRunType = snapshot.openTasks.find((task) => task.type === "run" && task.runType)?.runType;
+    const blockedByKeys = this.db.issues.listIssueDependencies(issue.projectId, issue.linearIssueId)
+      .filter((entry) => entry.blockerCurrentLinearStateType !== "completed"
+        && entry.blockerCurrentLinearState?.trim().toLowerCase() !== "done")
+      .map((entry) => entry.blockerIssueKey ?? entry.blockerLinearIssueId);
+    const executionState = deriveIssueExecutionStateFromRecords(dbIssue, {
+      activeRun,
+      latestRun,
+      blockedByKeys,
+      ...(runnableTaskRunType ? { runnableTaskRunType } : {}),
+    });
     const observations = this.db.workflowObservations
       .listObservations(issue.projectId, issue.linearIssueId)
       .map((observation): IssueTraceObservation => {
@@ -588,7 +607,7 @@ export class CliDataAccess extends CliOperatorApiClient {
         };
       });
 
-    return { issue, snapshot, tasks, observations };
+    return { issue, snapshot, executionState, activeRun: activeRun ?? null, tasks, observations };
   }
 
   transcriptSource(issueKey: string, runId?: number): IssueTranscriptSourceResult | undefined {
@@ -651,7 +670,7 @@ export class CliDataAccess extends CliOperatorApiClient {
     };
   }
 
-  private appendRetryWake(issue: IssueRecord, runType: RunType): void {
+  private appendRetryWorkflowEvent(issue: IssueRecord, runType: RunType): void {
     this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -697,7 +716,7 @@ export class CliDataAccess extends CliOperatorApiClient {
 
     return items.filter((item) => {
       if (options?.active && !item.activeRunType) return false;
-      if (options?.failed && item.factoryState !== "failed" && item.factoryState !== "escalated") return false;
+      if (options?.failed && !isIssueTerminalFailureProjection(item)) return false;
       return true;
     });
   }

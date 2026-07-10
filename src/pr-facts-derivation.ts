@@ -5,6 +5,10 @@ import {
   isReviewDecisionApproved,
   isReviewDecisionReviewRequired,
 } from "./idle-reconciliation-helpers.ts";
+import {
+  isIssuePrePrOpenDisplayStateProjection,
+  isIssueTerminalFailureProjection,
+} from "./issue-execution-state.ts";
 
 /**
  * Normalized GitHub PR facts observed by either ingestion path (core
@@ -96,7 +100,7 @@ function deriveFromTriggerEvent(
   }
 
   const effectiveCurrentState =
-    (current.factoryState === "awaiting_input" || current.factoryState === "delegated")
+    isIssuePrePrOpenDisplayStateProjection(current)
     && (observed.prState === "open" || observed.prNumber !== undefined)
       ? "pr_open"
       : current.factoryState;
@@ -135,7 +139,7 @@ function deriveFromPolledLevel(
     return current.activeRunId === undefined ? "done" : undefined;
   }
 
-  if (current.factoryState === "escalated" || current.factoryState === "failed") {
+  if (isIssueTerminalFailureProjection(current)) {
     // Terminal recovery: newer GitHub truth reopens a stuck terminal issue.
     // No fall-through to the generic approved rule — an escalated issue with
     // a red gate stays escalated (the failure provenance keeps the repair

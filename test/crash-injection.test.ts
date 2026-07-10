@@ -8,8 +8,9 @@ import { PatchRelayDatabase } from "../src/db.ts";
 import { deriveIssueExecutionStateFromRecords } from "../src/issue-execution-state.ts";
 import { ISSUE_SESSION_LEASE_MS } from "../src/issue-session-lease-service.ts";
 import { RunOrchestrator } from "../src/run-orchestrator.ts";
-import { RunWakePlanner } from "../src/run-wake-planner.ts";
+import { RunTaskPlanner } from "../src/run-task-planner.ts";
 import { MemoryPatchRelayTelemetry } from "../src/telemetry.ts";
+import { reconcileWorkflowTasksForIssue } from "../src/workflow-task-reconciler.ts";
 import type { AppConfig, CodexThreadSummary } from "../src/types.ts";
 
 // Crash-injection suite (core simplification plan, "Ordering, risk,
@@ -205,7 +206,7 @@ function seedExpiredForeignLease(db: PatchRelayDatabase, linearIssueId: string):
   assert.equal(acquired, true, "fixture: dead worker's lease must be seeded");
   // Backdate the expiry instead of sleeping past it.
   db.unsafeRawConnectionForTests()
-    .prepare("UPDATE issue_sessions SET leased_until = ? WHERE project_id = ? AND linear_issue_id = ?")
+    .prepare("UPDATE issue_session_leases SET leased_until = ? WHERE project_id = ? AND linear_issue_id = ?")
     .run(new Date(Date.now() - 60_000).toISOString(), PROJECT, linearIssueId);
 }
 
@@ -295,7 +296,7 @@ test("crash before settlement: interrupted ci_repair run settles, budget is refu
       assert.equal(issue?.lastAttemptedFailureHeadSha, undefined);
       // The same idle pass routes the still-red failure again.
       assert.equal(issue?.factoryState, "repairing_ci");
-      assert.equal(new RunWakePlanner(db).resolveRunWake(db.getIssue(PROJECT, "issue-interrupted")!)?.runType, "ci_repair");
+      assert.equal(new RunTaskPlanner(db).resolveRunTask(db.getIssue(PROJECT, "issue-interrupted")!)?.runType, "ci_repair");
       // D4: the dead worker's heartbeat-stale lease was reclaimed without
       // waiting for TTL expiry, and is not left held after recovery.
       assert.equal(telemetry.list("lease.reclaimed").length, 1);
@@ -347,10 +348,10 @@ test("launch race: slot claimed but no thread persisted - restart settles the zo
       assert.equal(run?.status, "failed");
       assert.match(run?.failureReason ?? "", /Zombie: never started/);
       assert.equal(issue?.activeRunId, undefined, "the claimed slot must be released");
-      // The zombie budget was consumed and a recovery wake was dispatched.
+      // The zombie budget was consumed and a recovery workflowTask was dispatched.
       assert.equal(issue?.zombieRecoveryAttempts, 1);
       assert.ok(issue?.lastZombieRecoveryAt, "the recovery timestamp arms the backoff");
-      assert.equal(new RunWakePlanner(db).resolveRunWake(db.getIssue(PROJECT, "issue-launch-race")!)?.runType, "implementation");
+      assert.equal(new RunTaskPlanner(db).resolveRunTask(db.getIssue(PROJECT, "issue-launch-race")!)?.runType, "implementation");
       assert.ok(
         enqueueCalls.some((call) => call.issueId === "issue-launch-race"),
         "the recovered issue must be handed back to the work queue in the same pass",
@@ -407,7 +408,7 @@ test("thread persisted but gone after restart: stale foreign lease is reclaimed 
       assert.equal(run?.failureReason, "Stale thread after restart");
       assert.equal(issue?.activeRunId, undefined);
       assert.equal(issue?.zombieRecoveryAttempts, 1);
-      assert.equal(new RunWakePlanner(db).resolveRunWake(db.getIssue(PROJECT, "issue-stale-thread")!)?.runType, "implementation");
+      assert.equal(new RunTaskPlanner(db).resolveRunTask(db.getIssue(PROJECT, "issue-stale-thread")!)?.runType, "implementation");
       const session = db.issueSessions.getIssueSession(PROJECT, "issue-stale-thread");
       assert.notEqual(session?.workerId, DEAD_WORKER_ID);
       assertConvergedIssue(db, "issue-stale-thread");
@@ -419,15 +420,15 @@ test("thread persisted but gone after restart: stale foreign lease is reclaimed 
   }
 });
 
-test("wake appended but dispatch lost: restart dispatches exactly once with no duplicate wake", { concurrency: false }, async () => {
-  // Multi-step path: the session event (wake) was appended durably, but the
-  // crash took the in-memory work queue before enqueueIssue ran. The wake
+test("workflowTask appended but dispatch lost: restart dispatches exactly once with no duplicate workflowTask", { concurrency: false }, async () => {
+  // Multi-step path: the session event (workflowTask) was appended durably, but the
+  // crash took the in-memory work queue before enqueueIssue ran. The workflowTask
   // must survive the restart and be dispatched exactly once by the next
   // reconciliation pass — not duplicated, not dropped.
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-crash-lost-dispatch-"));
   const restoreGh = installFakeGh(baseDir, {
     prView: {
-      headRefOid: "sha-wake",
+      headRefOid: "sha-workflowTask",
       state: "OPEN",
       reviewDecision: "CHANGES_REQUESTED",
       mergeable: "MERGEABLE",
@@ -445,7 +446,7 @@ test("wake appended but dispatch lost: restart dispatches exactly once with no d
         branchName: "feat-lost-dispatch",
         prNumber: 200,
         prState: "open",
-        prHeadSha: "sha-wake",
+        prHeadSha: "sha-workflowTask",
         prAuthorLogin: "patchrelay[bot]",
         prReviewState: "changes_requested",
         prCheckStatus: "success",
@@ -457,7 +458,7 @@ test("wake appended but dispatch lost: restart dispatches exactly once with no d
         linearIssueId: issue.linearIssueId,
         eventType: "review_changes_requested",
         eventJson: JSON.stringify({ reviewerName: "review-quill[bot]" }),
-        dedupeKey: "review_changes_requested::sha-wake::review-quill[bot]",
+        dedupeKey: "review_changes_requested::sha-workflowTask::review-quill[bot]",
       });
       // CRASH here: enqueueIssue never ran in the dead process.
     });
@@ -467,10 +468,10 @@ test("wake appended but dispatch lost: restart dispatches exactly once with no d
       await orchestrator.reconcileActiveRuns();
 
       const dispatches = enqueueCalls.filter((call) => call.issueId === "issue-lost-dispatch");
-      assert.equal(dispatches.length, 1, "the surviving wake must be dispatched exactly once per pass");
-      assert.equal(new RunWakePlanner(db).resolveRunWake(db.getIssue(PROJECT, "issue-lost-dispatch")!)?.runType, "review_fix");
+      assert.equal(dispatches.length, 1, "the surviving workflowTask must be dispatched exactly once per pass");
+      assert.equal(new RunTaskPlanner(db).resolveRunTask(db.getIssue(PROJECT, "issue-lost-dispatch")!)?.runType, "review_fix");
       const events = db.issueSessions.listIssueSessionEvents(PROJECT, "issue-lost-dispatch");
-      assert.equal(events.length, 1, "re-derivation must not append a duplicate wake event");
+      assert.equal(events.length, 1, "re-derivation must not append a duplicate workflowTask event");
       assert.equal(db.getIssue(PROJECT, "issue-lost-dispatch")?.factoryState, "changes_requested");
       assert.equal(db.runs.listRunsForIssue(PROJECT, "issue-lost-dispatch").length, 0, "no duplicate run may be created by the dispatch itself");
       assertConvergedIssue(db, "issue-lost-dispatch");
@@ -561,13 +562,13 @@ test("finalizer seam: run already terminal but slot not cleared - settle and rou
 });
 
 test("stranded expired lease on runnable work: restart with a different worker dispatches and can acquire in one pass", async () => {
-  // Multi-step path: the dead worker appended a wake and held the session
+  // Multi-step path: the dead worker appended a workflowTask and held the session
   // lease when it died; the lease TTL has since expired. The restart (a
   // different workerId) must treat the leftover lease row as no obstacle:
-  // the wake is dispatched by the first pass and the lease is acquirable
+  // the workflowTask is dispatched by the first pass and the lease is acquirable
   // immediately. The actual Codex launch cannot be exercised offline (it
   // needs a live app-server and a git worktree), so this scenario asserts
-  // the DB-state convergence that gates the launch: runnable wake + free
+  // the DB-state convergence that gates the launch: runnable workflowTask + free
   // lease + dispatch.
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-crash-stranded-lease-"));
   const config = createConfig(baseDir);
@@ -587,6 +588,7 @@ test("stranded expired lease on runnable work: restart with a different worker d
         eventType: "delegated",
         dedupeKey: `delegated:${issue.linearIssueId}`,
       });
+      reconcileWorkflowTasksForIssue(db, issue);
       seedExpiredForeignLease(db, issue.linearIssueId);
     });
 
@@ -595,8 +597,8 @@ test("stranded expired lease on runnable work: restart with a different worker d
       await orchestrator.reconcileActiveRuns();
 
       const dispatches = enqueueCalls.filter((call) => call.issueId === "issue-stranded-lease");
-      assert.equal(dispatches.length, 1, "the runnable wake must be dispatched despite the leftover lease row");
-      assert.equal(new RunWakePlanner(db).resolveRunWake(db.getIssue(PROJECT, "issue-stranded-lease")!)?.runType, "implementation");
+      assert.equal(dispatches.length, 1, "the runnable workflowTask must be dispatched despite the leftover lease row");
+      assert.equal(new RunTaskPlanner(db).resolveRunTask(db.getIssue(PROJECT, "issue-stranded-lease")!)?.runType, "implementation");
 
       // The launch path's first gate is lease acquisition: a different
       // worker must win it over the expired foreign lease in one call.

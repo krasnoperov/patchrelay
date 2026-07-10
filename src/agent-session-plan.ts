@@ -112,17 +112,17 @@ function setStatuses(
 function resolvePlanRunType(params: {
   factoryState: FactoryState;
   activeRunType?: RunType;
-  pendingRunType?: RunType;
+  runnableTaskRunType?: RunType;
 }): RunType {
   if (params.activeRunType) {
     return params.activeRunType;
   }
-  if (params.pendingRunType) {
-    return params.pendingRunType;
+  if (params.runnableTaskRunType) {
+    return params.runnableTaskRunType;
   }
   switch (params.factoryState) {
     case "changes_requested":
-      return params.pendingRunType === "branch_upkeep" || params.activeRunType === "branch_upkeep"
+      return params.runnableTaskRunType === "branch_upkeep" || params.activeRunType === "branch_upkeep"
         ? "branch_upkeep"
         : "review_fix";
     case "repairing_ci":
@@ -139,7 +139,7 @@ export function buildAgentSessionPlan(params: {
   issueClass?: IssueClass;
   orchestrationSettleUntil?: string;
   activeRunType?: RunType;
-  pendingRunType?: RunType;
+  runnableTaskRunType?: RunType;
   ciRepairAttempts?: number;
   queueRepairAttempts?: number;
   prReviewState?: string;
@@ -296,7 +296,6 @@ export function buildAgentSessionPlanForIssue(
   issue: Pick<
     IssueRecord,
     | "factoryState"
-    | "pendingRunType"
     | "ciRepairAttempts"
     | "queueRepairAttempts"
     | "issueClass"
@@ -304,7 +303,7 @@ export function buildAgentSessionPlanForIssue(
     | "prReviewState"
     | "prCheckStatus"
   >,
-  options?: { activeRunType?: RunType },
+  options?: { activeRunType?: RunType; runnableTaskRunType?: RunType },
 ): AgentSessionPlanStep[] {
   return buildAgentSessionPlan({
     factoryState: issue.factoryState,
@@ -312,10 +311,10 @@ export function buildAgentSessionPlanForIssue(
     queueRepairAttempts: issue.queueRepairAttempts,
     ...(issue.issueClass ? { issueClass: issue.issueClass } : {}),
     ...(issue.orchestrationSettleUntil ? { orchestrationSettleUntil: issue.orchestrationSettleUntil } : {}),
-    ...(issue.pendingRunType ? { pendingRunType: issue.pendingRunType } : {}),
     ...(issue.prReviewState ? { prReviewState: issue.prReviewState } : {}),
     ...(issue.prCheckStatus ? { prCheckStatus: issue.prCheckStatus } : {}),
     ...(options?.activeRunType ? { activeRunType: options.activeRunType } : {}),
+    ...(options?.runnableTaskRunType ? { runnableTaskRunType: options.runnableTaskRunType } : {}),
   });
 }
 

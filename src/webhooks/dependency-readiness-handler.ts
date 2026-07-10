@@ -1,17 +1,14 @@
 import type { PatchRelayDatabase } from "../db.ts";
-import type { RunType } from "../factory-state.ts";
 import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "../telemetry.ts";
-import type { WakeDispatcher } from "../wake-dispatcher.ts";
-import { peekPendingWakeRunType } from "../pending-wake.ts";
+import type { WorkflowTaskDispatcher } from "../workflow-task-dispatcher.ts";
+import { peekRunnableWorkflowTaskRunType } from "../pending-workflow-task.ts";
 import { reconcileWorkflowTasksForIssue } from "../workflow-task-reconciler.ts";
-
-const WRITER = "dependency-readiness-handler";
+import { isIssueLocalWorkProjection } from "../issue-execution-state.ts";
 
 export class DependencyReadinessHandler {
   constructor(
     private readonly db: PatchRelayDatabase,
-    private readonly wakeDispatcher: WakeDispatcher,
-    private readonly peekPendingSessionWakeRunType: (projectId: string, issueId: string) => RunType | undefined,
+    private readonly workflowTaskDispatcher: WorkflowTaskDispatcher,
     private readonly telemetry: PatchRelayTelemetry = noopTelemetry,
   ) {}
 
@@ -44,19 +41,6 @@ export class DependencyReadinessHandler {
           blockerCount: unresolved,
           blockerKeys,
         });
-        if (this.peekPendingSessionWakeRunType(projectId, dependent.linearIssueId) === "implementation"
-          && issue.activeRunId === undefined
-          && !this.db.issueSessions.hasPendingIssueSessionEvents(projectId, dependent.linearIssueId)) {
-          this.db.issueSessions.commitIssueState({
-            writer: WRITER,
-            update: {
-              projectId,
-              linearIssueId: dependent.linearIssueId,
-              pendingRunType: null,
-              pendingRunContextJson: null,
-            },
-          });
-        }
         continue;
       }
 
@@ -69,10 +53,9 @@ export class DependencyReadinessHandler {
         ...workflowReconciliation.result.opened,
         ...workflowReconciliation.result.updated,
       ].some((task) => task.gateAction === "start" && task.runType);
-      const pendingWakeRunType = peekPendingWakeRunType(this.db, projectId, dependent.linearIssueId)
-        ?? issue.pendingRunType;
-      if (pendingWakeRunType) {
-        const dispatchedRunType = this.wakeDispatcher.dispatchIfWakePending(projectId, dependent.linearIssueId);
+      const runnableTaskRunType = peekRunnableWorkflowTaskRunType(this.db, projectId, dependent.linearIssueId);
+      if (runnableTaskRunType) {
+        const dispatchedRunType = this.workflowTaskDispatcher.dispatchIfWorkflowTaskPending(projectId, dependent.linearIssueId);
         emitTelemetry(this.telemetry, {
           type: "dependency.dependent_unblocked",
           projectId,
@@ -86,7 +69,7 @@ export class DependencyReadinessHandler {
       }
 
       if (hasRunnableWorkflowTask) {
-        const dispatchedRunType = this.wakeDispatcher.dispatchIfWakePending(projectId, dependent.linearIssueId);
+        const dispatchedRunType = this.workflowTaskDispatcher.dispatchIfWorkflowTaskPending(projectId, dependent.linearIssueId);
         emitTelemetry(this.telemetry, {
           type: "dependency.dependent_unblocked",
           projectId,
@@ -99,20 +82,8 @@ export class DependencyReadinessHandler {
         continue;
       }
 
-      if (issue.factoryState !== "delegated" || this.db.issueSessions.hasPendingIssueSessionEvents(projectId, dependent.linearIssueId)) {
+      if (!isIssueLocalWorkProjection(issue) || this.db.issueSessions.hasPendingIssueSessionEvents(projectId, dependent.linearIssueId)) {
         continue;
-      }
-
-      if (this.peekPendingSessionWakeRunType(projectId, dependent.linearIssueId) === "implementation") {
-        this.db.issueSessions.commitIssueState({
-          writer: WRITER,
-          update: {
-            projectId,
-            linearIssueId: dependent.linearIssueId,
-            pendingRunType: null,
-            pendingRunContextJson: null,
-          },
-        });
       }
     }
 

@@ -2,6 +2,7 @@ import type { StateHistoryNode } from "./history-builder.ts";
 import type { OperatorFeedEvent } from "../../operator-feed.ts";
 import { hasOpenPr } from "../../pr-state.ts";
 import { derivePrDisplayContext } from "../../pr-display-context.ts";
+import { isIssueDownstreamOwnedProjection } from "../../issue-execution-state.ts";
 
 export type VisualizationNodeStatus = "current" | "visited" | "upcoming";
 
@@ -215,7 +216,7 @@ export function buildPatchRelayQueueObservations(
   const latestEvent = latestQueueObservationEvent(feedEvents);
   if (latestEvent) {
     observations.push(describeObservationEvent(latestEvent));
-  } else if (issue.factoryState === "awaiting_queue") {
+  } else if (isIssueDownstreamOwnedProjection(issue)) {
     observations.push({
       tone: "info",
       text: "No downstream queue signal has been observed yet.",

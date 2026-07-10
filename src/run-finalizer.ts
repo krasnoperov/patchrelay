@@ -12,18 +12,21 @@ import type { ReleaseIssueSessionLease, WithHeldIssueSessionLease } from "./issu
 import type { LinearSessionSync } from "./linear-session-sync.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { buildStageReport, countEventMethods } from "./run-reporting.ts";
-import type { AppendWakeEventWithLease } from "./run-wake-planner.ts";
+import type { AppendRunIntentEventWithLease } from "./run-task-planner.ts";
 import type { buildCompletionCheckActivity } from "./linear-session-reporting.ts";
 import { buildRunCompletedActivity, buildRunFailureActivity } from "./linear-session-reporting.ts";
 import { handleNoPrCompletionCheck } from "./no-pr-completion-check.ts";
 import type { RunCompletionPolicy } from "./run-completion-policy.ts";
 import { resolvePostRunFactoryState } from "./run-completion-policy.ts";
 import { computeChangeIdentityFromWorktree } from "./change-identity.ts";
-import type { WakeDispatcher } from "./wake-dispatcher.ts";
+import type { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
 import { inspectGitWorktreeStatus, isRepairRunType, type GitWorktreeStatus } from "./git-worktree-status.ts";
 import { buildRunOutcomeSummary, type RunOutcomeFacts } from "./run-outcome-summary.ts";
 import { settleRun } from "./run-settlement.ts";
-import { evaluateTaskCompletion, projectWorkflowSnapshot, type WorkflowTask } from "./workflow-runtime.ts";
+import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
+import { evaluateTaskCompletion } from "./workflow-gates.ts";
+import { COMPLETION_CHECK_CONTINUE_OBSERVATION, type WorkflowTask } from "./workflow-model.ts";
+import { projectWorkflowSnapshot } from "./workflow-snapshot.ts";
 
 type StageReport = ReturnType<typeof buildStageReport>;
 
@@ -75,10 +78,10 @@ export class RunFinalizer {
     private readonly db: PatchRelayDatabase,
     private readonly logger: Logger,
     private readonly linearSync: LinearSessionSync,
-    private readonly wakeDispatcher: WakeDispatcher,
+    private readonly workflowTaskDispatcher: WorkflowTaskDispatcher,
     private readonly withHeldLease: WithHeldIssueSessionLease,
     private readonly releaseLease: ReleaseIssueSessionLease,
-    private readonly appendWakeEventWithLease: AppendWakeEventWithLease,
+    private readonly appendRunIntentEventWithLease: AppendRunIntentEventWithLease,
     private readonly failRunAndClear: (run: RunRecord, message: string, nextState?: FactoryState) => void,
     private readonly completionPolicy: RunCompletionPolicy,
     private readonly completionCheck: {
@@ -115,7 +118,7 @@ export class RunFinalizer {
     };
   }
 
-  private resolveConsumedWakeEvent(run: Pick<RunRecord, "id" | "projectId" | "linearIssueId">): IssueSessionEventRecord | undefined {
+  private resolveConsumedSessionEvent(run: Pick<RunRecord, "id" | "projectId" | "linearIssueId">): IssueSessionEventRecord | undefined {
     return this.db.issueSessions
       .listIssueSessionEvents(run.projectId, run.linearIssueId)
       .filter((event) => event.consumedByRunId === run.id)
@@ -130,20 +133,20 @@ export class RunFinalizer {
   }): RunOutcomeFacts {
     const session = this.db.issueSessions.getIssueSession(params.run.projectId, params.run.linearIssueId);
     const facts: RunOutcomeFacts = {
-      ...(session?.lastWakeReason ? { wakeReason: session.lastWakeReason } : {}),
+      ...(session?.lastWorkflowReason ? { workflowReason: session.lastWorkflowReason } : {}),
       ...(params.postRunState ? { postRunState: params.postRunState } : {}),
       ...(params.issue.prNumber !== undefined ? { prNumber: params.issue.prNumber } : {}),
       ...(params.latestAssistantSummary ? { latestAssistantSummary: params.latestAssistantSummary } : {}),
     };
 
-    const wakeEvent = this.resolveConsumedWakeEvent(params.run);
-    if (!wakeEvent) {
+    const consumedEvent = this.resolveConsumedSessionEvent(params.run);
+    if (!consumedEvent) {
       return this.resolveWorkflowTaskOutcomeFacts(params.run, facts);
     }
-    // Boundary over DB rows: a malformed wake payload degrades to bare facts.
+    // Boundary over DB rows: a malformed session payload degrades to bare facts.
     const typed = parseIssueSessionEventOrWarn(
-      wakeEvent,
-      (message) => this.logger.warn({ runId: params.run.id, eventId: wakeEvent.id }, message),
+      consumedEvent,
+      (message) => this.logger.warn({ runId: params.run.id, eventId: consumedEvent.id }, message),
     );
     if (!typed?.payload) {
       return this.resolveWorkflowTaskOutcomeFacts(params.run, facts);
@@ -310,9 +313,9 @@ export class RunFinalizer {
     );
   }
 
-  // Single owner of "clear Linear progress + release lease + drain pending
-  // wake". Every run-end path goes through here. Routes the release through
-  // the WakeDispatcher so a wake that landed during the run is picked up
+  // Single owner of "clear Linear progress + release lease + dispatch pending
+  // workflow task". Every run-end path goes through here. Routes the release through
+  // the WorkflowTaskDispatcher so a task that landed during the run is picked up
   // even on failure paths (the previous implementation only drained on the
   // success path). Failure and completion-check paths publish their own
   // more-specific operator-feed event before getting here, so the
@@ -323,7 +326,7 @@ export class RunFinalizer {
     options?: { issueKey?: string | undefined; publishDeferredFollowUp?: boolean },
   ): void {
     this.linearSync.clearProgress(run.id);
-    this.wakeDispatcher.releaseRunAndDispatch({
+    this.workflowTaskDispatcher.releaseRunAndDispatch({
       run,
       ...(options?.issueKey ? { issueKey: options.issueKey } : {}),
       ...(options?.publishDeferredFollowUp ? { publishDeferredFollowUp: true } : {}),
@@ -352,8 +355,6 @@ export class RunFinalizer {
           projectId: run.projectId,
           linearIssueId: run.linearIssueId,
           activeRunId: null,
-          pendingRunType: null,
-          pendingRunContextJson: null,
         },
       });
     });
@@ -451,9 +452,9 @@ export class RunFinalizer {
     });
     void this.linearSync.emitActivity(issue, params.activity, { ephemeral: true });
     void this.linearSync.syncSession(issue);
-    // releaseRunAndDispatch always drains any pending wake — the
+    // releaseRunAndDispatch always dispatches any pending workflow task — the
     // explicit `params.enqueue` flag is no longer needed because the
-    // dispatcher peeks the wake itself and only enqueues when one
+    // dispatcher peeks the task itself and only enqueues when one
     // exists. Keeping the parameter would be redundant.
     this.clearProgressAndRelease(params.run);
   }
@@ -558,14 +559,12 @@ export class RunFinalizer {
         lease,
         buildIssueUpdate: () => ({
           factoryState: nextState,
-          pendingRunType: null,
-          pendingRunContextJson: null,
           lastAttemptedFailureHeadSha: null,
           lastAttemptedFailureSignature: null,
           lastAttemptedFailureAt: null,
         }),
       });
-      return this.appendWakeEventWithLease(
+      return this.appendRunIntentEventWithLease(
         lease,
         params.issue,
         params.run.runType,
@@ -587,6 +586,14 @@ export class RunFinalizer {
       ? `Repair run finished with a dirty worktree; ${params.status.summary}`
       : "Repair run finished with a dirty worktree";
     const outcomeSummary = "Repair left unpublished local changes; continuing automatically to publish them.";
+    const continuationContext = {
+      runType: params.run.runType,
+      summary: message,
+      preserveDirtyWorktree: true,
+      ...(params.status.summary !== undefined ? { dirtyWorktreeSummary: params.status.summary } : {}),
+      dirtyWorktreeChangedPaths: params.status.changedPaths,
+      dirtyWorktreeMergeInProgress: params.status.mergeInProgress,
+    } satisfies RunContext;
     const continued = this.withHeldLease(params.run.projectId, params.run.linearIssueId, (lease) => {
       this.db.runs.finishRun(params.run.id, this.buildCompletedRunUpdate({
         threadId: params.threadId,
@@ -594,6 +601,8 @@ export class RunFinalizer {
         report: params.report,
         outcomeSummary,
       }));
+      const currentIssue = this.db.issues.getIssue(params.run.projectId, params.run.linearIssueId);
+      if (!currentIssue) return false;
       // The attempt decrements are read-modify-write against the issue row;
       // on conflict, recompute them from the fresh row instead of writing
       // counters derived from a stale read.
@@ -602,8 +611,6 @@ export class RunFinalizer {
         linearIssueId: params.run.linearIssueId,
         activeRunId: null,
         factoryState: "delegated" as FactoryState,
-        pendingRunType: null,
-        pendingRunContextJson: null,
         ...(params.run.runType === "ci_repair" && record.ciRepairAttempts > 0
           ? { ciRepairAttempts: record.ciRepairAttempts - 1 }
           : {}),
@@ -617,22 +624,26 @@ export class RunFinalizer {
       this.db.issueSessions.commitIssueState({
         writer: WRITER,
         lease,
-        expectedVersion: params.issue.version,
-        update: buildContinueUpdate(params.issue),
+        expectedVersion: currentIssue.version,
+        update: buildContinueUpdate(currentIssue),
         onConflict: (current) => buildContinueUpdate(current),
+      });
+      this.db.workflowObservations.appendObservation({
+        projectId: params.run.projectId,
+        subjectId: params.run.linearIssueId,
+        source: "executor",
+        type: COMPLETION_CHECK_CONTINUE_OBSERVATION,
+        payloadJson: JSON.stringify({
+          runId: params.run.id,
+          ...continuationContext,
+        }),
+        dedupeKey: `dirty_repair_continue:${params.run.id}`,
       });
       return Boolean(this.db.issueSessions.appendIssueSessionEventWithLease(lease, {
         projectId: params.run.projectId,
         linearIssueId: params.run.linearIssueId,
         eventType: "completion_check_continue",
-        eventJson: JSON.stringify({
-          runType: params.run.runType,
-          summary: message,
-          preserveDirtyWorktree: true,
-          ...(params.status.summary !== undefined ? { dirtyWorktreeSummary: params.status.summary } : {}),
-          dirtyWorktreeChangedPaths: params.status.changedPaths,
-          dirtyWorktreeMergeInProgress: params.status.mergeInProgress,
-        } satisfies RunContext),
+        eventJson: JSON.stringify(continuationContext),
         dedupeKey: `dirty_repair_continue:${params.run.id}`,
       }));
     });
@@ -656,6 +667,10 @@ export class RunFinalizer {
       body: "PatchRelay found unpublished repair changes and is continuing automatically to commit and push them.",
     }, { ephemeral: true });
     void this.linearSync.syncSession(params.issue, { activeRunType: params.run.runType });
+    const issue = this.db.issues.getIssue(params.run.projectId, params.run.linearIssueId);
+    if (issue) {
+      reconcileWorkflowTasksForIssue(this.db, issue);
+    }
     this.clearProgressAndRelease(params.run);
   }
 
@@ -787,7 +802,7 @@ export class RunFinalizer {
         syncFailureOutcome: (event) => this.syncFailureOutcome(event),
         syncCompletionCheckOutcome: (event) => this.syncCompletionCheckOutcome(event),
         clearProgressAndRelease: (releaseRun) => this.clearProgressAndRelease(releaseRun),
-        wakeDispatcher: this.wakeDispatcher,
+        workflowTaskDispatcher: this.workflowTaskDispatcher,
       });
       return;
     }
@@ -818,8 +833,6 @@ export class RunFinalizer {
       const state = postRunFollowUp?.factoryState ?? resolvePostRunFactoryState(record, run);
       return {
         ...(state ? { factoryState: state } : {}),
-        pendingRunType: null,
-        pendingRunContextJson: null,
         // A successful completion ends any capacity-failure streak, so the next
         // capacity outage restarts the escalating backoff from the short step.
         ...(record.capacityBackoffAttempts > 0 ? { capacityBackoffAttempts: 0 } : {}),
@@ -842,11 +855,11 @@ export class RunFinalizer {
         buildIssueUpdate: buildCompletionUpdate,
       });
       if (postRunFollowUp) {
-        return this.appendWakeEventWithLease(
+        return this.appendRunIntentEventWithLease(
           lease,
           issue,
-          postRunFollowUp.pendingRunType,
-          postRunFollowUp.context,
+          postRunFollowUp.workflowIntent.runType,
+          postRunFollowUp.workflowIntent.context,
           "post_run",
         );
       }
@@ -948,7 +961,7 @@ export class RunFinalizer {
       syncFailureOutcome: (event) => this.syncFailureOutcome(event),
       syncCompletionCheckOutcome: (event) => this.syncCompletionCheckOutcome(event),
       clearProgressAndRelease: (releaseRun) => this.clearProgressAndRelease(releaseRun),
-      wakeDispatcher: this.wakeDispatcher,
+      workflowTaskDispatcher: this.workflowTaskDispatcher,
     });
     return true;
   }

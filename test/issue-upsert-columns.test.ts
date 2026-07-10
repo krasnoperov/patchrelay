@@ -32,10 +32,9 @@ test("buildUpdateAssignments uses plain assignment for non-COALESCE fields", () 
     projectId: "p",
     linearIssueId: "i",
     factoryState: "delegated",
-    pendingRunType: null,
   });
   assert.ok(assignments.includes("factory_state = @factoryState"));
-  assert.ok(assignments.includes("pending_run_type = @pendingRunType"));
+  assert.equal(assignments.some((assignment) => assignment.includes("pending_run")), false);
 });
 
 test("buildUpdateAssignments runs transforms (booleans → 0/1)", () => {

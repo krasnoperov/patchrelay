@@ -86,7 +86,7 @@ test("listRecentCompletionCandidates: done/merged within the cutoff window only"
   });
 });
 
-test("listTerminalIssuesWithPendingWake: actionable pending event or pending run type, not non-actionable noise", () => {
+test("listTerminalIssuesWithStaleInbox: actionable pending event, not non-actionable noise", () => {
   withDb((db) => {
     addIssue(db, "term-actionable", { factoryState: "done" });
     db.issueSessions.appendIssueSessionEvent({
@@ -104,7 +104,6 @@ test("listTerminalIssuesWithPendingWake: actionable pending event or pending run
       eventJson: JSON.stringify({ text: "fyi" }),
     });
 
-    addIssue(db, "term-pending-run", { factoryState: "failed", pendingRunType: "ci_repair" });
     addIssue(db, "nonterminal-actionable", { factoryState: "delegated" });
     db.issueSessions.appendIssueSessionEvent({
       projectId: PROJECT,
@@ -113,7 +112,7 @@ test("listTerminalIssuesWithPendingWake: actionable pending event or pending run
       eventJson: JSON.stringify({ reviewBody: "fix" }),
     });
 
-    assert.deepEqual(keys(db.issues.listTerminalIssuesWithPendingWake(NON_ACTIONABLE)), ["term-actionable", "term-pending-run"]);
+    assert.deepEqual(keys(db.issues.listTerminalIssuesWithStaleInbox(NON_ACTIONABLE)), ["term-actionable"]);
   });
 });
 

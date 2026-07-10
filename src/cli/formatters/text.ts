@@ -162,6 +162,8 @@ export function formatTrace(result: IssueTraceResult): string {
   const lines = [
     `${result.issue.issueKey ?? result.issue.linearIssueId}${result.issue.currentLinearState ? `  ${result.issue.currentLinearState}` : ""}`,
     value("Workflow status", result.snapshot.status),
+    value("Execution state", formatRecord(result.executionState)),
+    result.activeRun ? value("Active run", `#${result.activeRun.id} ${result.activeRun.runType} ${result.activeRun.status}`) : value("Active run", "none"),
     value("Authority", `${result.snapshot.authority.delegated ? "delegated" : "revoked"} epoch=${result.snapshot.authority.epoch}`),
     value("Blockers", result.snapshot.blockerCount),
     value("Children", `${result.snapshot.openChildCount}/${result.snapshot.childCount} open`),

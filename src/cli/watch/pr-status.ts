@@ -1,4 +1,9 @@
 import { hasOpenPr } from "../../pr-state.ts";
+import {
+  isIssuePrOpenProjection,
+  isIssuePublishedOrDownstreamProjection,
+  isIssueQueueRepairProjection,
+} from "../../issue-execution-state.ts";
 import type { WatchIssue } from "./watch-state.ts";
 
 function isPassingCheckStatus(status: string | undefined): boolean {
@@ -90,7 +95,7 @@ export function hasDisplayPrBlocker(issue: WatchIssue): boolean {
   if (!hasOpenPr(issue.prNumber, issue.prState) || issue.activeRunType) {
     return false;
   }
-  if (issue.factoryState === "pr_open" || issue.factoryState === "awaiting_queue" || issue.factoryState === "repairing_queue") {
+  if (isIssuePublishedOrDownstreamProjection(issue) || isIssueQueueRepairProjection(issue)) {
     return true;
   }
   if (hasPendingPrChecks(issue) || hasFailedPrChecks(issue)) {
@@ -99,7 +104,7 @@ export function hasDisplayPrBlocker(issue: WatchIssue): boolean {
   if (isChangesRequestedReviewState(issue.prReviewState) && !isRereviewNeeded(issue)) {
     return true;
   }
-  if (!issue.prReviewState && issue.factoryState === "pr_open") {
+  if (!issue.prReviewState && isIssuePrOpenProjection(issue)) {
     return true;
   }
   return false;

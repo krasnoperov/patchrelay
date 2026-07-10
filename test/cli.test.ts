@@ -382,7 +382,6 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     title: "Playback-first evidence workspace",
     url: "https://linear.example/USE-54",
     currentLinearState: "Human Needed",
-    pendingRunType: "implementation",
     branchName: "use/USE-54-playback-first-evidence-workspace",
     worktreePath: path.join(config.projects[0].worktreeRoot, "USE-54"),
     threadId: "thread-54",
@@ -447,7 +446,6 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     issueKey: "USE-56",
     title: "Running stage",
     currentLinearState: "Start",
-    pendingRunType: "implementation",
     branchName: "use/USE-56-running-stage",
     worktreePath: path.join(config.projects[0].worktreeRoot, "USE-56"),
     factoryState: "implementing",
@@ -771,9 +769,8 @@ test("cli list and retry cover operator control flows", async () => {
     const updated = db.getTrackedIssue("usertold", "issue-2");
     assert.equal(updated?.factoryState, "delegated");
     const updatedIssue = db.getIssue("usertold", "issue-2");
-    const updatedWake = db.issueSessions.peekIssueSessionWake("usertold", "issue-2");
-    assert.equal(updatedIssue?.pendingRunType, undefined);
-    assert.equal(updatedWake?.runType, "implementation");
+    const updatedTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-2");
+    assert.equal(updatedTask?.runType, "implementation");
 
     db.upsertIssue({
       projectId: "usertold",
@@ -804,9 +801,8 @@ test("cli list and retry cover operator control flows", async () => {
 
     const queueRepairIssue = db.getIssue("usertold", "issue-queue-repair");
     assert.equal(queueRepairIssue?.factoryState, "repairing_queue");
-    const queueRepairWake = db.issueSessions.peekIssueSessionWake("usertold", "issue-queue-repair");
-    assert.equal(queueRepairIssue?.pendingRunType, undefined);
-    assert.equal(queueRepairWake?.runType, "queue_repair");
+    const queueRepairTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-queue-repair");
+    assert.equal(queueRepairTask?.runType, "queue_repair");
 
     db.upsertIssue({
       projectId: "usertold",
@@ -835,9 +831,8 @@ test("cli list and retry cover operator control flows", async () => {
     const reviewFixIssue = db.getIssue("usertold", "issue-review-fix");
     assert.equal(reviewFixIssue?.factoryState, "changes_requested");
     assert.equal(reviewFixIssue?.reviewFixAttempts, 0);
-    const reviewFixWake = db.issueSessions.peekIssueSessionWake("usertold", "issue-review-fix");
-    assert.equal(reviewFixIssue?.pendingRunType, undefined);
-    assert.equal(reviewFixWake?.runType, "review_fix");
+    const reviewFixTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-review-fix");
+    assert.equal(reviewFixTask?.runType, "review_fix");
 
     const inspectJson = createBufferStream();
     assert.equal(await runCli(["issue", "show", "USE-54", "--json"], { config, data, stdout: inspectJson.stream, stderr: createBufferStream().stream }), 0);
@@ -1128,7 +1123,6 @@ test("cli close force-terminates a stuck issue and releases its active run", asy
       issueKey: "USE-CLOSE-CLI",
       title: "CLI close",
       factoryState: "implementing",
-      pendingRunType: "implementation",
     });
     const run = db.runs.createRun({
       issueId: issue.id,

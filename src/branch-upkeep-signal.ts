@@ -11,7 +11,7 @@ export interface BranchUpkeepObservationInput {
   childPrNumber?: number | undefined;
   /**
    * SHA that scopes the dedupe key. Stack-coordination dedupes on the parent
-   * head (one wake per parent advance); the review-fix-dirty / interrupted-retry
+   * head (one workflow signal per parent advance); the review-fix-dirty / interrupted-retry
    * paths dedupe on the child's own head. Defaults to `childHeadSha`.
    */
   dedupeSha?: string | undefined;
@@ -20,9 +20,8 @@ export interface BranchUpkeepObservationInput {
 /**
  * Append the durable `github.parent_head_moved` observation that
  * `deriveWorkflowTasks` turns into a `run:branch_upkeep` task (S2). Shared by
- * every writer that used to drive branch upkeep through the legacy
- * `pending_run_type` column / session events so the observation → task path is
- * the single source of the upkeep run. Deduped by the child + scoping SHA, so
+ * every branch-upkeep writer so the observation -> task path is the single
+ * source of the upkeep run. Deduped by the child + scoping SHA, so
  * repeated signals on the same head collapse and a new child head self-closes
  * the stale one.
  */

@@ -2,23 +2,23 @@ import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
-import type { WakeDispatcher } from "./wake-dispatcher.ts";
+import type { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
 import { appendBranchUpkeepObservation } from "./branch-upkeep-signal.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
 // Plan §8.3-8.4: when a parent PR's head moves (review-fix push,
 // eviction repair, base-branch update), child PRs stacked on it
-// become stale. Patchrelay treats this as a wake event for each
+// become stale. Patchrelay treats this as a workflow signal for each
 // matching child and enqueues a `branch_upkeep` run to rebase the
 // child onto the new parent head.
-export function maybeFanChildRebaseWakes(params: {
+export function maybeFanChildRebaseDispatches(params: {
   db: PatchRelayDatabase;
   logger: Logger;
   feed?: OperatorEventFeed;
-  wakeDispatcher: WakeDispatcher;
+  workflowTaskDispatcher: WorkflowTaskDispatcher;
   event: NormalizedGitHubEvent;
 }): void {
-  const { db, logger, feed, wakeDispatcher, event } = params;
+  const { db, logger, feed, workflowTaskDispatcher, event } = params;
   if (event.triggerEvent !== "pr_synchronize") return;
   if (!event.branchName) return;
 
@@ -31,14 +31,13 @@ export function maybeFanChildRebaseWakes(params: {
       // reconcile cycle pick up the new parent state.
       logger.debug(
         { parentBranch: event.branchName, childIssue: child.issueKey, childRunId: child.activeRunId },
-        "Skipping child-rebase wake — child has an active run",
+        "Skipping child-rebase dispatch because child has an active run",
       );
       continue;
     }
-    // S6: append the durable signal the v2 workflow-task path derives
+    // Append the durable signal the workflow-task path derives
     // `run:branch_upkeep` from and reconcile a runnable workflow task. The
-    // legacy `pending_run_type` column write is gone — the `workflow_task`
-    // dispatch rung is now the only source. Repeated syncs on the same parent
+    // `workflow_task` dispatch path is the only source. Repeated syncs on the same parent
     // head dedupe (keyed on the parent head); a new child head self-closes the
     // stale one.
     appendBranchUpkeepObservation(db, child, {
@@ -51,9 +50,9 @@ export function maybeFanChildRebaseWakes(params: {
     const refreshedChild = db.issues.getIssue(child.projectId, child.linearIssueId) ?? child;
     reconcileWorkflowTasksForIssue(db, refreshedChild);
     // The observation append is not an in-memory enqueue, so we still need an
-    // explicit dispatch call. dispatchIfWakePending resolves the runnable
+    // explicit dispatch call. dispatchIfWorkflowTaskPending resolves the runnable
     // workflow task materialized by the reconcile above.
-    wakeDispatcher.dispatchIfWakePending(child.projectId, child.linearIssueId);
+    workflowTaskDispatcher.dispatchIfWorkflowTaskPending(child.projectId, child.linearIssueId);
     logger.info(
       {
         parentBranch: event.branchName,

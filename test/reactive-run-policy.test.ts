@@ -438,7 +438,7 @@ test("verifyReviewFixAdvancedHead fails closed when no blocking or starting head
   }
 });
 
-test("resolveRequestedChangesWakeContext refreshes GitHub review context even when cached context exists", async () => {
+test("resolveRequestedChangesWorkflowContext refreshes GitHub review context even when cached context exists", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-review-context-refresh-"));
   const oldPath = process.env.PATH;
   try {
@@ -471,7 +471,7 @@ exit 1
       prReviewState: "changes_requested",
     });
 
-    const context = await policy.resolveRequestedChangesWakeContext(issue, "review_fix", {
+    const context = await policy.resolveRequestedChangesWorkflowContext(issue, "review_fix", {
       reviewBody: "stale cached review",
       reviewerName: "stale-reviewer",
     });
@@ -492,7 +492,7 @@ exit 1
   }
 });
 
-test("resolveRequestedChangesWakeContext marks review context degraded when GitHub review fetch fails", async () => {
+test("resolveRequestedChangesWorkflowContext marks review context degraded when GitHub review fetch fails", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-review-context-degraded-"));
   const oldPath = process.env.PATH;
   try {
@@ -519,7 +519,7 @@ exit 1
       prReviewState: "changes_requested",
     });
 
-    const context = await policy.resolveRequestedChangesWakeContext(issue, "review_fix", {
+    const context = await policy.resolveRequestedChangesWorkflowContext(issue, "review_fix", {
       reviewBody: "cached review that might be stale",
     });
 

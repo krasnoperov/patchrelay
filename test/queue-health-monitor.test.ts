@@ -156,7 +156,6 @@ test("reconcileQueueHealth skips issues within the grace period", { concurrency:
 
     const issue = harness.db.getIssue("proj", "issue-1");
     assert.equal(issue?.factoryState, "awaiting_queue");
-    assert.equal(issue?.pendingRunType, undefined);
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });
@@ -209,7 +208,6 @@ exit 1`;
 
     const issue = harness.db.getIssue("proj", "issue-1");
     assert.equal(issue?.factoryState, "awaiting_queue");
-    assert.equal(issue?.pendingRunType, undefined);
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });
@@ -236,10 +234,9 @@ exit 1`;
 
     const issue = harness.db.getIssue("proj", "issue-1");
     assert.equal(issue?.factoryState, "repairing_queue");
-    assert.equal(issue?.pendingRunType, undefined);
-    const wake = harness.db.issueSessions.peekIssueSessionWake("proj", "issue-1");
-    assert.equal(wake?.runType, "queue_repair");
-    const ctx = wake?.context ?? {};
+    const workflowTask = harness.db.issueSessions.peekPendingSessionInputPlanForDiagnostics("proj", "issue-1");
+    assert.equal(workflowTask?.runType, "queue_repair");
+    const ctx = workflowTask?.context ?? {};
     assert.equal(ctx.source, "queue_health_monitor");
     assert.equal(ctx.failureReason, "preemptive_conflict");
     assert.equal(ctx.failureHeadSha, "deadbeef");
@@ -270,8 +267,7 @@ exit 1`;
 
     const issue = harness.db.getIssue("proj", "issue-1");
     assert.equal(issue?.factoryState, "repairing_queue");
-    assert.equal(issue?.pendingRunType, undefined);
-    assert.equal(harness.db.issueSessions.peekIssueSessionWake("proj", "issue-1")?.runType, "queue_repair");
+    assert.equal(harness.db.issueSessions.peekPendingSessionInputPlanForDiagnostics("proj", "issue-1")?.runType, "queue_repair");
     assert.deepEqual(harness.enqueueCalls, [{ projectId: "proj", issueId: "issue-1" }]);
   } finally {
     process.env.PATH = oldPath;
@@ -299,7 +295,6 @@ exit 1`;
 
     const issue = harness.db.getIssue("proj", "issue-1");
     assert.equal(issue?.factoryState, "awaiting_queue");
-    assert.equal(issue?.pendingRunType, undefined);
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });
@@ -333,12 +328,12 @@ exit 1`;
 
     const issue = harness.db.getIssue("proj", "issue-1");
     assert.equal(issue?.factoryState, "repairing_queue");
-    const wake = harness.db.issueSessions.peekIssueSessionWake("proj", "issue-1");
-    assert.equal(wake?.runType, "queue_repair");
-    assert.equal(wake?.context.failureReason, "queue_eviction_missed");
-    assert.equal(wake?.context.failureSignature, "same_head_queue_eviction:evictedhead");
-    assert.equal(wake?.context.requiresFreshHead, true);
-    assert.match(String(wake?.context.promptContext), /will not re-admit the same evicted head SHA/);
+    const workflowTask = harness.db.issueSessions.peekPendingSessionInputPlanForDiagnostics("proj", "issue-1");
+    assert.equal(workflowTask?.runType, "queue_repair");
+    assert.equal(workflowTask?.context.failureReason, "queue_eviction_missed");
+    assert.equal(workflowTask?.context.failureSignature, "same_head_queue_eviction:evictedhead");
+    assert.equal(workflowTask?.context.requiresFreshHead, true);
+    assert.match(String(workflowTask?.context.promptContext), /will not re-admit the same evicted head SHA/);
     assert.deepEqual(harness.enqueueCalls, [{ projectId: "proj", issueId: "issue-1" }]);
   } finally {
     process.env.PATH = oldPath;
@@ -366,8 +361,7 @@ exit 1`;
     await harness.reconcileQueueHealth();
     const after1 = harness.db.getIssue("proj", "issue-1");
     assert.equal(after1?.factoryState, "repairing_queue");
-    assert.equal(after1?.pendingRunType, undefined);
-    assert.equal(harness.db.issueSessions.peekIssueSessionWake("proj", "issue-1")?.runType, "queue_repair");
+    assert.equal(harness.db.issueSessions.peekPendingSessionInputPlanForDiagnostics("proj", "issue-1")?.runType, "queue_repair");
 
     // Reset state to awaiting_queue to simulate the issue coming back
     // (e.g. repair completed but conflict remains with same head)
@@ -375,8 +369,6 @@ exit 1`;
       projectId: "proj",
       linearIssueId: "issue-1",
       factoryState: "awaiting_queue",
-      pendingRunType: null,
-      pendingRunContextJson: null,
       activeRunId: null,
     });
     harness.db.issueSessions.consumeIssueSessionEvents("proj", "issue-1", harness.db.issueSessions.listIssueSessionEvents("proj", "issue-1", { pendingOnly: true }).map((event) => event.id), 999);
@@ -391,7 +383,6 @@ exit 1`;
     await harness.reconcileQueueHealth();
     const after2 = harness.db.getIssue("proj", "issue-1");
     assert.equal(after2?.factoryState, "awaiting_queue");
-    assert.equal(after2?.pendingRunType, undefined);
     assert.deepEqual(harness.enqueueCalls, []);
   } finally {
     process.env.PATH = oldPath;
@@ -465,7 +456,6 @@ test("reconcileQueueHealth does not transition state on probe failure", { concur
 
     const issue = harness.db.getIssue("proj", "issue-1");
     assert.equal(issue?.factoryState, "awaiting_queue");
-    assert.equal(issue?.pendingRunType, undefined);
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });

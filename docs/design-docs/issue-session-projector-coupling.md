@@ -14,9 +14,9 @@ it resists a simple extraction — the constraints below are the reason.
 
 ## What exists
 
-`PatchRelayDatabase` injects an anonymous `syncIssueSessionFromIssue` closure
-into both stores at construction (`src/db.ts:51-67`). The closure runs on six
-write paths:
+`PatchRelayDatabase` injects an anonymous `projectIssueSessionReadModel`
+closure into both stores at construction (`src/db.ts`). The closure runs on
+six write paths:
 
 | Store | Method | Site |
 |-|-|-|
@@ -32,10 +32,10 @@ invocation it:
 
 - reads from three stores — `issueSessions.getIssueSession`,
   `runs.getLatestRunForIssue`, `issues.listIssueDependencies`,
-  `issueSessions.peekIssueSessionWake`, `issueSessions.listIssueSessionEvents`;
+  `workflowTasks.listOpenRunnableTasks`, `issueSessions.listIssueSessionEvents`;
 - calls the read-model builder `buildTrackedIssueRecord`
   (`src/tracked-issue-projector.ts`);
-- derives `sessionState`, `waitingReason`, `summaryText`, `lastWakeReason`,
+- derives `sessionState`, `waitingReason`, `summaryText`, `lastWorkflowReason`,
   `threadGeneration`;
 - writes the `issue_sessions` row (INSERT or UPDATE).
 

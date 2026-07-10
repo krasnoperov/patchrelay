@@ -1,41 +1,37 @@
 import type { IssueRecord, RunRecord, TrackedIssueRecord } from "./db-types.ts";
 import type { FactoryState } from "./factory-state.ts";
 import { buildTrackedIssueRecord } from "./tracked-issue-projector.ts";
-import { deriveIssueSessionState, isIssueSessionReadyForExecution } from "./issue-session.ts";
 import type { IssueStore } from "./db/issue-store.ts";
 import type { IssueSessionStore } from "./db/issue-session-store.ts";
 import type { RunStore } from "./db/run-store.ts";
 import { resolveEffectiveActiveRun } from "./effective-active-run.ts";
+import { deriveIssueExecutionStateFromRecords, isIssueExecutionReadyForExecution } from "./issue-execution-state.ts";
+import type { RunType } from "./run-type.ts";
 
 export class TrackedIssueQuery {
   constructor(
     private readonly issues: IssueStore,
     private readonly issueSessions: IssueSessionStore,
-    private readonly pendingWake: { hasPendingWake(projectId: string, linearIssueId: string): boolean },
+    private readonly pendingWorkflowTask: { peekRunnableWorkflowTaskRunType(projectId: string, linearIssueId: string): RunType | undefined },
     private readonly runs: RunStore,
   ) {}
 
   listIssuesReadyForExecution(): Array<{ projectId: string; linearIssueId: string }> {
     return this.issues.listIssues()
-      .filter((issue) => isIssueSessionReadyForExecution({
-        factoryState: issue.factoryState,
-        sessionState: deriveIssueSessionState({
-          activeRunId: issue.activeRunId,
-          ...(issue.prState !== undefined ? { prState: issue.prState } : {}),
-          compatibilityFactoryState: issue.factoryState,
-        }),
-        currentLinearState: issue.currentLinearState,
-        currentLinearStateType: issue.currentLinearStateType,
-        activeRunId: issue.activeRunId,
-        blockedByCount: this.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId),
-        hasPendingWake: this.pendingWake.hasPendingWake(issue.projectId, issue.linearIssueId),
-        hasLegacyPendingRun: issue.pendingRunType !== undefined,
-        prNumber: issue.prNumber,
-        prState: issue.prState,
-        prReviewState: issue.prReviewState,
-        prCheckStatus: issue.prCheckStatus,
-        latestFailureSource: issue.lastGitHubFailureSource,
-      }))
+      .filter((issue) => {
+        const latestRun = this.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+        const activeRun = issue.activeRunId !== undefined ? this.runs.getRunById(issue.activeRunId) : undefined;
+        const runnableTaskRunType = this.pendingWorkflowTask.peekRunnableWorkflowTaskRunType(issue.projectId, issue.linearIssueId);
+        return isIssueExecutionReadyForExecution(deriveIssueExecutionStateFromRecords(issue, {
+          ...(activeRun ? { activeRun } : {}),
+          ...(latestRun ? { latestRun } : {}),
+          blockedByKeys: this.issues.listIssueDependencies(issue.projectId, issue.linearIssueId)
+            .filter((entry) => entry.blockerCurrentLinearStateType !== "completed"
+              && entry.blockerCurrentLinearState?.trim().toLowerCase() !== "done")
+            .map((entry) => entry.blockerIssueKey ?? entry.blockerLinearIssueId),
+          ...(runnableTaskRunType ? { runnableTaskRunType } : {}),
+        }));
+      })
       .map((issue) => ({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
@@ -43,11 +39,12 @@ export class TrackedIssueQuery {
   }
 
   issueToTrackedIssue(issue: IssueRecord): TrackedIssueRecord {
+    const runnableTaskRunType = this.pendingWorkflowTask.peekRunnableWorkflowTaskRunType(issue.projectId, issue.linearIssueId);
     return buildTrackedIssueRecord({
       issue,
       session: this.issueSessions.getIssueSession(issue.projectId, issue.linearIssueId),
       blockedBy: this.issues.listIssueDependencies(issue.projectId, issue.linearIssueId),
-      hasPendingWake: this.pendingWake.hasPendingWake(issue.projectId, issue.linearIssueId),
+      ...(runnableTaskRunType ? { runnableTaskRunType } : {}),
       latestRun: this.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId),
       latestEvent: this.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 1 }).at(-1),
     });

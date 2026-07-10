@@ -1,4 +1,5 @@
 import type { FactoryState } from "./factory-state.ts";
+import { deriveIssueTerminalOutcome } from "./issue-execution-state.ts";
 
 export interface PrDisplayIssueLike {
   prNumber?: number | undefined;
@@ -15,10 +16,6 @@ export type PrDisplayContext =
   | { kind: "closed_replacement_pending"; prNumber: number }
   | { kind: "closed_pr_paused"; prNumber: number };
 
-function isTerminalFactoryState(factoryState: FactoryState | string | undefined): boolean {
-  return factoryState === "done" || factoryState === "failed" || factoryState === "escalated";
-}
-
 export function derivePrDisplayContext(issue: PrDisplayIssueLike): PrDisplayContext {
   if (issue.prNumber === undefined) {
     return { kind: "no_pr" };
@@ -29,7 +26,7 @@ export function derivePrDisplayContext(issue: PrDisplayIssueLike): PrDisplayCont
   }
 
   if (issue.prState === "closed") {
-    if (isTerminalFactoryState(issue.factoryState)) {
+    if (deriveIssueTerminalOutcome(issue) !== undefined) {
       return { kind: "closed_historical_pr", prNumber: issue.prNumber };
     }
     if (issue.delegatedToPatchRelay === false) {

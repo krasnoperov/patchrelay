@@ -1,5 +1,5 @@
 import type { PatchRelayDatabase } from "../db.ts";
-import { TERMINAL_STATES } from "../factory-state.ts";
+import { isIssueTerminalProjection } from "../issue-execution-state.ts";
 import type { OperatorEventFeed } from "../operator-feed.ts";
 import type { IssueMetadata, TrackedIssueRecord } from "../types.ts";
 
@@ -29,7 +29,6 @@ export class IssueRemovalHandler {
           projectId: params.projectId,
           linearIssueId: params.issue.id,
           activeRunId: null,
-          pendingRunType: null,
           factoryState: "failed" as never,
         };
         const commit = this.db.issueSessions.commitIssueState({
@@ -44,11 +43,10 @@ export class IssueRemovalHandler {
         }
         return;
       }
-      if (removedIssue && !TERMINAL_STATES.has(removedIssue.factoryState)) {
+      if (removedIssue && !isIssueTerminalProjection(removedIssue)) {
         const update = {
           projectId: params.projectId,
           linearIssueId: params.issue.id,
-          pendingRunType: null,
           factoryState: "failed" as never,
         };
         this.db.issueSessions.commitIssueState({
@@ -56,7 +54,7 @@ export class IssueRemovalHandler {
           expectedVersion: removedIssue.version,
           ...(activeLease ? { lease: activeLease } : {}),
           update,
-          onConflict: (current) => (TERMINAL_STATES.has(current.factoryState) ? undefined : update),
+          onConflict: (current) => (isIssueTerminalProjection(current) ? undefined : update),
         });
       }
     };

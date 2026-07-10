@@ -19,13 +19,13 @@ test("telemetry fanout keeps workflow-safe delivery when one sink throws", () =>
   const telemetry = new FanoutPatchRelayTelemetry([throwing, memory]);
 
   assert.doesNotThrow(() => telemetry.emit({
-    type: "wake.suppressed",
+    type: "dispatch.suppressed",
     projectId: "proj",
     linearIssueId: "issue-1",
     reason: "blocked",
     blockerCount: 1,
   }));
-  assert.equal(memory.list("wake.suppressed").length, 1);
+  assert.equal(memory.list("dispatch.suppressed").length, 1);
 });
 
 test("operator feed telemetry sink publishes only curated human-facing events", () => {

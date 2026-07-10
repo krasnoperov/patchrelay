@@ -397,16 +397,22 @@ test("syncActiveWorkflowState moves blocked delegated no-PR work back to the que
       currentLinearState: "In Progress",
       currentLinearStateType: "started",
     });
+    db.replaceIssueDependencies({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      blockers: [{
+        blockerLinearIssueId: "issue-blocker",
+        blockerIssueKey: "USE-BLOCKER",
+        blockerTitle: "Blocking work",
+        blockerCurrentLinearState: "In Progress",
+        blockerCurrentLinearStateType: "started",
+      }],
+    });
 
     let requestedState: string | undefined;
     await syncActiveWorkflowState({
       db,
       issue,
-      trackedIssue: {
-        sessionState: "idle",
-        blockedByCount: 2,
-        readyForExecution: false,
-      } as never,
       linear: {
         getIssue: async () => ({
           id: issue.linearIssueId,

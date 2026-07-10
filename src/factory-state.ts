@@ -3,7 +3,11 @@ import type { GitHubTriggerEvent } from "./github-types.ts";
 export type { RunType } from "./run-type.ts";
 
 /**
- * Factory state machine — the single source of truth for issue lifecycle.
+ * Compatibility/display lifecycle projected onto the issue row.
+ *
+ * Workflow decisions should derive from observations, snapshots, workflow
+ * tasks, active runs, and external facts. This value remains the compact
+ * operator-facing stage label and compatibility field for older surfaces.
  */
 export type FactoryState =
   | "delegated"
@@ -20,7 +24,7 @@ export type FactoryState =
   | "failed";
 
 /**
- * Canonical value set for {@link FactoryState}. Used for read-side validation
+ * Canonical value set for {@link FactoryState}. Used for read-model validation
  * (row mappers throw on unknown values instead of lying via cast) — keep in
  * sync with the union above; `satisfies` rejects values outside the union.
  */
@@ -45,7 +49,7 @@ export function isFactoryState(value: string): value is FactoryState {
   return FACTORY_STATES.has(value as FactoryState);
 }
 
-/** Which factory states involve an active Codex run. */
+/** Which display states conventionally involve an active Codex run. */
 export const ACTIVE_RUN_STATES: ReadonlySet<FactoryState> = new Set([
   "implementing",
   "repairing_ci",
@@ -53,26 +57,12 @@ export const ACTIVE_RUN_STATES: ReadonlySet<FactoryState> = new Set([
   "repairing_queue",
 ]);
 
-/** Which factory states are terminal (no further transitions possible except pr_merged → done). */
+/** Which display states are terminal (no further transitions possible except pr_merged -> done). */
 export const TERMINAL_STATES: ReadonlySet<FactoryState> = new Set([
   "done",
   "escalated",
   "failed",
   "awaiting_input",
-]);
-
-// States where implementation/repair work is already in flight or queued
-// (i.e. NOT a fresh "delegated but nothing started" issue). Used to avoid
-// telling the operator "no work is queued" when the issue is actively being
-// worked — e.g. an agentSessionCreated webhook racing a session change.
-export const IN_PROGRESS_STATES: ReadonlySet<FactoryState> = new Set([
-  "implementing",
-  "pr_open",
-  "changes_requested",
-  "repairing_ci",
-  "awaiting_queue",
-  "repairing_queue",
-  "deploying",
 ]);
 
 // ─── Semantic guards ─────────────────────────────────────────────

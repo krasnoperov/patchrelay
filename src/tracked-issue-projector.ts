@@ -7,10 +7,11 @@ import type {
   TrackedIssueRecord,
 } from "./db-types.ts";
 import { parseGitHubFailureContext } from "./github-failure-context.ts";
-import { isIssueSessionReadyForExecution } from "./issue-session.ts";
+import { deriveIssueExecutionStateFromRecords, isIssueExecutionReadyForExecution } from "./issue-execution-state.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
 import { hasDetachedActiveLatestRun, resolveEffectiveActiveRun } from "./effective-active-run.ts";
+import type { RunType } from "./run-type.ts";
 
 export function isResolvedLinearState(stateType: string | undefined, stateName: string | undefined): boolean {
   return stateType === "completed" || stateName?.trim().toLowerCase() === "done";
@@ -20,7 +21,7 @@ export function buildTrackedIssueRecord(params: {
   issue: IssueRecord;
   session?: IssueSessionRecord | undefined;
   blockedBy: IssueDependencyRecord[];
-  hasPendingWake: boolean;
+  runnableTaskRunType?: RunType | undefined;
   latestRun?: RunRecord | undefined;
   latestEvent?: IssueSessionEventRecord | undefined;
 }): TrackedIssueRecord {
@@ -45,7 +46,7 @@ export function buildTrackedIssueRecord(params: {
     ...(effectiveActiveRun ? { activeRunId: effectiveActiveRun.id } : {}),
     blockedByKeys,
     factoryState: params.issue.factoryState,
-    pendingRunType: params.issue.pendingRunType,
+    ...(params.runnableTaskRunType ? { runnableTaskRunType: params.runnableTaskRunType } : {}),
     orchestrationSettleUntil: params.issue.orchestrationSettleUntil,
     prNumber: params.issue.prNumber,
     prState: params.issue.prState,
@@ -89,25 +90,12 @@ export function buildTrackedIssueRecord(params: {
     ...(params.issue.prCheckStatus ? { prCheckStatus: params.issue.prCheckStatus } : {}),
     blockedByCount: unresolvedBlockedBy.length,
     blockedByKeys,
-    readyForExecution: isIssueSessionReadyForExecution({
-      sessionState: params.session?.sessionState,
-      factoryState: params.issue.factoryState,
-      currentLinearState: params.issue.currentLinearState,
-      currentLinearStateType: params.issue.currentLinearStateType,
-      delegatedToPatchRelay: params.issue.delegatedToPatchRelay,
-      ...(effectiveActiveRun ? { activeRunId: effectiveActiveRun.id } : {}),
-      blockedByCount: unresolvedBlockedBy.length,
-      hasPendingWake: params.hasPendingWake,
-      hasLegacyPendingRun: params.issue.pendingRunType !== undefined,
-      orchestrationSettleUntil: params.issue.orchestrationSettleUntil,
-      ...(params.issue.prNumber !== undefined ? { prNumber: params.issue.prNumber } : {}),
-      ...(params.issue.prState ? { prState: params.issue.prState } : {}),
-      ...(params.issue.prHeadSha ? { prHeadSha: params.issue.prHeadSha } : {}),
-      ...(params.issue.prReviewState ? { prReviewState: params.issue.prReviewState } : {}),
-      ...(params.issue.prCheckStatus ? { prCheckStatus: params.issue.prCheckStatus } : {}),
-      ...(params.issue.lastBlockingReviewHeadSha ? { lastBlockingReviewHeadSha: params.issue.lastBlockingReviewHeadSha } : {}),
-      ...(params.issue.lastGitHubFailureSource ? { latestFailureSource: params.issue.lastGitHubFailureSource } : {}),
-    }),
+    readyForExecution: isIssueExecutionReadyForExecution(deriveIssueExecutionStateFromRecords(params.issue, {
+      ...(effectiveActiveRun ? { activeRun: effectiveActiveRun } : {}),
+      ...(params.latestRun ? { latestRun: params.latestRun } : {}),
+      blockedByKeys,
+      ...(params.runnableTaskRunType ? { runnableTaskRunType: params.runnableTaskRunType } : {}),
+    })),
     ...(params.issue.lastGitHubFailureSource ? { latestFailureSource: params.issue.lastGitHubFailureSource } : {}),
     ...(params.issue.lastGitHubFailureHeadSha ? { latestFailureHeadSha: params.issue.lastGitHubFailureHeadSha } : {}),
     ...(params.issue.lastGitHubFailureCheckName ? { latestFailureCheckName: params.issue.lastGitHubFailureCheckName } : {}),

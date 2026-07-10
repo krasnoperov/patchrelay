@@ -1,23 +1,22 @@
-import type { FactoryState, RunType } from "./factory-state.ts";
+import type { FactoryState } from "./factory-state.ts";
 import type { ProjectConfig } from "./types.ts";
 import type { RemotePrState } from "./remote-pr-state.ts";
-import type { RunContext } from "./run-context.ts";
 import { deriveGateCheckStatusFromRollup } from "./github-rollup.ts";
-import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
+import { deriveReactiveWorkflowIntent } from "./reactive-workflow-intent.ts";
 import { buildClosedPrCleanupFields } from "./pr-state.ts";
 import {
   buildReviewFixBranchUpkeepContext,
   normalizeRemotePrState,
   normalizeRemoteReviewDecision,
 } from "./reactive-pr-state.ts";
+import { workflowRunIntent, type WorkflowRunIntent } from "./workflow-intent.ts";
 
 export interface LinkedPrAdoptionOutcome {
   factoryState: FactoryState;
-  pendingRunType: RunType | null;
-  pendingRunContext?: RunContext;
+  workflowIntent?: WorkflowRunIntent | undefined;
   issueUpdates: {
     branchName?: string;
-    prNumber: number;
+    prNumber?: number;
     prUrl?: string | null;
     prState?: string | null;
     prIsDraft?: boolean | null;
@@ -73,7 +72,6 @@ export function deriveLinkedPrAdoptionOutcome(
   if (prState === "merged") {
     return {
       factoryState: "done",
-      pendingRunType: null,
       issueUpdates: {
         ...issueUpdates,
         prIsDraft: false,
@@ -84,7 +82,7 @@ export function deriveLinkedPrAdoptionOutcome(
   if (prState === "closed") {
     return {
       factoryState: "delegated",
-      pendingRunType: "implementation",
+      workflowIntent: workflowRunIntent("implementation"),
       issueUpdates: {
         ...issueUpdates,
         prIsDraft: false,
@@ -96,7 +94,6 @@ export function deriveLinkedPrAdoptionOutcome(
   if (remote.isCrossRepository) {
     return {
       factoryState: "awaiting_input",
-      pendingRunType: null,
       issueUpdates,
     };
   }
@@ -104,12 +101,12 @@ export function deriveLinkedPrAdoptionOutcome(
   if (remote.isDraft) {
     return {
       factoryState: "delegated",
-      pendingRunType: "implementation",
+      workflowIntent: workflowRunIntent("implementation"),
       issueUpdates,
     };
   }
 
-  const reactiveIntent = deriveIssueSessionReactiveIntent({
+  const reactiveIntent = deriveReactiveWorkflowIntent({
     delegatedToPatchRelay: true,
     prNumber,
     prState,
@@ -123,16 +120,16 @@ export function deriveLinkedPrAdoptionOutcome(
   if (reactiveIntent) {
     return {
       factoryState: reactiveIntent.compatibilityFactoryState,
-      pendingRunType: reactiveIntent.runType,
-      ...(reactiveIntent.runType === "branch_upkeep"
-        ? {
-            pendingRunContext: buildReviewFixBranchUpkeepContext(
+      workflowIntent: workflowRunIntent(
+        reactiveIntent.runType,
+        reactiveIntent.runType === "branch_upkeep"
+          ? buildReviewFixBranchUpkeepContext(
               prNumber,
               project.github?.baseBranch ?? "main",
               remote,
-            ),
-          }
-        : {}),
+            )
+          : undefined,
+      ),
       issueUpdates,
     };
   }
@@ -140,14 +137,12 @@ export function deriveLinkedPrAdoptionOutcome(
   if (reviewState === "approved") {
     return {
       factoryState: "awaiting_queue",
-      pendingRunType: null,
       issueUpdates,
     };
   }
 
   return {
     factoryState: "pr_open",
-    pendingRunType: null,
     issueUpdates,
   };
 }

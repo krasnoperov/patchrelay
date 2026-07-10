@@ -1,4 +1,4 @@
-import type { DatabaseConnection } from "./shared.ts";
+import { isoNow, type DatabaseConnection } from "./shared.ts";
 
 const schema = `
 CREATE TABLE IF NOT EXISTS issues (
@@ -18,8 +18,6 @@ CREATE TABLE IF NOT EXISTS issues (
   current_linear_state TEXT,
   current_linear_state_type TEXT,
   factory_state TEXT NOT NULL DEFAULT 'delegated',
-  pending_run_type TEXT,
-  pending_run_context_json TEXT,
   branch_name TEXT,
   worktree_path TEXT,
   thread_id TEXT,
@@ -91,7 +89,7 @@ CREATE TABLE IF NOT EXISTS issue_sessions (
   thread_generation INTEGER NOT NULL DEFAULT 0,
   active_run_id INTEGER,
   last_run_type TEXT,
-  last_wake_reason TEXT,
+  last_workflow_reason TEXT,
   ci_repair_attempts INTEGER NOT NULL DEFAULT 0,
   queue_repair_attempts INTEGER NOT NULL DEFAULT 0,
   review_fix_attempts INTEGER NOT NULL DEFAULT 0,
@@ -102,6 +100,25 @@ CREATE TABLE IF NOT EXISTS issue_sessions (
   display_updated_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE(project_id, linear_issue_id)
+);
+
+CREATE TABLE IF NOT EXISTS issue_session_leases (
+  project_id TEXT NOT NULL,
+  linear_issue_id TEXT NOT NULL,
+  lease_id TEXT NOT NULL,
+  worker_id TEXT NOT NULL,
+  leased_until TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(project_id, linear_issue_id)
+);
+
+CREATE TABLE IF NOT EXISTS issue_session_threads (
+  project_id TEXT NOT NULL,
+  linear_issue_id TEXT NOT NULL,
+  active_thread_id TEXT,
+  thread_generation INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(project_id, linear_issue_id)
 );
 
 CREATE TABLE IF NOT EXISTS issue_session_events (
@@ -271,7 +288,6 @@ CREATE TABLE IF NOT EXISTS workflow_tasks (
 
 CREATE INDEX IF NOT EXISTS idx_issues_project ON issues(project_id, linear_issue_id);
 CREATE INDEX IF NOT EXISTS idx_issues_key ON issues(issue_key);
-CREATE INDEX IF NOT EXISTS idx_issues_ready ON issues(pending_run_type, active_run_id);
 CREATE INDEX IF NOT EXISTS idx_issues_branch ON issues(branch_name);
 -- getIssueByPrNumber() runs on the GitHub webhook hot path; without this it
 -- full-scanned the issues table for every inbound PR/review/comment event.
@@ -289,7 +305,7 @@ CREATE INDEX IF NOT EXISTS idx_runs_thread ON runs(thread_id);
 CREATE INDEX IF NOT EXISTS idx_runs_issue_latest ON runs(project_id, linear_issue_id, id);
 CREATE INDEX IF NOT EXISTS idx_issue_sessions_issue ON issue_sessions(project_id, linear_issue_id);
 CREATE INDEX IF NOT EXISTS idx_issue_sessions_key ON issue_sessions(issue_key);
-CREATE INDEX IF NOT EXISTS idx_issue_sessions_lease ON issue_sessions(leased_until, session_state);
+CREATE INDEX IF NOT EXISTS idx_issue_session_leases_until ON issue_session_leases(leased_until);
 CREATE INDEX IF NOT EXISTS idx_issue_session_events_issue ON issue_session_events(project_id, linear_issue_id, id);
 CREATE INDEX IF NOT EXISTS idx_issue_session_events_pending ON issue_session_events(processed_at, project_id, linear_issue_id, id);
 CREATE INDEX IF NOT EXISTS idx_webhook_events_retention ON webhook_events(processing_status, received_at, id);
@@ -314,6 +330,8 @@ CREATE INDEX IF NOT EXISTS idx_workflow_tasks_open ON workflow_tasks(status, pro
 
 export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   connection.exec(schema);
+  connection.prepare("DROP INDEX IF EXISTS idx_issue_sessions_lease").run();
+  connection.prepare("DROP INDEX IF EXISTS idx_issues_ready").run();
 
   // Clean up stale dedupe-only webhook records (no payload, never processable)
   connection.prepare(
@@ -350,10 +368,65 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   // Preserve the PR head SHA seen when a run started so PatchRelay can
   // verify that requested-changes work actually published a new head.
   addColumnIfMissing(connection, "issue_sessions", "display_updated_at", "TEXT");
+  addColumnIfMissing(connection, "issue_sessions", "last_workflow_reason", "TEXT");
+  if (columnExists(connection, "issue_sessions", "last_wake_reason")) {
+    connection.prepare(`
+      UPDATE issue_sessions
+      SET last_workflow_reason = COALESCE(last_workflow_reason, last_wake_reason)
+      WHERE last_workflow_reason IS NULL
+    `).run();
+  }
   connection.prepare(`
     UPDATE issue_sessions
     SET display_updated_at = COALESCE(display_updated_at, updated_at, created_at)
     WHERE display_updated_at IS NULL
+  `).run();
+  connection.prepare(`
+    INSERT INTO issue_session_leases (
+      project_id,
+      linear_issue_id,
+      lease_id,
+      worker_id,
+      leased_until,
+      updated_at
+    )
+    SELECT
+      project_id,
+      linear_issue_id,
+      lease_id,
+      COALESCE(worker_id, 'unknown'),
+      leased_until,
+      COALESCE(updated_at, created_at)
+    FROM issue_sessions
+    WHERE lease_id IS NOT NULL
+      AND leased_until IS NOT NULL
+    ON CONFLICT(project_id, linear_issue_id) DO UPDATE SET
+      lease_id = excluded.lease_id,
+      worker_id = excluded.worker_id,
+      leased_until = excluded.leased_until,
+      updated_at = excluded.updated_at
+  `).run();
+  connection.prepare(`
+    INSERT INTO issue_session_threads (
+      project_id,
+      linear_issue_id,
+      active_thread_id,
+      thread_generation,
+      updated_at
+    )
+    SELECT
+      project_id,
+      linear_issue_id,
+      active_thread_id,
+      COALESCE(thread_generation, 0),
+      COALESCE(updated_at, created_at)
+    FROM issue_sessions
+    WHERE active_thread_id IS NOT NULL
+       OR COALESCE(thread_generation, 0) > 0
+    ON CONFLICT(project_id, linear_issue_id) DO UPDATE SET
+      active_thread_id = excluded.active_thread_id,
+      thread_generation = excluded.thread_generation,
+      updated_at = excluded.updated_at
   `).run();
   addColumnIfMissing(connection, "runs", "source_head_sha", "TEXT");
   addColumnIfMissing(connection, "runs", "launch_phase", "TEXT");
@@ -433,6 +506,7 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   addColumnIfMissing(connection, "linear_installations", "health_reason", "TEXT");
   addColumnIfMissing(connection, "linear_installations", "health_updated_at", "TEXT");
 
+  backfillLegacyPendingRunWorkflowTasks(connection);
   removeRetiredIssueColumnsIfPresent(connection);
   addColumnIfMissing(connection, "issues", "issue_triage_hash", "TEXT");
   addColumnIfMissing(connection, "issues", "issue_triage_result_json", "TEXT");
@@ -460,10 +534,122 @@ function addColumnIfMissing(connection: DatabaseConnection, table: string, colum
   connection.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
+function columnExists(connection: DatabaseConnection, table: string, column: string): boolean {
+  const cols = connection.prepare(`PRAGMA table_info(${table})`).all() as Array<Record<string, unknown>>;
+  return cols.some((c) => c.name === column);
+}
+
+const LEGACY_PENDING_RUN_TYPES = new Set(["implementation", "ci_repair", "review_fix", "branch_upkeep", "queue_repair"]);
+
+function parseObjectJson(raw: unknown): Record<string, unknown> {
+  if (typeof raw !== "string" || !raw.trim()) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function backfillLegacyPendingRunWorkflowTasks(connection: DatabaseConnection): void {
+  if (!columnExists(connection, "issues", "pending_run_type")) return;
+  const rows = connection.prepare(`
+    SELECT
+      project_id,
+      linear_issue_id,
+      pending_run_type,
+      pending_run_context_json,
+      pr_number,
+      pr_head_sha,
+      updated_at
+    FROM issues
+    WHERE pending_run_type IS NOT NULL
+  `).all() as Array<Record<string, unknown>>;
+  if (rows.length === 0) return;
+
+  const insertTask = connection.prepare(`
+    INSERT INTO workflow_tasks (
+      project_id, subject_id, task_id, task_type, run_type, status, reason,
+      requirements_json, authority_epoch, gate_action, gate_reason,
+      created_at, updated_at, closed_at
+    ) VALUES (
+      @projectId, @subjectId, @taskId, 'run', @runType, 'open', 'Legacy pending run migrated to workflow task',
+      @requirementsJson, 0, 'start', 'legacy_pending_run_migration',
+      @createdAt, @updatedAt, NULL
+    )
+    ON CONFLICT(project_id, subject_id, task_id) DO UPDATE SET
+      run_type = excluded.run_type,
+      status = 'open',
+      reason = excluded.reason,
+      requirements_json = excluded.requirements_json,
+      gate_action = excluded.gate_action,
+      gate_reason = excluded.gate_reason,
+      updated_at = excluded.updated_at,
+      closed_at = NULL
+  `);
+  const insertBranchObservation = connection.prepare(`
+    INSERT INTO workflow_observations (
+      project_id, subject_id, source, type, payload_json, dedupe_key, observed_at
+    ) VALUES (
+      @projectId, @subjectId, 'github', 'github.parent_head_moved', @payloadJson, @dedupeKey, @observedAt
+    )
+    ON CONFLICT(project_id, subject_id, source, dedupe_key) DO NOTHING
+  `);
+
+  const now = isoNow();
+  const run = connection.transaction(() => {
+    for (const row of rows) {
+      const runType = String(row.pending_run_type ?? "");
+      if (!LEGACY_PENDING_RUN_TYPES.has(runType)) continue;
+      const context = parseObjectJson(row.pending_run_context_json);
+      const requirements = {
+        ...context,
+        source: "legacy_pending_run_migration",
+      };
+      insertTask.run({
+        projectId: String(row.project_id),
+        subjectId: String(row.linear_issue_id),
+        taskId: `run:${runType}`,
+        runType,
+        requirementsJson: JSON.stringify(requirements),
+        createdAt: typeof row.updated_at === "string" ? row.updated_at : now,
+        updatedAt: now,
+      });
+
+      if (runType === "branch_upkeep") {
+        const payload = {
+          parentBranch: typeof context.baseBranch === "string" ? context.baseBranch : "main",
+          ...(typeof context.parentHeadSha === "string" ? { parentHeadSha: context.parentHeadSha } : {}),
+          ...(typeof row.pr_number === "number" ? { childPrNumber: row.pr_number } : {}),
+          ...(typeof row.pr_head_sha === "string" ? { childHeadSha: row.pr_head_sha } : {}),
+        };
+        insertBranchObservation.run({
+          projectId: String(row.project_id),
+          subjectId: String(row.linear_issue_id),
+          payloadJson: JSON.stringify(payload),
+          dedupeKey: `branch_upkeep:${String(row.linear_issue_id)}:${typeof row.pr_head_sha === "string" ? row.pr_head_sha : "legacy-pending-run"}`,
+          observedAt: now,
+        });
+      }
+    }
+  });
+  run();
+}
+
 function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): void {
   const cols = connection.prepare("PRAGMA table_info(issues)").all() as Array<Record<string, unknown>>;
   const columnNames = new Set(cols.map((column) => String(column.name)));
-  const retired = ["queue_label_applied", "pending_merge_prep", "merge_prep_attempts", "branch_owner", "branch_ownership_changed_at"];
+  const retired = [
+    "queue_label_applied",
+    "pending_merge_prep",
+    "merge_prep_attempts",
+    "branch_owner",
+    "branch_ownership_changed_at",
+    "pending_run_type",
+    "pending_run_context_json",
+  ];
   if (!retired.some((name) => columnNames.has(name))) {
     return;
   }
@@ -491,8 +677,6 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         current_linear_state TEXT,
         current_linear_state_type TEXT,
         factory_state TEXT NOT NULL DEFAULT 'delegated',
-        pending_run_type TEXT,
-        pending_run_context_json TEXT,
         branch_name TEXT,
         worktree_path TEXT,
         thread_id TEXT,
@@ -560,8 +744,6 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         current_linear_state,
         current_linear_state_type,
         factory_state,
-        pending_run_type,
-        pending_run_context_json,
         branch_name,
         worktree_path,
         thread_id,
@@ -627,8 +809,6 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         current_linear_state,
         current_linear_state_type,
         COALESCE(factory_state, 'delegated'),
-        pending_run_type,
-        pending_run_context_json,
         branch_name,
         worktree_path,
         thread_id,
@@ -680,7 +860,6 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
 
       CREATE INDEX IF NOT EXISTS idx_issues_project ON issues(project_id, linear_issue_id);
       CREATE INDEX IF NOT EXISTS idx_issues_key ON issues(issue_key);
-      CREATE INDEX IF NOT EXISTS idx_issues_ready ON issues(pending_run_type, active_run_id);
       CREATE INDEX IF NOT EXISTS idx_issues_branch ON issues(branch_name);
       CREATE INDEX IF NOT EXISTS idx_issues_parent_pr_branch ON issues(parent_pr_branch);
     `);
