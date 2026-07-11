@@ -14,7 +14,13 @@ export async function probePatchRelayService(config: AppConfig): Promise<Service
       fetchLocalService(readyUrl),
     ]);
     const healthBody = await healthResponse.json() as { ok?: boolean; version?: string };
-    const readyBody = await readyResponse.json() as { ready?: boolean; codexStarted?: boolean; linearConnected?: boolean };
+    const readyBody = await readyResponse.json() as {
+      ready?: boolean;
+      codexStarted?: boolean;
+      linearConnected?: boolean;
+      reconcileHealthy?: boolean;
+      reconcileError?: string;
+    };
     if (healthResponse.ok && readyResponse.ok && readyBody.ready) {
       return {
         status: "pass",
@@ -23,10 +29,11 @@ export async function probePatchRelayService(config: AppConfig): Promise<Service
     }
     return {
       status: "fail",
-      message: `Reachable but not ready${readyBody.codexStarted === false || readyBody.linearConnected === false
+      message: `Reachable but not ready${readyBody.codexStarted === false || readyBody.linearConnected === false || readyBody.reconcileHealthy === false
         ? ` (${[
           readyBody.codexStarted === false ? "codex not started" : undefined,
           readyBody.linearConnected === false ? "Linear not connected" : undefined,
+          readyBody.reconcileHealthy === false ? `reconciliation failed${readyBody.reconcileError ? `: ${readyBody.reconcileError}` : ""}` : undefined,
         ].filter(Boolean).join(", ")})`
         : ""}`,
     };

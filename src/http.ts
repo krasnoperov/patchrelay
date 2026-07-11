@@ -284,11 +284,11 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
 
   if (managementRoutesEnabled) {
     app.get("/status", async (_request, reply) => {
-      const status = getCodexStatusSnapshot(config.runner.codex.bin);
+      const status = await getCodexStatusSnapshot(config.runner.codex.bin);
       return reply.code(status.ok ? 200 : 502).send(status);
     });
     app.get("/api/codex/status", async (_request, reply) => {
-      const status = getCodexStatusSnapshot(config.runner.codex.bin);
+      const status = await getCodexStatusSnapshot(config.runner.codex.bin);
       return reply.code(status.ok ? 200 : 502).send(status);
     });
 

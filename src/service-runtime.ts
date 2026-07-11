@@ -59,6 +59,9 @@ export class ServiceRuntime {
   private eventLoopMonitorExpectedAt = 0;
   private eventLoopLagMs = 0;
   private reconcileInProgress = false;
+  private reconcileHealthy = true;
+  private reconcileError: string | undefined;
+  private reconcileFailedAt: string | undefined;
 
   constructor(
     private readonly codex: CodexAppServerClient,
@@ -127,13 +130,16 @@ export class ServiceRuntime {
 
   getReadiness() {
     return {
-      ready: this.ready && this.codex.isStarted() && this.linearConnected && this.githubAppAuthHealthy,
+      ready: this.ready && this.codex.isStarted() && this.linearConnected && this.githubAppAuthHealthy && this.reconcileHealthy,
       codexStarted: this.codex.isStarted(),
       linearConnected: this.linearConnected,
       githubAppAuthHealthy: this.githubAppAuthHealthy,
       eventLoopLagMs: this.eventLoopLagMs,
+      reconcileHealthy: this.reconcileHealthy,
       ...(this.githubAppAuthError ? { githubAppAuthError: this.githubAppAuthError } : {}),
       ...(this.startupError ? { startupError: this.startupError } : {}),
+      ...(this.reconcileError ? { reconcileError: this.reconcileError } : {}),
+      ...(this.reconcileFailedAt ? { reconcileFailedAt: this.reconcileFailedAt } : {}),
     };
   }
 
@@ -188,7 +194,13 @@ export class ServiceRuntime {
       for (const issue of this.readyIssueSource.listIssuesReadyForExecution()) {
         this.enqueueIssue(issue.projectId, issue.linearIssueId);
       }
+      this.reconcileHealthy = true;
+      this.reconcileError = undefined;
+      this.reconcileFailedAt = undefined;
     } catch (error) {
+      this.reconcileHealthy = false;
+      this.reconcileError = error instanceof Error ? error.message : String(error);
+      this.reconcileFailedAt = new Date().toISOString();
       this.logger.warn(
         {
           error: error instanceof Error ? error.message : String(error),
