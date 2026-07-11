@@ -21,7 +21,7 @@ LoadCredentialEncrypted=merge-steward-webhook-secret:/etc/credstore.encrypted/me
 LoadCredentialEncrypted=merge-steward-github-app-pem:/etc/credstore.encrypted/merge-steward-github-app-pem.cred
 
 ExecStart=/usr/bin/env merge-steward serve
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 NoNewPrivileges=true

@@ -179,6 +179,8 @@ test("merge-steward init and repo commands manage bootstrap state with explicit 
     const repoConfig = readFileSync(path.join(configHome, "merge-steward", "repos", "app.json"), "utf8");
     assert.match(repoConfig, /"repoFullName": "owner\/repo"/);
     assert.match(repoConfig, /"mergeQueueCheckName": "custom\/queue-eviction"/);
+    const unit = readFileSync(path.join(systemdDir, "merge-steward.service"), "utf8");
+    assert.match(unit, /^Restart=always$/m);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -108,6 +108,35 @@ test("unknown command prints help and exits 1", async () => {
   assert.match(stderr.read(), /review-quill/);
   assert.match(stderr.read(), /Command help:/);
   assert.match(stderr.read(), /Error: Unknown command: dashboard1/);
+});
+
+test("review-quill init installs an always-restarting service unit", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "review-quill-init-reliability-"));
+  try {
+    const systemdDir = path.join(baseDir, "systemd");
+    await withEnv({
+      XDG_CONFIG_HOME: path.join(baseDir, ".config"),
+      XDG_STATE_HOME: path.join(baseDir, ".state"),
+      XDG_DATA_HOME: path.join(baseDir, ".share"),
+      REVIEW_QUILL_SYSTEMD_DIR: systemdDir,
+    }, async () => {
+      const commands: string[] = [];
+      assert.equal(await runCli(["init", "https://review.example.com"], {
+        stdout: createBufferStream().stream,
+        stderr: createBufferStream().stream,
+        runCommand: async (command, args) => {
+          commands.push([command, ...args].join(" "));
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      }), 0);
+      assert.deepEqual(commands, ["sudo systemctl daemon-reload"]);
+    });
+
+    const unit = readFileSync(path.join(systemdDir, "review-quill.service"), "utf8");
+    assert.match(unit, /^Restart=always$/m);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
 });
 
 test("repo help and alias help both describe the repo command surface", async () => {
