@@ -283,12 +283,25 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
   }
 
   if (managementRoutesEnabled) {
-    app.get("/status", async (_request, reply) => {
+    const readCodexStatus = async () => {
       const status = await getCodexStatusSnapshot(config.runner.codex.bin);
+      if (status.ok) return status;
+      const readiness = service.getReadiness();
+      if (!readiness.codexStarted) return status;
+      return {
+        ok: true,
+        exitCode: 0,
+        output: "Codex app-server is running. Interactive account usage is unavailable from the service process.",
+        source: "app_server",
+        warning: status.error ?? status.output,
+      };
+    };
+    app.get("/status", async (_request, reply) => {
+      const status = await readCodexStatus();
       return reply.code(status.ok ? 200 : 502).send(status);
     });
     app.get("/api/codex/status", async (_request, reply) => {
-      const status = await getCodexStatusSnapshot(config.runner.codex.bin);
+      const status = await readCodexStatus();
       return reply.code(status.ok ? 200 : 502).send(status);
     });
 

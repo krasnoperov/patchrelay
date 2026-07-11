@@ -133,6 +133,34 @@ test("health endpoint includes build version metadata from the built artifact", 
   }
 });
 
+test("codex status falls back to the live app-server when the interactive CLI is unavailable", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-http-codex-status-"));
+  try {
+    const config = createConfig(baseDir);
+    config.runner.codex.bin = path.join(baseDir, "missing-codex");
+    const app = await buildHttpServer(
+      config,
+      {
+        getReadiness: () => ({ ready: true, codexStarted: true, linearConnected: true }),
+      } as never,
+      pino({ enabled: false }),
+    );
+
+    const response = await app.inject({ method: "GET", url: "/status" });
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(response.json(), {
+      ok: true,
+      exitCode: 0,
+      output: "Codex app-server is running. Interactive account usage is unavailable from the service process.",
+      source: "app_server",
+      warning: `spawn ${config.runner.codex.bin} ENOENT`,
+    });
+    await app.close();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("http routes handle webhook validation and issue/live lookups", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-http-routes-"));
 
