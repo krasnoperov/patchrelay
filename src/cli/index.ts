@@ -346,7 +346,7 @@ export async function runCli(
   try {
     if (command === "doctor") {
       const { runPreflight } = await import("../preflight.ts");
-      const report = await runPreflight(config);
+      const report = await runPreflight(config, { migrateDatabase: false });
       const cliVersion = getBuildInfo().version;
       let serviceVersion: string | undefined;
       try {

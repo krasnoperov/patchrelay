@@ -72,7 +72,7 @@ test("service runtime starts codex, seeds ready issues, triggers reconcile in th
     },
   );
 
-  assert.deepEqual(runtime.getReadiness(), { ready: false, codexStarted: false, linearConnected: false, githubAppAuthHealthy: true, eventLoopLagMs: 0 });
+  assert.deepEqual(runtime.getReadiness(), { ready: false, codexStarted: false, linearConnected: false, githubAppAuthHealthy: true, eventLoopLagMs: 0, reconcileHealthy: true });
 
   runtime.setLinearConnected(true);
   await runtime.start();
@@ -84,7 +84,7 @@ test("service runtime starts codex, seeds ready issues, triggers reconcile in th
     { projectId: "app", issueId: "issue-1" },
     { projectId: "app", issueId: "issue-2" },
   ]);
-  assert.deepEqual(runtime.getReadiness(), { ready: true, codexStarted: true, linearConnected: true, githubAppAuthHealthy: true, eventLoopLagMs: 0 });
+  assert.deepEqual(runtime.getReadiness(), { ready: true, codexStarted: true, linearConnected: true, githubAppAuthHealthy: true, eventLoopLagMs: 0, reconcileHealthy: true });
   await runtime.stop();
 });
 
@@ -250,13 +250,13 @@ test("service runtime clears ready state on stop and preserves codex status in r
 
   runtime.setLinearConnected(true);
   await runtime.start();
-  assert.deepEqual(runtime.getReadiness(), { ready: true, codexStarted: true, linearConnected: true, githubAppAuthHealthy: true, eventLoopLagMs: 0 });
+  assert.deepEqual(runtime.getReadiness(), { ready: true, codexStarted: true, linearConnected: true, githubAppAuthHealthy: true, eventLoopLagMs: 0, reconcileHealthy: true });
 
   await runtime.stop();
   await flushQueue();
 
   assert.equal(codex.stopCalls, 1);
-  assert.deepEqual(runtime.getReadiness(), { ready: false, codexStarted: false, linearConnected: true, githubAppAuthHealthy: true, eventLoopLagMs: 0 });
+  assert.deepEqual(runtime.getReadiness(), { ready: false, codexStarted: false, linearConnected: true, githubAppAuthHealthy: true, eventLoopLagMs: 0, reconcileHealthy: true });
 });
 
 test("service runtime treats unhealthy GitHub App auth as not ready", async () => {
@@ -280,6 +280,7 @@ test("service runtime treats unhealthy GitHub App auth as not ready", async () =
     linearConnected: true,
     githubAppAuthHealthy: false,
     eventLoopLagMs: 0,
+    reconcileHealthy: true,
     githubAppAuthError: "credential check failed",
   });
   await runtime.stop();
@@ -308,6 +309,7 @@ test("service runtime records startup error when codex start fails", async () =>
     linearConnected: false,
     githubAppAuthHealthy: true,
     eventLoopLagMs: 0,
+    reconcileHealthy: true,
     startupError: "codex offline",
   });
 });
@@ -331,13 +333,12 @@ test("service runtime does not fail startup when background reconciliation fails
 
   assert.equal(readyIssuesCalled, true);
   assert.ok(reconcileCalls >= 1);
-  assert.deepEqual(runtime.getReadiness(), {
-    ready: false,
-    codexStarted: true,
-    linearConnected: false,
-    githubAppAuthHealthy: true,
-    eventLoopLagMs: 0,
-  });
+  const readiness = runtime.getReadiness();
+  assert.equal(readiness.ready, false);
+  assert.equal(readiness.codexStarted, true);
+  assert.equal(readiness.reconcileHealthy, false);
+  assert.equal(readiness.reconcileError, "reconcile failed");
+  assert.match(readiness.reconcileFailedAt ?? "", /^\d{4}-\d{2}-\d{2}T/);
   await runtime.stop();
 });
 

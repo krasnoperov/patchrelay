@@ -18,7 +18,7 @@ export interface PreflightReport {
   ok: boolean;
 }
 
-export async function runPreflight(config: AppConfig, options?: { connectivity?: boolean; skipServiceCheck?: boolean }): Promise<PreflightReport> {
+export async function runPreflight(config: AppConfig, options?: { connectivity?: boolean; skipServiceCheck?: boolean; migrateDatabase?: boolean }): Promise<PreflightReport> {
   const connectivity = options?.connectivity ?? true;
   const skipServiceCheck = options?.skipServiceCheck ?? false;
   const checks: PreflightCheck[] = [];
@@ -88,7 +88,7 @@ export async function runPreflight(config: AppConfig, options?: { connectivity?:
   checks.push(...checkOAuthRedirectUri(config));
 
   checks.push(...checkPath("database", path.dirname(config.database.path), "directory", { createIfMissing: true, writable: true }));
-  checks.push(...checkDatabaseHealth(config));
+  checks.push(...checkDatabaseHealth(config, options?.migrateDatabase ?? true));
   checks.push(...checkPath("logging", path.dirname(config.logging.filePath), "directory", { createIfMissing: true, writable: true }));
   if (config.projects.length === 0) {
     checks.push(warn("projects", "No repos are configured yet; connect a Linear workspace with `patchrelay linear connect` and then link a GitHub repo with `patchrelay repo link <owner/repo> --workspace <workspace> --team <team>`"));
@@ -165,7 +165,7 @@ async function checkLinearApi(graphqlUrl: string): Promise<PreflightCheck> {
   }
 }
 
-function checkDatabaseHealth(config: AppConfig): PreflightCheck[] {
+function checkDatabaseHealth(config: AppConfig, migrateDatabase: boolean): PreflightCheck[] {
   const checks: PreflightCheck[] = [];
   let connection: SqliteConnection | undefined;
   try {
@@ -175,7 +175,12 @@ function checkDatabaseHealth(config: AppConfig): PreflightCheck[] {
       connection.pragma("journal_mode = WAL");
     }
 
-    runPatchRelayMigrations(connection);
+    // Operator diagnostics may run while the service owns this database. Some
+    // migrations rebuild tables, so doctor must validate the live schema
+    // without mutating it or invalidating the service's prepared statements.
+    if (migrateDatabase) {
+      runPatchRelayMigrations(connection);
+    }
     assertPatchRelaySchemaReady(connection, config.database.path);
 
     const quickCheck = connection.prepare("PRAGMA quick_check").get();
@@ -202,7 +207,7 @@ function checkDatabaseHealth(config: AppConfig): PreflightCheck[] {
       return checks;
     }
 
-    checks.push(pass("database_schema", `Database opened, migrations applied, and schema is readable (${objectCount} objects)`));
+    checks.push(pass("database_schema", `Database opened, schema is readable (${objectCount} objects)${migrateDatabase ? ", and migrations are applied" : ""}`));
   } catch (error) {
     checks.push(fail("database_schema", `Unable to open or validate database schema at ${config.database.path}: ${formatError(error)}`));
   } finally {

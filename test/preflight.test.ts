@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { PatchRelayDatabase } from "../src/db.ts";
 import { runPreflight } from "../src/preflight.ts";
 import type { AppConfig } from "../src/types.ts";
 
@@ -92,6 +93,32 @@ test("runPreflight reports a healthy local setup", async () => {
     assert.ok(report.checks.some((check) => check.scope === "public_url" && check.status === "pass"));
     assert.ok(report.checks.some((check) => check.scope === "database_schema" && check.status === "pass"));
   } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("runPreflight can validate a live database without running destructive migrations", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-preflight-readonly-"));
+  const config = createConfig(baseDir);
+  mkdirSync(config.projects[0]!.repoPath, { recursive: true });
+  mkdirSync(path.dirname(config.database.path), { recursive: true });
+  const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+  try {
+    db.runMigrations();
+    const raw = db.unsafeRawConnectionForTests();
+    raw.exec("ALTER TABLE issues ADD COLUMN pending_run_type TEXT");
+
+    const report = await runPreflight(config, {
+      connectivity: false,
+      skipServiceCheck: true,
+      migrateDatabase: false,
+    });
+
+    assert.equal(report.ok, true);
+    const columns = raw.prepare("PRAGMA table_info(issues)").all().map((row) => row.name);
+    assert.ok(columns.includes("pending_run_type"), "read-only preflight must not rebuild the live issues table");
+  } finally {
+    db.close();
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
