@@ -22,7 +22,7 @@ LoadCredentialEncrypted=review-quill-webhook-secret:/etc/credstore.encrypted/rev
 LoadCredentialEncrypted=review-quill-github-app-pem:/etc/credstore.encrypted/review-quill-github-app-pem.cred
 
 ExecStart=/usr/bin/env review-quill serve
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 NoNewPrivileges=true

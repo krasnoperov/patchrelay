@@ -1801,6 +1801,7 @@ test("cli init writes XDG config files and service install manages the system un
         assert.match(unit, new RegExp(`Environment=PATCHRELAY_CONFIG=${configPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
         assert.match(unit, /EnvironmentFile=-.*runtime\.env/);
         assert.match(unit, /LoadCredentialEncrypted=linear-webhook-secret/);
+        assert.match(unit, /^Restart=always$/m);
 
         const commands: string[] = [];
         const restartOut = createBufferStream();

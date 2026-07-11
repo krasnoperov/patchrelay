@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { handleStdoutError } from "./stdout-error.ts";
+
 function installSqliteWarningFilter(): void {
   const emitWarning = process.emitWarning.bind(process);
 
@@ -43,16 +45,11 @@ function installSqliteWarningFilter(): void {
 
 installSqliteWarningFilter();
 
-// When the CLI is piped into something like `head` or `less -q`, the
-// downstream consumer can close stdout before we finish writing. Node
-// treats that as an unhandled error and crashes with EPIPE. Swallow it
-// quietly — it's the normal outcome of `review-quill diff | head`, not
-// a failure we should report.
+// A closed pipe is normal for short-lived CLI output (`diff | head`) but
+// fatal for the daemon: a server that loses its service-owned stdout must
+// exit non-zero so systemd can recover it and preserve an observable cause.
 process.stdout.on("error", (error: NodeJS.ErrnoException) => {
-  if (error.code === "EPIPE") {
-    process.exit(0);
-  }
-  throw error;
+  handleStdoutError(error, process.argv[2]);
 });
 
 try {

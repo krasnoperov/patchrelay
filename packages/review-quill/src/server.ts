@@ -9,6 +9,7 @@ import { SqliteStore } from "./db/sqlite-store.ts";
 import { resolveGitHubAuthConfig, createGitHubAppTokenManager, resolveAppSlug, type GitHubAuthRuntimeStatus } from "./github-auth.ts";
 import { applyGitHubCliAuthEnv, getGhConfigDir, resolveGhBin } from "./github-cli-auth.ts";
 import { GitHubClient } from "./github-client.ts";
+import { createGracefulShutdown } from "./graceful-shutdown.ts";
 import { getCodexStatusSnapshot } from "./codex-status.ts";
 import { ReviewRunner } from "./review-runner.ts";
 import { ReviewQuillService } from "./service.ts";
@@ -223,16 +224,19 @@ export async function startServer(configPath = process.env.REVIEW_QUILL_CONFIG ?
     return { ok: true, repo: normalized.repoFullName, started };
   });
 
-  const shutdown = async () => {
-    await service.stop();
-    tokenManager.stop();
-    store.close();
-    await app.close();
-    process.exit(0);
-  };
+  const shutdown = createGracefulShutdown({
+    service: "review-quill",
+    logger,
+    cleanup: async () => {
+      await service.stop();
+      tokenManager.stop();
+      store.close();
+      await app.close();
+    },
+  });
 
-  process.on("SIGTERM", () => void shutdown());
-  process.on("SIGINT", () => void shutdown());
+  process.once("SIGTERM", () => void shutdown("SIGTERM"));
+  process.once("SIGINT", () => void shutdown("SIGINT"));
 
   await app.listen({ host: config.server.bind, port: config.server.port });
   logger.info({ bind: config.server.bind, port: config.server.port }, "review-quill listening");

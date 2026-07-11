@@ -2,6 +2,7 @@
 
 import { dirname } from "node:path";
 import { runCli } from "./cli/index.ts";
+import { createGracefulShutdown } from "./graceful-shutdown.ts";
 
 function suppressNodeSqliteExperimentalWarning(): void {
   const originalEmitWarning = process.emitWarning as (...args: unknown[]) => void;
@@ -112,17 +113,16 @@ async function main(): Promise<void> {
     "PatchRelay started",
   );
 
-  const shutdown = async (): Promise<void> => {
-    await service.stop();
-    await app.close();
-  };
-  const onSignal = (signal: string) => {
-    shutdown().catch((error) => {
-      logger.error({ signal, error: error instanceof Error ? error.message : String(error) }, "Shutdown error");
-    }).finally(() => { process.exitCode ??= 0; });
-  };
-  process.once("SIGINT", () => onSignal("SIGINT"));
-  process.once("SIGTERM", () => onSignal("SIGTERM"));
+  const shutdown = createGracefulShutdown({
+    service: "patchrelay",
+    logger,
+    cleanup: async () => {
+      await service.stop();
+      await app.close();
+    },
+  });
+  process.once("SIGINT", () => void shutdown("SIGINT"));
+  process.once("SIGTERM", () => void shutdown("SIGTERM"));
 }
 
 main().catch((error) => {

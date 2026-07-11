@@ -12,6 +12,7 @@ import { buildMultiRepoHttpServer } from "./http-multi.ts";
 import { loadAllRepoConfigs } from "./install.ts";
 import { parseHomeConfigObject } from "./steward-home.ts";
 import { getMergeStewardPathLayout } from "./runtime-paths.ts";
+import { createGracefulShutdown } from "./graceful-shutdown.ts";
 import { createGitHubAppTokenManager, generateJwt, resolveGitHubAuthConfig, resolveAppSlug, type GitHubAppTokenManager } from "./github-auth.ts";
 import { discoverRepoSettings } from "./github-repo-discovery.ts";
 import { resolveSecretWithSource } from "./resolve-secret.ts";
@@ -231,25 +232,27 @@ export async function startMultiServer(): Promise<void> {
     logger,
   });
 
-  const shutdown = async () => {
-    shuttingDown = true;
-    logger.info("Shutting down...");
-    githubAppTokenManager?.stop();
-    setRuntimeGitHubAuthProvider(undefined);
-    for (const record of repos.values()) {
-      const inst = record.instance;
-      if (!inst) {
-        continue;
+  const shutdown = createGracefulShutdown({
+    service: "merge-steward",
+    logger,
+    cleanup: async () => {
+      shuttingDown = true;
+      githubAppTokenManager?.stop();
+      setRuntimeGitHubAuthProvider(undefined);
+      for (const record of repos.values()) {
+        const inst = record.instance;
+        if (!inst) {
+          continue;
+        }
+        await inst.service.stop();
+        inst.store.close();
       }
-      await inst.service.stop();
-      inst.store.close();
-    }
-    await app.close();
-    process.exit(0);
-  };
+      await app.close();
+    },
+  });
 
-  process.on("SIGTERM", () => void shutdown());
-  process.on("SIGINT", () => void shutdown());
+  process.once("SIGTERM", () => void shutdown("SIGTERM"));
+  process.once("SIGINT", () => void shutdown("SIGINT"));
 
   await app.listen({ host: bind, port });
   logger.info({ bind, port, repos: repos.size }, "merge-steward listening");

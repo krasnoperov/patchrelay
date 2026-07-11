@@ -35,7 +35,7 @@ LoadCredentialEncrypted=linear-oauth-client-secret:/etc/credstore.encrypted/line
 # LoadCredentialEncrypted=github-app-webhook-secret:/etc/credstore.encrypted/github-app-webhook-secret.cred
 
 ExecStart=/usr/bin/env patchrelay serve
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 # Hardening
