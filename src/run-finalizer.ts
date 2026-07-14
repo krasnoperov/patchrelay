@@ -24,8 +24,7 @@ import { inspectGitWorktreeStatus, isRepairRunType, type GitWorktreeStatus } fro
 import { buildRunOutcomeSummary, type RunOutcomeFacts } from "./run-outcome-summary.ts";
 import { settleRun } from "./run-settlement.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
-import { evaluateTaskCompletion } from "./workflow-gates.ts";
-import { COMPLETION_CHECK_CONTINUE_OBSERVATION, type WorkflowTask } from "./workflow-model.ts";
+import { COMPLETION_CHECK_CONTINUE_OBSERVATION } from "./workflow-model.ts";
 import { projectWorkflowSnapshot } from "./workflow-snapshot.ts";
 
 type StageReport = ReturnType<typeof buildStageReport>;
@@ -466,52 +465,6 @@ export class RunFinalizer {
     return status;
   }
 
-  private resolveWorkflowCompletionTask(run: RunRecord): WorkflowTask | undefined {
-    if (!isRepairRunType(run.runType)) return undefined;
-    // S5: prefer the task id stamped at claim time; old rows without a
-    // task_id fall back to the reconstructed `run:<runType>` string.
-    const record = this.db.workflowTasks.getTask(run.projectId, run.linearIssueId, run.taskId ?? `run:${run.runType}`);
-    if (!record?.runType) return undefined;
-    const requirements = parseObjectJson(record.requirementsJson);
-    return {
-      id: record.taskId,
-      type: record.taskType as WorkflowTask["type"],
-      runType: record.runType,
-      reason: record.reason,
-      ...(requirements ? { requirements } : {}),
-    };
-  }
-
-  private evaluateWorkflowCompletionGate(
-    run: RunRecord,
-    issue: IssueRecord,
-  ): { message: string; nextState: FactoryState; status: string; level: "warn" | "error" } | undefined {
-    const task = this.resolveWorkflowCompletionTask(run);
-    if (!task) return undefined;
-    const snapshot = projectWorkflowSnapshot({
-      issue,
-      observations: this.db.workflowObservations.listObservations(issue.projectId, issue.linearIssueId),
-      blockerCount: this.db.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId),
-      childCount: this.db.issues.listCanonicalChildIssues(issue.projectId, issue.linearIssueId).length,
-    });
-    const decision = evaluateTaskCompletion(snapshot, task);
-    if (decision.action === "start") return undefined;
-    if (decision.action === "ask") {
-      return {
-        message: decision.question,
-        nextState: "awaiting_input",
-        status: decision.reason,
-        level: "warn",
-      };
-    }
-    return {
-      message: decision.reason,
-      nextState: "escalated",
-      status: decision.reason,
-      level: decision.action === "wait" ? "warn" : "error",
-    };
-  }
-
   private buildSameHeadRepairRetryContext(
     run: Pick<RunRecord, "runType">,
     issue: Pick<IssueRecord, "lastGitHubFailureContextJson">,
@@ -716,20 +669,9 @@ export class RunFinalizer {
       return;
     }
 
-    const workflowCompletionGate = this.evaluateWorkflowCompletionGate(run, freshIssue);
-    if (workflowCompletionGate) {
-      this.failRunAndClear(run, workflowCompletionGate.message, workflowCompletionGate.nextState);
-      this.syncFailureOutcome({
-        run,
-        fallbackIssue: freshIssue,
-        message: workflowCompletionGate.message,
-        level: workflowCompletionGate.level,
-        status: workflowCompletionGate.status,
-        summary: workflowCompletionGate.message,
-      });
-      return;
-    }
-
+    // Workflow snapshots admit work, but they are eventually consistent
+    // projections of GitHub. Remote completion verdicts belong to the live
+    // completion policies below, never to the snapshot that scheduled the run.
     const verifiedRepairError = await this.completionPolicy.verifyReactiveRunAdvancedBranch(run, freshIssue);
     if (verifiedRepairError) {
       // The run failed verification — it did not do its work, so resolve

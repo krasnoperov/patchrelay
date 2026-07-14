@@ -8,7 +8,6 @@ import { PatchRelayDatabase } from "../src/db.ts";
 import { peekRunnableWorkflowTaskRunType } from "../src/pending-workflow-task.ts";
 import type { IssueRecord } from "../src/db-types.ts";
 import {
-  evaluateTaskCompletion,
   evaluateTaskStart,
   projectWorkflowSnapshot,
 } from "../src/workflow-runtime.ts";
@@ -160,7 +159,7 @@ test("implementation task preserves Linear delegation prompt context", () => {
   }
 });
 
-test("review fix completion blocks same-head handoff", () => {
+test("review fix task records the blocking review head", () => {
   const { db, cleanup } = createDb();
   try {
     const issue = makeIssue(db, {
@@ -175,10 +174,7 @@ test("review fix completion blocks same-head handoff", () => {
 
     assert.equal(task?.id, "run:review_fix");
     assert.equal(evaluateTaskStart(snapshot, task!).action, "start");
-    assert.deepEqual(evaluateTaskCompletion(snapshot, task!), {
-      action: "escalate",
-      reason: "same_head_review_handoff_blocked",
-    });
+    assert.equal(task?.requirements?.blockingHeadSha, "abc123");
   } finally {
     cleanup();
   }
@@ -354,7 +350,6 @@ test("parent head moved derives a branch_upkeep task carrying upkeep context", (
     assert.equal(task?.requirements?.baseBranch, "feat/parent");
     assert.equal(task?.requirements?.childPrNumber, 101);
     assert.equal(evaluateTaskStart(snapshot, task!).action, "start");
-    assert.equal(evaluateTaskCompletion(snapshot, task!).action, "start");
   } finally {
     cleanup();
   }
@@ -609,7 +604,7 @@ test("settled red CI already attempted at the current head derives no CI repair 
   }
 });
 
-test("CI repair completion defers same-head judgment to remote verification", () => {
+test("CI repair task records the failing head for remote verification", () => {
   const { db, cleanup } = createDb();
   try {
     const issue = makeIssue(db, {
@@ -624,35 +619,7 @@ test("CI repair completion defers same-head judgment to remote verification", ()
     const task = snapshot.openTasks[0];
 
     assert.equal(task?.id, "run:ci_repair");
-    assert.deepEqual(evaluateTaskCompletion(snapshot, task!), { action: "start" });
-  } finally {
-    cleanup();
-  }
-});
-
-test("CI repair completion accepts a head advanced beyond the failing head", () => {
-  const { db, cleanup } = createDb();
-  try {
-    const issue = makeIssue(db, {
-      prNumber: 42,
-      prState: "open",
-      prHeadSha: "abc123",
-      lastGitHubFailureSource: "branch_ci",
-      lastGitHubFailureHeadSha: "abc123",
-      lastGitHubFailureSignature: "ci:unit-tests",
-    });
-    const task = projectWorkflowSnapshot({ issue }).openTasks[0]!;
-    const advanced = makeIssue(db, {
-      prNumber: 42,
-      prState: "open",
-      prHeadSha: "def456",
-      lastGitHubFailureSource: "branch_ci",
-      lastGitHubFailureHeadSha: "abc123",
-      lastGitHubFailureSignature: "ci:unit-tests",
-    });
-    const advancedSnapshot = projectWorkflowSnapshot({ issue: advanced });
-
-    assert.deepEqual(evaluateTaskCompletion(advancedSnapshot, task), { action: "start" });
+    assert.equal(task?.requirements?.failureHeadSha, "abc123");
   } finally {
     cleanup();
   }
