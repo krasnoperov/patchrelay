@@ -40,6 +40,7 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
   publishedOutcomeError?: string | null;
   failedRecoveryError?: string | null;
   reactiveAdvanceError?: string | null;
+  reviewFixAdvanceError?: string | null;
   onEnqueue?: (projectId: string, issueId: string) => void;
   failRunAndClear?: (runId: number, message: string, nextState?: FactoryState) => void;
 }) {
@@ -91,7 +92,9 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
       verifyReactiveRunAdvancedBranch: async () => options && "reactiveAdvanceError" in options
         ? options.reactiveAdvanceError ?? undefined
         : undefined,
-      verifyReviewFixAdvancedHead: async () => undefined,
+      verifyReviewFixAdvancedHead: async () => options && "reviewFixAdvanceError" in options
+        ? options.reviewFixAdvanceError ?? undefined
+        : undefined,
       verifyReactiveRunStayedInScope: async () => undefined,
       verifyPublishedRunOutcome: async () => options && "publishedOutcomeError" in options
         ? options.publishedOutcomeError ?? undefined
@@ -323,7 +326,7 @@ test("run finalizer suppresses late completion after authority is revoked", asyn
   }
 });
 
-test("run finalizer blocks task-backed review fixes that do not advance the PR head", async () => {
+test("run finalizer accepts a review-fix verifier result despite a stale workflow projection", async () => {
   const { baseDir, db } = createDb();
   try {
     const issue = db.upsertIssue({
@@ -357,24 +360,11 @@ test("run finalizer blocks task-backed review fixes that do not advance the PR h
     });
     reconcileWorkflowTasksForIssue(db, db.getIssue(issue.projectId, issue.linearIssueId)!);
 
-    let failedMessage: string | undefined;
-    let failedNextState: FactoryState | undefined;
-    const { finalizer, feedEvents } = createFinalizer(db, {
+    const { finalizer } = createFinalizer(db, {
       outcome: "done",
       summary: "unused",
     }, {
       publishedOutcomeError: null,
-      failRunAndClear: (runId, message, nextState) => {
-        failedMessage = message;
-        failedNextState = nextState;
-        db.runs.finishRun(runId, { status: "failed", failureReason: message });
-        db.upsertIssue({
-          projectId: issue.projectId,
-          linearIssueId: issue.linearIssueId,
-          activeRunId: null,
-          factoryState: nextState ?? "failed",
-        });
-      },
     });
 
     await finalizer.finalizeCompletedRun({
@@ -400,14 +390,83 @@ test("run finalizer blocks task-backed review fixes that do not advance the PR h
 
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
     const updatedRun = db.runs.getRunById(run.id)!;
-    assert.equal(failedMessage, "same_head_review_handoff_blocked");
-    assert.equal(failedNextState, "escalated");
-    assert.equal(updatedIssue.factoryState, "escalated");
+    assert.notEqual(updatedIssue.factoryState, "escalated");
     assert.equal(updatedIssue.activeRunId, undefined);
+    assert.equal(updatedRun.status, "completed");
+    assert.equal(updatedRun.failureReason, undefined);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("run finalizer escalates a review fix only when the verifier rejects it", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      issueKey: "USE-111V",
+      title: "Fix requested review changes",
+      factoryState: "changes_requested",
+      delegatedToPatchRelay: true,
+      prNumber: 42,
+      prState: "open",
+      prReviewState: "changes_requested",
+      prHeadSha: "sha-blocked",
+      lastBlockingReviewHeadSha: "sha-blocked",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+      sourceHeadSha: "sha-blocked",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-1", turnId: "turn-main" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+
+    const verificationError = "Requested-changes run finished for PR #42 without pushing a new head past blocking review SHA sha-bloc; PatchRelay must not hand the same SHA back to review.";
+    const { finalizer } = createFinalizer(db, {
+      outcome: "done",
+      summary: "unused",
+    }, {
+      reviewFixAdvanceError: verificationError,
+      publishedOutcomeError: null,
+      failRunAndClear: (runId, message, nextState) => {
+        db.runs.finishRun(runId, { status: "failed", failureReason: message });
+        db.upsertIssue({
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          activeRunId: null,
+          factoryState: nextState ?? "failed",
+        });
+      },
+    });
+
+    await finalizer.finalizeCompletedRun({
+      source: "notification",
+      run: db.runs.getRunById(run.id)!,
+      issue: db.getIssue(issue.projectId, issue.linearIssueId)!,
+      thread: {
+        id: "thread-1",
+        preview: "",
+        cwd: "/tmp/work",
+        status: "idle",
+        turns: [{ id: "turn-main", status: "completed", items: [{ id: "msg-1", type: "agentMessage", text: "I addressed the review." }] }],
+      },
+      threadId: "thread-1",
+      completedTurnId: "turn-main",
+    });
+
+    const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
+    const updatedRun = db.runs.getRunById(run.id)!;
+    assert.equal(updatedIssue.factoryState, "escalated");
     assert.equal(updatedRun.status, "failed");
-    assert.equal(updatedRun.failureReason, "same_head_review_handoff_blocked");
-    assert.equal(updatedRun.completionCheckOutcome, undefined);
-    assert.equal(feedEvents.at(-1)?.status, "same_head_review_handoff_blocked");
+    assert.equal(updatedRun.failureReason, verificationError);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
