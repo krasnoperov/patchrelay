@@ -118,6 +118,10 @@ test("renderReviewPrompt includes explicit guidance docs and suppressed summarie
   assert.match(prompt, /Flag only high-signal issues/);
   assert.match(prompt, /Repository guidance is authoritative project policy/);
   assert.match(prompt, /project-specific guidance, glossaries, samples, and PR-linked docs as the product spec/);
+  assert.match(prompt, /Apply a proportionality test before blocking/);
+  assert.match(prompt, /delaying the merge is preferable to accepting the risk now/);
+  assert.match(prompt, /rather than assumed scale or future requirements/);
+  assert.match(prompt, /Rare, reversible concerns and optional hardening are nits at most/);
   assert.match(prompt, /These documents are project-specific policy/);
   assert.match(prompt, /previous blocking review concerns are now resolved, still blocking, or no longer relevant/);
   assert.match(prompt, /Include still-blocking prior concerns and newly discovered independent blockers in the same review, up to the blocker cap/);
