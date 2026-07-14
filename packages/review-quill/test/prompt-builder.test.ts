@@ -116,6 +116,9 @@ test("renderReviewPrompt includes explicit guidance docs and suppressed summarie
   assert.match(prompt, /Linked issue keys: TST-28/);
   assert.match(prompt, /## Review rules/);
   assert.match(prompt, /Flag only high-signal issues/);
+  assert.match(prompt, /Calibrate likelihood and impact from repository evidence/);
+  assert.match(prompt, /A conceivable failure mode is not automatically a bug/);
+  assert.match(prompt, /theoretical concurrency, timing, scale, or adversarial assumptions/);
   assert.match(prompt, /Repository guidance is authoritative project policy/);
   assert.match(prompt, /project-specific guidance, glossaries, samples, and PR-linked docs as the product spec/);
   assert.match(prompt, /These documents are project-specific policy/);
