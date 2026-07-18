@@ -144,6 +144,11 @@ test("loadConfig expands env vars, resolves paths, and honors runtime overrides"
         assert.equal(config.operatorApi.bearerToken, "operator-secret");
         assert.equal(config.projects[0]?.repoPath, path.join(baseDir, "repo"));
         assert.equal(config.projects[0]?.worktreeRoot, path.join(baseDir, "worktrees"));
+        assert.deepEqual(config.projects[0]?.repairBudgets, {
+          ciRepair: 10,
+          queueRepair: 10,
+          reviewFix: 3,
+        });
         assert.deepEqual(config.projects[0]?.trustedActors, {
           ids: ["user_123"],
           names: [],

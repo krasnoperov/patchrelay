@@ -134,6 +134,8 @@ git log --oneline --decorate -5
 
 If there is a real fix in the worktree, commit and push it or requeue the issue. If there is no diff, the agent did not produce a repair; clarify the requested change in Linear or take over manually.
 
+PatchRelay allows three requested-changes repair attempts by default. Projects can override this with `repair_budgets.review_fix`. When that limit is reached, PatchRelay identifies a repeated/systemic review loop and escalates with the observed attempt count, configured limit, and next action: consolidate the accumulated review history and audit the violated invariants, or split an oversized PR before requesting another review.
+
 ### Queue repair handoff
 
 When merge-steward cannot land an approved PR, it emits the configured eviction check run (default `merge-steward/queue`). PatchRelay treats that as `queue_repair`, not ordinary branch CI. The normal successful shape is:
