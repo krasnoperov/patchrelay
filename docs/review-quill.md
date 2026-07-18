@@ -129,7 +129,7 @@ Diff context is intentionally filtered:
 
 Review execution concurrency defaults to 4. The cap is configurable with `reconciliation.maxConcurrentReviews`; keep it conservative on hosts where many reviews share one Codex app-server and the same per-repo git cache.
 
-Review threads start fresh by default. `codex.forkPriorReviewThread: true` enables a conservative optimization for a newer head: Review Quill may fork only the immediately preceding decisive attempt when its stored transcript ends at the recorded completed turn and its review surface, base SHA, and prompt fingerprint still match. The fork receives the full current prompt. Missing or unusable source state falls back to a fresh thread; other protocol, authentication, model, sandbox, transport, or timeout failures remain visible as errors.
+Review threads start fresh by default. `codex.forkPriorReviewThread: true` enables a conservative optimization for a newer head: Review Quill may fork only the immediately preceding decisive attempt when its stored transcript ends at the recorded completed turn and its review surface, base SHA, and prompt fingerprint still match. The fork receives the full current prompt. Codex's explicit missing-rollout response falls back to a fresh thread; other protocol, authentication, model, sandbox, transport, or timeout failures remain visible as errors.
 
 ## Carry-forward
 

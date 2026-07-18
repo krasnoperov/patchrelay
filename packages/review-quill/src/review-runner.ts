@@ -64,12 +64,9 @@ function isCodexAppServerRequestTimeout(error: unknown): boolean {
 }
 
 function isForkSourceUnavailable(error: unknown): boolean {
-  if (error instanceof CodexJsonRpcError && error.code === -32602) return false;
-  if (isCodexAppServerRequestTimeout(error)) return false;
-  const message = error instanceof Error ? error.message : String(error);
-  return /\b(?:source\s+)?thread\b[^\n]*(?:not found|does not exist|unavailable)/i.test(message)
-    || /\brollout\b[^\n]*(?:not found|does not exist|unavailable|is empty)/i.test(message)
-    || isThreadMaterializationRace(error);
+  return error instanceof CodexJsonRpcError
+    && error.code === -32600
+    && /\bno rollout found for thread id\b/i.test(error.message);
 }
 
 export function isUnsupportedOutputSchemaError(error: unknown): error is CodexJsonRpcError {

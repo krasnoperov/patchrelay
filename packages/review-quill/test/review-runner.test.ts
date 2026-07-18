@@ -204,7 +204,7 @@ test("ReviewRunner disables unsupported thread/fork once across concurrent start
   assert.equal(warnings.length, 1);
 });
 
-test("ReviewRunner only falls back for explicit unavailable fork sources", async () => {
+test("ReviewRunner falls back for the real missing source rollout payload without disabling forks", async () => {
   const config = minimalConfig();
   config.codex.forkPriorReviewThread = true;
   let forkCalls = 0;
@@ -214,7 +214,7 @@ test("ReviewRunner only falls back for explicit unavailable fork sources", async
     readThread: async () => ({ id: "unused", turns: [] }),
     forkThread: async () => {
       forkCalls += 1;
-      throw new CodexJsonRpcError(-32000, "Source thread source-1 not found", null);
+      throw new CodexJsonRpcError(-32600, "No rollout found for thread id source-1", null);
     },
     startThread: async () => ({ id: `fresh-${++freshCalls}`, turns: [] }),
   };
@@ -234,6 +234,9 @@ test("ReviewRunner propagates unsafe fork failures without starting fresh", asyn
     new CodexJsonRpcError(-32602, "Invalid params", { field: "model" }),
     new Error("Codex app-server request timed out after 30000ms"),
     new CodexJsonRpcError(-32001, "Authentication required", null),
+    new CodexJsonRpcError(-32000, "Source thread source-1 not found", null),
+    new CodexJsonRpcError(-32000, "No rollout found for thread id source-1", null),
+    new CodexJsonRpcError(-32600, "No rollout found for thread", null),
     new Error("socket disconnected"),
   ];
   for (const failure of failures) {
@@ -264,7 +267,7 @@ test("ReviewRunner does not fresh-fallback after cancellation during a fork", as
     readThread: async () => ({ id: "unused", turns: [] }),
     forkThread: async () => {
       controller.abort("Superseded head");
-      throw new CodexJsonRpcError(-32000, "Source thread unavailable", null);
+      throw new CodexJsonRpcError(-32600, "No rollout found for thread id source", null);
     },
     startThread: async () => { freshCalls += 1; return { id: "fresh", turns: [] }; },
   } as never, async () => {});
