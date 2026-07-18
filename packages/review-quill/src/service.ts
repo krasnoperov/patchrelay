@@ -40,6 +40,7 @@ import { evaluateReviewEligibility } from "./review-eligibility.ts";
 import { ReviewSemaphore } from "./review-semaphore.ts";
 import { waitForReviewHeadStability, type ReviewHeadStabilityWait } from "./review-head-stabilizer.ts";
 import { buildPromptFingerprint } from "./prompt-fingerprint.ts";
+import { ReviewExecutionTiming } from "./review-execution-timing.ts";
 
 /** Default cap on parallel review executions. Review Quill shares one
  *  Codex app-server and one git cache per repository, so the default
@@ -68,6 +69,7 @@ export class ReviewQuillService {
    */
   private readonly inFlightReviews = new Map<string, Promise<void>>();
   private readonly inFlightReviewSignals = new Map<string, AbortController>();
+  private readonly inFlightReviewTimings = new Map<string, ReviewExecutionTiming>();
   private readonly semaphore: ReviewSemaphore;
   private readonly reconciler: AttemptReconciler;
   /**
@@ -102,6 +104,7 @@ export class ReviewQuillService {
     private readonly logger: Logger,
     private readonly reviewerLogin?: string,
     private readonly waitForHeadStability: ReviewHeadStabilityWait = waitForReviewHeadStability,
+    private readonly nowMs?: () => number,
   ) {
     const capacity = config.reconciliation.maxConcurrentReviews ?? DEFAULT_MAX_CONCURRENT_REVIEWS;
     this.semaphore = new ReviewSemaphore(capacity, (inFlight) => {
@@ -333,13 +336,20 @@ export class ReviewQuillService {
 
     this.supersedeInFlightReviewsForPullRequest(repo, pr.number, pr.headSha);
     const controller = new AbortController();
+    const timing = new ReviewExecutionTiming(this.nowMs);
     this.inFlightReviewSignals.set(key, controller);
+    this.inFlightReviewTimings.set(key, timing);
     const work = (async () => {
       let release: (() => void) | undefined;
       try {
         const stabilizationMs = this.config.reconciliation.headStabilizationMs;
         if (stabilizationMs > 0) {
-          await this.waitForHeadStability(stabilizationMs, controller.signal);
+          timing.beginStabilization();
+          try {
+            await this.waitForHeadStability(stabilizationMs, controller.signal);
+          } finally {
+            timing.endStabilization();
+          }
           this.throwIfReviewSuperseded(controller.signal);
           const currentPr = await this.github.getPullRequest(repo.repoFullName, pr.number);
           const disposition = classifyPublicationDisposition(currentPr, pr.headSha);
@@ -351,9 +361,14 @@ export class ReviewQuillService {
           }
           this.throwIfReviewSuperseded(controller.signal);
         }
-        release = await this.semaphore.acquire();
+        timing.beginSemaphoreWait();
+        try {
+          release = await this.semaphore.acquire();
+        } finally {
+          timing.endSemaphoreWait();
+        }
         this.throwIfReviewSuperseded(controller.signal);
-        await this.executeReview(repo, pr, existing, identity, controller.signal);
+        await this.executeReview(repo, pr, existing, identity, controller.signal, timing);
       } catch (error) {
         if (error instanceof ReviewExecutionSupersededError) {
           this.logger.info({
@@ -371,9 +386,16 @@ export class ReviewQuillService {
           err: error instanceof Error ? error.message : String(error),
         }, "Review execution failed");
       } finally {
+        this.logger.info({
+          repo: repo.repoFullName,
+          prNumber: pr.number,
+          headSha: pr.headSha,
+          ...timing.snapshot(),
+        }, "Review execution timing");
         release?.();
         this.inFlightReviews.delete(key);
         this.inFlightReviewSignals.delete(key);
+        this.inFlightReviewTimings.delete(key);
       }
     })();
 
@@ -392,11 +414,18 @@ export class ReviewQuillService {
         continue;
       }
       controller.abort(`Superseded by newer head ${currentHeadSha.slice(0, 12)} before review started.`);
+      const supersededHeadSha = key.slice(prefix.length);
+      const timing = this.inFlightReviewTimings.get(key);
       this.logger.info({
         repo: repo.repoFullName,
         prNumber,
         currentHeadSha,
+        supersededHeadSha,
         supersededKey: key,
+        phase: timing?.phase ?? "unknown",
+        supersededBeforeAttempt: timing ? !timing.attemptCreated : undefined,
+        supersededBeforeCodex: timing ? !timing.codexStarted : undefined,
+        elapsedMs: timing?.snapshot().totalExecutionMs,
       }, "Superseded older in-flight review worker for pull request");
     }
   }
@@ -540,6 +569,7 @@ export class ReviewQuillService {
     existingAttempt?: ReturnType<SqliteStore["getAttempt"]>,
     identity?: ChangeIdentity,
     signal?: AbortSignal,
+    timing?: ReviewExecutionTiming,
   ): Promise<void> {
     this.throwIfReviewSuperseded(signal);
     // A worker dispatched moments before a Codex capacity pause began may
@@ -588,6 +618,7 @@ export class ReviewQuillService {
         reviewSurfaceMode: surfaceMode,
         ...(identity?.baseSha !== undefined ? { baseSha: identity.baseSha } : {}),
       });
+    timing?.markAttemptCreated();
     if (existingAttempt && pr.title && attempt.prTitle !== pr.title) {
       this.store.setAttemptTitle(attempt.id, pr.title);
       attempt.prTitle = pr.title;
@@ -687,16 +718,23 @@ export class ReviewQuillService {
           suppressedReasons: reasons,
           patchBodyBudgetTokens: repo.patchBodyBudgetTokens,
         }, "Diff packer stats");
-        result = await this.runner.review(prepared.context, {
-          ...(signal ? { signal } : {}),
-          onThreadSnapshot: (transcript) => {
-            this.store.updateAttempt(attempt.id, {
-              threadId: transcript.id,
-              turnId: transcript.turns.at(-1)?.id ?? null,
-              transcript,
-            });
-          },
-        });
+        timing?.beginCodexReview();
+        let codexReviewCompleted = false;
+        try {
+          result = await this.runner.review(prepared.context, {
+            ...(signal ? { signal } : {}),
+            onThreadSnapshot: (transcript) => {
+              this.store.updateAttempt(attempt.id, {
+                threadId: transcript.id,
+                turnId: transcript.turns.at(-1)?.id ?? null,
+                transcript,
+              });
+            },
+          });
+          codexReviewCompleted = true;
+        } finally {
+          timing?.endCodexReview(codexReviewCompleted);
+        }
       } finally {
         await prepared.dispose();
       }
@@ -739,6 +777,7 @@ export class ReviewQuillService {
         }, "Skipping stale review publication");
         return;
       }
+      timing?.beginPublication();
       const currentReviews = await this.github.listPullRequestReviews(repo.repoFullName, pr.number);
       // Track the body we actually posted so the persisted attempt
       // row matches what's visible on GitHub. The 422 retry path
@@ -787,7 +826,11 @@ export class ReviewQuillService {
         reviewEvent: event,
         publicationMode: "body_only",
       });
+      timing?.endPublication();
     } catch (error) {
+      if (timing?.phase === "publication") {
+        timing.endPublication(false);
+      }
       if (error instanceof ReviewExecutionSupersededError) {
         this.store.updateAttempt(attempt.id, {
           status: "superseded",
