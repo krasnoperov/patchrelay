@@ -11,12 +11,14 @@ export async function buildPromptContext(
   workspace: ReviewWorkspace,
   reviewDocs: string[],
   selfLogin?: string,
+  priorAttemptCompletedAt?: string,
 ): Promise<PromptContext> {
-  const githubContext = await buildGitHubPromptContext(github, repoFullName, pr, selfLogin);
+  const githubContext = await buildGitHubPromptContext(github, repoFullName, pr, selfLogin, priorAttemptCompletedAt);
   const guidanceDocs = await loadRepoGuidanceDocs(workspace.worktreePath, reviewDocs, [pr.title, pr.body ?? ""]);
   return {
     guidanceDocs,
     priorReviewClaims: githubContext.priorReviewClaims,
+    followUpReviewClaims: githubContext.followUpReviewClaims,
     issueKeys: detectIssueKeys(pr),
   };
 }

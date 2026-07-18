@@ -22,6 +22,7 @@ const attempt: ReviewAttemptRecord = {
   baseSha: "base-1",
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
+  completedAt: "2026-01-01T00:01:00.000Z",
 };
 
 function select(overrides: {
@@ -44,7 +45,14 @@ function select(overrides: {
 test("selectPriorReviewThread accepts only a completed terminal transcript boundary", () => {
   assert.deepEqual(select(), {
     kind: "selected",
-    candidate: { sourceAttemptId: 1, threadId: "thread-1", lastTurnId: "turn-1" },
+    candidate: {
+      sourceAttemptId: 1,
+      threadId: "thread-1",
+      lastTurnId: "turn-1",
+      priorHeadSha: "old-head",
+      promptFingerprint: "prompt-1",
+      completedAt: "2026-01-01T00:01:00.000Z",
+    },
   });
   assert.equal(select({ attempt: { ...attempt, conclusion: "declined" } }).kind, "selected");
 });

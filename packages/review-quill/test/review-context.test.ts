@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolvePromptPullRequest } from "../src/review-context.ts";
+import { revalidatePriorThreadForPrompt, resolvePromptPullRequest } from "../src/review-context.ts";
+import { buildPromptFingerprint } from "../src/prompt-fingerprint.ts";
 import type { PullRequestSummary } from "../src/types.ts";
 
 function basePr(overrides: Partial<PullRequestSummary> = {}): PullRequestSummary {
@@ -51,4 +52,31 @@ test("resolvePromptPullRequest keeps the original snapshot when the head changed
   });
 
   assert.equal(resolved, original);
+});
+
+test("metadata refresh invalidates a prior-thread candidate selected from the dispatch snapshot", async () => {
+  const dispatched = basePr();
+  const candidate = {
+    sourceAttemptId: 17,
+    threadId: "source-thread",
+    lastTurnId: "source-turn",
+    priorHeadSha: "prior-head",
+    promptFingerprint: buildPromptFingerprint(dispatched),
+  };
+  const promptPr = await resolvePromptPullRequest({
+    github: {
+      getPullRequest: async () => basePr({
+        title: "Edited while workspace was prepared",
+        body: "The exact prompt metadata snapshot changed.",
+      }),
+    } as never,
+    repoFullName: "example/fixture",
+    pr: dispatched,
+  });
+
+  assert.equal(revalidatePriorThreadForPrompt(candidate, promptPr), undefined);
+  assert.equal(revalidatePriorThreadForPrompt({
+    ...candidate,
+    promptFingerprint: buildPromptFingerprint(promptPr),
+  }, promptPr)?.threadId, "source-thread");
 });

@@ -12,7 +12,7 @@ export {
   parseGitHubRepoFullName,
   resolveLocalBaseRef,
 } from "./local-diff.ts";
-export { renderDiffContextLines } from "./render.ts";
+export { renderDiffContextLines, renderDiffInventoryLines } from "./render.ts";
 export { humanReason } from "./summarize.ts";
 export {
   estimateTokens,

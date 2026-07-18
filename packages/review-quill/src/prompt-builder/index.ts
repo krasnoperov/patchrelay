@@ -1,1 +1,1 @@
-export { renderCorrectivePrompt, renderReviewPrompt } from "./render.ts";
+export { renderCorrectivePrompt, renderFollowUpReviewPrompt, renderReviewPrompt } from "./render.ts";

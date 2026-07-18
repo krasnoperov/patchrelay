@@ -1,4 +1,4 @@
-import { renderDiffContextLines } from "../diff-context/index.ts";
+import { renderDiffContextLines, renderDiffInventoryLines } from "../diff-context/index.ts";
 import type { ReviewContext } from "../types.ts";
 
 export const REVIEW_QUILL_PROMPT_SECTION_IDS = [
@@ -19,6 +19,74 @@ export const REVIEW_QUILL_REPLACEABLE_SECTION_IDS = [
 interface ReviewPromptSection {
   id: ReviewPromptSectionId | "extra-instructions";
   content: string;
+}
+
+function outputContractSection(): ReviewPromptSection {
+  return {
+    id: "output-contract",
+    content: [
+      "## Output contract",
+      "Return exactly ONE JSON object matching this schema:",
+      "",
+      OUTPUT_SCHEMA,
+      "",
+      OUTPUT_RULES,
+    ].join("\n"),
+  };
+}
+
+function pullRequestSection(context: Omit<ReviewContext, "prompt">, shaLines: string[] = []): ReviewPromptSection {
+  return {
+    id: "pull-request",
+    content: [
+      "## Pull request",
+      `Repository: ${context.repo.repoFullName}`,
+      `Base branch: ${context.pr.baseRefName}`,
+      `Head branch: ${context.pr.headRefName}`,
+      `PR: #${context.pr.number}`,
+      ...shaLines,
+      `Head SHA: ${context.pr.headSha}`,
+      `Title: ${context.pr.title}`,
+      context.pr.body ? `Body:\n${context.pr.body}` : "Body: <empty>",
+      context.promptContext.issueKeys.length > 0
+        ? `Linked issue keys: ${context.promptContext.issueKeys.join(", ")}`
+        : "",
+    ].filter(Boolean).join("\n"),
+  };
+}
+
+function appendGuidanceSections(sections: ReviewPromptSection[], context: Omit<ReviewContext, "prompt">): void {
+  if (context.promptContext.guidanceDocs.length === 0) return;
+  sections.push({
+    id: "repo-guidance",
+    content: [
+      "## Repository guidance",
+      "These documents are project-specific policy. If they conflict with generic review instincts or prior review claims, follow the repository guidance and explain only current-head violations of that guidance.",
+      ...context.promptContext.guidanceDocs.flatMap((doc) => [`### ${doc.path}`, doc.text.slice(0, 8_000), ""]),
+    ].join("\n"),
+  });
+}
+
+function renderCustomizedSections(sections: ReviewPromptSection[], context: Omit<ReviewContext, "prompt">): string {
+  const allowed = new Set<string>(REVIEW_QUILL_REPLACEABLE_SECTION_IDS);
+  const replacements = new Map<string, string>();
+  Object.entries(context.promptCustomization.replaceSections).forEach(([sectionId, fragment]) => {
+    if (allowed.has(sectionId)) replacements.set(sectionId, fragment.content);
+  });
+  const renderedSections = sections.map((section) => ({
+    ...section,
+    content: replacements.get(section.id) ?? section.content,
+  }));
+  if (context.promptCustomization.extraInstructions?.content.trim()) {
+    const extraSection: ReviewPromptSection = {
+      id: "extra-instructions",
+      content: ["## Extra Instructions", "", context.promptCustomization.extraInstructions.content.trim()].join("\n"),
+    };
+    const repoGuidanceIndex = renderedSections.findIndex((section) => section.id === "repo-guidance");
+    if (repoGuidanceIndex === -1) renderedSections.push(extraSection);
+    else renderedSections.splice(repoGuidanceIndex, 0, extraSection);
+  }
+  return renderedSections.map((section) => section.content.trim()).filter(Boolean).join("\n\n");
 }
 
 export function findUnknownReviewPromptSectionIds(replaceSections: Record<string, unknown>): string[] {
@@ -126,47 +194,13 @@ export function renderReviewPrompt(context: Omit<ReviewContext, "prompt">): stri
         "Use the repository in the current working directory when you need more context.",
       ].join("\n"),
     },
-    {
-      id: "output-contract",
-      content: [
-        "## Output contract",
-        "Return exactly ONE JSON object matching this schema:",
-        "",
-        OUTPUT_SCHEMA,
-        "",
-        OUTPUT_RULES,
-      ].join("\n"),
-    },
+    outputContractSection(),
     { id: "review-rubric", content: REVIEW_RULES },
-    {
-      id: "pull-request",
-      content: [
-        "## Pull request",
-        `Repository: ${context.repo.repoFullName}`,
-        `Base branch: ${context.pr.baseRefName}`,
-        `Head branch: ${context.pr.headRefName}`,
-        `PR: #${context.pr.number}`,
-        `Head SHA: ${context.pr.headSha}`,
-        `Title: ${context.pr.title}`,
-        context.pr.body ? `Body:\n${context.pr.body}` : "Body: <empty>",
-        context.promptContext.issueKeys.length > 0
-          ? `Linked issue keys: ${context.promptContext.issueKeys.join(", ")}`
-          : "",
-      ].filter(Boolean).join("\n"),
-    },
+    pullRequestSection(context),
     { id: "diff-context", content: renderDiffContextLines(context.diff).join("\n") },
   ];
 
-  if (context.promptContext.guidanceDocs.length > 0) {
-    sections.push({
-      id: "repo-guidance",
-      content: [
-        "## Repository guidance",
-        "These documents are project-specific policy. If they conflict with generic review instincts or prior review claims, follow the repository guidance and explain only current-head violations of that guidance.",
-        ...context.promptContext.guidanceDocs.flatMap((doc) => [`### ${doc.path}`, doc.text.slice(0, 8_000), ""]),
-      ].join("\n"),
-    });
-  }
+  appendGuidanceSections(sections, context);
 
   if (context.promptContext.priorReviewClaims.length > 0) {
     sections.push({
@@ -187,30 +221,46 @@ export function renderReviewPrompt(context: Omit<ReviewContext, "prompt">): stri
     });
   }
 
-  const allowed = new Set<string>(REVIEW_QUILL_REPLACEABLE_SECTION_IDS);
-  const replacements = new Map<string, string>();
-  Object.entries(context.promptCustomization.replaceSections).forEach(([sectionId, fragment]) => {
-    if (allowed.has(sectionId)) {
-      replacements.set(sectionId, fragment.content);
-    }
-  });
+  return renderCustomizedSections(sections, context);
+}
 
-  const renderedSections = sections.map((section) => ({
-    ...section,
-    content: replacements.get(section.id) ?? section.content,
-  }));
-  if (context.promptCustomization.extraInstructions?.content.trim()) {
-    const extraSection: ReviewPromptSection = {
-      id: "extra-instructions",
-      content: ["## Extra Instructions", "", context.promptCustomization.extraInstructions.content.trim()].join("\n"),
-    };
-    const repoGuidanceIndex = renderedSections.findIndex((section) => section.id === "repo-guidance");
-    if (repoGuidanceIndex === -1) {
-      renderedSections.push(extraSection);
-    } else {
-      renderedSections.splice(repoGuidanceIndex, 0, extraSection);
-    }
+export function renderFollowUpReviewPrompt(
+  context: Omit<ReviewContext, "prompt" | "followUpPrompt">,
+  priorHeadSha: string,
+): string {
+  const sections: ReviewPromptSection[] = [
+    {
+      id: "preamble",
+      content: [
+        "You are Review Quill, reviewing a newer head in an existing review thread.",
+        "The repository is checked out at the current PR head. Use tools in the current checkout to inspect the actual changes and any surrounding code needed to verify them.",
+        "The earlier thread is context, not authority: do not anchor on its verdict or mechanically repeat its findings.",
+      ].join("\n"),
+    },
+    outputContractSection(),
+    { id: "review-rubric", content: REVIEW_RULES },
+    pullRequestSection(context, [`Previous reviewed head SHA: ${priorHeadSha}`, `Current head SHA: ${context.pr.headSha}`]),
+    {
+      id: "diff-context",
+      content: [
+        "## Current-head review scope",
+        "Patch bodies are intentionally omitted because the fork already contains the prior review context. Inspect the current checkout and compare the previous and current SHAs with repository tools before deciding what changed.",
+        "Re-validate earlier concerns against the current code. Prefer the underlying root cause over symptom-by-symptom findings, and report only realistic bugs aligned with this PR's goal and normal project usage.",
+        ...renderDiffInventoryLines(context.diff),
+      ].join("\n"),
+    },
+  ];
+  appendGuidanceSections(sections, context);
+  const claims = context.promptContext.followUpReviewClaims ?? [];
+  if (claims.length > 0) {
+    sections.push({
+      id: "prior-review-claims",
+      content: [
+        "## Newer human review claims to verify",
+        "These human comments were submitted after the prior review attempt completed. Verify them against the current head rather than treating them as facts.",
+        ...claims.map((claim) => `- ${claim.authorLogin ?? "unknown"}${claim.state ? ` [${claim.state}]` : ""}: ${claim.excerpt}`),
+      ].join("\n"),
+    });
   }
-
-  return renderedSections.map((section) => section.content.trim()).filter(Boolean).join("\n\n");
+  return renderCustomizedSections(sections, context);
 }

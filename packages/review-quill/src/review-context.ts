@@ -4,10 +4,12 @@ import type { PullRequestSummary, ReviewContext, ReviewQuillRepositoryConfig } f
 import { loadReviewQuillRepoPrompting } from "./customization.ts";
 import { buildDiffContext } from "./diff-context/index.ts";
 import { buildPromptContext } from "./prompt-context/index.ts";
-import { renderReviewPrompt } from "./prompt-builder/index.ts";
+import { renderFollowUpReviewPrompt, renderReviewPrompt } from "./prompt-builder/index.ts";
 import { findDisallowedReviewPromptSectionIds, findUnknownReviewPromptSectionIds } from "./prompt-builder/render.ts";
 import { materializeReviewWorkspaceWithMode } from "./review-workspace/index.ts";
 import { resolveReviewSurfaceMode } from "./carry-forward.ts";
+import type { PriorReviewThreadCandidate } from "./prior-review-thread-selector.ts";
+import { buildPromptFingerprint } from "./prompt-fingerprint.ts";
 
 export class CannotIntegrateError extends Error {
   readonly headSha: string;
@@ -37,6 +39,13 @@ export async function resolvePromptPullRequest(params: {
   };
 }
 
+export function revalidatePriorThreadForPrompt(
+  candidate: PriorReviewThreadCandidate | undefined,
+  promptPr: PullRequestSummary,
+): PriorReviewThreadCandidate | undefined {
+  return candidate?.promptFingerprint === buildPromptFingerprint(promptPr) ? candidate : undefined;
+}
+
 function mergePromptCustomization(
   base: ReviewContext["promptCustomization"],
   override: ReviewContext["promptCustomization"] | undefined,
@@ -61,7 +70,8 @@ export async function buildReviewContext(params: {
   prompting: ReviewContext["promptCustomization"];
   logger: Logger;
   selfLogin: string | undefined;
-}): Promise<{ context: ReviewContext; dispose: () => Promise<void> }> {
+  priorThread?: PriorReviewThreadCandidate;
+}): Promise<{ context: ReviewContext; dispose: () => Promise<void>; priorThread?: PriorReviewThreadCandidate }> {
   const token = params.github.currentTokenForRepo(params.repo.repoFullName);
   if (!token) {
     throw new Error(`No GitHub installation token available for ${params.repo.repoFullName}`);
@@ -84,6 +94,12 @@ export async function buildReviewContext(params: {
       repoFullName: params.repo.repoFullName,
       pr: params.pr,
     });
+    // The candidate was selected from an earlier PR metadata snapshot. Only
+    // reuse it when the exact snapshot rendered below has the same prompt
+    // fingerprint; title/body edits during workspace preparation must start a
+    // full fresh review instead of anchoring a bounded follow-up to stale
+    // context.
+    const priorThread = revalidatePriorThreadForPrompt(params.priorThread, promptPr);
     const diff = await buildDiffContext(params.repo, materialized.workspace);
     const promptContext = await buildPromptContext(
       params.github,
@@ -92,6 +108,7 @@ export async function buildReviewContext(params: {
       materialized.workspace,
       params.repo.reviewDocs,
       params.selfLogin,
+      priorThread?.completedAt,
     );
     const repoPromptCustomization = loadReviewQuillRepoPrompting({
       repoRoot: materialized.workspace.worktreePath,
@@ -120,12 +137,18 @@ export async function buildReviewContext(params: {
         "Review Quill prompt customization attempted to replace non-overridable sections",
       );
     }
+    const prompt = renderReviewPrompt(baseContext);
+    const followUpPrompt = priorThread
+      ? renderFollowUpReviewPrompt(baseContext, priorThread.priorHeadSha)
+      : undefined;
     return {
       context: {
         ...baseContext,
-        prompt: renderReviewPrompt(baseContext),
+        prompt,
+        ...(followUpPrompt ? { followUpPrompt } : {}),
       },
       dispose: materialized.dispose,
+      ...(priorThread ? { priorThread } : {}),
     };
   } catch (error) {
     await materialized.dispose();

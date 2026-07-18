@@ -698,6 +698,7 @@ export class ReviewQuillService {
           prompting: this.config.prompting,
           logger: this.logger,
           selfLogin: this.reviewerLogin,
+          ...(priorThreadCandidate ? { priorThread: priorThreadCandidate } : {}),
         });
       } catch (error) {
         if (error instanceof CannotIntegrateError) {
@@ -720,6 +721,13 @@ export class ReviewQuillService {
         }
         throw error;
       }
+      // buildReviewContext refreshes same-head PR metadata immediately before
+      // rendering. Persist the fingerprint of that exact snapshot so the next
+      // follow-up selection is keyed to what Codex actually reviewed, rather
+      // than the earlier preflight snapshot.
+      this.store.updateAttempt(attempt.id, {
+        promptFingerprint: buildPromptFingerprint(prepared.context.pr),
+      });
       let result: Awaited<ReturnType<ReviewRunner["review"]>>;
       try {
         this.throwIfReviewSuperseded(signal);
@@ -753,7 +761,7 @@ export class ReviewQuillService {
                 transcript,
               });
             },
-          }, priorThreadCandidate);
+          }, prepared.priorThread);
           codexReviewCompleted = true;
         } finally {
           timing?.endCodexReview(codexReviewCompleted);
