@@ -5,8 +5,30 @@ import type {
   ReviewAttemptRecord,
   ReviewAttemptStatus,
   ReviewSurfaceMode,
+  CodexThreadSummary,
   WebhookEventRecord,
 } from "../types.ts";
+
+// Keep large transcript snapshots out of normal attempt reads. Operators load
+// one explicitly through getAttemptTranscript when they ask for a transcript.
+const ATTEMPT_COLUMNS = `
+  id, repo_full_name, pr_number, head_sha, status, conclusion, summary,
+  pr_title, prompt_fingerprint, thread_id, turn_id, external_check_run_id,
+  patch_id, integration_tree_id, review_surface_mode, base_sha,
+  prior_attempt_id, review_body, review_event, publication_mode,
+  created_at, updated_at, completed_at
+`;
+
+function parseTranscript(value: unknown): CodexThreadSummary | undefined {
+  if (typeof value !== "string" || !value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as Partial<CodexThreadSummary>;
+    if (typeof parsed.id !== "string" || !Array.isArray(parsed.turns)) return undefined;
+    return parsed as CodexThreadSummary;
+  } catch {
+    return undefined;
+  }
+}
 
 function mapAttempt(row: Record<string, unknown>): ReviewAttemptRecord {
   return {
@@ -57,6 +79,7 @@ export class SqliteStore {
     this.db.exec(SCHEMA_SQL);
     this.addColumnIfMissing("review_attempts", "pr_title", "TEXT");
     this.addColumnIfMissing("review_attempts", "prompt_fingerprint", "TEXT");
+    this.addColumnIfMissing("review_attempts", "transcript_json", "TEXT");
     // Carry-forward identity columns. Existing rows backfill NULL and behave
     // as cache misses; new approved rows populate them so future heads can
     // re-emit the verdict without re-running the reviewer.
@@ -104,7 +127,7 @@ export class SqliteStore {
 
   getAttempt(repoFullName: string, prNumber: number, headSha: string): ReviewAttemptRecord | undefined {
     const row = this.db.prepare(`
-      SELECT *
+      SELECT ${ATTEMPT_COLUMNS}
       FROM review_attempts
       WHERE repo_full_name = ? AND pr_number = ? AND head_sha = ?
     `).get(repoFullName, prNumber, headSha);
@@ -112,8 +135,13 @@ export class SqliteStore {
   }
 
   getAttemptById(id: number): ReviewAttemptRecord | undefined {
-    const row = this.db.prepare("SELECT * FROM review_attempts WHERE id = ?").get(id);
+    const row = this.db.prepare(`SELECT ${ATTEMPT_COLUMNS} FROM review_attempts WHERE id = ?`).get(id);
     return row ? mapAttempt(row) : undefined;
+  }
+
+  getAttemptTranscript(id: number): CodexThreadSummary | undefined {
+    const row = this.db.prepare("SELECT transcript_json FROM review_attempts WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    return parseTranscript(row?.transcript_json);
   }
 
   // Carry-forward lookup for head-mode review surface. Finds an approved
@@ -139,7 +167,7 @@ export class SqliteStore {
       ...(promptFingerprint ? [promptFingerprint] : []),
     ];
     const row = this.db.prepare(`
-      SELECT *
+      SELECT ${ATTEMPT_COLUMNS}
       FROM review_attempts
       WHERE repo_full_name = ?
         AND pr_number = ?
@@ -179,7 +207,7 @@ export class SqliteStore {
       ...(promptFingerprint ? [promptFingerprint] : []),
     ];
     const row = this.db.prepare(`
-      SELECT *
+      SELECT ${ATTEMPT_COLUMNS}
       FROM review_attempts
       WHERE repo_full_name = ?
         AND pr_number = ?
@@ -265,6 +293,7 @@ export class SqliteStore {
     summary?: string;
     threadId?: string | null;
     turnId?: string | null;
+    transcript?: CodexThreadSummary | null;
     externalCheckRunId?: number | null;
     completedAt?: string | null;
     promptFingerprint?: string | null;
@@ -298,6 +327,10 @@ export class SqliteStore {
     if (params.turnId !== undefined) {
       sets.push("turn_id = @turnId");
       values.turnId = params.turnId;
+    }
+    if (params.transcript !== undefined) {
+      sets.push("transcript_json = @transcriptJson");
+      values.transcriptJson = params.transcript === null ? null : JSON.stringify(params.transcript);
     }
     if (params.externalCheckRunId !== undefined) {
       sets.push("external_check_run_id = @externalCheckRunId");
@@ -349,7 +382,7 @@ export class SqliteStore {
 
   listAttempts(limit = 100): ReviewAttemptRecord[] {
     return this.db.prepare(`
-      SELECT *
+      SELECT ${ATTEMPT_COLUMNS}
       FROM review_attempts
       ORDER BY id DESC
       LIMIT ?
@@ -358,7 +391,7 @@ export class SqliteStore {
 
   listAttemptsForPullRequest(repoFullName: string, prNumber: number, limit = 20): ReviewAttemptRecord[] {
     return this.db.prepare(`
-      SELECT *
+      SELECT ${ATTEMPT_COLUMNS}
       FROM review_attempts
       WHERE repo_full_name = ? AND pr_number = ?
       ORDER BY id DESC
@@ -368,7 +401,7 @@ export class SqliteStore {
 
   listActiveAttemptsForRepo(repoFullName: string, limit = 50): ReviewAttemptRecord[] {
     return this.db.prepare(`
-      SELECT *
+      SELECT ${ATTEMPT_COLUMNS}
       FROM review_attempts
       WHERE repo_full_name = ?
         AND status IN ('queued', 'running')

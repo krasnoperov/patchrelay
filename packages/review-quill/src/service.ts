@@ -541,8 +541,6 @@ export class ReviewQuillService {
         status: "queued",
         conclusion: null,
         summary: "Retrying previous failed review attempt",
-        threadId: null,
-        turnId: null,
         externalCheckRunId: null,
         completedAt: null,
         ...(identity?.patchId !== undefined ? { patchId: identity.patchId } : {}),
@@ -662,7 +660,16 @@ export class ReviewQuillService {
           suppressedReasons: reasons,
           patchBodyBudgetTokens: repo.patchBodyBudgetTokens,
         }, "Diff packer stats");
-        result = await this.runner.review(prepared.context, signal ? { signal } : {});
+        result = await this.runner.review(prepared.context, {
+          ...(signal ? { signal } : {}),
+          onThreadSnapshot: (transcript) => {
+            this.store.updateAttempt(attempt.id, {
+              threadId: transcript.id,
+              turnId: transcript.turns.at(-1)?.id ?? null,
+              transcript,
+            });
+          },
+        });
       } finally {
         await prepared.dispose();
       }

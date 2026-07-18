@@ -60,6 +60,7 @@ test("SqliteStore opens a legacy database that pre-dates the carry-forward colum
     assert.ok(names.has("integration_tree_id"), "integration_tree_id column should be added on open");
     assert.ok(names.has("review_surface_mode"), "review_surface_mode column should be added on open");
     assert.ok(names.has("prompt_fingerprint"), "prompt_fingerprint column should be added on open");
+    assert.ok(names.has("transcript_json"), "transcript_json column should be added on open");
     verify.close();
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

@@ -30,6 +30,7 @@ function minimalConfig(): ReviewQuillConfig {
 test("ReviewRunner keeps waiting when a Codex thread read times out", async () => {
   let readCalls = 0;
   const sleeps: number[] = [];
+  const snapshots: Array<{ id: string; turns: Array<{ status: string }> }> = [];
   const fakeCodex = {
     start: async () => {},
     stop: async () => {},
@@ -75,13 +76,14 @@ test("ReviewRunner keeps waiting when a Codex thread read times out", async () =
   const result = await runner.review({
     prompt: "Review this PR.",
     workspace: { worktreePath: "/tmp/review-quill-test" },
-  } as never);
+  } as never, { onThreadSnapshot: (thread) => snapshots.push(thread) });
 
   assert.equal(result.threadId, "thread-1");
   assert.equal(result.turnId, "turn-1");
   assert.equal(result.verdict.verdict, "approve");
   assert.equal(readCalls, 2);
   assert.deepEqual(sleeps, [1_500]);
+  assert.deepEqual(snapshots.map((thread) => thread.turns.at(-1)?.status), ["running", "completed"]);
 });
 
 test("ReviewRunner retries Codex thread start when rollout jsonl is empty", async () => {
@@ -137,6 +139,122 @@ test("ReviewRunner retries Codex thread start when rollout jsonl is empty", asyn
   assert.equal(result.threadId, "thread-1");
   assert.equal(startThreadCalls, 2);
   assert.deepEqual(sleeps, [750]);
+});
+
+test("ReviewRunner continues when thread snapshot persistence fails", async () => {
+  const warnings: string[] = [];
+  const fakeCodex = {
+    start: async () => {},
+    stop: async () => {},
+    startThread: async () => ({ id: "thread-1", turns: [] }),
+    startTurn: async () => ({ turnId: "turn-1", status: "running" }),
+    readThread: async () => ({
+      id: "thread-1",
+      turns: [{
+        id: "turn-1",
+        status: "completed",
+        items: [{
+          type: "agentMessage",
+          text: JSON.stringify({
+            walkthrough: "The patch is straightforward.",
+            architectural_concerns: [],
+            findings: [],
+            verdict: "approve",
+            verdict_reason: "No blocking issues found.",
+          }),
+        }],
+      }],
+    }),
+  };
+  const runner = new ReviewRunner(
+    minimalConfig(),
+    {
+      warn: (_data: unknown, message: string) => warnings.push(message),
+      child: () => ({}),
+    } as never,
+    fakeCodex as never,
+    async () => {},
+  );
+
+  const result = await runner.review({
+    prompt: "Review this PR.",
+    workspace: { worktreePath: "/tmp/review-quill-test" },
+  } as never, {
+    onThreadSnapshot: () => { throw new Error("database is read-only"); },
+  });
+
+  assert.equal(result.verdict.verdict, "approve");
+  assert.deepEqual(warnings, [
+    "Failed to persist Codex thread snapshot; continuing review",
+    "Failed to persist Codex thread snapshot; continuing review",
+  ]);
+});
+
+test("ReviewRunner checkpoints a started turn and only changed in-progress snapshots", async () => {
+  let readCalls = 0;
+  const snapshots: Array<{ id: string; turns: Array<{ id: string; status: string; items: unknown[] }> }> = [];
+  const inProgressThread = {
+    id: "thread-progress",
+    turns: [{
+      id: "turn-progress",
+      status: "inProgress",
+      items: [{ type: "agentMessage", id: "partial", text: "Inspecting the changed files." }],
+    }],
+  };
+  const fakeCodex = {
+    start: async () => {},
+    stop: async () => {},
+    startThread: async () => ({ id: "thread-progress", turns: [] }),
+    startTurn: async () => ({ turnId: "turn-progress", status: "running" }),
+    readThread: async () => {
+      readCalls += 1;
+      if (readCalls <= 2) return structuredClone(inProgressThread);
+      return {
+        id: "thread-progress",
+        turns: [{
+          id: "turn-progress",
+          status: "completed",
+          items: [{
+            type: "agentMessage",
+            id: "final",
+            text: JSON.stringify({
+              walkthrough: "The patch is straightforward.",
+              architectural_concerns: [],
+              findings: [],
+              verdict: "approve",
+              verdict_reason: "No blocking issues found.",
+            }),
+          }],
+        }],
+      };
+    },
+  };
+  const runner = new ReviewRunner(
+    minimalConfig(),
+    { warn: () => {}, child: () => ({}) } as never,
+    fakeCodex as never,
+    async () => {},
+  );
+
+  const result = await runner.review({
+    prompt: "Review this PR.",
+    workspace: { worktreePath: "/tmp/review-quill-test" },
+  } as never, { onThreadSnapshot: (thread) => snapshots.push(thread) });
+
+  assert.equal(result.verdict.verdict, "approve");
+  assert.equal(readCalls, 3);
+  assert.deepEqual(
+    snapshots.map((thread) => ({
+      threadId: thread.id,
+      turnId: thread.turns.at(-1)?.id,
+      status: thread.turns.at(-1)?.status,
+    })),
+    [
+      { threadId: "thread-progress", turnId: "turn-progress", status: "running" },
+      { threadId: "thread-progress", turnId: "turn-progress", status: "inProgress" },
+      { threadId: "thread-progress", turnId: "turn-progress", status: "completed" },
+    ],
+  );
 });
 
 test("ReviewRunner retries Codex turn start when rollout jsonl is empty", async () => {
@@ -199,6 +317,7 @@ test("ReviewRunner interrupts a running Codex turn when the review signal aborts
   let readCalls = 0;
   let interruptCalls = 0;
   const sleeps: number[] = [];
+  const snapshots: Array<{ id: string; turns: Array<{ status: string }> }> = [];
   const fakeCodex = {
     start: async () => {},
     stop: async () => {},
@@ -238,7 +357,7 @@ test("ReviewRunner interrupts a running Codex turn when the review signal aborts
     () => runner.review({
       prompt: "Review this PR.",
       workspace: { worktreePath: "/tmp/review-quill-test" },
-    } as never, { signal: controller.signal }),
+    } as never, { signal: controller.signal, onThreadSnapshot: (thread) => snapshots.push(thread) }),
     (error: unknown) => {
       assert.ok(error instanceof ReviewRunInterruptedError);
       assert.equal(error.threadId, "thread-1");
@@ -251,10 +370,12 @@ test("ReviewRunner interrupts a running Codex turn when the review signal aborts
   assert.equal(interruptCalls, 1);
   assert.equal(readCalls, 1);
   assert.deepEqual(sleeps, []);
+  assert.deepEqual(snapshots.map((thread) => thread.turns.at(-1)?.status), ["running", "interrupted"]);
 });
 
 test("ReviewRunner fails fast when the Codex app-server reports a failed turn", async () => {
   const sleeps: number[] = [];
+  const snapshots: Array<{ id: string; turns: Array<{ status: string }> }> = [];
   const fakeCodex = {
     start: async () => {},
     stop: async () => {},
@@ -289,10 +410,11 @@ test("ReviewRunner fails fast when the Codex app-server reports a failed turn", 
     () => runner.review({
       prompt: "Review this PR.",
       workspace: { worktreePath: "/tmp/review-quill-test" },
-    } as never),
+    } as never, { onThreadSnapshot: (thread) => snapshots.push(thread) }),
     /Review turn ended with status failed/,
   );
   assert.deepEqual(sleeps, []);
+  assert.deepEqual(snapshots.map((thread) => thread.turns.at(-1)?.status), ["running", "failed"]);
 });
 
 test("ReviewRunner does not retry non-materialization app-server start failures", async () => {

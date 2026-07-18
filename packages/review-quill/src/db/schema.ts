@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS review_attempts (
   prompt_fingerprint TEXT,
   thread_id TEXT,
   turn_id TEXT,
+  transcript_json TEXT,
   external_check_run_id INTEGER,
   patch_id TEXT,
   integration_tree_id TEXT,

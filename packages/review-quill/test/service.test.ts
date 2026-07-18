@@ -286,7 +286,20 @@ test("triggerReconcile retires active attempts for merged pull requests", async 
 });
 
 test("executeReview skips stale heads before starting Codex review work", async () => {
-  let storedAttempt: Record<string, unknown> | undefined;
+  const existingAttempt = {
+    id: 99,
+    repoFullName: "krasnoperov/subtitles",
+    prNumber: 1220,
+    headSha: "old-head",
+    status: "failed",
+    conclusion: "error",
+    threadId: "old-thread",
+    turnId: "old-turn",
+    transcript: { id: "old-thread", turns: [{ id: "old-turn", status: "failed", items: [] }] },
+    createdAt: "2026-05-24T00:00:00.000Z",
+    updatedAt: "2026-05-24T00:01:00.000Z",
+  } as const;
+  let storedAttempt: Record<string, unknown> | undefined = { ...existingAttempt };
   const updates: Array<Record<string, unknown>> = [];
   let runnerCalled = false;
 
@@ -395,6 +408,7 @@ test("executeReview skips stale heads before starting Codex review work", async 
       baseRefName: "main",
       labels: [],
     },
+    existingAttempt,
   );
 
   assert.equal(runnerCalled, false);
@@ -403,6 +417,10 @@ test("executeReview skips stale heads before starting Codex review work", async 
   assert.match(String(storedAttempt?.summary), /Superseded by newer head new-head/);
   assert.ok(updates.some((update) => update.status === "running"));
   assert.ok(updates.some((update) => update.status === "superseded"));
+  assert.ok(!updates.some((update) => update.threadId === null || update.turnId === null || update.transcript === null));
+  assert.equal(storedAttempt?.threadId, "old-thread");
+  assert.equal(storedAttempt?.turnId, "old-turn");
+  assert.deepEqual(storedAttempt?.transcript, existingAttempt.transcript);
 });
 
 test("triggerReconcile does not re-review an unchanged head after PR metadata edits", async () => {
