@@ -40,10 +40,12 @@ export class CodexJsonRpcError extends Error {
   }
 }
 
-interface JsonRpcNotification {
+export interface CodexAppServerNotification {
   method: string;
   params?: unknown;
 }
+
+export type CodexAppServerNotificationListener = (notification: CodexAppServerNotification) => void;
 
 export interface StartThreadOptions {
   cwd: string;
@@ -166,6 +168,11 @@ export class CodexAppServerClient extends EventEmitter {
     return this.mapThread(response.thread);
   }
 
+  subscribeNotifications(listener: CodexAppServerNotificationListener): () => void {
+    this.on("notification", listener);
+    return () => this.off("notification", listener);
+  }
+
   private async sendRequest(method: string, params: unknown): Promise<unknown> {
     if (!this.child?.stdin) throw new Error("Codex app-server is not running");
     const id = this.nextRequestId++;
@@ -203,8 +210,11 @@ export class CodexAppServerClient extends EventEmitter {
       const line = this.stdoutBuffer.slice(0, newlineIndex).trim();
       this.stdoutBuffer = this.stdoutBuffer.slice(newlineIndex + 1);
       if (!line) continue;
-      const message = JSON.parse(line) as JsonRpcSuccess | JsonRpcFailure | JsonRpcNotification;
-      if ("method" in message) continue;
+      const message = JSON.parse(line) as JsonRpcSuccess | JsonRpcFailure | CodexAppServerNotification;
+      if ("method" in message) {
+        this.emit("notification", message);
+        continue;
+      }
       const id = Number(message.id);
       const pending = this.pending.get(id);
       if (!pending) continue;

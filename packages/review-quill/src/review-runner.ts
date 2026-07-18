@@ -1,5 +1,10 @@
 import type { Logger } from "pino";
-import { CodexAppServerClient, CodexJsonRpcError, type StartTurnOptions } from "./codex-app-server.ts";
+import {
+  CodexAppServerClient,
+  CodexJsonRpcError,
+  type CodexAppServerNotification,
+  type StartTurnOptions,
+} from "./codex-app-server.ts";
 import { classifyCodexFailure, CodexCapacityError } from "./codex-capacity.ts";
 import { buildAgentChildEnv } from "./github-cli-auth.ts";
 import { renderCorrectivePrompt } from "./prompt-builder/index.ts";
@@ -32,6 +37,7 @@ type ParseResult =
 const PARSE_FAILURE_PREVIEW_CHARS = 200;
 const CODEX_START_MAX_ATTEMPTS = 4;
 const CODEX_START_BACKOFF_MS = 750;
+const TURN_NOTIFICATION_WATCHDOG_MS = 10_000;
 
 export class ReviewRunInterruptedError extends Error {
   constructor(
@@ -278,7 +284,13 @@ export function normalizeVerdict(raw: Record<string, unknown>): ReviewVerdict {
 }
 
 type CodexRunnerClient = Pick<CodexAppServerClient, "start" | "stop" | "startThread" | "startTurn" | "readThread">;
-type InterruptibleCodexRunnerClient = CodexRunnerClient & Partial<Pick<CodexAppServerClient, "interruptTurn">>;
+type InterruptibleCodexRunnerClient = CodexRunnerClient & Partial<Pick<CodexAppServerClient, "interruptTurn" | "subscribeNotifications">>;
+
+interface TurnCompletionSubscription {
+  completion: Promise<void>;
+  expectTurn(turnId: string): void;
+  unsubscribe(): void;
+}
 
 export class ReviewRunner {
   private readonly codex: InterruptibleCodexRunnerClient;
@@ -289,6 +301,7 @@ export class ReviewRunner {
     private readonly logger: Logger,
     codex?: InterruptibleCodexRunnerClient,
     private readonly sleep: (ms: number) => Promise<void> = delay,
+    private readonly notificationWatchdogMs = TURN_NOTIFICATION_WATCHDOG_MS,
   ) {
     // The Codex review agent is long-lived: give it an env without GH_TOKEN/GITHUB_TOKEN
     // so its git/gh authenticate as the App via the inherited GH_CONFIG_DIR (rotated),
@@ -360,34 +373,84 @@ export class ReviewRunner {
   ): Promise<{ latestMessage: string; turnId: string; thread: CodexThreadSummary }> {
     const threadId = priorThread.id;
     this.throwIfReviewRunInterrupted(options.signal, threadId);
-    const started = await this.startTurnWithMaterializationRetry(threadId, cwd, input);
-    const startedThread: CodexThreadSummary = {
-      id: threadId,
-      turns: [
-        ...priorThread.turns,
-        { id: started.turnId, status: started.status, items: [] },
-      ],
-    };
-    const startedThreadPersisted = this.emitThreadSnapshot(options.onThreadSnapshot, startedThread);
-    const completedThread = await this.waitForTurnCompletion(
-      threadId,
-      started.turnId,
-      options,
-      startedThreadPersisted ? JSON.stringify(startedThread) : undefined,
-    );
-    const latestMessage = collectAssistantMessages(completedThread).at(-1);
-    if (!latestMessage) {
-      // The turn "completed" but produced no message — the thread summary
-      // usually carries the real failure as a turn-level error event
-      // (account usage limits surface this way). Surface it, and throw the
-      // typed capacity error when it is a usage-limit/quota failure.
-      const turnError = latestTurnErrorMessage(completedThread, started.turnId);
-      if (turnError) {
-        throwTurnError(turnError, "Review run completed without an assistant message");
+    const completionSubscription = this.subscribeToTurnCompletion(threadId);
+    try {
+      const started = await this.startTurnWithMaterializationRetry(threadId, cwd, input);
+      completionSubscription?.expectTurn(started.turnId);
+      const startedThread: CodexThreadSummary = {
+        id: threadId,
+        turns: [
+          ...priorThread.turns,
+          { id: started.turnId, status: started.status, items: [] },
+        ],
+      };
+      const startedThreadPersisted = this.emitThreadSnapshot(options.onThreadSnapshot, startedThread);
+      const completedThread = await this.waitForTurnCompletion(
+        threadId,
+        started.turnId,
+        options,
+        startedThreadPersisted ? JSON.stringify(startedThread) : undefined,
+        completionSubscription?.completion,
+      );
+      const latestMessage = collectAssistantMessages(completedThread).at(-1);
+      if (!latestMessage) {
+        // The turn "completed" but produced no message — the thread summary
+        // usually carries the real failure as a turn-level error event
+        // (account usage limits surface this way). Surface it, and throw the
+        // typed capacity error when it is a usage-limit/quota failure.
+        const turnError = latestTurnErrorMessage(completedThread, started.turnId);
+        if (turnError) {
+          throwTurnError(turnError, "Review run completed without an assistant message");
+        }
+        throw new Error("Review run completed without an assistant message");
       }
-      throw new Error("Review run completed without an assistant message");
+      return { latestMessage, turnId: started.turnId, thread: completedThread };
+    } finally {
+      completionSubscription?.unsubscribe();
     }
-    return { latestMessage, turnId: started.turnId, thread: completedThread };
+  }
+
+  private subscribeToTurnCompletion(threadId: string): TurnCompletionSubscription | undefined {
+    if (!this.codex.subscribeNotifications) return undefined;
+    let expectedTurnId: string | undefined;
+    let completed = false;
+    const bufferedTurnIds = new Set<string>();
+    let resolveCompletion!: () => void;
+    const completion = new Promise<void>((resolve) => {
+      resolveCompletion = resolve;
+    });
+    const listener = (notification: CodexAppServerNotification): void => {
+      if (completed || notification.method !== "turn/completed") return;
+      const params = notification.params && typeof notification.params === "object"
+        ? notification.params as Record<string, unknown>
+        : undefined;
+      const turn = params?.turn && typeof params.turn === "object"
+        ? params.turn as Record<string, unknown>
+        : undefined;
+      const notifiedThreadId = typeof params?.threadId === "string" ? params.threadId : undefined;
+      const notifiedTurnId = typeof turn?.id === "string" ? turn.id : undefined;
+      if (notifiedThreadId !== threadId || !notifiedTurnId) return;
+      if (!expectedTurnId) {
+        bufferedTurnIds.add(notifiedTurnId);
+        return;
+      }
+      if (notifiedTurnId !== expectedTurnId) return;
+      completed = true;
+      resolveCompletion();
+    };
+    const unsubscribe = this.codex.subscribeNotifications(listener);
+    return {
+      completion,
+      expectTurn: (turnId) => {
+        expectedTurnId = turnId;
+        if (!completed && bufferedTurnIds.has(turnId)) {
+          completed = true;
+          resolveCompletion();
+        }
+        bufferedTurnIds.clear();
+      },
+      unsubscribe,
+    };
   }
 
   private async startThreadWithMaterializationRetry(cwd: string): Promise<Awaited<ReturnType<CodexRunnerClient["startThread"]>>> {
@@ -462,6 +525,7 @@ export class ReviewRunner {
     turnId: string,
     options: ReviewRunOptions,
     initialPersistedThreadJson?: string,
+    completionNotification?: Promise<void>,
   ): Promise<Awaited<ReturnType<CodexAppServerClient["readThread"]>>> {
     const { signal, onThreadSnapshot } = options;
     const deadline = Date.now() + 15 * 60_000;
@@ -490,6 +554,10 @@ export class ReviewRunner {
     };
     signal?.addEventListener("abort", abortListener, { once: true });
     try {
+      await submitInterrupt();
+      if (completionNotification && !signal?.aborted) {
+        await this.waitForCompletionNotification(completionNotification, signal);
+      }
       while (Date.now() < deadline) {
         await submitInterrupt();
         let thread: Awaited<ReturnType<CodexAppServerClient["readThread"]>>;
@@ -532,6 +600,29 @@ export class ReviewRunner {
       signal?.removeEventListener("abort", abortListener);
     }
     throw new Error("Timed out waiting for review turn completion");
+  }
+
+  private async waitForCompletionNotification(completion: Promise<void>, signal?: AbortSignal): Promise<void> {
+    let abortListener: (() => void) | undefined;
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        completion,
+        new Promise<void>((resolve) => {
+          timeout = setTimeout(resolve, this.notificationWatchdogMs);
+          timeout.unref?.();
+        }),
+        ...(signal
+          ? [new Promise<void>((resolve) => {
+            abortListener = () => resolve();
+            signal.addEventListener("abort", abortListener, { once: true });
+          })]
+          : []),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      if (abortListener) signal?.removeEventListener("abort", abortListener);
+    }
   }
 
   private async sleepUntilNextPoll(ms: number, signal?: AbortSignal): Promise<void> {
