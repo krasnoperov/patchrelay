@@ -754,7 +754,7 @@ export class ReviewQuillService {
                 transcript,
               });
             },
-          }, priorThreadCandidate);
+          }, prepared.priorThread);
           codexReviewCompleted = true;
         } finally {
           timing?.endCodexReview(codexReviewCompleted);

@@ -50,6 +50,7 @@ test("selectPriorReviewThread accepts only a completed terminal transcript bound
       threadId: "thread-1",
       lastTurnId: "turn-1",
       priorHeadSha: "old-head",
+      promptFingerprint: "prompt-1",
       completedAt: "2026-01-01T00:01:00.000Z",
     },
   });

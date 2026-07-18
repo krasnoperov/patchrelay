@@ -6,6 +6,7 @@ export interface PriorReviewThreadCandidate {
   threadId: string;
   lastTurnId: string;
   priorHeadSha: string;
+  promptFingerprint: string;
   completedAt?: string;
 }
 
@@ -48,6 +49,7 @@ export function selectPriorReviewThread(input: {
       threadId: attempt.threadId,
       lastTurnId: attempt.turnId,
       priorHeadSha: attempt.headSha,
+      promptFingerprint: input.promptFingerprint,
       ...(attempt.completedAt ? { completedAt: attempt.completedAt } : {}),
     },
   };

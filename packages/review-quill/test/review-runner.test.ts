@@ -150,6 +150,7 @@ test("ReviewRunner forks once, sends the bounded follow-up prompt, and keeps a c
     threadId: "source-thread",
     lastTurnId: "source-turn",
     priorHeadSha: "prior-head",
+    promptFingerprint: "prompt-1",
   });
 
   assert.deepEqual(forkCalls, [{ threadId: "source-thread", lastTurnId: "source-turn", cwd: "/tmp/current-head" }]);
@@ -193,7 +194,7 @@ test("ReviewRunner keeps the default-off path fresh even when given a candidate"
   const runner = new ReviewRunner(minimalConfig(), { warn() {}, child: () => ({}) } as never, fakeCodex as never, async () => {});
 
   await runner.review({ prompt: "Review", workspace: { worktreePath: "/tmp/current" } } as never, {}, {
-    sourceAttemptId: 1, threadId: "source", lastTurnId: "turn", priorHeadSha: "prior-head",
+    sourceAttemptId: 1, threadId: "source", lastTurnId: "turn", priorHeadSha: "prior-head", promptFingerprint: "prompt-1",
   });
   assert.equal(forkCalls, 0);
   assert.equal(freshCalls, 1);
@@ -234,6 +235,7 @@ test("ReviewRunner sends the byte-identical full prompt after a fork source fall
     threadId: "source",
     lastTurnId: "source-turn",
     priorHeadSha: "prior-head",
+    promptFingerprint: "prompt-1",
   });
 
   assert.equal(starts[0]?.input, fullPrompt);
@@ -268,7 +270,7 @@ test("ReviewRunner disables unsupported thread/fork once across concurrent start
   const start = (runner as unknown as {
     startReviewThread(cwd: string, candidate: unknown, signal?: AbortSignal): Promise<{ thread: { id: string }; mode: string }>;
   }).startReviewThread.bind(runner);
-  const candidate = { sourceAttemptId: 1, threadId: "source", lastTurnId: "turn", priorHeadSha: "prior-head" };
+  const candidate = { sourceAttemptId: 1, threadId: "source", lastTurnId: "turn", priorHeadSha: "prior-head", promptFingerprint: "prompt-1" };
 
   const first = await Promise.all([start("/tmp/one", candidate), start("/tmp/two", candidate)]);
   const third = await start("/tmp/three", candidate);
@@ -297,7 +299,7 @@ test("ReviewRunner falls back for the real missing source rollout payload withou
   const start = (runner as unknown as {
     startReviewThread(cwd: string, candidate: unknown, signal?: AbortSignal): Promise<{ thread: { id: string }; mode: string }>;
   }).startReviewThread.bind(runner);
-  const candidate = { sourceAttemptId: 1, threadId: "source", lastTurnId: "turn", priorHeadSha: "prior-head" };
+  const candidate = { sourceAttemptId: 1, threadId: "source", lastTurnId: "turn", priorHeadSha: "prior-head", promptFingerprint: "prompt-1" };
 
   assert.equal((await start("/tmp/one", candidate)).thread.id, "fresh-1");
   assert.equal((await start("/tmp/two", candidate)).thread.id, "fresh-2");
@@ -328,7 +330,7 @@ test("ReviewRunner propagates unsafe fork failures without starting fresh", asyn
       startReviewThread(cwd: string, candidate: unknown): Promise<unknown>;
     }).startReviewThread.bind(runner);
     await assert.rejects(start("/tmp", {
-      sourceAttemptId: 1, threadId: "source", lastTurnId: "turn", priorHeadSha: "prior-head",
+      sourceAttemptId: 1, threadId: "source", lastTurnId: "turn", priorHeadSha: "prior-head", promptFingerprint: "prompt-1",
     }), (error) => error === failure);
     assert.equal(freshCalls, 0);
   }
@@ -354,7 +356,7 @@ test("ReviewRunner does not fresh-fallback after cancellation during a fork", as
 
   await assert.rejects(
     start("/tmp", {
-      sourceAttemptId: 1, threadId: "source", lastTurnId: "turn", priorHeadSha: "prior-head",
+      sourceAttemptId: 1, threadId: "source", lastTurnId: "turn", priorHeadSha: "prior-head", promptFingerprint: "prompt-1",
     }, controller.signal),
     ReviewRunInterruptedError,
   );
