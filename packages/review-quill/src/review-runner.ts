@@ -58,9 +58,19 @@ function isCodexAppServerRequestTimeout(error: unknown): boolean {
 
 export function isUnsupportedOutputSchemaError(error: unknown): error is CodexJsonRpcError {
   if (!(error instanceof CodexJsonRpcError) || error.code !== -32602) return false;
-  const detail = [error.message, JSON.stringify(error.data)].join(" ");
-  return /outputSchema/i.test(detail)
-    && /(unknown|unrecognized|unsupported|unexpected|not allowed)/i.test(detail);
+  const data = error.data && typeof error.data === "object"
+    ? error.data as Record<string, unknown>
+    : undefined;
+  const namedParameter = data?.parameter ?? data?.field;
+  const structuredReason = [data?.reason, data?.kind, data?.message]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ");
+  if (namedParameter === "outputSchema" && /\b(unknown|unrecognized|unexpected)\b/i.test(structuredReason)) {
+    return true;
+  }
+  return /\b(unknown|unrecognized|unexpected)\s+(?:parameter|field)\s*[:=]?\s*[`"']?outputSchema\b/i.test(error.message)
+    || /\b(?:parameter|field)\s+[`"']?outputSchema[`"']?\s+(?:is\s+)?(?:unknown|unrecognized|unexpected)\b/i.test(error.message)
+    || /\boutputSchema\s+(?:is\s+)?(?:an?\s+)?(?:unknown|unrecognized|unexpected)\s+(?:parameter|field)\b/i.test(error.message);
 }
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -436,11 +446,13 @@ export class ReviewRunner {
       if (!useOutputSchema || !isUnsupportedOutputSchemaError(error)) {
         throw error;
       }
-      this.outputSchemaAvailable = false;
-      this.logger.warn({
-        code: error.code,
-        error: error.message,
-      }, "Codex app-server does not support turn outputSchema; disabling structured output for this process");
+      if (this.outputSchemaAvailable) {
+        this.outputSchemaAvailable = false;
+        this.logger.warn({
+          code: error.code,
+          error: error.message,
+        }, "Codex app-server does not recognize turn outputSchema; disabling structured output for this process");
+      }
       return await this.codex.startTurn(options);
     }
   }
