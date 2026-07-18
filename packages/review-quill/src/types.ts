@@ -68,6 +68,8 @@ export interface ReviewQuillConfig {
     heartbeatIntervalMs: number;
     staleQueuedAfterMs: number;
     staleRunningAfterMs: number;
+    /** Delay before expensive work so rapid successive pushes coalesce. */
+    headStabilizationMs: number;
     /**
      * Soft cap on parallel review executions. Each review materializes its
      * own tmp worktree, but executions still share the Codex app-server and

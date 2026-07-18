@@ -38,6 +38,7 @@ import { renderReviewArtifacts } from "./review-artifact-renderer.ts";
 import { submitReviewWithFallback } from "./submit-review-with-fallback.ts";
 import { evaluateReviewEligibility } from "./review-eligibility.ts";
 import { ReviewSemaphore } from "./review-semaphore.ts";
+import { waitForReviewHeadStability, type ReviewHeadStabilityWait } from "./review-head-stabilizer.ts";
 import { buildPromptFingerprint } from "./prompt-fingerprint.ts";
 
 /** Default cap on parallel review executions. Review Quill shares one
@@ -55,6 +56,7 @@ class ReviewExecutionSupersededError extends Error {
 
 export class ReviewQuillService {
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private stopping = false;
   private readonly startedAt = new Date().toISOString();
   private readonly pendingReviewsByRepo = new Map<string, ReviewQuillPendingReview[]>();
   /**
@@ -99,6 +101,7 @@ export class ReviewQuillService {
     private readonly runner: ReviewRunner,
     private readonly logger: Logger,
     private readonly reviewerLogin?: string,
+    private readonly waitForHeadStability: ReviewHeadStabilityWait = waitForReviewHeadStability,
   ) {
     const capacity = config.reconciliation.maxConcurrentReviews ?? DEFAULT_MAX_CONCURRENT_REVIEWS;
     this.semaphore = new ReviewSemaphore(capacity, (inFlight) => {
@@ -115,14 +118,21 @@ export class ReviewQuillService {
   }
 
   async start(): Promise<void> {
+    this.stopping = false;
     await this.runner.start();
     await this.reconcileAll();
     this.schedule();
   }
 
   async stop(): Promise<void> {
+    this.stopping = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
+    const workers = Array.from(this.inFlightReviews.values());
+    for (const controller of this.inFlightReviewSignals.values()) {
+      controller.abort("Review Quill service is stopping before review completed.");
+    }
+    await Promise.allSettled(workers);
     await this.runner.stop();
   }
 
@@ -316,6 +326,7 @@ export class ReviewQuillService {
     existing: ReviewAttemptRecord | undefined,
     identity: ChangeIdentity | undefined,
   ): Promise<void> {
+    if (this.stopping) return Promise.resolve();
     const key = `${repo.repoFullName}::${pr.number}::${pr.headSha}`;
     const inFlight = this.inFlightReviews.get(key);
     if (inFlight) return inFlight;
@@ -324,8 +335,24 @@ export class ReviewQuillService {
     const controller = new AbortController();
     this.inFlightReviewSignals.set(key, controller);
     const work = (async () => {
-      const release = await this.semaphore.acquire();
+      let release: (() => void) | undefined;
       try {
+        const stabilizationMs = this.config.reconciliation.headStabilizationMs;
+        if (stabilizationMs > 0) {
+          await this.waitForHeadStability(stabilizationMs, controller.signal);
+          this.throwIfReviewSuperseded(controller.signal);
+          const currentPr = await this.github.getPullRequest(repo.repoFullName, pr.number);
+          const disposition = classifyPublicationDisposition(currentPr, pr.headSha);
+          if (disposition.action !== "publish") {
+            if (disposition.action === "supersede") {
+              this.requestReconcile(repo.repoFullName);
+            }
+            throw new ReviewExecutionSupersededError(disposition.summary);
+          }
+          this.throwIfReviewSuperseded(controller.signal);
+        }
+        release = await this.semaphore.acquire();
+        this.throwIfReviewSuperseded(controller.signal);
         await this.executeReview(repo, pr, existing, identity, controller.signal);
       } catch (error) {
         if (error instanceof ReviewExecutionSupersededError) {
@@ -344,7 +371,7 @@ export class ReviewQuillService {
           err: error instanceof Error ? error.message : String(error),
         }, "Review execution failed");
       } finally {
-        release();
+        release?.();
         this.inFlightReviews.delete(key);
         this.inFlightReviewSignals.delete(key);
       }

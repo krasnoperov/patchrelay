@@ -55,6 +55,7 @@ function defaultConfigDocument(publicBaseUrl: string, databasePath: string): Rec
     },
     reconciliation: {
       pollIntervalMs: 120000,
+      headStabilizationMs: 20000,
       maxConcurrentReviews: 4,
     },
     codex: {
