@@ -19,8 +19,8 @@ import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
 const WRITER = "run-task-planner";
 
-export function buildRequestedChangesLoopEscalationReason(attempts: number): string {
-  return `Repeated/systemic requested-changes review loop after ${attempts} repair attempts. Next action: consolidate the accumulated review history and audit the violated invariants, or split an oversized PR before requesting another review.`;
+export function buildRequestedChangesLoopEscalationReason(attempts: number, configuredLimit: number): string {
+  return `Repeated/systemic requested-changes review loop after ${attempts} repair attempts (configured limit: ${configuredLimit}). Next action: consolidate the accumulated review history and audit the violated invariants, or split an oversized PR before requesting another review.`;
 }
 
 export interface RunnableWorkflowIntent extends WorkflowRunIntent {
@@ -186,7 +186,7 @@ export class RunTaskPlanner {
     }
     const reviewFixBudget = getReviewFixBudget(project);
     if (isRequestedChangesRunType(runType) && issue.reviewFixAttempts >= reviewFixBudget) {
-      return buildRequestedChangesLoopEscalationReason(reviewFixBudget);
+      return buildRequestedChangesLoopEscalationReason(issue.reviewFixAttempts, reviewFixBudget);
     }
     return undefined;
   }
