@@ -30,6 +30,7 @@ test("loadConfig resolves installation prompt files relative to the config file"
     assert.equal(config.prompting.extraInstructions?.content, "Install review policy");
     assert.equal(config.prompting.replaceSections["review-rubric"]?.content, "## Review rules\n\nCustom review policy");
     assert.equal(config.codex.model, "gpt-5.5");
+    assert.equal(config.codex.outputSchema, true);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -45,6 +46,7 @@ test("loadConfig defaults waitForGreenChecks to false for repositories", () => {
     writeFileSync(configPath, JSON.stringify({
       server: { bind: "127.0.0.1", port: 8788 },
       database: { path: path.join(baseDir, "review-quill.sqlite"), wal: true },
+      codex: { outputSchema: false },
       repositories: [
         {
           repoId: "mafia",
@@ -57,6 +59,7 @@ test("loadConfig defaults waitForGreenChecks to false for repositories", () => {
     assert.equal(config.repositories[0]?.waitForGreenChecks, false);
     assert.deepEqual(config.repositories[0]?.reviewDocs, ["REVIEW_WORKFLOW.md", "AGENTS.md"]);
     assert.equal(config.codex.model, "gpt-5.5");
+    assert.equal(config.codex.outputSchema, false);
     assert.equal(config.reconciliation.headStabilizationMs, 20_000);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

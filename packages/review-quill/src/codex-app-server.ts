@@ -14,6 +14,32 @@ interface JsonRpcFailure {
   error: unknown;
 }
 
+interface JsonRpcErrorPayload {
+  code?: unknown;
+  message?: unknown;
+  data?: unknown;
+}
+
+export class CodexJsonRpcError extends Error {
+  constructor(
+    readonly code: number | undefined,
+    message: string,
+    readonly data: unknown,
+  ) {
+    super(message);
+    this.name = "CodexJsonRpcError";
+  }
+
+  static fromPayload(payload: unknown): CodexJsonRpcError {
+    const value = payload && typeof payload === "object" ? payload as JsonRpcErrorPayload : {};
+    const code = typeof value.code === "number" ? value.code : undefined;
+    const message = typeof value.message === "string" && value.message.trim()
+      ? value.message
+      : JSON.stringify(payload);
+    return new CodexJsonRpcError(code, message, value.data);
+  }
+}
+
 interface JsonRpcNotification {
   method: string;
   params?: unknown;
@@ -27,6 +53,7 @@ export interface StartTurnOptions {
   threadId: string;
   input: string;
   cwd: string;
+  outputSchema?: Record<string, unknown>;
 }
 
 export interface InterruptTurnOptions {
@@ -116,6 +143,7 @@ export class CodexAppServerClient extends EventEmitter {
       threadId: options.threadId,
       cwd: options.cwd,
       input: [{ type: "text", text: options.input, text_elements: [] }],
+      ...(options.outputSchema ? { outputSchema: options.outputSchema } : {}),
     })) as { turn: Record<string, unknown> };
     return {
       turnId: String(response.turn.id),
@@ -182,7 +210,7 @@ export class CodexAppServerClient extends EventEmitter {
       if (!pending) continue;
       this.pending.delete(id);
       if ("error" in message) {
-        pending.reject(new Error(JSON.stringify(message.error)));
+        pending.reject(CodexJsonRpcError.fromPayload(message.error));
       } else {
         pending.resolve(message.result);
       }

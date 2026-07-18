@@ -25,6 +25,8 @@ The review runs against the real working tree at that SHA, not the GitHub files 
 
 The default Codex sandbox mode is `danger-full-access` because many systemd hosts cannot run Codex's bubblewrap networking inside `read-only` / `workspace-write` modes. The reviewer still works in a throwaway checkout and review-quill publishes only through the GitHub App; it does not commit or push.
 
+Review Quill requests native structured verdict output by default. Set `codex.outputSchema` to `false` for a reversible compatibility rollback with older Codex app-server versions.
+
 By default, a PR becomes eligible for review as soon as its branch head updates. Set `waitForGreenChecks: true` per-repo to gate on configured checks first.
 
 Review Quill waits 20 seconds before starting expensive work so rapid successive pushes coalesce into one review of the latest head. The wait happens outside the review concurrency limit, and a newer head cancels the older pending worker. Set `reconciliation.headStabilizationMs` to `0` for explicit immediate-review behavior.
