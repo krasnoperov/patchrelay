@@ -5,6 +5,7 @@ import type { ReviewExecutionTiming } from "../src/review-execution-timing.ts";
 import { GitHubApiError } from "../src/github-client.ts";
 import { normalizeVerdict } from "../src/review-runner.ts";
 import { extractFirstJsonObject, forgivingJsonParse, sanitizeJsonPayload } from "../src/utils.ts";
+import { buildPromptFingerprint } from "../src/prompt-fingerprint.ts";
 
 test("normalizeVerdict accepts the rich schema and passes it through", () => {
   const raw = {
@@ -976,9 +977,18 @@ test("dispatchReview emits deterministic wait and total timing without changing 
   assert.equal(timingLog.fields.totalExecutionMs, 64);
 });
 
-test("failed Codex reviews retain the codex phase while reporting elapsed time", async () => {
+test("failed Codex reviews persist the rendered prompt fingerprint and retain Codex timing", async () => {
   let now = 8_000;
   let storedAttempt: Record<string, unknown> | undefined;
+  const renderedPromptPr = {
+    number: 8,
+    title: "Metadata refreshed during context build",
+    body: "This is the exact snapshot rendered into the prompt.",
+    headSha: "failing-head",
+    state: "OPEN",
+    isDraft: false,
+    labels: [],
+  };
   const infoLogs: Array<{ fields: Record<string, unknown>; message: string }> = [];
   const errorLogs: Array<{ fields: Record<string, unknown>; message: string }> = [];
   const service = buildParallelTestService({
@@ -1026,6 +1036,7 @@ test("failed Codex reviews retain the codex phase while reporting elapsed time",
     now += 5;
     return {
       context: {
+        pr: renderedPromptPr,
         diff: { inventory: [], patches: [], suppressed: [] },
       },
       dispose: async () => undefined,
@@ -1059,6 +1070,7 @@ test("failed Codex reviews retain the codex phase while reporting elapsed time",
 
   assert.deepEqual(errorLogs, []);
   assert.equal(storedAttempt?.status, "failed");
+  assert.equal(storedAttempt?.promptFingerprint, buildPromptFingerprint(renderedPromptPr));
   const timingLog = infoLogs.find((entry) => entry.message === "Review execution timing");
   assert.ok(timingLog);
   assert.equal(timingLog.fields.phase, "codex_review");

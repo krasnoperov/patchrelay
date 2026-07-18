@@ -117,6 +117,7 @@ function buildCapacityTestHarness(reviewError: () => Error) {
   (service as unknown as { buildContext: unknown }).buildContext = async () => ({
     context: {
       prompt: "Review this PR.",
+      pr: openPullRequest(),
       workspace: { worktreePath: "/tmp/review-quill-capacity-test" },
       diff: { inventory: [], patches: [], suppressed: [] },
     },
