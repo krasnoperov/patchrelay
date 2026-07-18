@@ -289,11 +289,10 @@ export class ReviewRunner {
     const cwd = context.workspace.worktreePath;
     this.throwIfReviewRunInterrupted(options.signal);
     const thread = await this.startThreadWithMaterializationRetry(cwd);
-    this.emitThreadSnapshot(options.onThreadSnapshot, thread);
     this.throwIfReviewRunInterrupted(options.signal, thread.id);
 
     // First attempt: full prompt, fresh turn.
-    const firstTurn = await this.runTurn(thread.id, cwd, context.prompt, options);
+    const firstTurn = await this.runTurn(thread, cwd, context.prompt, options);
     const firstParse = parseModelResponse(firstTurn.latestMessage);
     if (firstParse.ok) {
       return { verdict: firstParse.verdict, threadId: thread.id, turnId: firstTurn.turnId };
@@ -312,7 +311,7 @@ export class ReviewRunner {
     }, "Review parse failed, retrying with corrective prompt");
 
     const correctivePrompt = renderCorrectivePrompt(firstParse.reason);
-    const secondTurn = await this.runTurn(thread.id, cwd, correctivePrompt, options);
+    const secondTurn = await this.runTurn(firstTurn.thread, cwd, correctivePrompt, options);
     const secondParse = parseModelResponse(secondTurn.latestMessage);
     if (secondParse.ok) {
       this.logger.info({
@@ -334,10 +333,29 @@ export class ReviewRunner {
   // Start a turn, wait for completion, and extract the latest assistant
   // message. Separate from parseModelResponse so the same pair can be
   // called twice in review() for the corrective retry.
-  private async runTurn(threadId: string, cwd: string, input: string, options: ReviewRunOptions): Promise<{ latestMessage: string; turnId: string }> {
+  private async runTurn(
+    priorThread: CodexThreadSummary,
+    cwd: string,
+    input: string,
+    options: ReviewRunOptions,
+  ): Promise<{ latestMessage: string; turnId: string; thread: CodexThreadSummary }> {
+    const threadId = priorThread.id;
     this.throwIfReviewRunInterrupted(options.signal, threadId);
     const started = await this.startTurnWithMaterializationRetry(threadId, cwd, input);
-    const completedThread = await this.waitForTurnCompletion(threadId, started.turnId, options);
+    const startedThread: CodexThreadSummary = {
+      id: threadId,
+      turns: [
+        ...priorThread.turns,
+        { id: started.turnId, status: started.status, items: [] },
+      ],
+    };
+    const startedThreadPersisted = this.emitThreadSnapshot(options.onThreadSnapshot, startedThread);
+    const completedThread = await this.waitForTurnCompletion(
+      threadId,
+      started.turnId,
+      options,
+      startedThreadPersisted ? JSON.stringify(startedThread) : undefined,
+    );
     const latestMessage = collectAssistantMessages(completedThread).at(-1);
     if (!latestMessage) {
       // The turn "completed" but produced no message — the thread summary
@@ -350,7 +368,7 @@ export class ReviewRunner {
       }
       throw new Error("Review run completed without an assistant message");
     }
-    return { latestMessage, turnId: started.turnId };
+    return { latestMessage, turnId: started.turnId, thread: completedThread };
   }
 
   private async startThreadWithMaterializationRetry(cwd: string): Promise<Awaited<ReturnType<CodexRunnerClient["startThread"]>>> {
@@ -398,15 +416,17 @@ export class ReviewRunner {
     threadId: string,
     turnId: string,
     options: ReviewRunOptions,
+    initialPersistedThreadJson?: string,
   ): Promise<Awaited<ReturnType<CodexAppServerClient["readThread"]>>> {
     const { signal, onThreadSnapshot } = options;
     const deadline = Date.now() + 15 * 60_000;
-    let latestThread: CodexThreadSummary | undefined;
-    let persistedThread: CodexThreadSummary | undefined;
+    let persistedThreadJson = initialPersistedThreadJson;
     const persistThread = (thread: CodexThreadSummary): void => {
-      if (thread === persistedThread) return;
-      this.emitThreadSnapshot(onThreadSnapshot, thread);
-      persistedThread = thread;
+      const threadJson = JSON.stringify(thread);
+      if (threadJson === persistedThreadJson) return;
+      if (this.emitThreadSnapshot(onThreadSnapshot, thread)) {
+        persistedThreadJson = threadJson;
+      }
     };
     let interruptSubmitted = false;
     const submitInterrupt = async (): Promise<void> => {
@@ -430,7 +450,7 @@ export class ReviewRunner {
         let thread: Awaited<ReturnType<CodexAppServerClient["readThread"]>>;
         try {
           thread = await this.codex.readThread(threadId);
-          latestThread = thread;
+          persistThread(thread);
         } catch (error) {
           if (isThreadMaterializationRace(error)) {
             await this.sleepUntilNextPoll(750, signal);
@@ -449,15 +469,12 @@ export class ReviewRunner {
           continue;
         }
         if (signal?.aborted && (turn.status === "completed" || turn.status === "interrupted" || turn.status === "cancelled")) {
-          persistThread(thread);
           throw new ReviewRunInterruptedError(abortedReviewMessage(signal), threadId, turnId);
         }
         if (turn.status === "completed") {
-          persistThread(thread);
           return thread;
         }
         if (turn.status === "failed" || turn.status === "interrupted" || turn.status === "cancelled") {
-          persistThread(thread);
           const turnError = turn.error?.message.trim();
           if (turnError) {
             throwTurnError(turnError, `Review turn ended with status ${turn.status}`);
@@ -466,13 +483,9 @@ export class ReviewRunner {
         }
         await this.sleepUntilNextPoll(1_500, signal);
       }
-    } catch (error) {
-      if (latestThread) persistThread(latestThread);
-      throw error;
     } finally {
       signal?.removeEventListener("abort", abortListener);
     }
-    if (latestThread) persistThread(latestThread);
     throw new Error("Timed out waiting for review turn completion");
   }
 
@@ -499,13 +512,15 @@ export class ReviewRunner {
   private emitThreadSnapshot(
     onThreadSnapshot: ReviewRunOptions["onThreadSnapshot"],
     thread: CodexThreadSummary,
-  ): void {
-    if (!onThreadSnapshot) return;
+  ): boolean {
+    if (!onThreadSnapshot) return true;
     try {
       onThreadSnapshot(thread);
+      return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn({ threadId: thread.id, error: message }, "Failed to persist Codex thread snapshot; continuing review");
+      return false;
     }
   }
 

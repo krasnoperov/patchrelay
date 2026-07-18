@@ -83,7 +83,7 @@ test("ReviewRunner keeps waiting when a Codex thread read times out", async () =
   assert.equal(result.verdict.verdict, "approve");
   assert.equal(readCalls, 2);
   assert.deepEqual(sleeps, [1_500]);
-  assert.deepEqual(snapshots.map((thread) => thread.turns.at(-1)?.status ?? "started"), ["started", "completed"]);
+  assert.deepEqual(snapshots.map((thread) => thread.turns.at(-1)?.status), ["running", "completed"]);
 });
 
 test("ReviewRunner retries Codex thread start when rollout jsonl is empty", async () => {
@@ -188,6 +188,73 @@ test("ReviewRunner continues when thread snapshot persistence fails", async () =
     "Failed to persist Codex thread snapshot; continuing review",
     "Failed to persist Codex thread snapshot; continuing review",
   ]);
+});
+
+test("ReviewRunner checkpoints a started turn and only changed in-progress snapshots", async () => {
+  let readCalls = 0;
+  const snapshots: Array<{ id: string; turns: Array<{ id: string; status: string; items: unknown[] }> }> = [];
+  const inProgressThread = {
+    id: "thread-progress",
+    turns: [{
+      id: "turn-progress",
+      status: "inProgress",
+      items: [{ type: "agentMessage", id: "partial", text: "Inspecting the changed files." }],
+    }],
+  };
+  const fakeCodex = {
+    start: async () => {},
+    stop: async () => {},
+    startThread: async () => ({ id: "thread-progress", turns: [] }),
+    startTurn: async () => ({ turnId: "turn-progress", status: "running" }),
+    readThread: async () => {
+      readCalls += 1;
+      if (readCalls <= 2) return structuredClone(inProgressThread);
+      return {
+        id: "thread-progress",
+        turns: [{
+          id: "turn-progress",
+          status: "completed",
+          items: [{
+            type: "agentMessage",
+            id: "final",
+            text: JSON.stringify({
+              walkthrough: "The patch is straightforward.",
+              architectural_concerns: [],
+              findings: [],
+              verdict: "approve",
+              verdict_reason: "No blocking issues found.",
+            }),
+          }],
+        }],
+      };
+    },
+  };
+  const runner = new ReviewRunner(
+    minimalConfig(),
+    { warn: () => {}, child: () => ({}) } as never,
+    fakeCodex as never,
+    async () => {},
+  );
+
+  const result = await runner.review({
+    prompt: "Review this PR.",
+    workspace: { worktreePath: "/tmp/review-quill-test" },
+  } as never, { onThreadSnapshot: (thread) => snapshots.push(thread) });
+
+  assert.equal(result.verdict.verdict, "approve");
+  assert.equal(readCalls, 3);
+  assert.deepEqual(
+    snapshots.map((thread) => ({
+      threadId: thread.id,
+      turnId: thread.turns.at(-1)?.id,
+      status: thread.turns.at(-1)?.status,
+    })),
+    [
+      { threadId: "thread-progress", turnId: "turn-progress", status: "running" },
+      { threadId: "thread-progress", turnId: "turn-progress", status: "inProgress" },
+      { threadId: "thread-progress", turnId: "turn-progress", status: "completed" },
+    ],
+  );
 });
 
 test("ReviewRunner retries Codex turn start when rollout jsonl is empty", async () => {
@@ -303,7 +370,7 @@ test("ReviewRunner interrupts a running Codex turn when the review signal aborts
   assert.equal(interruptCalls, 1);
   assert.equal(readCalls, 1);
   assert.deepEqual(sleeps, []);
-  assert.deepEqual(snapshots.map((thread) => thread.turns.at(-1)?.status ?? "started"), ["started", "interrupted"]);
+  assert.deepEqual(snapshots.map((thread) => thread.turns.at(-1)?.status), ["running", "interrupted"]);
 });
 
 test("ReviewRunner fails fast when the Codex app-server reports a failed turn", async () => {
@@ -347,7 +414,7 @@ test("ReviewRunner fails fast when the Codex app-server reports a failed turn", 
     /Review turn ended with status failed/,
   );
   assert.deepEqual(sleeps, []);
-  assert.deepEqual(snapshots.map((thread) => thread.turns.at(-1)?.status ?? "started"), ["started", "failed"]);
+  assert.deepEqual(snapshots.map((thread) => thread.turns.at(-1)?.status), ["running", "failed"]);
 });
 
 test("ReviewRunner does not retry non-materialization app-server start failures", async () => {
