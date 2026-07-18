@@ -64,6 +64,7 @@ function defaultConfigDocument(publicBaseUrl: string, databasePath: string): Rec
       sourceBashrc: true,
       requestTimeoutMs: 30000,
       outputSchema: true,
+      forkPriorReviewThread: false,
       serviceName: "review-quill",
       approvalPolicy: "never",
       // Match patchrelay's default. See `config.ts` for the long

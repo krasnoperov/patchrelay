@@ -19,6 +19,7 @@ import type {
   ReviewQuillConfig,
   ReviewVerdict,
 } from "./types.ts";
+import type { PriorReviewThreadCandidate } from "./prior-review-thread-selector.ts";
 
 export interface ReviewRunOptions {
   signal?: AbortSignal;
@@ -60,6 +61,12 @@ function isThreadMaterializationRace(error: unknown): boolean {
 function isCodexAppServerRequestTimeout(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /^Codex app-server request timed out after \d+ms$/.test(message);
+}
+
+function isForkSourceUnavailable(error: unknown): boolean {
+  return error instanceof CodexJsonRpcError
+    && error.code === -32600
+    && /\bno rollout found for thread id\b/i.test(error.message);
 }
 
 export function isUnsupportedOutputSchemaError(error: unknown): error is CodexJsonRpcError {
@@ -285,6 +292,7 @@ export function normalizeVerdict(raw: Record<string, unknown>): ReviewVerdict {
 
 type CodexRunnerClient = Pick<CodexAppServerClient, "start" | "stop" | "startThread" | "startTurn" | "readThread">;
 type InterruptibleCodexRunnerClient = CodexRunnerClient & Partial<Pick<CodexAppServerClient, "interruptTurn" | "subscribeNotifications">>;
+type ForkableCodexRunnerClient = InterruptibleCodexRunnerClient & Partial<Pick<CodexAppServerClient, "forkThread">>;
 
 interface TurnCompletionSubscription {
   completion: Promise<void>;
@@ -293,13 +301,14 @@ interface TurnCompletionSubscription {
 }
 
 export class ReviewRunner {
-  private readonly codex: InterruptibleCodexRunnerClient;
+  private readonly codex: ForkableCodexRunnerClient;
   private outputSchemaAvailable = true;
+  private threadForkAvailable = true;
 
   constructor(
     private readonly config: ReviewQuillConfig,
     private readonly logger: Logger,
-    codex?: InterruptibleCodexRunnerClient,
+    codex?: ForkableCodexRunnerClient,
     private readonly sleep: (ms: number) => Promise<void> = delay,
     private readonly notificationWatchdogMs = TURN_NOTIFICATION_WATCHDOG_MS,
   ) {
@@ -317,10 +326,14 @@ export class ReviewRunner {
     await this.codex.stop();
   }
 
-  async review(context: ReviewContext, options: ReviewRunOptions = {}): Promise<{ verdict: ReviewVerdict; threadId: string; turnId: string }> {
+  async review(
+    context: ReviewContext,
+    options: ReviewRunOptions = {},
+    priorThread?: PriorReviewThreadCandidate,
+  ): Promise<{ verdict: ReviewVerdict; threadId: string; turnId: string }> {
     const cwd = context.workspace.worktreePath;
     this.throwIfReviewRunInterrupted(options.signal);
-    const thread = await this.startThreadWithMaterializationRetry(cwd);
+    const thread = await this.startReviewThread(cwd, priorThread, options.signal);
     this.throwIfReviewRunInterrupted(options.signal, thread.id);
 
     // First attempt: full prompt, fresh turn.
@@ -360,6 +373,44 @@ export class ReviewRunner {
       `Review run produced unparseable output after one corrective retry. `
       + `First failure: ${firstParse.reason}. Second failure: ${secondParse.reason}.`,
     );
+  }
+
+  private async startReviewThread(
+    cwd: string,
+    priorThread: PriorReviewThreadCandidate | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<CodexThreadSummary> {
+    if (!this.config.codex.forkPriorReviewThread || !priorThread || !this.threadForkAvailable) {
+      return await this.startThreadWithMaterializationRetry(cwd);
+    }
+    if (!this.codex.forkThread) {
+      this.disableThreadForkCapability();
+      return await this.startThreadWithMaterializationRetry(cwd);
+    }
+    try {
+      return await this.codex.forkThread({
+        threadId: priorThread.threadId,
+        lastTurnId: priorThread.lastTurnId,
+        cwd,
+      });
+    } catch (error) {
+      this.throwIfReviewRunInterrupted(signal);
+      if (error instanceof CodexJsonRpcError && error.code === -32601) {
+        this.disableThreadForkCapability();
+        return await this.startThreadWithMaterializationRetry(cwd);
+      }
+      if (isForkSourceUnavailable(error)) {
+        this.logger.debug({ sourceAttemptId: priorThread.sourceAttemptId }, "Prior review thread unavailable; starting a fresh thread");
+        return await this.startThreadWithMaterializationRetry(cwd);
+      }
+      throw error;
+    }
+  }
+
+  private disableThreadForkCapability(): void {
+    if (!this.threadForkAvailable) return;
+    this.threadForkAvailable = false;
+    this.logger.warn("Codex app-server does not support thread/fork; disabling prior review thread forks for this process");
   }
 
   // Start a turn, wait for completion, and extract the latest assistant

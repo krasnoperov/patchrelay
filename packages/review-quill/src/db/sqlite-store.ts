@@ -144,6 +144,26 @@ export class SqliteStore {
     return parseTranscript(row?.transcript_json);
   }
 
+  getLatestDifferentHeadAttemptWithTranscript(
+    repoFullName: string,
+    prNumber: number,
+    headSha: string,
+  ): { attempt: ReviewAttemptRecord; transcript?: CodexThreadSummary } | undefined {
+    const row = this.db.prepare(`
+      SELECT ${ATTEMPT_COLUMNS}, transcript_json
+      FROM review_attempts
+      WHERE repo_full_name = ? AND pr_number = ? AND head_sha <> ?
+      ORDER BY id DESC
+      LIMIT 1
+    `).get(repoFullName, prNumber, headSha) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    const transcript = parseTranscript(row.transcript_json);
+    return {
+      attempt: mapAttempt(row),
+      ...(transcript ? { transcript } : {}),
+    };
+  }
+
   // Carry-forward lookup for head-mode review surface. Finds an approved
   // attempt with the same patch-id (any prior head) that has a stored
   // body+event we can re-emit on the new head SHA. Filters on

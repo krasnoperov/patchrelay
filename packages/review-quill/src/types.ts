@@ -45,6 +45,8 @@ export interface CodexAppServerConfig {
   requestTimeoutMs?: number;
   /** Request native structured ReviewVerdict output from Codex. */
   outputSchema: boolean;
+  /** Fork a validated prior review thread for a newer PR head. Default off. */
+  forkPriorReviewThread?: boolean;
   model?: string;
   modelProvider?: string;
   serviceName?: string;

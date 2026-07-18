@@ -58,6 +58,12 @@ export interface StartTurnOptions {
   outputSchema?: Record<string, unknown>;
 }
 
+export interface ForkThreadOptions {
+  threadId: string;
+  lastTurnId: string;
+  cwd: string;
+}
+
 export interface InterruptTurnOptions {
   threadId: string;
   turnId: string;
@@ -134,6 +140,19 @@ export class CodexAppServerClient extends EventEmitter {
       approvalPolicy: this.config.approvalPolicy,
       sandbox: this.config.sandboxMode,
       serviceName: this.config.serviceName ?? "review-quill",
+      model: this.config.model ?? null,
+      modelProvider: this.config.modelProvider ?? null,
+    })) as { thread: Record<string, unknown> };
+    return this.mapThread(response.thread);
+  }
+
+  async forkThread(options: ForkThreadOptions): Promise<CodexThreadSummary> {
+    const response = (await this.sendRequest("thread/fork", {
+      threadId: options.threadId,
+      lastTurnId: options.lastTurnId,
+      cwd: options.cwd,
+      approvalPolicy: this.config.approvalPolicy,
+      sandbox: this.config.sandboxMode,
       model: this.config.model ?? null,
       modelProvider: this.config.modelProvider ?? null,
     })) as { thread: Record<string, unknown> };

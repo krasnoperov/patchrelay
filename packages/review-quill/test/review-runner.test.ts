@@ -97,6 +97,191 @@ test("ReviewRunner sends the canonical output schema on initial and corrective t
   assert.deepEqual(starts[1]?.outputSchema, REVIEW_VERDICT_JSON_SCHEMA);
 });
 
+test("ReviewRunner forks once, sends the full current prompt, and keeps a corrective turn on the fork", async () => {
+  const config = minimalConfig();
+  config.codex.forkPriorReviewThread = true;
+  const forkCalls: unknown[] = [];
+  const starts: StartTurnOptions[] = [];
+  const snapshots: Array<{ id: string; lastTurnId?: string }> = [];
+  const fakeCodex = {
+    start: async () => {},
+    stop: async () => {},
+    startThread: async () => { throw new Error("fresh thread must not start"); },
+    forkThread: async (options: unknown) => {
+      forkCalls.push(options);
+      return { id: "forked-thread", turns: [{ id: "source-turn", status: "completed", items: [] }] };
+    },
+    startTurn: async (options: StartTurnOptions) => {
+      starts.push(options);
+      return { turnId: `fork-turn-${starts.length}`, status: "running" };
+    },
+    readThread: async () => ({
+      id: "forked-thread",
+      turns: [
+        { id: "source-turn", status: "completed", items: [] },
+        { id: "fork-turn-1", status: "completed", items: [{ type: "agentMessage", text: "not json" }] },
+        ...(starts.length === 2
+          ? [{ id: "fork-turn-2", status: "completed", items: [{ type: "agentMessage", text: validReviewMessage }] }]
+          : []),
+      ],
+    }),
+  };
+  const runner = new ReviewRunner(
+    config,
+    { warn() {}, info() {}, debug() {}, child: () => ({}) } as never,
+    fakeCodex as never,
+    async () => {},
+  );
+
+  const result = await runner.review({
+    prompt: "FULL CURRENT REVIEW PROMPT",
+    workspace: { worktreePath: "/tmp/current-head" },
+  } as never, {
+    onThreadSnapshot: (thread) => snapshots.push({ id: thread.id, lastTurnId: thread.turns.at(-1)?.id }),
+  }, { sourceAttemptId: 17, threadId: "source-thread", lastTurnId: "source-turn" });
+
+  assert.deepEqual(forkCalls, [{ threadId: "source-thread", lastTurnId: "source-turn", cwd: "/tmp/current-head" }]);
+  assert.equal(starts[0]?.input, "FULL CURRENT REVIEW PROMPT");
+  assert.match(starts[1]?.input ?? "", /previous response could not be parsed/i);
+  assert.deepEqual(starts.map((entry) => entry.threadId), ["forked-thread", "forked-thread"]);
+  assert.equal(result.threadId, "forked-thread");
+  assert.equal(result.turnId, "fork-turn-2");
+  assert.ok(snapshots.every((snapshot) => snapshot.id === "forked-thread"));
+  assert.equal(snapshots.at(-1)?.lastTurnId, "fork-turn-2");
+});
+
+test("ReviewRunner keeps the default-off path fresh even when given a candidate", async () => {
+  let forkCalls = 0;
+  let freshCalls = 0;
+  const fakeCodex = {
+    start: async () => {}, stop: async () => {},
+    forkThread: async () => { forkCalls += 1; return { id: "wrong", turns: [] }; },
+    startThread: async () => { freshCalls += 1; return { id: "thread-structured", turns: [] }; },
+    startTurn: async () => ({ turnId: "turn-1", status: "running" }),
+    readThread: async () => completedTurns([validReviewMessage]),
+  };
+  const runner = new ReviewRunner(minimalConfig(), { warn() {}, child: () => ({}) } as never, fakeCodex as never, async () => {});
+
+  await runner.review({ prompt: "Review", workspace: { worktreePath: "/tmp/current" } } as never, {}, {
+    sourceAttemptId: 1, threadId: "source", lastTurnId: "turn",
+  });
+  assert.equal(forkCalls, 0);
+  assert.equal(freshCalls, 1);
+});
+
+test("ReviewRunner disables unsupported thread/fork once across concurrent starts", async () => {
+  const config = minimalConfig();
+  config.codex.forkPriorReviewThread = true;
+  let forkCalls = 0;
+  let freshCalls = 0;
+  const warnings: string[] = [];
+  let release!: () => void;
+  const bothStarted = new Promise<void>((resolve) => { release = resolve; });
+  const fakeCodex = {
+    start: async () => {}, stop: async () => {}, startTurn: async () => ({ turnId: "unused", status: "running" }),
+    readThread: async () => ({ id: "unused", turns: [] }),
+    forkThread: async () => {
+      forkCalls += 1;
+      if (forkCalls === 2) release();
+      await bothStarted;
+      throw new CodexJsonRpcError(-32601, "Method not found", null);
+    },
+    startThread: async () => ({ id: `fresh-${++freshCalls}`, turns: [] }),
+  };
+  const runner = new ReviewRunner(config, {
+    warn: (...args: unknown[]) => warnings.push(String(args.at(-1))), debug() {}, child: () => ({}),
+  } as never, fakeCodex as never, async () => {});
+  const start = (runner as unknown as {
+    startReviewThread(cwd: string, candidate: unknown, signal?: AbortSignal): Promise<{ id: string }>;
+  }).startReviewThread.bind(runner);
+  const candidate = { sourceAttemptId: 1, threadId: "source", lastTurnId: "turn" };
+
+  const first = await Promise.all([start("/tmp/one", candidate), start("/tmp/two", candidate)]);
+  const third = await start("/tmp/three", candidate);
+  assert.deepEqual(first.map((thread) => thread.id), ["fresh-1", "fresh-2"]);
+  assert.equal(third.id, "fresh-3");
+  assert.equal(forkCalls, 2);
+  assert.equal(warnings.length, 1);
+});
+
+test("ReviewRunner falls back for the real missing source rollout payload without disabling forks", async () => {
+  const config = minimalConfig();
+  config.codex.forkPriorReviewThread = true;
+  let forkCalls = 0;
+  let freshCalls = 0;
+  const fakeCodex = {
+    start: async () => {}, stop: async () => {}, startTurn: async () => ({ turnId: "unused", status: "running" }),
+    readThread: async () => ({ id: "unused", turns: [] }),
+    forkThread: async () => {
+      forkCalls += 1;
+      throw new CodexJsonRpcError(-32600, "No rollout found for thread id source-1", null);
+    },
+    startThread: async () => ({ id: `fresh-${++freshCalls}`, turns: [] }),
+  };
+  const runner = new ReviewRunner(config, { warn() {}, debug() {}, child: () => ({}) } as never, fakeCodex as never, async () => {});
+  const start = (runner as unknown as {
+    startReviewThread(cwd: string, candidate: unknown, signal?: AbortSignal): Promise<{ id: string }>;
+  }).startReviewThread.bind(runner);
+  const candidate = { sourceAttemptId: 1, threadId: "source", lastTurnId: "turn" };
+
+  assert.equal((await start("/tmp/one", candidate)).id, "fresh-1");
+  assert.equal((await start("/tmp/two", candidate)).id, "fresh-2");
+  assert.equal(forkCalls, 2, "source misses must not disable the capability");
+});
+
+test("ReviewRunner propagates unsafe fork failures without starting fresh", async () => {
+  const failures = [
+    new CodexJsonRpcError(-32602, "Invalid params", { field: "model" }),
+    new Error("Codex app-server request timed out after 30000ms"),
+    new CodexJsonRpcError(-32001, "Authentication required", null),
+    new CodexJsonRpcError(-32000, "Source thread source-1 not found", null),
+    new CodexJsonRpcError(-32000, "No rollout found for thread id source-1", null),
+    new CodexJsonRpcError(-32600, "No rollout found for thread", null),
+    new Error("socket disconnected"),
+  ];
+  for (const failure of failures) {
+    const config = minimalConfig();
+    config.codex.forkPriorReviewThread = true;
+    let freshCalls = 0;
+    const runner = new ReviewRunner(config, { warn() {}, debug() {}, child: () => ({}) } as never, {
+      start: async () => {}, stop: async () => {}, startTurn: async () => ({ turnId: "unused", status: "running" }),
+      readThread: async () => ({ id: "unused", turns: [] }),
+      forkThread: async () => { throw failure; },
+      startThread: async () => { freshCalls += 1; return { id: "fresh", turns: [] }; },
+    } as never, async () => {});
+    const start = (runner as unknown as {
+      startReviewThread(cwd: string, candidate: unknown): Promise<unknown>;
+    }).startReviewThread.bind(runner);
+    await assert.rejects(start("/tmp", { sourceAttemptId: 1, threadId: "source", lastTurnId: "turn" }), (error) => error === failure);
+    assert.equal(freshCalls, 0);
+  }
+});
+
+test("ReviewRunner does not fresh-fallback after cancellation during a fork", async () => {
+  const config = minimalConfig();
+  config.codex.forkPriorReviewThread = true;
+  const controller = new AbortController();
+  let freshCalls = 0;
+  const runner = new ReviewRunner(config, { warn() {}, debug() {}, child: () => ({}) } as never, {
+    start: async () => {}, stop: async () => {}, startTurn: async () => ({ turnId: "unused", status: "running" }),
+    readThread: async () => ({ id: "unused", turns: [] }),
+    forkThread: async () => {
+      controller.abort("Superseded head");
+      throw new CodexJsonRpcError(-32600, "No rollout found for thread id source", null);
+    },
+    startThread: async () => { freshCalls += 1; return { id: "fresh", turns: [] }; },
+  } as never, async () => {});
+  const start = (runner as unknown as {
+    startReviewThread(cwd: string, candidate: unknown, signal: AbortSignal): Promise<unknown>;
+  }).startReviewThread.bind(runner);
+
+  await assert.rejects(
+    start("/tmp", { sourceAttemptId: 1, threadId: "source", lastTurnId: "turn" }, controller.signal),
+    ReviewRunInterruptedError,
+  );
+  assert.equal(freshCalls, 0);
+});
+
 test("ReviewRunner downgrades once for an explicit unsupported outputSchema error and remembers it", async () => {
   const starts: StartTurnOptions[] = [];
   let successfulTurns = 0;
