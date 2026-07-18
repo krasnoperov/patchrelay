@@ -41,6 +41,7 @@ import { ReviewSemaphore } from "./review-semaphore.ts";
 import { waitForReviewHeadStability, type ReviewHeadStabilityWait } from "./review-head-stabilizer.ts";
 import { buildPromptFingerprint } from "./prompt-fingerprint.ts";
 import { ReviewExecutionTiming } from "./review-execution-timing.ts";
+import { selectPriorReviewThread, type PriorReviewThreadCandidate } from "./prior-review-thread-selector.ts";
 
 /** Default cap on parallel review executions. Review Quill shares one
  *  Codex app-server and one git cache per repository, so the default
@@ -593,6 +594,28 @@ export class ReviewQuillService {
     // PRs and other failure paths; identity.mode is therefore not a
     // reliable source of truth).
     const surfaceMode = resolveReviewSurfaceMode(repo);
+    const promptFingerprint = buildPromptFingerprint(pr);
+    let priorThreadCandidate: PriorReviewThreadCandidate | undefined;
+    if (this.config.codex.forkPriorReviewThread) {
+      const latest = this.store.getLatestDifferentHeadAttemptWithTranscript(repo.repoFullName, pr.number, pr.headSha);
+      const selection = selectPriorReviewThread({
+        enabled: true,
+        ...(identity ? { identity } : {}),
+        currentHeadSha: pr.headSha,
+        promptFingerprint,
+        ...(latest ? { latest } : {}),
+      });
+      if (selection.kind === "selected") {
+        priorThreadCandidate = selection.candidate;
+        this.logger.debug({
+          repo: repo.repoFullName,
+          prNumber: pr.number,
+          sourceAttemptId: selection.candidate.sourceAttemptId,
+        }, "Selected prior review thread for fork");
+      } else {
+        this.logger.debug({ repo: repo.repoFullName, prNumber: pr.number, reason: selection.reason }, "Prior review thread not selected");
+      }
+    }
     const attempt = existingAttempt
       ? (this.store.updateAttempt(existingAttempt.id, {
         status: "queued",
@@ -604,7 +627,7 @@ export class ReviewQuillService {
         ...(identity?.integrationTreeId !== undefined ? { integrationTreeId: identity.integrationTreeId } : {}),
         reviewSurfaceMode: surfaceMode,
         ...(identity?.baseSha !== undefined ? { baseSha: identity.baseSha } : {}),
-        promptFingerprint: buildPromptFingerprint(pr),
+        promptFingerprint,
       }) ?? existingAttempt)
       : this.store.createAttempt({
         repoFullName: repo.repoFullName,
@@ -612,7 +635,7 @@ export class ReviewQuillService {
         headSha: pr.headSha,
         status: "queued",
         ...(pr.title ? { prTitle: pr.title } : {}),
-        promptFingerprint: buildPromptFingerprint(pr),
+        promptFingerprint,
         ...(identity?.patchId !== undefined ? { patchId: identity.patchId } : {}),
         ...(identity?.integrationTreeId !== undefined ? { integrationTreeId: identity.integrationTreeId } : {}),
         reviewSurfaceMode: surfaceMode,
@@ -730,7 +753,7 @@ export class ReviewQuillService {
                 transcript,
               });
             },
-          });
+          }, priorThreadCandidate);
           codexReviewCompleted = true;
         } finally {
           timing?.endCodexReview(codexReviewCompleted);

@@ -30,6 +30,45 @@ test("CodexAppServerClient wires outputSchema into turn/start", async () => {
   assert.deepEqual(requests[0]?.params.outputSchema, REVIEW_VERDICT_JSON_SCHEMA);
 });
 
+test("CodexAppServerClient sends the exact source boundary and current runtime policy to thread/fork", async () => {
+  const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const client = new CodexAppServerClient({
+    bin: "codex",
+    args: ["app-server"],
+    outputSchema: true,
+    forkPriorReviewThread: true,
+    model: "gpt-review",
+    modelProvider: "openai",
+    serviceName: "review-quill",
+    approvalPolicy: "never",
+    sandboxMode: "read-only",
+  }, {} as never);
+  (client as unknown as {
+    sendRequest: (method: string, params: Record<string, unknown>) => Promise<unknown>;
+  }).sendRequest = async (method, params) => {
+    requests.push({ method, params });
+    return { thread: { id: "forked-thread", turns: [] } };
+  };
+
+  const result = await client.forkThread({
+    threadId: "source-thread",
+    lastTurnId: "source-turn",
+    cwd: "/tmp/current-head",
+  });
+
+  assert.equal(requests[0]?.method, "thread/fork");
+  assert.deepEqual(requests[0]?.params, {
+    threadId: "source-thread",
+    lastTurnId: "source-turn",
+    cwd: "/tmp/current-head",
+    approvalPolicy: "never",
+    sandbox: "read-only",
+    model: "gpt-review",
+    modelProvider: "openai",
+  });
+  assert.equal(result.id, "forked-thread");
+});
+
 test("CodexJsonRpcError preserves error code, message, and data", () => {
   const error = CodexJsonRpcError.fromPayload({
     code: -32602,

@@ -27,6 +27,8 @@ The default Codex sandbox mode is `danger-full-access` because many systemd host
 
 Review Quill requests native structured verdict output by default. Set `codex.outputSchema` to `false` for a reversible compatibility rollback with older Codex app-server versions.
 
+Review threads start fresh by default. Set `codex.forkPriorReviewThread` to `true` to let a newer PR head fork the immediately preceding completed review thread when its review surface, base, prompt fingerprint, and stored terminal transcript all match. The fork still receives the full current review prompt; invalid or unavailable prior state falls back to a fresh thread.
+
 By default, a PR becomes eligible for review as soon as its branch head updates. Set `waitForGreenChecks: true` per-repo to gate on configured checks first.
 
 Review Quill waits 20 seconds before starting expensive work so rapid successive pushes coalesce into one review of the latest head. The wait happens outside the review concurrency limit, and a newer head cancels the older pending worker. Set `reconciliation.headStabilizationMs` to `0` for explicit immediate-review behavior.
