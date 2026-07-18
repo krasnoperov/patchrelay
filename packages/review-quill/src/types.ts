@@ -43,6 +43,8 @@ export interface CodexAppServerConfig {
   shellBin?: string;
   sourceBashrc?: boolean;
   requestTimeoutMs?: number;
+  /** Request native structured ReviewVerdict output from Codex. */
+  outputSchema: boolean;
   model?: string;
   modelProvider?: string;
   serviceName?: string;

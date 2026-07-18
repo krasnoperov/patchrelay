@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ReviewRunInterruptedError, ReviewRunner } from "../src/review-runner.ts";
+import { isUnsupportedOutputSchemaError } from "../src/review-runner.ts";
+import { CodexJsonRpcError, type StartTurnOptions } from "../src/codex-app-server.ts";
 import { CodexCapacityError } from "../src/codex-capacity.ts";
+import { REVIEW_VERDICT_JSON_SCHEMA } from "../src/review-verdict-schema.ts";
 import type { ReviewQuillConfig } from "../src/types.ts";
 
 function minimalConfig(): ReviewQuillConfig {
@@ -18,6 +21,7 @@ function minimalConfig(): ReviewQuillConfig {
     codex: {
       bin: "codex",
       args: ["app-server"],
+      outputSchema: true,
       approvalPolicy: "never",
       sandboxMode: "danger-full-access",
     },
@@ -26,6 +30,181 @@ function minimalConfig(): ReviewQuillConfig {
     secretSources: {},
   };
 }
+
+const validReviewMessage = JSON.stringify({
+  walkthrough: "The patch is straightforward.",
+  architectural_concerns: [],
+  findings: [],
+  verdict: "approve",
+  verdict_reason: "No blocking issues found.",
+});
+
+function completedTurns(messages: string[]): { id: string; turns: Array<Record<string, unknown>> } {
+  return {
+    id: "thread-structured",
+    turns: messages.map((text, index) => ({
+      id: `turn-${index + 1}`,
+      status: "completed",
+      items: [{ type: "agentMessage", text }],
+    })),
+  };
+}
+
+test("ReviewRunner sends the canonical output schema on initial and corrective turns", async () => {
+  const starts: StartTurnOptions[] = [];
+  const fakeCodex = {
+    start: async () => {},
+    stop: async () => {},
+    startThread: async () => ({ id: "thread-structured", turns: [] }),
+    startTurn: async (options: StartTurnOptions) => {
+      starts.push(options);
+      return { turnId: `turn-${starts.length}`, status: "running" };
+    },
+    readThread: async () => completedTurns(starts.length === 1 ? ["not json"] : ["not json", validReviewMessage]),
+  };
+  const runner = new ReviewRunner(minimalConfig(), { warn() {}, info() {}, child: () => ({}) } as never, fakeCodex as never, async () => {});
+
+  const result = await runner.review({
+    prompt: "Review this PR.",
+    workspace: { worktreePath: "/tmp/review-quill-test" },
+  } as never);
+
+  assert.equal(result.verdict.verdict, "approve");
+  assert.equal(starts.length, 2);
+  assert.deepEqual(starts[0]?.outputSchema, REVIEW_VERDICT_JSON_SCHEMA);
+  assert.deepEqual(starts[1]?.outputSchema, REVIEW_VERDICT_JSON_SCHEMA);
+});
+
+test("ReviewRunner downgrades once for an explicit unsupported outputSchema error and remembers it", async () => {
+  const starts: StartTurnOptions[] = [];
+  let successfulTurns = 0;
+  const warnings: string[] = [];
+  const fakeCodex = {
+    start: async () => {},
+    stop: async () => {},
+    startThread: async () => ({ id: "thread-structured", turns: [] }),
+    startTurn: async (options: StartTurnOptions) => {
+      starts.push(options);
+      if (starts.length === 1) {
+        throw new CodexJsonRpcError(-32602, "Unknown parameter: outputSchema", { parameter: "outputSchema" });
+      }
+      successfulTurns += 1;
+      return { turnId: `turn-${successfulTurns}`, status: "running" };
+    },
+    readThread: async () => completedTurns(successfulTurns === 1 ? ["not json"] : ["not json", validReviewMessage]),
+  };
+  const runner = new ReviewRunner(minimalConfig(), {
+    warn: (_fields: unknown, message: string) => warnings.push(message),
+    info() {},
+    child: () => ({}),
+  } as never, fakeCodex as never, async () => {});
+
+  const result = await runner.review({
+    prompt: "Review this PR.",
+    workspace: { worktreePath: "/tmp/review-quill-test" },
+  } as never);
+
+  assert.equal(result.verdict.verdict, "approve");
+  assert.deepEqual(starts.map((start) => Boolean(start.outputSchema)), [true, false, false]);
+  assert.equal(warnings.filter((message) => message.includes("does not recognize turn outputSchema")).length, 1);
+});
+
+test("ReviewRunner logs one capability transition when concurrent schema starts are rejected", async () => {
+  let schemaCalls = 0;
+  let fallbackCalls = 0;
+  let releaseSchemaFailures!: () => void;
+  const bothSchemaCallsStarted = new Promise<void>((resolve) => {
+    releaseSchemaFailures = resolve;
+  });
+  const warnings: string[] = [];
+  const runner = new ReviewRunner(minimalConfig(), {
+    warn: (_fields: unknown, message: string) => warnings.push(message),
+    child: () => ({}),
+  } as never, {
+    start: async () => {},
+    stop: async () => {},
+    startThread: async () => ({ id: "unused", turns: [] }),
+    startTurn: async (options: StartTurnOptions) => {
+      if (options.outputSchema) {
+        schemaCalls += 1;
+        if (schemaCalls === 2) releaseSchemaFailures();
+        await bothSchemaCallsStarted;
+        throw new CodexJsonRpcError(-32602, "Invalid params", {
+          field: "outputSchema",
+          reason: "unknown field",
+        });
+      }
+      fallbackCalls += 1;
+      return { turnId: `fallback-${fallbackCalls}`, status: "running" };
+    },
+    readThread: async () => completedTurns([]),
+  } as never, async () => {});
+  const startTurn = (runner as unknown as {
+    startTurnWithOutputSchemaFallback: (
+      options: Omit<StartTurnOptions, "outputSchema">,
+    ) => Promise<{ turnId: string; status: string }>;
+  }).startTurnWithOutputSchemaFallback.bind(runner);
+
+  const results = await Promise.all([
+    startTurn({ threadId: "thread-1", cwd: "/tmp/one", input: "one" }),
+    startTurn({ threadId: "thread-2", cwd: "/tmp/two", input: "two" }),
+  ]);
+
+  assert.equal(schemaCalls, 2);
+  assert.equal(fallbackCalls, 2);
+  assert.deepEqual(results.map((result) => result.turnId).sort(), ["fallback-1", "fallback-2"]);
+  assert.equal(warnings.filter((message) => message.includes("does not recognize turn outputSchema")).length, 1);
+});
+
+test("ReviewRunner never downgrades for other invalid params or non-parameter failures", async () => {
+  assert.equal(isUnsupportedOutputSchemaError(new CodexJsonRpcError(-32602, "Invalid params", {
+    parameter: "outputSchema",
+    reason: "unrecognized parameter",
+  })), true);
+  assert.equal(isUnsupportedOutputSchemaError(new CodexJsonRpcError(-32602, "Model is not allowed", { parameter: "model" })), false);
+  assert.equal(isUnsupportedOutputSchemaError(new CodexJsonRpcError(-32602, "Unsupported schema keyword in outputSchema", null)), false);
+  assert.equal(isUnsupportedOutputSchemaError(new CodexJsonRpcError(-32602, "Union type not allowed in outputSchema", null)), false);
+  assert.equal(isUnsupportedOutputSchemaError(new CodexJsonRpcError(-32000, "Unknown parameter: outputSchema", null)), false);
+  assert.equal(isUnsupportedOutputSchemaError(new Error("Codex app-server request timed out after 30000ms")), false);
+
+  const original = new CodexJsonRpcError(-32602, "Model is not allowed", { parameter: "model" });
+  let startCalls = 0;
+  const runner = new ReviewRunner(minimalConfig(), { warn() {}, child: () => ({}) } as never, {
+    start: async () => {},
+    stop: async () => {},
+    startThread: async () => ({ id: "thread-structured", turns: [] }),
+    startTurn: async () => {
+      startCalls += 1;
+      throw original;
+    },
+    readThread: async () => completedTurns([]),
+  } as never, async () => {});
+
+  await assert.rejects(
+    runner.review({ prompt: "Review", workspace: { worktreePath: "/tmp/review-quill-test" } } as never),
+    (error: unknown) => error === original,
+  );
+  assert.equal(startCalls, 1);
+});
+
+test("ReviewRunner omits outputSchema when the rollout flag is disabled", async () => {
+  const config = minimalConfig();
+  config.codex.outputSchema = false;
+  const starts: StartTurnOptions[] = [];
+  const runner = new ReviewRunner(config, { warn() {}, child: () => ({}) } as never, {
+    start: async () => {},
+    stop: async () => {},
+    startThread: async () => ({ id: "thread-structured", turns: [] }),
+    startTurn: async (options: StartTurnOptions) => {
+      starts.push(options);
+      return { turnId: "turn-1", status: "running" };
+    },
+    readThread: async () => completedTurns([validReviewMessage]),
+  } as never, async () => {});
+
+  await runner.review({ prompt: "Review", workspace: { worktreePath: "/tmp/review-quill-test" } } as never);
+  assert.equal(starts[0]?.outputSchema, undefined);
+});
 
 test("ReviewRunner keeps waiting when a Codex thread read times out", async () => {
   let readCalls = 0;

@@ -1,9 +1,10 @@
 import type { Logger } from "pino";
-import { CodexAppServerClient } from "./codex-app-server.ts";
+import { CodexAppServerClient, CodexJsonRpcError, type StartTurnOptions } from "./codex-app-server.ts";
 import { classifyCodexFailure, CodexCapacityError } from "./codex-capacity.ts";
 import { buildAgentChildEnv } from "./github-cli-auth.ts";
 import { renderCorrectivePrompt } from "./prompt-builder/index.ts";
 import { extractFirstJsonObject, forgivingJsonParse } from "./utils.ts";
+import { REVIEW_VERDICT_JSON_SCHEMA } from "./review-verdict-schema.ts";
 import type {
   ReviewArchitecturalConcern,
   CodexThreadSummary,
@@ -53,6 +54,23 @@ function isThreadMaterializationRace(error: unknown): boolean {
 function isCodexAppServerRequestTimeout(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /^Codex app-server request timed out after \d+ms$/.test(message);
+}
+
+export function isUnsupportedOutputSchemaError(error: unknown): error is CodexJsonRpcError {
+  if (!(error instanceof CodexJsonRpcError) || error.code !== -32602) return false;
+  const data = error.data && typeof error.data === "object"
+    ? error.data as Record<string, unknown>
+    : undefined;
+  const namedParameter = data?.parameter ?? data?.field;
+  const structuredReason = [data?.reason, data?.kind, data?.message]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ");
+  if (namedParameter === "outputSchema" && /\b(unknown|unrecognized|unexpected)\b/i.test(structuredReason)) {
+    return true;
+  }
+  return /\b(unknown|unrecognized|unexpected)\s+(?:parameter|field)\s*[:=]?\s*[`"']?outputSchema\b/i.test(error.message)
+    || /\b(?:parameter|field)\s+[`"']?outputSchema[`"']?\s+(?:is\s+)?(?:unknown|unrecognized|unexpected)\b/i.test(error.message)
+    || /\boutputSchema\s+(?:is\s+)?(?:an?\s+)?(?:unknown|unrecognized|unexpected)\s+(?:parameter|field)\b/i.test(error.message);
 }
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -264,6 +282,7 @@ type InterruptibleCodexRunnerClient = CodexRunnerClient & Partial<Pick<CodexAppS
 
 export class ReviewRunner {
   private readonly codex: InterruptibleCodexRunnerClient;
+  private outputSchemaAvailable = true;
 
   constructor(
     private readonly config: ReviewQuillConfig,
@@ -396,7 +415,7 @@ export class ReviewRunner {
   ): Promise<Awaited<ReturnType<CodexRunnerClient["startTurn"]>>> {
     for (let attempt = 1; attempt <= CODEX_START_MAX_ATTEMPTS; attempt += 1) {
       try {
-        return await this.codex.startTurn({ threadId, cwd, input });
+        return await this.startTurnWithOutputSchemaFallback({ threadId, cwd, input });
       } catch (error) {
         if (!isThreadMaterializationRace(error) || attempt === CODEX_START_MAX_ATTEMPTS) {
           throw error;
@@ -410,6 +429,32 @@ export class ReviewRunner {
       }
     }
     throw new Error("unreachable");
+  }
+
+  private async startTurnWithOutputSchemaFallback(
+    options: Omit<StartTurnOptions, "outputSchema">,
+  ): Promise<Awaited<ReturnType<CodexRunnerClient["startTurn"]>>> {
+    const useOutputSchema = this.config.codex.outputSchema && this.outputSchemaAvailable;
+    try {
+      return await this.codex.startTurn({
+        ...options,
+        ...(useOutputSchema
+          ? { outputSchema: REVIEW_VERDICT_JSON_SCHEMA as unknown as Record<string, unknown> }
+          : {}),
+      });
+    } catch (error) {
+      if (!useOutputSchema || !isUnsupportedOutputSchemaError(error)) {
+        throw error;
+      }
+      if (this.outputSchemaAvailable) {
+        this.outputSchemaAvailable = false;
+        this.logger.warn({
+          code: error.code,
+          error: error.message,
+        }, "Codex app-server does not recognize turn outputSchema; disabling structured output for this process");
+      }
+      return await this.codex.startTurn(options);
+    }
   }
 
   private async waitForTurnCompletion(
