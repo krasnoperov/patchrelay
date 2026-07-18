@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ReviewQuillService } from "../src/service.ts";
+import type { ReviewExecutionTiming } from "../src/review-execution-timing.ts";
 import { GitHubApiError } from "../src/github-client.ts";
 import { normalizeVerdict } from "../src/review-runner.ts";
 import { extractFirstJsonObject, forgivingJsonParse, sanitizeJsonPayload } from "../src/utils.ts";
@@ -631,6 +632,8 @@ function buildParallelTestService(
     github?: Record<string, unknown>;
     runner?: Record<string, unknown>;
     waitForHeadStability?: (delayMs: number, signal: AbortSignal) => Promise<void>;
+    logger?: Record<string, unknown>;
+    nowMs?: () => number;
   } = {},
 ): ReviewQuillService {
   const repos = options.repos ?? [
@@ -680,9 +683,10 @@ function buildParallelTestService(
     } as never,
     (options.github ?? {}) as never,
     (options.runner ?? {}) as never,
-    { info() {}, warn() {}, error() {}, debug() {}, child() { return this; } } as never,
+    (options.logger ?? { info() {}, warn() {}, error() {}, debug() {}, child() { return this; } }) as never,
     undefined,
     options.waitForHeadStability,
+    options.nowMs,
   );
 }
 
@@ -827,6 +831,7 @@ test("dispatchReview aborts older in-flight workers for the same pull request", 
 
 test("dispatchReview coalesces rapid heads before acquiring a review slot", async () => {
   const liveHeads = new Map<number, string>([[1, "head-1"]]);
+  const infoLogs: Array<{ fields: Record<string, unknown>; message: string }> = [];
   const waiters: Array<{ delayMs: number; signal: AbortSignal; release: () => void }> = [];
   const waitForHeadStability = (delayMs: number, signal: AbortSignal): Promise<void> =>
     new Promise((resolve) => {
@@ -846,6 +851,10 @@ test("dispatchReview coalesces rapid heads before acquiring a review slot", asyn
         headSha: liveHeads.get(prNumber),
         state: "OPEN",
       }),
+    },
+    logger: {
+      info(fields: Record<string, unknown>, message: string) { infoLogs.push({ fields, message }); },
+      warn() {}, error() {}, debug() {}, child() { return this; },
     },
   });
   const executedHeads: string[] = [];
@@ -880,6 +889,90 @@ test("dispatchReview coalesces rapid heads before acquiring a review slot", asyn
 
   assert.deepEqual(executedHeads, ["head-3"]);
   assert.equal(service.getWatchSnapshot().runtime.inFlightReviews, 0);
+  const supersededLogs = infoLogs.filter((entry) => entry.message === "Superseded older in-flight review worker for pull request");
+  assert.equal(supersededLogs.length, 2);
+  assert.deepEqual(
+    supersededLogs.map((entry) => ({
+      supersededHeadSha: entry.fields.supersededHeadSha,
+      currentHeadSha: entry.fields.currentHeadSha,
+      phase: entry.fields.phase,
+      supersededBeforeAttempt: entry.fields.supersededBeforeAttempt,
+      supersededBeforeCodex: entry.fields.supersededBeforeCodex,
+    })),
+    [
+      {
+        supersededHeadSha: "head-1",
+        currentHeadSha: "head-2",
+        phase: "stabilizing",
+        supersededBeforeAttempt: true,
+        supersededBeforeCodex: true,
+      },
+      {
+        supersededHeadSha: "head-2",
+        currentHeadSha: "head-3",
+        phase: "stabilizing",
+        supersededBeforeAttempt: true,
+        supersededBeforeCodex: true,
+      },
+    ],
+  );
+});
+
+test("dispatchReview emits deterministic wait and total timing without changing execution", async () => {
+  let now = 5_000;
+  let executionCount = 0;
+  const infoLogs: Array<{ fields: Record<string, unknown>; message: string }> = [];
+  const service = buildParallelTestService({
+    headStabilizationMs: 20_000,
+    nowMs: () => now,
+    waitForHeadStability: async () => { now += 20; },
+    github: {
+      getPullRequest: async () => ({ number: 7, headSha: "stable-head", state: "OPEN" }),
+    },
+    logger: {
+      info(fields: Record<string, unknown>, message: string) { infoLogs.push({ fields, message }); },
+      warn() {}, error() {}, debug() {}, child() { return this; },
+    },
+  });
+  (service as unknown as {
+    executeReview: (
+      repo: unknown,
+      pr: unknown,
+      existing: unknown,
+      identity: unknown,
+      signal: AbortSignal,
+      timing: ReviewExecutionTiming,
+    ) => Promise<void>;
+  }).executeReview = async (_repo, _pr, _existing, _identity, _signal, timing) => {
+    executionCount += 1;
+    timing.markAttemptCreated();
+    now += 5;
+    timing.beginCodexReview();
+    now += 30;
+    timing.endCodexReview();
+    now += 2;
+    timing.beginPublication();
+    now += 7;
+    timing.endPublication();
+  };
+  const dispatch = (service as unknown as {
+    dispatchReview: (repo: unknown, pr: unknown) => Promise<void>;
+  }).dispatchReview.bind(service);
+
+  await dispatch(
+    { repoFullName: "krasnoperov/alpha", repoId: "alpha" } as never,
+    { number: 7, headSha: "stable-head" } as never,
+  );
+
+  assert.equal(executionCount, 1);
+  const timingLog = infoLogs.find((entry) => entry.message === "Review execution timing");
+  assert.ok(timingLog);
+  assert.equal(timingLog.fields.stabilizationWaitMs, 20);
+  assert.equal(timingLog.fields.semaphoreWaitMs, 0);
+  assert.equal(timingLog.fields.dispatchToCodexStartMs, 25);
+  assert.equal(timingLog.fields.codexReviewMs, 30);
+  assert.equal(timingLog.fields.publicationMs, 7);
+  assert.equal(timingLog.fields.totalExecutionMs, 64);
 });
 
 test("dispatchReview re-checks the live head after stabilization", async () => {
