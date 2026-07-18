@@ -41,3 +41,30 @@ test("CodexJsonRpcError preserves error code, message, and data", () => {
   assert.equal(error.message, "Unknown parameter outputSchema");
   assert.deepEqual(error.data, { parameter: "outputSchema" });
 });
+
+test("CodexAppServerClient routes notifications and unsubscribe stops delivery", () => {
+  const client = new CodexAppServerClient({
+    bin: "codex",
+    args: ["app-server"],
+    outputSchema: true,
+    approvalPolicy: "never",
+    sandboxMode: "danger-full-access",
+  }, {} as never);
+  const received: unknown[] = [];
+  const unsubscribe = client.subscribeNotifications((notification) => received.push(notification));
+  const internals = client as unknown as { stdoutBuffer: string; drainMessages(): void };
+
+  internals.stdoutBuffer = `${JSON.stringify({
+    method: "turn/completed",
+    params: { threadId: "thread-1", turn: { id: "turn-1" } },
+  })}\n`;
+  internals.drainMessages();
+  unsubscribe();
+  internals.stdoutBuffer = `${JSON.stringify({ method: "turn/started", params: { threadId: "thread-1" } })}\n`;
+  internals.drainMessages();
+
+  assert.deepEqual(received, [{
+    method: "turn/completed",
+    params: { threadId: "thread-1", turn: { id: "turn-1" } },
+  }]);
+});

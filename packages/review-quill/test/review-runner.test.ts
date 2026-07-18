@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ReviewRunInterruptedError, ReviewRunner } from "../src/review-runner.ts";
 import { isUnsupportedOutputSchemaError } from "../src/review-runner.ts";
-import { CodexJsonRpcError, type StartTurnOptions } from "../src/codex-app-server.ts";
+import {
+  CodexJsonRpcError,
+  type CodexAppServerNotification,
+  type StartTurnOptions,
+} from "../src/codex-app-server.ts";
 import { CodexCapacityError } from "../src/codex-capacity.ts";
 import { REVIEW_VERDICT_JSON_SCHEMA } from "../src/review-verdict-schema.ts";
 import type { ReviewQuillConfig } from "../src/types.ts";
@@ -38,6 +42,24 @@ const validReviewMessage = JSON.stringify({
   verdict: "approve",
   verdict_reason: "No blocking issues found.",
 });
+
+function notificationHarness(): {
+  emit(notification: CodexAppServerNotification): void;
+  listenerCount(): number;
+  subscribeNotifications(listener: (notification: CodexAppServerNotification) => void): () => void;
+} {
+  const listeners = new Set<(notification: CodexAppServerNotification) => void>();
+  return {
+    emit: (notification) => {
+      for (const listener of listeners) listener(notification);
+    },
+    listenerCount: () => listeners.size,
+    subscribeNotifications: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
 
 function completedTurns(messages: string[]): { id: string; turns: Array<Record<string, unknown>> } {
   return {
@@ -263,6 +285,111 @@ test("ReviewRunner keeps waiting when a Codex thread read times out", async () =
   assert.equal(readCalls, 2);
   assert.deepEqual(sleeps, [1_500]);
   assert.deepEqual(snapshots.map((thread) => thread.turns.at(-1)?.status), ["running", "completed"]);
+});
+
+test("ReviewRunner buffers an early matching completion and ignores unrelated or duplicate notifications", async () => {
+  const notifications = notificationHarness();
+  let readCalls = 0;
+  const sleeps: number[] = [];
+  const fakeCodex = {
+    start: async () => {},
+    stop: async () => {},
+    startThread: async () => ({ id: "thread-1", turns: [] }),
+    subscribeNotifications: notifications.subscribeNotifications,
+    startTurn: async () => {
+      notifications.emit({ method: "turn/completed", params: { threadId: "other-thread", turn: { id: "turn-1" } } });
+      notifications.emit({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "old-turn" } } });
+      notifications.emit({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1" } } });
+      notifications.emit({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1" } } });
+      return { turnId: "turn-1", status: "running" };
+    },
+    readThread: async () => {
+      readCalls += 1;
+      return completedTurns([validReviewMessage]);
+    },
+  };
+  const runner = new ReviewRunner(
+    minimalConfig(),
+    { warn() {}, info() {}, child: () => ({}) } as never,
+    fakeCodex as never,
+    async (ms) => { sleeps.push(ms); },
+  );
+
+  const result = await runner.review({
+    prompt: "Review this PR.",
+    workspace: { worktreePath: "/tmp/review-quill-test" },
+  } as never);
+
+  assert.equal(result.verdict.verdict, "approve");
+  assert.equal(readCalls, 1);
+  assert.deepEqual(sleeps, []);
+  assert.equal(notifications.listenerCount(), 0);
+});
+
+test("ReviewRunner falls back to polling after the notification watchdog", async () => {
+  const notifications = notificationHarness();
+  let readCalls = 0;
+  const sleeps: number[] = [];
+  const fakeCodex = {
+    start: async () => {},
+    stop: async () => {},
+    startThread: async () => ({ id: "thread-structured", turns: [] }),
+    subscribeNotifications: notifications.subscribeNotifications,
+    startTurn: async () => ({ turnId: "turn-1", status: "running" }),
+    readThread: async () => {
+      readCalls += 1;
+      return readCalls === 1
+        ? { id: "thread-structured", turns: [{ id: "turn-1", status: "inProgress", items: [] }] }
+        : completedTurns([validReviewMessage]);
+    },
+  };
+  const runner = new ReviewRunner(
+    minimalConfig(),
+    { warn() {}, info() {}, child: () => ({}) } as never,
+    fakeCodex as never,
+    async (ms) => { sleeps.push(ms); },
+    0,
+  );
+
+  const result = await runner.review({
+    prompt: "Review this PR.",
+    workspace: { worktreePath: "/tmp/review-quill-test" },
+  } as never);
+
+  assert.equal(result.verdict.verdict, "approve");
+  assert.equal(readCalls, 2);
+  assert.deepEqual(sleeps, [1_500]);
+  assert.equal(notifications.listenerCount(), 0);
+});
+
+test("ReviewRunner applies terminal error classification after a completion notification", async () => {
+  const notifications = notificationHarness();
+  const fakeCodex = {
+    start: async () => {},
+    stop: async () => {},
+    startThread: async () => ({ id: "thread-failed", turns: [] }),
+    subscribeNotifications: notifications.subscribeNotifications,
+    startTurn: async () => {
+      notifications.emit({ method: "turn/completed", params: { threadId: "thread-failed", turn: { id: "turn-failed" } } });
+      return { turnId: "turn-failed", status: "running" };
+    },
+    readThread: async () => ({
+      id: "thread-failed",
+      turns: [{ id: "turn-failed", status: "failed", items: [], error: { message: "sandbox denied write access" } }],
+    }),
+  };
+  const runner = new ReviewRunner(
+    minimalConfig(),
+    { warn() {}, child: () => ({}) } as never,
+    fakeCodex as never,
+    async () => {},
+  );
+
+  await assert.rejects(
+    runner.review({ prompt: "Review", workspace: { worktreePath: "/tmp/review-quill-test" } } as never),
+    /Review turn ended with status failed: sandbox denied write access/,
+  );
+  assert.equal(notifications.listenerCount(), 0);
 });
 
 test("ReviewRunner retries Codex thread start when rollout jsonl is empty", async () => {
@@ -550,6 +677,44 @@ test("ReviewRunner interrupts a running Codex turn when the review signal aborts
   assert.equal(readCalls, 1);
   assert.deepEqual(sleeps, []);
   assert.deepEqual(snapshots.map((thread) => thread.turns.at(-1)?.status), ["running", "interrupted"]);
+});
+
+test("ReviewRunner interrupts once when cancellation arrives before startTurn responds and removes its listener", async () => {
+  const controller = new AbortController();
+  const notifications = notificationHarness();
+  let interruptCalls = 0;
+  const fakeCodex = {
+    start: async () => {},
+    stop: async () => {},
+    startThread: async () => ({ id: "thread-1", turns: [] }),
+    subscribeNotifications: notifications.subscribeNotifications,
+    startTurn: async () => {
+      controller.abort("New head arrived.");
+      notifications.emit({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1" } } });
+      return { turnId: "turn-1", status: "running" };
+    },
+    interruptTurn: async () => { interruptCalls += 1; },
+    readThread: async () => ({
+      id: "thread-1",
+      turns: [{ id: "turn-1", status: "interrupted", items: [] }],
+    }),
+  };
+  const runner = new ReviewRunner(
+    minimalConfig(),
+    { warn() {}, child: () => ({}) } as never,
+    fakeCodex as never,
+    async () => {},
+  );
+
+  await assert.rejects(
+    runner.review(
+      { prompt: "Review", workspace: { worktreePath: "/tmp/review-quill-test" } } as never,
+      { signal: controller.signal },
+    ),
+    (error: unknown) => error instanceof ReviewRunInterruptedError && error.turnId === "turn-1",
+  );
+  assert.equal(interruptCalls, 1);
+  assert.equal(notifications.listenerCount(), 0);
 });
 
 test("ReviewRunner fails fast when the Codex app-server reports a failed turn", async () => {
