@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import { existsSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import {
   redactSensitiveHeaders,
@@ -80,4 +84,22 @@ test("execCommand captures output and timeout failures", async () => {
     () => execCommand("definitely-not-a-real-patchrelay-command", ["--version"]),
     /ENOENT/,
   );
+});
+
+test("execCommand timeout terminates descendants", { skip: process.platform === "win32" }, async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "patchrelay-exec-timeout-"));
+  const markerPath = path.join(tempDir, "descendant-survived");
+  const childCode = `setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'unexpected'), 100)`;
+  const parentCode = `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(childCode)}], { stdio: 'ignore' }); setTimeout(() => {}, 10_000)`;
+
+  try {
+    await assert.rejects(
+      () => execCommand(process.execPath, ["-e", parentCode], { timeoutMs: 20 }),
+      /Command timed out after 20ms/,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(existsSync(markerPath), false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });

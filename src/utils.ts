@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { execFile } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import type { StdioOptions } from "node:child_process";
 
 const REDACTED_HEADER_NAMES = new Set(["authorization", "cookie", "set-cookie", "linear-signature"]);
@@ -58,50 +58,74 @@ export async function execCommand(
   } = {},
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve, reject) => {
-    execFile(command, args, {
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let stdout = "";
+    let stderr = "";
+    const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env,
-      timeout: options.timeoutMs,
-      killSignal: "SIGTERM",
-      encoding: "utf8",
-      maxBuffer: 10 * 1024 * 1024,
-      ...(options.stdio ? { stdio: options.stdio } : {}),
-    }, (error, stdout, stderr) => {
-      if (error) {
-        const timeoutError =
-          typeof error === "object" &&
-          error !== null &&
-          "killed" in error &&
-          "signal" in error &&
-          error.killed === true &&
-          error.signal === "SIGTERM" &&
-          options.timeoutMs;
-        if (timeoutError) {
-          reject(new Error(`Command timed out after ${options.timeoutMs}ms: ${command}`));
-          return;
-        }
-
-        const rawCode = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
-        if (typeof rawCode === "string" && !/^-?\d+$/.test(rawCode)) {
-          reject(error);
-          return;
-        }
-        const exitCode = typeof rawCode === "number" ? rawCode : typeof rawCode === "string" ? Number(rawCode) : 1;
-        resolve({
-          stdout: typeof stdout === "string" ? stdout : "",
-          stderr: typeof stderr === "string" ? stderr : "",
-          exitCode,
-        });
-        return;
-      }
+      // A hook commonly starts package-manager children. Put it in its own
+      // process group so a watchdog can stop the whole hook rather than
+      // leaving an orphaned install running in the worktree.
+      detached: process.platform !== "win32",
+      stdio: options.stdio ?? ["ignore", "pipe", "pipe"],
+    });
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr?.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      reject(error);
+    });
+    child.on("close", (code, signal) => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
 
       resolve({
-        stdout: typeof stdout === "string" ? stdout : "",
-        stderr: typeof stderr === "string" ? stderr : "",
-        exitCode: 0,
+        stdout,
+        stderr,
+        exitCode: signal ? 1 : (code ?? 0),
       });
     });
+
+    if (options.timeoutMs !== undefined) {
+      timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        terminateCommandProcessGroup(child, "SIGTERM");
+        const forceKill = setTimeout(() => terminateCommandProcessGroup(child, "SIGKILL"), 1_000);
+        forceKill.unref?.();
+        reject(new Error(`Command timed out after ${options.timeoutMs}ms: ${command}`));
+      }, options.timeoutMs);
+      timeout.unref?.();
+    }
   });
+}
+
+function terminateCommandProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (process.platform !== "win32" && child.pid !== undefined) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch (error) {
+      // The command may have already exited between the watchdog firing and
+      // this signal. Fall back to the direct child when possible.
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "ESRCH") {
+        child.kill(signal);
+        return;
+      }
+    }
+  }
+  child.kill(signal);
 }
 
 export function safeJsonParse<T>(value: string): T | undefined {
