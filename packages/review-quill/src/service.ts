@@ -698,6 +698,7 @@ export class ReviewQuillService {
           prompting: this.config.prompting,
           logger: this.logger,
           selfLogin: this.reviewerLogin,
+          ...(priorThreadCandidate ? { priorThread: priorThreadCandidate } : {}),
         });
       } catch (error) {
         if (error instanceof CannotIntegrateError) {

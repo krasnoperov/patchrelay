@@ -11,13 +11,7 @@ import type { ReviewDiffContext } from "../types.ts";
 //   2. `Detailed patches:` — a `\`\`\`diff\`\`\`` block per surviving
 //      patch.
 export function renderDiffContextLines(diff: ReviewDiffContext): string[] {
-  const lines: string[] = ["Changed files inventory:"];
-
-  for (const file of diff.inventory) {
-    const stats = `${file.status} +${file.additions} -${file.deletions}`;
-    const reasonSuffix = file.reason ? ` — ${humanReason(file.reason)}` : "";
-    lines.push(`- ${file.path} (${stats})${reasonSuffix}`);
-  }
+  const lines = renderDiffInventoryLines(diff);
 
   if (diff.patches.length > 0) {
     lines.push("", "Detailed patches:");
@@ -25,6 +19,18 @@ export function renderDiffContextLines(diff: ReviewDiffContext): string[] {
       lines.push(`## ${file.path}`);
       lines.push("```diff", file.patch, "```");
     }
+  }
+
+  return lines;
+}
+
+export function renderDiffInventoryLines(diff: ReviewDiffContext): string[] {
+  const lines: string[] = ["Changed files inventory:"];
+
+  for (const file of diff.inventory) {
+    const stats = `${file.status} +${file.additions} -${file.deletions}`;
+    const reasonSuffix = file.reason ? ` — ${humanReason(file.reason)}` : "";
+    lines.push(`- ${file.path} (${stats})${reasonSuffix}`);
   }
 
   return lines;

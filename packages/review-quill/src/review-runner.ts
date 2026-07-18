@@ -26,6 +26,13 @@ export interface ReviewRunOptions {
   onThreadSnapshot?: (thread: CodexThreadSummary) => void;
 }
 
+type ReviewThreadStartMode = "fresh" | "forked" | "fresh_fallback";
+
+interface ReviewThreadStart {
+  thread: CodexThreadSummary;
+  mode: ReviewThreadStartMode;
+}
+
 // A parse attempt either yields a valid verdict or a reason string that
 // the corrective retry will feed back to the model so it knows what
 // went wrong on its previous attempt.
@@ -333,11 +340,38 @@ export class ReviewRunner {
   ): Promise<{ verdict: ReviewVerdict; threadId: string; turnId: string }> {
     const cwd = context.workspace.worktreePath;
     this.throwIfReviewRunInterrupted(options.signal);
-    const thread = await this.startReviewThread(cwd, priorThread, options.signal);
+    const threadStart = await this.startReviewThread(cwd, priorThread, options.signal);
+    const thread = threadStart.thread;
     this.throwIfReviewRunInterrupted(options.signal, thread.id);
+    const promptMode = threadStart.mode === "forked" ? "follow_up" : "full";
+    if (promptMode === "follow_up" && !context.followUpPrompt) {
+      throw new Error("Forked review thread is missing its bounded follow-up prompt");
+    }
+    const reviewPrompt = promptMode === "follow_up" ? context.followUpPrompt! : context.prompt;
+    const inventoryCount = context.diff?.inventory.length ?? 0;
+    const patches = context.diff?.patches ?? [];
+    const omittedPatchChars = patches.reduce((sum, patch) => sum + patch.patch.length, 0);
+    this.logger.info?.({
+      threadStartMode: threadStart.mode,
+      promptMode,
+      threadId: thread.id,
+      ...(priorThread
+        ? {
+          sourceAttemptId: priorThread.sourceAttemptId,
+          sourceThreadId: priorThread.threadId,
+          sourceTurnId: priorThread.lastTurnId,
+          priorHeadSha: priorThread.priorHeadSha,
+        }
+        : {}),
+      currentHeadSha: context.pr?.headSha,
+      inventoryCount,
+      omittedPatchCount: promptMode === "follow_up" ? patches.length : 0,
+      omittedPatchChars: promptMode === "follow_up" ? omittedPatchChars : 0,
+      promptChars: reviewPrompt.length,
+    }, "Selected Review Quill prompt mode");
 
-    // First attempt: full prompt, fresh turn.
-    const firstTurn = await this.runTurn(thread, cwd, context.prompt, options);
+    // First attempt: selected review prompt, fresh turn on the chosen thread.
+    const firstTurn = await this.runTurn(thread, cwd, reviewPrompt, options);
     const firstParse = parseModelResponse(firstTurn.latestMessage);
     if (firstParse.ok) {
       return { verdict: firstParse.verdict, threadId: thread.id, turnId: firstTurn.turnId };
@@ -379,29 +413,31 @@ export class ReviewRunner {
     cwd: string,
     priorThread: PriorReviewThreadCandidate | undefined,
     signal: AbortSignal | undefined,
-  ): Promise<CodexThreadSummary> {
+  ): Promise<ReviewThreadStart> {
     if (!this.config.codex.forkPriorReviewThread || !priorThread || !this.threadForkAvailable) {
-      return await this.startThreadWithMaterializationRetry(cwd);
+      const thread = await this.startThreadWithMaterializationRetry(cwd);
+      return { thread, mode: priorThread && this.config.codex.forkPriorReviewThread ? "fresh_fallback" : "fresh" };
     }
     if (!this.codex.forkThread) {
       this.disableThreadForkCapability();
-      return await this.startThreadWithMaterializationRetry(cwd);
+      return { thread: await this.startThreadWithMaterializationRetry(cwd), mode: "fresh_fallback" };
     }
     try {
-      return await this.codex.forkThread({
+      const thread = await this.codex.forkThread({
         threadId: priorThread.threadId,
         lastTurnId: priorThread.lastTurnId,
         cwd,
       });
+      return { thread, mode: "forked" };
     } catch (error) {
       this.throwIfReviewRunInterrupted(signal);
       if (error instanceof CodexJsonRpcError && error.code === -32601) {
         this.disableThreadForkCapability();
-        return await this.startThreadWithMaterializationRetry(cwd);
+        return { thread: await this.startThreadWithMaterializationRetry(cwd), mode: "fresh_fallback" };
       }
       if (isForkSourceUnavailable(error)) {
         this.logger.debug({ sourceAttemptId: priorThread.sourceAttemptId }, "Prior review thread unavailable; starting a fresh thread");
-        return await this.startThreadWithMaterializationRetry(cwd);
+        return { thread: await this.startThreadWithMaterializationRetry(cwd), mode: "fresh_fallback" };
       }
       throw error;
     }

@@ -72,7 +72,43 @@ function summarizePriorClaim(
 const SELF_CLAIM_FRESH_START_THRESHOLD = 3;
 
 function normalizeLogin(login: string | undefined): string | undefined {
-  return login?.replace(/\[bot\]$/i, "").toLowerCase();
+  const normalized = login?.trim().replace(/\[bot\]$/i, "").toLowerCase();
+  return normalized || undefined;
+}
+
+export function buildFollowUpHumanClaims(
+  priorReviews: PullRequestReviewRecord[],
+  selfLogin: string | undefined,
+  priorAttemptCompletedAt: string | undefined,
+): PriorReviewClaim[] {
+  const normalizedSelf = normalizeLogin(selfLogin);
+  const completedAtMs = priorAttemptCompletedAt ? Date.parse(priorAttemptCompletedAt) : Number.NaN;
+  if (!normalizedSelf || !Number.isFinite(completedAtMs)) return [];
+
+  return priorReviews
+    .flatMap((review) => {
+      const author = normalizeLogin(review.authorLogin);
+      const isBotAuthor = /\[bot\]$/i.test(review.authorLogin?.trim() ?? "");
+      const submittedAtMs = review.submittedAt ? Date.parse(review.submittedAt) : Number.NaN;
+      const excerpt = summarizePriorClaim(review);
+      if (isBotAuthor || !author || author === normalizedSelf || !Number.isFinite(submittedAtMs) || submittedAtMs <= completedAtMs || !excerpt) {
+        return [];
+      }
+      return [{ review, submittedAtMs, excerpt }];
+    })
+    .sort((left, right) => {
+      const leftDecisive = isDecisive(left.review.state);
+      const rightDecisive = isDecisive(right.review.state);
+      if (leftDecisive !== rightDecisive) return leftDecisive ? -1 : 1;
+      return right.submittedAtMs - left.submittedAtMs;
+    })
+    .slice(0, 3)
+    .map(({ review, excerpt }) => ({
+      ...(review.authorLogin ? { authorLogin: review.authorLogin } : {}),
+      ...(review.state ? { state: review.state } : {}),
+      ...(review.commitId ? { commitId: review.commitId } : {}),
+      excerpt,
+    }));
 }
 
 function isDecisive(state: string | undefined): boolean {
@@ -155,7 +191,11 @@ export async function buildGitHubPromptContext(
   repoFullName: string,
   pr: PullRequestSummary,
   selfLogin?: string,
-): Promise<{ priorReviewClaims: PriorReviewClaim[] }> {
+  priorAttemptCompletedAt?: string,
+): Promise<{ priorReviewClaims: PriorReviewClaim[]; followUpReviewClaims: PriorReviewClaim[] }> {
   const priorReviews = await github.listPullRequestReviews(repoFullName, pr.number);
-  return { priorReviewClaims: buildPriorReviewClaims(priorReviews, selfLogin) };
+  return {
+    priorReviewClaims: buildPriorReviewClaims(priorReviews, selfLogin),
+    followUpReviewClaims: buildFollowUpHumanClaims(priorReviews, selfLogin, priorAttemptCompletedAt),
+  };
 }

@@ -97,12 +97,13 @@ test("ReviewRunner sends the canonical output schema on initial and corrective t
   assert.deepEqual(starts[1]?.outputSchema, REVIEW_VERDICT_JSON_SCHEMA);
 });
 
-test("ReviewRunner forks once, sends the full current prompt, and keeps a corrective turn on the fork", async () => {
+test("ReviewRunner forks once, sends the bounded follow-up prompt, and keeps a corrective turn on the fork", async () => {
   const config = minimalConfig();
   config.codex.forkPriorReviewThread = true;
   const forkCalls: unknown[] = [];
   const starts: StartTurnOptions[] = [];
   const snapshots: Array<{ id: string; lastTurnId?: string }> = [];
+  const promptLogs: Array<Record<string, unknown>> = [];
   const fakeCodex = {
     start: async () => {},
     stop: async () => {},
@@ -128,45 +129,118 @@ test("ReviewRunner forks once, sends the full current prompt, and keeps a correc
   };
   const runner = new ReviewRunner(
     config,
-    { warn() {}, info() {}, debug() {}, child: () => ({}) } as never,
+    { warn() {}, info: (fields: Record<string, unknown>) => promptLogs.push(fields), debug() {}, child: () => ({}) } as never,
     fakeCodex as never,
     async () => {},
   );
 
   const result = await runner.review({
     prompt: "FULL CURRENT REVIEW PROMPT",
+    followUpPrompt: "BOUNDED FOLLOW-UP REVIEW PROMPT",
     workspace: { worktreePath: "/tmp/current-head" },
+    pr: { headSha: "current-head" },
+    diff: {
+      inventory: [{ path: "src/one.ts" }, { path: "src/two.ts" }],
+      patches: [{ patch: "PATCH BODY SENTINEL" }],
+    },
   } as never, {
     onThreadSnapshot: (thread) => snapshots.push({ id: thread.id, lastTurnId: thread.turns.at(-1)?.id }),
-  }, { sourceAttemptId: 17, threadId: "source-thread", lastTurnId: "source-turn" });
+  }, {
+    sourceAttemptId: 17,
+    threadId: "source-thread",
+    lastTurnId: "source-turn",
+    priorHeadSha: "prior-head",
+  });
 
   assert.deepEqual(forkCalls, [{ threadId: "source-thread", lastTurnId: "source-turn", cwd: "/tmp/current-head" }]);
-  assert.equal(starts[0]?.input, "FULL CURRENT REVIEW PROMPT");
+  assert.equal(starts[0]?.input, "BOUNDED FOLLOW-UP REVIEW PROMPT");
   assert.match(starts[1]?.input ?? "", /previous response could not be parsed/i);
   assert.deepEqual(starts.map((entry) => entry.threadId), ["forked-thread", "forked-thread"]);
   assert.equal(result.threadId, "forked-thread");
   assert.equal(result.turnId, "fork-turn-2");
   assert.ok(snapshots.every((snapshot) => snapshot.id === "forked-thread"));
   assert.equal(snapshots.at(-1)?.lastTurnId, "fork-turn-2");
+  assert.deepEqual(promptLogs[0], {
+    threadStartMode: "forked",
+    promptMode: "follow_up",
+    threadId: "forked-thread",
+    sourceAttemptId: 17,
+    sourceThreadId: "source-thread",
+    sourceTurnId: "source-turn",
+    priorHeadSha: "prior-head",
+    currentHeadSha: "current-head",
+    inventoryCount: 2,
+    omittedPatchCount: 1,
+    omittedPatchChars: "PATCH BODY SENTINEL".length,
+    promptChars: "BOUNDED FOLLOW-UP REVIEW PROMPT".length,
+  });
 });
 
 test("ReviewRunner keeps the default-off path fresh even when given a candidate", async () => {
   let forkCalls = 0;
   let freshCalls = 0;
+  const starts: StartTurnOptions[] = [];
   const fakeCodex = {
     start: async () => {}, stop: async () => {},
     forkThread: async () => { forkCalls += 1; return { id: "wrong", turns: [] }; },
     startThread: async () => { freshCalls += 1; return { id: "thread-structured", turns: [] }; },
-    startTurn: async () => ({ turnId: "turn-1", status: "running" }),
+    startTurn: async (options: StartTurnOptions) => {
+      starts.push(options);
+      return { turnId: "turn-1", status: "running" };
+    },
     readThread: async () => completedTurns([validReviewMessage]),
   };
   const runner = new ReviewRunner(minimalConfig(), { warn() {}, child: () => ({}) } as never, fakeCodex as never, async () => {});
 
   await runner.review({ prompt: "Review", workspace: { worktreePath: "/tmp/current" } } as never, {}, {
-    sourceAttemptId: 1, threadId: "source", lastTurnId: "turn",
+    sourceAttemptId: 1, threadId: "source", lastTurnId: "turn", priorHeadSha: "prior-head",
   });
   assert.equal(forkCalls, 0);
   assert.equal(freshCalls, 1);
+  assert.equal(starts[0]?.input, "Review");
+});
+
+test("ReviewRunner sends the byte-identical full prompt after a fork source fallback", async () => {
+  const config = minimalConfig();
+  config.codex.forkPriorReviewThread = true;
+  const starts: StartTurnOptions[] = [];
+  const promptLogs: Array<Record<string, unknown>> = [];
+  const fakeCodex = {
+    start: async () => {}, stop: async () => {},
+    forkThread: async () => { throw new CodexJsonRpcError(-32600, "No rollout found for thread id source", null); },
+    startThread: async () => ({ id: "fresh-thread", turns: [] }),
+    startTurn: async (options: StartTurnOptions) => {
+      starts.push(options);
+      return { turnId: "turn-1", status: "running" };
+    },
+    readThread: async () => ({
+      id: "fresh-thread",
+      turns: [{ id: "turn-1", status: "completed", items: [{ type: "agentMessage", text: validReviewMessage }] }],
+    }),
+  };
+  const runner = new ReviewRunner(config, {
+    warn() {}, debug() {}, info: (fields: Record<string, unknown>) => promptLogs.push(fields), child: () => ({}),
+  } as never, fakeCodex as never, async () => {});
+  const fullPrompt = "FULL PROMPT WITH PATCH BODY SENTINEL";
+
+  await runner.review({
+    prompt: fullPrompt,
+    followUpPrompt: "FOLLOW-UP MUST NOT BE SENT",
+    workspace: { worktreePath: "/tmp/current" },
+    pr: { headSha: "current-head" },
+    diff: { inventory: [], patches: [{ patch: "PATCH BODY SENTINEL" }] },
+  } as never, {}, {
+    sourceAttemptId: 1,
+    threadId: "source",
+    lastTurnId: "source-turn",
+    priorHeadSha: "prior-head",
+  });
+
+  assert.equal(starts[0]?.input, fullPrompt);
+  assert.equal(promptLogs[0]?.threadStartMode, "fresh_fallback");
+  assert.equal(promptLogs[0]?.promptMode, "full");
+  assert.equal(promptLogs[0]?.omittedPatchCount, 0);
+  assert.equal(promptLogs[0]?.promptChars, fullPrompt.length);
 });
 
 test("ReviewRunner disables unsupported thread/fork once across concurrent starts", async () => {
@@ -192,14 +266,15 @@ test("ReviewRunner disables unsupported thread/fork once across concurrent start
     warn: (...args: unknown[]) => warnings.push(String(args.at(-1))), debug() {}, child: () => ({}),
   } as never, fakeCodex as never, async () => {});
   const start = (runner as unknown as {
-    startReviewThread(cwd: string, candidate: unknown, signal?: AbortSignal): Promise<{ id: string }>;
+    startReviewThread(cwd: string, candidate: unknown, signal?: AbortSignal): Promise<{ thread: { id: string }; mode: string }>;
   }).startReviewThread.bind(runner);
-  const candidate = { sourceAttemptId: 1, threadId: "source", lastTurnId: "turn" };
+  const candidate = { sourceAttemptId: 1, threadId: "source", lastTurnId: "turn", priorHeadSha: "prior-head" };
 
   const first = await Promise.all([start("/tmp/one", candidate), start("/tmp/two", candidate)]);
   const third = await start("/tmp/three", candidate);
-  assert.deepEqual(first.map((thread) => thread.id), ["fresh-1", "fresh-2"]);
-  assert.equal(third.id, "fresh-3");
+  assert.deepEqual(first.map((result) => result.thread.id), ["fresh-1", "fresh-2"]);
+  assert.equal(third.thread.id, "fresh-3");
+  assert.ok([...first, third].every((result) => result.mode === "fresh_fallback"));
   assert.equal(forkCalls, 2);
   assert.equal(warnings.length, 1);
 });
@@ -220,12 +295,12 @@ test("ReviewRunner falls back for the real missing source rollout payload withou
   };
   const runner = new ReviewRunner(config, { warn() {}, debug() {}, child: () => ({}) } as never, fakeCodex as never, async () => {});
   const start = (runner as unknown as {
-    startReviewThread(cwd: string, candidate: unknown, signal?: AbortSignal): Promise<{ id: string }>;
+    startReviewThread(cwd: string, candidate: unknown, signal?: AbortSignal): Promise<{ thread: { id: string }; mode: string }>;
   }).startReviewThread.bind(runner);
-  const candidate = { sourceAttemptId: 1, threadId: "source", lastTurnId: "turn" };
+  const candidate = { sourceAttemptId: 1, threadId: "source", lastTurnId: "turn", priorHeadSha: "prior-head" };
 
-  assert.equal((await start("/tmp/one", candidate)).id, "fresh-1");
-  assert.equal((await start("/tmp/two", candidate)).id, "fresh-2");
+  assert.equal((await start("/tmp/one", candidate)).thread.id, "fresh-1");
+  assert.equal((await start("/tmp/two", candidate)).thread.id, "fresh-2");
   assert.equal(forkCalls, 2, "source misses must not disable the capability");
 });
 
@@ -252,7 +327,9 @@ test("ReviewRunner propagates unsafe fork failures without starting fresh", asyn
     const start = (runner as unknown as {
       startReviewThread(cwd: string, candidate: unknown): Promise<unknown>;
     }).startReviewThread.bind(runner);
-    await assert.rejects(start("/tmp", { sourceAttemptId: 1, threadId: "source", lastTurnId: "turn" }), (error) => error === failure);
+    await assert.rejects(start("/tmp", {
+      sourceAttemptId: 1, threadId: "source", lastTurnId: "turn", priorHeadSha: "prior-head",
+    }), (error) => error === failure);
     assert.equal(freshCalls, 0);
   }
 });
@@ -276,7 +353,9 @@ test("ReviewRunner does not fresh-fallback after cancellation during a fork", as
   }).startReviewThread.bind(runner);
 
   await assert.rejects(
-    start("/tmp", { sourceAttemptId: 1, threadId: "source", lastTurnId: "turn" }, controller.signal),
+    start("/tmp", {
+      sourceAttemptId: 1, threadId: "source", lastTurnId: "turn", priorHeadSha: "prior-head",
+    }, controller.signal),
     ReviewRunInterruptedError,
   );
   assert.equal(freshCalls, 0);

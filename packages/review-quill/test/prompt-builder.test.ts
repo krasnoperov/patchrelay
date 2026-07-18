@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { renderDiffContextLines } from "../src/diff-context/index.ts";
-import { renderReviewPrompt } from "../src/prompt-builder/index.ts";
+import { renderFollowUpReviewPrompt, renderReviewPrompt } from "../src/prompt-builder/index.ts";
 import { findDisallowedReviewPromptSectionIds } from "../src/prompt-builder/render.ts";
 import type { ReviewContext } from "../src/types.ts";
 
@@ -140,6 +140,40 @@ test("renderReviewPrompt includes explicit guidance docs and suppressed summarie
   assert.match(prompt, /If a concern is real but mostly pre-existing or only weakly connected to the stated PR task, prefer a nit or drop it instead of blocking/);
   assert.match(prompt, /Verify these historical claims against the current head before reusing them/);
   assert.match(prompt, /make the continuity explicit: note what appears resolved since the prior review, what still blocks on this head, and what is genuinely new/);
+});
+
+test("renderFollowUpReviewPrompt carries policy and inventory without patch bodies", () => {
+  const context = baseContext();
+  context.promptCustomization = {
+    extraInstructions: { sourcePath: "/tmp/extra.md", content: "Check the release boundary." },
+    replaceSections: {
+      "review-rubric": { sourcePath: "/tmp/rubric.md", content: "## Review rules\nCUSTOM EFFECTIVE RUBRIC" },
+    },
+  };
+  context.promptContext.followUpReviewClaims = [{
+    authorLogin: "alice",
+    state: "CHANGES_REQUESTED",
+    excerpt: "A newer human concern.",
+  }];
+
+  const prompt = renderFollowUpReviewPrompt(context, "previous-sha-123");
+
+  assert.match(prompt, /Previous reviewed head SHA: previous-sha-123/);
+  assert.match(prompt, /Current head SHA: abc123/);
+  assert.match(prompt, /src\/service\.ts/);
+  assert.match(prompt, /package-lock\.json .*summary only by rule/);
+  assert.match(prompt, /AGENTS\.md/);
+  assert.match(prompt, /Be careful with merges/);
+  assert.match(prompt, /CUSTOM EFFECTIVE RUBRIC/);
+  assert.match(prompt, /Check the release boundary/);
+  assert.match(prompt, /A newer human concern/);
+  assert.match(prompt, /"verdict": "approve" \| "request_changes"/);
+  assert.match(prompt, /current checkout to inspect the actual changes/i);
+  assert.match(prompt, /do not anchor on its verdict/i);
+  assert.match(prompt, /underlying root cause over symptom-by-symptom findings/i);
+  assert.doesNotMatch(prompt, /Detailed patches:/);
+  assert.doesNotMatch(prompt, /export const updated = true/);
+  assert.doesNotMatch(prompt, /```diff/);
 });
 
 test("renderReviewPrompt embeds renderDiffContextLines verbatim (CLI/LLM parity lock)", () => {

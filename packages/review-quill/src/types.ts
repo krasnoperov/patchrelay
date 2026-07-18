@@ -201,6 +201,7 @@ export interface ReviewDiffContext {
 export interface PromptContext {
   guidanceDocs: GuidanceDoc[];
   priorReviewClaims: PriorReviewClaim[];
+  followUpReviewClaims?: PriorReviewClaim[];
   issueKeys: string[];
 }
 
@@ -213,6 +214,7 @@ export interface ReviewContext {
   promptCustomization: PromptCustomizationLayer;
   promptContext: PromptContext;
   prompt: string;
+  followUpPrompt?: string;
 }
 
 export type ReviewAttemptStatus =

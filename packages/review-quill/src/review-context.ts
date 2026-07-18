@@ -4,10 +4,11 @@ import type { PullRequestSummary, ReviewContext, ReviewQuillRepositoryConfig } f
 import { loadReviewQuillRepoPrompting } from "./customization.ts";
 import { buildDiffContext } from "./diff-context/index.ts";
 import { buildPromptContext } from "./prompt-context/index.ts";
-import { renderReviewPrompt } from "./prompt-builder/index.ts";
+import { renderFollowUpReviewPrompt, renderReviewPrompt } from "./prompt-builder/index.ts";
 import { findDisallowedReviewPromptSectionIds, findUnknownReviewPromptSectionIds } from "./prompt-builder/render.ts";
 import { materializeReviewWorkspaceWithMode } from "./review-workspace/index.ts";
 import { resolveReviewSurfaceMode } from "./carry-forward.ts";
+import type { PriorReviewThreadCandidate } from "./prior-review-thread-selector.ts";
 
 export class CannotIntegrateError extends Error {
   readonly headSha: string;
@@ -61,6 +62,7 @@ export async function buildReviewContext(params: {
   prompting: ReviewContext["promptCustomization"];
   logger: Logger;
   selfLogin: string | undefined;
+  priorThread?: PriorReviewThreadCandidate;
 }): Promise<{ context: ReviewContext; dispose: () => Promise<void> }> {
   const token = params.github.currentTokenForRepo(params.repo.repoFullName);
   if (!token) {
@@ -92,6 +94,7 @@ export async function buildReviewContext(params: {
       materialized.workspace,
       params.repo.reviewDocs,
       params.selfLogin,
+      params.priorThread?.completedAt,
     );
     const repoPromptCustomization = loadReviewQuillRepoPrompting({
       repoRoot: materialized.workspace.worktreePath,
@@ -120,10 +123,15 @@ export async function buildReviewContext(params: {
         "Review Quill prompt customization attempted to replace non-overridable sections",
       );
     }
+    const prompt = renderReviewPrompt(baseContext);
+    const followUpPrompt = params.priorThread
+      ? renderFollowUpReviewPrompt(baseContext, params.priorThread.priorHeadSha)
+      : undefined;
     return {
       context: {
         ...baseContext,
-        prompt: renderReviewPrompt(baseContext),
+        prompt,
+        ...(followUpPrompt ? { followUpPrompt } : {}),
       },
       dispose: materialized.dispose,
     };
