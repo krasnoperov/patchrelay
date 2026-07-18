@@ -537,6 +537,19 @@ test("transcript shows the full stored Codex thread for one PR review attempt", 
       summary: "Looks good.",
       threadId: "thread-review-42",
       turnId: "turn-review-42",
+      transcript: {
+        id: "thread-review-42",
+        turns: [
+          {
+            id: "turn-review-42",
+            status: "completed",
+            items: [
+              { type: "agentMessage", id: "assistant-1", text: "Review walkthrough paragraph one." },
+              { type: "customItem", id: "item-2", detail: "structured payload" },
+            ],
+          },
+        ],
+      },
       completedAt: "2026-04-07T10:15:00.000Z",
     });
     store.close();
@@ -553,19 +566,7 @@ test("transcript shows the full stored Codex thread for one PR review attempt", 
         const code = await runCli(["transcript", "mafia", "42"], {
           stdout: stdout.stream,
           stderr: stderr.stream,
-          readCodexThread: async (threadId) => ({
-            id: threadId,
-            turns: [
-              {
-                id: "turn-review-42",
-                status: "completed",
-                items: [
-                  { type: "agentMessage", id: "assistant-1", text: "Review walkthrough paragraph one." },
-                  { type: "customItem", id: "item-2", detail: "structured payload" },
-                ],
-              },
-            ],
-          }),
+          readCodexThread: async () => { throw new Error("live app-server should not be read when a snapshot is stored"); },
         });
 
         assert.equal(code, 0);
@@ -573,6 +574,7 @@ test("transcript shows the full stored Codex thread for one PR review attempt", 
         assert.match(rendered, /Repo: krasnoperov\/mafia/);
         assert.match(rendered, /Attempt: #\d+/);
         assert.match(rendered, /Thread: thread-review-42/);
+        assert.match(rendered, /Transcript source: stored attempt snapshot/);
         assert.match(rendered, /Visible thread items are shown below/);
         assert.match(rendered, /Turn 1: turn-review-42 \[completed\]/);
         assert.match(rendered, /assistant \(assistant-1\):/);
