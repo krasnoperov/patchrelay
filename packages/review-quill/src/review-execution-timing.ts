@@ -1,3 +1,5 @@
+import { performance } from "node:perf_hooks";
+
 export type ReviewExecutionPhase =
   | "dispatched"
   | "stabilizing"
@@ -126,4 +128,3 @@ export class ReviewExecutionTiming {
     return Math.max(0, Math.round(endedAtMs - startedAtMs));
   }
 }
-import { performance } from "node:perf_hooks";
