@@ -48,7 +48,7 @@ function createProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
 test("run budgets fall back to defaults when no project is provided", () => {
   assert.equal(getCiRepairBudget(undefined), 10);
   assert.equal(getQueueRepairBudget(undefined), 10);
-  assert.equal(getReviewFixBudget(undefined), 10);
+  assert.equal(getReviewFixBudget(undefined), 3);
 });
 
 test("run budgets read project-specific overrides", () => {

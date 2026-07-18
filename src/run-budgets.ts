@@ -15,7 +15,7 @@ export interface RunBudgetTable {
 export const DEFAULT_RUN_BUDGETS: RunBudgetTable = {
   ciRepair: 10,
   queueRepair: 10,
-  reviewFix: 10,
+  reviewFix: 3,
   zombieRecovery: 5,
 };
 
