@@ -56,3 +56,14 @@ test("ReviewExecutionTiming records failed publication time while retaining the 
   assert.equal(timing.snapshot().publicationMs, 9);
   assert.equal(timing.snapshot().phase, "publication");
 });
+
+test("ReviewExecutionTiming records failed Codex time without claiming post-Codex progress", () => {
+  let now = 300;
+  const timing = new ReviewExecutionTiming(() => now);
+  timing.beginCodexReview();
+  now += 17;
+  timing.endCodexReview(false);
+
+  assert.equal(timing.snapshot().codexReviewMs, 17);
+  assert.equal(timing.snapshot().phase, "codex_review");
+});

@@ -629,6 +629,7 @@ function buildParallelTestService(
     repos?: Array<{ repoId: string; repoFullName: string }>;
     maxConcurrentReviews?: number;
     headStabilizationMs?: number;
+    store?: Record<string, unknown>;
     github?: Record<string, unknown>;
     runner?: Record<string, unknown>;
     waitForHeadStability?: (delayMs: number, signal: AbortSignal) => Promise<void>;
@@ -677,10 +678,10 @@ function buildParallelTestService(
       })),
       secretSources: {},
     } as never,
-    {
+    (options.store ?? {
       listAttempts: () => [],
       listWebhooks: () => [],
-    } as never,
+    }) as never,
     (options.github ?? {}) as never,
     (options.runner ?? {}) as never,
     (options.logger ?? { info() {}, warn() {}, error() {}, debug() {}, child() { return this; } }) as never,
@@ -973,6 +974,97 @@ test("dispatchReview emits deterministic wait and total timing without changing 
   assert.equal(timingLog.fields.codexReviewMs, 30);
   assert.equal(timingLog.fields.publicationMs, 7);
   assert.equal(timingLog.fields.totalExecutionMs, 64);
+});
+
+test("failed Codex reviews retain the codex phase while reporting elapsed time", async () => {
+  let now = 8_000;
+  let storedAttempt: Record<string, unknown> | undefined;
+  const infoLogs: Array<{ fields: Record<string, unknown>; message: string }> = [];
+  const errorLogs: Array<{ fields: Record<string, unknown>; message: string }> = [];
+  const service = buildParallelTestService({
+    headStabilizationMs: 0,
+    nowMs: () => now,
+    store: {
+      listAttempts: () => [],
+      listWebhooks: () => [],
+      createAttempt: (params: Record<string, unknown>) => {
+        storedAttempt = { id: 41, ...params };
+        return storedAttempt;
+      },
+      updateAttempt: (_id: number, params: Record<string, unknown>) => {
+        storedAttempt = { ...storedAttempt, ...params };
+        return storedAttempt;
+      },
+      setAttemptTitle: () => undefined,
+    },
+    github: {
+      getPullRequest: async () => ({
+        number: 8,
+        title: "Observe failed review",
+        headSha: "failing-head",
+        state: "OPEN",
+        isDraft: false,
+        labels: [],
+      }),
+    },
+    runner: {
+      review: async () => {
+        now += 17;
+        throw new Error("synthetic Codex failure");
+      },
+    },
+    logger: {
+      info(fields: Record<string, unknown>, message: string) { infoLogs.push({ fields, message }); },
+      warn() {},
+      error(fields: Record<string, unknown>, message: string) { errorLogs.push({ fields, message }); },
+      debug() {}, child() { return this; },
+    },
+  });
+  (service as unknown as {
+    buildContext: () => Promise<{ context: unknown; dispose: () => Promise<void> }>;
+  }).buildContext = async () => {
+    now += 5;
+    return {
+      context: {
+        diff: { inventory: [], patches: [], suppressed: [] },
+      },
+      dispose: async () => undefined,
+    };
+  };
+  const dispatch = (service as unknown as {
+    dispatchReview: (repo: unknown, pr: unknown) => Promise<void>;
+  }).dispatchReview.bind(service);
+
+  await dispatch(
+    {
+      repoFullName: "krasnoperov/alpha",
+      repoId: "alpha",
+      baseBranch: "main",
+      requiredChecks: [],
+      excludeBranches: [],
+      reviewDocs: [],
+      diffIgnore: [],
+      diffSummarizeOnly: [],
+      patchBodyBudgetTokens: 5_000,
+    } as never,
+    {
+      number: 8,
+      title: "Observe failed review",
+      headSha: "failing-head",
+      state: "OPEN",
+      isDraft: false,
+      labels: [],
+    } as never,
+  );
+
+  assert.deepEqual(errorLogs, []);
+  assert.equal(storedAttempt?.status, "failed");
+  const timingLog = infoLogs.find((entry) => entry.message === "Review execution timing");
+  assert.ok(timingLog);
+  assert.equal(timingLog.fields.phase, "codex_review");
+  assert.equal(timingLog.fields.codexReviewMs, 17);
+  assert.equal(timingLog.fields.dispatchToCodexStartMs, 5);
+  assert.equal(timingLog.fields.publicationMs, undefined);
 });
 
 test("dispatchReview re-checks the live head after stabilization", async () => {

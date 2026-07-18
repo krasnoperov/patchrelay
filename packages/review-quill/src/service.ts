@@ -104,7 +104,7 @@ export class ReviewQuillService {
     private readonly logger: Logger,
     private readonly reviewerLogin?: string,
     private readonly waitForHeadStability: ReviewHeadStabilityWait = waitForReviewHeadStability,
-    private readonly nowMs: () => number = Date.now,
+    private readonly nowMs?: () => number,
   ) {
     const capacity = config.reconciliation.maxConcurrentReviews ?? DEFAULT_MAX_CONCURRENT_REVIEWS;
     this.semaphore = new ReviewSemaphore(capacity, (inFlight) => {
@@ -719,6 +719,7 @@ export class ReviewQuillService {
           patchBodyBudgetTokens: repo.patchBodyBudgetTokens,
         }, "Diff packer stats");
         timing?.beginCodexReview();
+        let codexReviewCompleted = false;
         try {
           result = await this.runner.review(prepared.context, {
             ...(signal ? { signal } : {}),
@@ -730,8 +731,9 @@ export class ReviewQuillService {
               });
             },
           });
+          codexReviewCompleted = true;
         } finally {
-          timing?.endCodexReview();
+          timing?.endCodexReview(codexReviewCompleted);
         }
       } finally {
         await prepared.dispose();

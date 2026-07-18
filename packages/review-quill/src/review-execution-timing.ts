@@ -34,7 +34,7 @@ export class ReviewExecutionTiming {
   private codexMs: number | undefined;
   private publicationDurationMs: number | undefined;
 
-  constructor(private readonly nowMs: () => number = Date.now) {
+  constructor(private readonly nowMs: () => number = () => performance.now()) {
     this.dispatchedAtMs = nowMs();
     this.phaseStartedAtMs = this.dispatchedAtMs;
   }
@@ -80,9 +80,11 @@ export class ReviewExecutionTiming {
     this.dispatchToCodexMs = this.elapsedMs(this.dispatchedAtMs, now);
   }
 
-  endCodexReview(): void {
+  endCodexReview(completed = true): void {
     this.codexMs = this.elapsedPhaseMs();
-    this.beginPhase("post_codex");
+    if (completed) {
+      this.beginPhase("post_codex");
+    }
   }
 
   beginPublication(): void {
@@ -124,3 +126,4 @@ export class ReviewExecutionTiming {
     return Math.max(0, Math.round(endedAtMs - startedAtMs));
   }
 }
+import { performance } from "node:perf_hooks";
