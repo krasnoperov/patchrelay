@@ -57,6 +57,7 @@ test("loadConfig defaults waitForGreenChecks to false for repositories", () => {
     assert.equal(config.repositories[0]?.waitForGreenChecks, false);
     assert.deepEqual(config.repositories[0]?.reviewDocs, ["REVIEW_WORKFLOW.md", "AGENTS.md"]);
     assert.equal(config.codex.model, "gpt-5.5");
+    assert.equal(config.reconciliation.headStabilizationMs, 20_000);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -101,12 +102,14 @@ test("loadConfig preserves maxConcurrentReviews reconciliation override", () => 
       database: { path: path.join(baseDir, "review-quill.sqlite"), wal: true },
       reconciliation: {
         pollIntervalMs: 120_000,
+        headStabilizationMs: 7_500,
         maxConcurrentReviews: 3,
       },
     }, null, 2));
 
     const config = loadConfig(configPath);
     assert.equal(config.reconciliation.maxConcurrentReviews, 3);
+    assert.equal(config.reconciliation.headStabilizationMs, 7_500);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

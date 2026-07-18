@@ -12,6 +12,7 @@
   },
   "reconciliation": {
     "pollIntervalMs": 120000,
+    "headStabilizationMs": 20000,
     "maxConcurrentReviews": 4
   },
   "codex": {

@@ -627,6 +627,10 @@ function buildParallelTestService(
   options: {
     repos?: Array<{ repoId: string; repoFullName: string }>;
     maxConcurrentReviews?: number;
+    headStabilizationMs?: number;
+    github?: Record<string, unknown>;
+    runner?: Record<string, unknown>;
+    waitForHeadStability?: (delayMs: number, signal: AbortSignal) => Promise<void>;
   } = {},
 ): ReviewQuillService {
   const repos = options.repos ?? [
@@ -645,6 +649,9 @@ function buildParallelTestService(
         staleRunningAfterMs: 60_000,
         ...(options.maxConcurrentReviews !== undefined
           ? { maxConcurrentReviews: options.maxConcurrentReviews }
+          : {}),
+        ...(options.headStabilizationMs !== undefined
+          ? { headStabilizationMs: options.headStabilizationMs }
           : {}),
       },
       codex: {
@@ -671,9 +678,11 @@ function buildParallelTestService(
       listAttempts: () => [],
       listWebhooks: () => [],
     } as never,
-    {} as never,
-    {} as never,
+    (options.github ?? {}) as never,
+    (options.runner ?? {}) as never,
     { info() {}, warn() {}, error() {}, debug() {}, child() { return this; } } as never,
+    undefined,
+    options.waitForHeadStability,
   );
 }
 
@@ -814,6 +823,133 @@ test("dispatchReview aborts older in-flight workers for the same pull request", 
     release.shift()!();
   }
   await Promise.all([oldWork, newWork]);
+});
+
+test("dispatchReview coalesces rapid heads before acquiring a review slot", async () => {
+  const liveHeads = new Map<number, string>([[1, "head-1"]]);
+  const waiters: Array<{ delayMs: number; signal: AbortSignal; release: () => void }> = [];
+  const waitForHeadStability = (delayMs: number, signal: AbortSignal): Promise<void> =>
+    new Promise((resolve) => {
+      const release = (): void => {
+        signal.removeEventListener("abort", release);
+        resolve();
+      };
+      signal.addEventListener("abort", release, { once: true });
+      waiters.push({ delayMs, signal, release });
+    });
+  const service = buildParallelTestService({
+    headStabilizationMs: 20_000,
+    waitForHeadStability,
+    github: {
+      getPullRequest: async (_repo: string, prNumber: number) => ({
+        number: prNumber,
+        headSha: liveHeads.get(prNumber),
+        state: "OPEN",
+      }),
+    },
+  });
+  const executedHeads: string[] = [];
+  (service as unknown as {
+    executeReview: (_repo: unknown, pr: { headSha: string }) => Promise<void>;
+  }).executeReview = async (_repo, pr) => {
+    executedHeads.push(pr.headSha);
+  };
+  const dispatch = (service as unknown as {
+    dispatchReview: (repo: unknown, pr: unknown) => Promise<void>;
+  }).dispatchReview.bind(service);
+  const repo = { repoFullName: "krasnoperov/alpha", repoId: "alpha" } as never;
+
+  const first = dispatch(repo, { number: 1, headSha: "head-1" } as never);
+  await new Promise((resolve) => setImmediate(resolve));
+  liveHeads.set(1, "head-2");
+  const second = dispatch(repo, { number: 1, headSha: "head-2" } as never);
+  await new Promise((resolve) => setImmediate(resolve));
+  liveHeads.set(1, "head-3");
+  const third = dispatch(repo, { number: 1, headSha: "head-3" } as never);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(waiters.length, 3);
+  assert.deepEqual(waiters.map((waiter) => waiter.delayMs), [20_000, 20_000, 20_000]);
+  assert.equal(waiters[0]?.signal.aborted, true);
+  assert.equal(waiters[1]?.signal.aborted, true);
+  assert.equal(waiters[2]?.signal.aborted, false);
+  assert.equal(service.getWatchSnapshot().runtime.inFlightReviews, 0, "stabilizing workers must not occupy Codex slots");
+
+  waiters[2]!.release();
+  await Promise.all([first, second, third]);
+
+  assert.deepEqual(executedHeads, ["head-3"]);
+  assert.equal(service.getWatchSnapshot().runtime.inFlightReviews, 0);
+});
+
+test("dispatchReview re-checks the live head after stabilization", async () => {
+  let releaseWait!: () => void;
+  let executionCount = 0;
+  let rediscoveryCount = 0;
+  const service = buildParallelTestService({
+    headStabilizationMs: 20_000,
+    waitForHeadStability: async () => await new Promise<void>((resolve) => { releaseWait = resolve; }),
+    github: {
+      getPullRequest: async () => ({ number: 1, headSha: "new-live-head", state: "OPEN" }),
+    },
+  });
+  (service as unknown as { executeReview: () => Promise<void> }).executeReview = async () => {
+    executionCount += 1;
+  };
+  (service as unknown as { discoverRepoByName: () => Promise<void> }).discoverRepoByName = async () => {
+    rediscoveryCount += 1;
+  };
+  const dispatch = (service as unknown as {
+    dispatchReview: (repo: unknown, pr: unknown) => Promise<void>;
+  }).dispatchReview.bind(service);
+
+  const work = dispatch(
+    { repoFullName: "krasnoperov/alpha", repoId: "alpha" } as never,
+    { number: 1, headSha: "stale-discovered-head" } as never,
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(service.getWatchSnapshot().runtime.inFlightReviews, 0);
+
+  releaseWait();
+  await work;
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(executionCount, 0);
+  assert.equal(rediscoveryCount, 1);
+  assert.equal(service.getWatchSnapshot().runtime.inFlightReviews, 0);
+});
+
+test("stop cancels stabilizing workers before stopping the shared runner", async () => {
+  const order: string[] = [];
+  const service = buildParallelTestService({
+    headStabilizationMs: 20_000,
+    waitForHeadStability: async (_delayMs, signal) => await new Promise<void>((resolve) => {
+      signal.addEventListener("abort", () => {
+        order.push("wait-aborted");
+        resolve();
+      }, { once: true });
+    }),
+    runner: {
+      stop: async () => { order.push("runner-stopped"); },
+    },
+  });
+  let executionCount = 0;
+  (service as unknown as { executeReview: () => Promise<void> }).executeReview = async () => {
+    executionCount += 1;
+  };
+  const dispatch = (service as unknown as {
+    dispatchReview: (repo: unknown, pr: unknown) => Promise<void>;
+  }).dispatchReview.bind(service);
+  dispatch(
+    { repoFullName: "krasnoperov/alpha", repoId: "alpha" } as never,
+    { number: 1, headSha: "pending-head" } as never,
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  await service.stop();
+
+  assert.equal(executionCount, 0);
+  assert.deepEqual(order, ["wait-aborted", "runner-stopped"]);
 });
 
 test("review semaphore caps in-flight executions at maxConcurrentReviews", async () => {

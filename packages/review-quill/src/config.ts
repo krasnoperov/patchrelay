@@ -48,12 +48,14 @@ const configSchema = z.object({
     heartbeatIntervalMs: z.number().int().min(5_000).default(30_000),
     staleQueuedAfterMs: z.number().int().min(30_000).default(5 * 60_000),
     staleRunningAfterMs: z.number().int().min(60_000).default(20 * 60_000),
+    headStabilizationMs: z.number().int().min(0).default(20_000),
     maxConcurrentReviews: z.number().int().min(1).optional(),
   }).default({
     pollIntervalMs: 120_000,
     heartbeatIntervalMs: 30_000,
     staleQueuedAfterMs: 5 * 60_000,
     staleRunningAfterMs: 20 * 60_000,
+    headStabilizationMs: 20_000,
   }),
   codex: z.object({
     bin: z.string().default("codex"),
@@ -185,6 +187,7 @@ export function loadConfig(configPath: string): ReviewQuillConfig {
     heartbeatIntervalMs: parsed.reconciliation.heartbeatIntervalMs,
     staleQueuedAfterMs: parsed.reconciliation.staleQueuedAfterMs,
     staleRunningAfterMs: parsed.reconciliation.staleRunningAfterMs,
+    headStabilizationMs: parsed.reconciliation.headStabilizationMs,
     ...(parsed.reconciliation.maxConcurrentReviews !== undefined
       ? { maxConcurrentReviews: parsed.reconciliation.maxConcurrentReviews }
       : {}),
