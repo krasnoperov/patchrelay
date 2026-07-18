@@ -1,6 +1,6 @@
 {
   "name": "review-quill",
-  "version": "0.28.0",
+  "version": "0.29.0",
   "description": "GitHub-first PR review service for the PatchRelay stack",
   "type": "module",
   "repository": {
