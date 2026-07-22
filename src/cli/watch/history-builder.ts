@@ -102,13 +102,10 @@ function toRunInfo(run: TimelineRunInput): HistoryRunInfo {
   };
 
   if (run.report) {
-    info.messageCount = run.report.assistantMessages.length;
-    info.commandCount = run.report.commands.length;
-    info.fileChangeCount = run.report.fileChanges.length;
-    const lastMsg = run.report.assistantMessages[run.report.assistantMessages.length - 1];
-    if (lastMsg) {
-      info.lastMessage = lastMsg;
-    }
+    info.messageCount = run.report.latestAssistantMessage ? 1 : 0;
+    info.commandCount = run.report.commandCount;
+    info.fileChangeCount = run.report.fileChangeCount;
+    if (run.report.latestAssistantMessage) info.lastMessage = run.report.latestAssistantMessage;
   }
 
   return info;

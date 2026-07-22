@@ -211,7 +211,6 @@ export class TrackedIssueListQuery {
             runType: String(row.latest_run_type) as never,
             status: String(row.latest_run_status) as never,
             ...(typeof row.latest_run_summary_json === "string" ? { summaryJson: row.latest_run_summary_json } : {}),
-            ...(typeof row.latest_run_report_json === "string" ? { reportJson: row.latest_run_report_json } : {}),
             ...(typeof row.latest_run_completion_check_thread_id === "string" ? { completionCheckThreadId: row.latest_run_completion_check_thread_id } : {}),
             ...(typeof row.latest_run_completion_check_outcome === "string" ? { completionCheckOutcome: row.latest_run_completion_check_outcome as never } : {}),
             ...(typeof row.latest_run_completion_check_summary === "string" ? { completionCheckSummary: row.latest_run_completion_check_summary } : {}),

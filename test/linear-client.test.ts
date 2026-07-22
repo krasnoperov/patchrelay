@@ -55,7 +55,6 @@ function createConfig(): AppConfig {
         args: [],
         approvalPolicy: "never",
         sandboxMode: "danger-full-access",
-        persistExtendedHistory: false,
       },
     },
     projects: [],

@@ -1,11 +1,10 @@
-import { setTimeout as delay } from "node:timers/promises";
 import type { AppConfig } from "../../types.ts";
 import { getRunTypeFlag } from "../args.ts";
 import type { InteractiveRunner, Output, ParsedArgs } from "../command-types.ts";
 import type { CliDataAccess } from "../data.ts";
 import { CliUsageError } from "../errors.ts";
 import { formatJson } from "../formatters/json.ts";
-import { formatAudit, formatClose, formatInspect, formatList, formatLive, formatOpen, formatPrompt, formatRetry, formatSessionHistory, formatTrace, formatTranscriptSource, formatWorktree } from "../formatters/text.ts";
+import { formatClose, formatOpen, formatPrompt, formatRetry, formatWorktree } from "../formatters/text.ts";
 import { buildOpenCommand } from "../interactive.ts";
 import { writeOutput } from "../output.ts";
 
@@ -31,33 +30,10 @@ export async function handleIssueCommand(params: IssueCommandParams): Promise<nu
   };
 
   switch (subcommand) {
-    case "show":
-      return await handleInspectCommand(nested);
-    case "list":
-      return await handleListCommand(nested);
-    case "watch": {
-      const flags = new Map(params.parsed.flags);
-      flags.set("watch", true);
-      return await handleLiveCommand({
-        ...nested,
-        parsed: {
-          ...params.parsed,
-          flags,
-        },
-      });
-    }
     case "path":
       return await handleWorktreeCommand(nested);
     case "open":
       return await handleOpenCommand(nested);
-    case "sessions":
-      return await handleSessionsCommand(nested);
-    case "audit":
-      return await handleAuditCommand(nested);
-    case "trace":
-      return await handleTraceCommand(nested);
-    case "transcript-source":
-      return await handleTranscriptSourceCommand(nested);
     case "prompt":
       return await handlePromptCommand(nested);
     case "retry":
@@ -67,39 +43,6 @@ export async function handleIssueCommand(params: IssueCommandParams): Promise<nu
     default:
       throw new CliUsageError(`Unknown issue command: ${subcommand}`, "issue");
   }
-}
-
-export async function handleInspectCommand(params: IssueCommandParams): Promise<number> {
-  const issueKey = params.commandArgs[0];
-  if (!issueKey) {
-    throw new Error("show requires <issueKey>.");
-  }
-  const result = await params.data.inspect(issueKey);
-  if (!result) {
-    throw new Error(`Issue not found: ${issueKey}`);
-  }
-  writeOutput(params.stdout, params.json ? formatJson(result) : formatInspect(result));
-  return 0;
-}
-
-export async function handleLiveCommand(params: IssueCommandParams): Promise<number> {
-  const issueKey = params.commandArgs[0];
-  if (!issueKey) {
-    throw new Error(`${params.parsed.flags.get("watch") === true ? "watch" : "status"} requires <issueKey>.`);
-  }
-  const watch = params.parsed.flags.get("watch") === true;
-  for (;;) {
-    const result = await params.data.live(issueKey);
-    if (!result) {
-      throw new Error(`No active stage found for ${issueKey}`);
-    }
-    writeOutput(params.stdout, params.json ? formatJson(result) : formatLive(result));
-    if (!watch || result.run.status !== "running") {
-      break;
-    }
-    await delay(2000);
-  }
-  return 0;
 }
 
 export async function handleWorktreeCommand(params: IssueCommandParams): Promise<number> {
@@ -144,87 +87,6 @@ export async function handleOpenCommand(params: IssueCommandParams): Promise<num
   }
   const openCommand = buildOpenCommand(params.config, result.worktreePath, result.resumeThreadId);
   return await params.runInteractive(openCommand.command, openCommand.args);
-}
-
-export async function handleTranscriptSourceCommand(params: IssueCommandParams): Promise<number> {
-  const issueKey = params.commandArgs[0];
-  if (!issueKey) {
-    throw new Error("transcript-source requires <issueKey>.");
-  }
-
-  const runFlag = params.parsed.flags.get("run");
-  let runId: number | undefined;
-  if (typeof runFlag === "string") {
-    const parsedRunId = Number(runFlag);
-    if (!Number.isSafeInteger(parsedRunId) || parsedRunId <= 0) {
-      throw new Error("--run must be a positive integer.");
-    }
-    runId = parsedRunId;
-  }
-
-  const result = params.data.transcriptSource(issueKey, runId);
-  if (!result) {
-    throw new Error(`Issue not found: ${issueKey}`);
-  }
-  if (runId !== undefined && result.runId !== runId) {
-    throw new Error(`Run not found for ${issueKey}: ${runId}`);
-  }
-
-  writeOutput(params.stdout, params.json ? formatJson(result) : formatTranscriptSource(result));
-  return 0;
-}
-
-export async function handleSessionsCommand(params: IssueCommandParams): Promise<number> {
-  const issueKey = params.commandArgs[0];
-  if (!issueKey) {
-    throw new Error("sessions requires <issueKey>.");
-  }
-
-  const result = params.data.sessions(issueKey);
-  if (!result) {
-    throw new Error(`Issue not found: ${issueKey}`);
-  }
-
-  writeOutput(
-    params.stdout,
-    params.json
-      ? formatJson(result)
-      : formatSessionHistory(
-        result,
-        (threadId) => buildOpenCommand(params.config, result.worktreePath ?? "", threadId),
-      ),
-  );
-  return 0;
-}
-
-export async function handleAuditCommand(params: IssueCommandParams): Promise<number> {
-  const issueKey = params.commandArgs[0];
-  if (!issueKey) {
-    throw new Error("audit requires <issueKey>.");
-  }
-
-  const result = params.data.audit(issueKey);
-  if (!result) {
-    throw new Error(`Issue not found: ${issueKey}`);
-  }
-
-  writeOutput(params.stdout, params.json ? formatJson(result) : formatAudit(result));
-  return 0;
-}
-
-export async function handleTraceCommand(params: IssueCommandParams): Promise<number> {
-  const issueKey = params.commandArgs[0];
-  if (!issueKey) {
-    throw new Error("trace requires <issueKey>.");
-  }
-
-  const result = params.data.trace(issueKey);
-  if (!result) {
-    throw new Error(`Issue not found: ${issueKey}`);
-  }
-
-  writeOutput(params.stdout, params.json ? formatJson(result) : formatTrace(result));
-  return 0;
 }
 
 export async function handleRetryCommand(params: IssueCommandParams): Promise<number> {
@@ -280,15 +142,5 @@ export async function handleCloseCommand(params: IssueCommandParams): Promise<nu
     throw new Error(`Issue not found: ${issueKey}`);
   }
   writeOutput(params.stdout, params.json ? formatJson(result) : formatClose(result));
-  return 0;
-}
-
-export async function handleListCommand(params: IssueCommandParams): Promise<number> {
-  const result = params.data.list({
-    active: params.parsed.flags.get("active") === true,
-    failed: params.parsed.flags.get("failed") === true,
-    ...(typeof params.parsed.flags.get("repo") === "string" ? { project: String(params.parsed.flags.get("repo")) } : {}),
-  });
-  writeOutput(params.stdout, params.json ? formatJson(result) : formatList(result));
   return 0;
 }

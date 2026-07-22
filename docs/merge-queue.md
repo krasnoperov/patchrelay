@@ -169,7 +169,7 @@ When a PR is stuck or evicted, start with:
 merge-steward pr status
 merge-steward queue show --pr <num>
 merge-steward service logs --lines 100
-patchrelay issue show APP-123
+patchrelay status APP-123
 ```
 
 Escalate to a human when the incident points at product ambiguity, broken credentials, branch protection policy, an unhealthy `main`, or repeated semantic failures.

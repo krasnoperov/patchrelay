@@ -57,7 +57,6 @@ function buildConfig(baseDir: string): AppConfig {
         serviceName: "patchrelay",
         approvalPolicy: "never",
         sandboxMode: "danger-full-access",
-        persistExtendedHistory: false,
       },
     },
     projects: [

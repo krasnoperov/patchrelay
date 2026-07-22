@@ -59,7 +59,6 @@ test("notification handler keeps completion authoritative when Linear progress r
     const warnings: Array<Record<string, unknown>> = [];
     const finalized: Array<Record<string, unknown>> = [];
     const handler = new RunNotificationHandler(
-      { runner: { codex: { persistExtendedHistory: false } } },
       db,
       {
         info: () => {},
@@ -152,7 +151,6 @@ test("notification handler interrupts a stuck git push command", async () => {
     const warnings: Array<Record<string, unknown>> = [];
     const interrupts: Array<{ threadId: string; turnId: string }> = [];
     const handler = new RunNotificationHandler(
-      { runner: { codex: { persistExtendedHistory: false } } },
       db,
       {
         info: () => {},
@@ -234,7 +232,6 @@ test("notification handler clears git push watchdog when the command completes",
 
     const interrupts: Array<{ threadId: string; turnId: string }> = [];
     const handler = new RunNotificationHandler(
-      { runner: { codex: { persistExtendedHistory: false } } },
       db,
       { info: () => {}, warn: () => {} } as unknown as Logger,
       {

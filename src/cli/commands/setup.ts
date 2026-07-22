@@ -1,9 +1,5 @@
-import {
-  getSystemdUnitPath,
-} from "../../runtime-paths.ts";
 import { initializePatchRelayHome, installServiceUnits } from "../../install.ts";
 import { loadConfig } from "../../config.ts";
-import { parsePositiveIntegerFlag } from "../args.ts";
 import type { CommandRunner, InteractiveRunner, Output, ParsedArgs } from "../command-types.ts";
 import { CliUsageError } from "../errors.ts";
 import { formatJson } from "../formatters/json.ts";
@@ -115,7 +111,7 @@ export async function handleInitCommand(params: SetupCommandParams): Promise<num
             "5. Run `patchrelay linear sync`",
             "6. Run `patchrelay repo link <owner/repo> --workspace <workspace> --team <team>`",
             "7. Add the workflow files your repo needs, then run `patchrelay doctor`",
-            "8. Run `patchrelay service status`",
+            "8. Run `patchrelay status`",
           ]
             .filter(Boolean)
             .join("\n") + "\n",
@@ -181,56 +177,6 @@ export async function handleRestartServiceCommand(params: SetupCommandParams): P
   return ok ? 0 : 1;
 }
 
-function parseSystemctlShowOutput(raw: string): Record<string, string> {
-  const properties: Record<string, string> = {};
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const separator = trimmed.indexOf("=");
-    if (separator <= 0) continue;
-    properties[trimmed.slice(0, separator)] = trimmed.slice(separator + 1);
-  }
-  return properties;
-}
-
-async function readPatchRelayHealth(): Promise<
-  | {
-      reachable: true;
-      ok: boolean;
-      status: number;
-    }
-  | {
-      reachable: false;
-      ok: false;
-      error: string;
-    }
-> {
-  try {
-    const config = loadConfig(undefined, { profile: "doctor" });
-    const response = await fetchLocalService(`${localServiceBaseUrl(config)}${config.server.healthPath}`);
-    let ok = response.ok;
-    try {
-      const body = await response.json() as Record<string, unknown>;
-      if (typeof body.ok === "boolean") {
-        ok = response.ok && body.ok;
-      }
-    } catch {
-      ok = response.ok;
-    }
-    return {
-      reachable: true,
-      ok,
-      status: response.status,
-    };
-  } catch (error) {
-    return {
-      reachable: false,
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
 function getPatchRelayServiceUrl(): { baseUrl: string; healthPath: string; codexStatusPath: string } {
   const config = loadConfig(undefined, { profile: "doctor" });
   const baseUrl = localServiceBaseUrl(config);
@@ -286,46 +232,6 @@ export async function handleServiceCommand(params: SetupCommandParams): Promise<
       commandArgs: params.commandArgs.slice(1),
     });
   }
-  if (subcommand === "status") {
-    const result = await params.runCommand("sudo", [
-      "systemctl",
-      "show",
-      "patchrelay.service",
-      "--property=Id,LoadState,UnitFileState,ActiveState,SubState,FragmentPath,ExecMainPID",
-    ]);
-    if (result.exitCode !== 0) {
-      throw new Error(result.stderr.trim() || result.stdout.trim() || "Unable to read patchrelay.service status.");
-    }
-    const properties = parseSystemctlShowOutput(result.stdout);
-    const health = await readPatchRelayHealth();
-    const payload = {
-      service: "patchrelay",
-      unit: "patchrelay.service",
-      systemd: properties,
-      health,
-    };
-    writeOutput(
-      params.stdout,
-      params.json
-        ? formatJson(payload)
-        : [
-            "PatchRelay service",
-            "",
-            `Unit: ${properties.Id ?? "patchrelay.service"}`,
-            `Load state: ${properties.LoadState ?? "unknown"}`,
-            `Enabled: ${properties.UnitFileState ?? "unknown"}`,
-            `Active: ${properties.ActiveState ?? "unknown"}${properties.SubState ? ` (${properties.SubState})` : ""}`,
-            `Unit path: ${properties.FragmentPath || getSystemdUnitPath()}`,
-            properties.ExecMainPID ? `Main PID: ${properties.ExecMainPID}` : undefined,
-            health.reachable
-              ? `Health: ${health.ok ? "ok" : "unhealthy"} (HTTP ${health.status})`
-              : `Health: not reachable (${health.error})`,
-          ]
-            .filter(Boolean)
-            .join("\n") + "\n",
-    );
-    return 0;
-  }
   if (subcommand === "codex-status") {
     const result = await readPatchRelayCodexStatus();
     if (!result.reachable) {
@@ -343,35 +249,6 @@ export async function handleServiceCommand(params: SetupCommandParams): Promise<
     ].filter(Boolean);
     writeOutput(params.stdout, `${lines.join("\n")}\n`);
     return status.ok ? 0 : 1;
-  }
-  if (subcommand === "logs") {
-    const lines = parsePositiveIntegerFlag(params.parsed.flags.get("lines"), "--lines") ?? 50;
-    const result = await params.runCommand("sudo", [
-      "journalctl",
-      "-u",
-      "patchrelay.service",
-      "-n",
-      String(lines),
-      "--no-pager",
-      "-o",
-      "short-iso",
-    ]);
-    if (result.exitCode !== 0) {
-      throw new Error(result.stderr.trim() || result.stdout.trim() || "Unable to read PatchRelay logs.");
-    }
-    const logs = result.stdout.split(/\r?\n/).filter(Boolean);
-    writeOutput(
-      params.stdout,
-      params.json
-        ? formatJson({
-            service: "patchrelay",
-            unit: "patchrelay.service",
-            lines,
-            logs,
-          })
-        : `${result.stdout}${result.stdout.endsWith("\n") || result.stdout.length === 0 ? "" : "\n"}`,
-    );
-    return 0;
   }
 
   throw new CliUsageError(`Unknown service command: ${subcommand}`, "service");

@@ -13,7 +13,7 @@ This applies to:
 - Keep the primary row subject stable: issues for PatchRelay, PRs for review-quill and merge-steward.
 - Prefer glyphs and short phrases over prose.
 - Keep internal ids, check-run ids, thread ids, turn ids, and raw timestamps out of list views.
-- Put forensic detail in logs, transcript commands, or explicit detail views.
+- Put forensic detail in logs, Codex itself, or explicit live detail views.
 - Separate native state from external observation. Do not invent cross-service states such as `queued_in_steward`.
 
 ## Tokens

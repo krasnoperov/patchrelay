@@ -29,7 +29,7 @@ function createConfig(baseDir: string): AppConfig {
     operatorApi: { enabled: false },
     runner: {
       gitBin: "git",
-      codex: { bin: "node", args: ["app-server"], approvalPolicy: "never", sandboxMode: "danger-full-access", persistExtendedHistory: false },
+      codex: { bin: "node", args: ["app-server"], approvalPolicy: "never", sandboxMode: "danger-full-access" },
     },
     projects: [
       {

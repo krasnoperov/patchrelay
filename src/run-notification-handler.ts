@@ -27,7 +27,6 @@ export class RunNotificationHandler {
   private readonly publishCommandWatchdogs = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(
-    private readonly config: { runner: { codex: { persistExtendedHistory: boolean } } },
     private readonly db: PatchRelayDatabase,
     private readonly logger: Logger,
     private readonly linearSync: LinearSessionSync,
@@ -68,15 +67,7 @@ export class RunNotificationHandler {
 
     const turnId = typeof notification.params.turnId === "string" ? notification.params.turnId : undefined;
     this.observePublishCommand(notification, run, threadId, turnId ?? run.turnId);
-    if (this.config.runner.codex.persistExtendedHistory) {
-      this.db.runs.saveThreadEvent({
-        runId: run.id,
-        threadId,
-        ...(turnId ? { turnId } : {}),
-        method: notification.method,
-        eventJson: JSON.stringify(notification.params),
-      });
-    }
+    this.recordActivity(notification, run);
 
     this.maybeEmitProgress(notification, run);
 
@@ -287,6 +278,12 @@ export class RunNotificationHandler {
     }
   }
 
+  private recordActivity(notification: CodexNotification, run: RunRecord): void {
+    const activity = describeCodexActivity(notification);
+    if (!activity) return;
+    this.db.runs.recordCodexActivity(run.id, activity);
+  }
+
   private syncCodexPlan(notification: CodexNotification, run: RunRecord): void {
     let issue: IssueRecord | undefined;
     try {
@@ -322,6 +319,60 @@ export class RunNotificationHandler {
       return undefined;
     }
   }
+}
+
+function describeCodexActivity(
+  notification: CodexNotification,
+): { kind: string; summary?: string } | undefined {
+  if (notification.method === "turn/started" || notification.method === "turn/completed") {
+    return { kind: notification.method };
+  }
+  if (notification.method === "turn/plan/updated") {
+    const plan = notification.params.plan;
+    if (!Array.isArray(plan)) return { kind: "plan" };
+    const active = plan.find((entry) => {
+      if (!entry || typeof entry !== "object") return false;
+      const status = String((entry as Record<string, unknown>).status ?? "");
+      return status === "inProgress" || status === "in_progress";
+    }) as Record<string, unknown> | undefined;
+    return {
+      kind: "plan",
+      ...(typeof active?.step === "string" ? { summary: compactActivityText(active.step) } : {}),
+    };
+  }
+  if (notification.method !== "item/started" && notification.method !== "item/completed") {
+    return undefined;
+  }
+  const rawItem = notification.params.item;
+  if (!rawItem || typeof rawItem !== "object") return undefined;
+  const item = rawItem as Record<string, unknown>;
+  const itemType = typeof item.type === "string" ? item.type : "item";
+  const phase = notification.method === "item/started" ? "started" : "completed";
+
+  if (itemType === "agentMessage" && typeof item.text === "string") {
+    return { kind: `agent_message_${phase}`, summary: compactActivityText(item.text) };
+  }
+  if (itemType === "commandExecution") {
+    const command = extractCommandText(item.command);
+    return { kind: `command_${phase}`, ...(command ? { summary: compactActivityText(command) } : {}) };
+  }
+  if (itemType === "fileChange") {
+    const count = Array.isArray(item.changes) ? item.changes.length : undefined;
+    return { kind: `file_change_${phase}`, ...(count !== undefined ? { summary: `${count} file change${count === 1 ? "" : "s"}` } : {}) };
+  }
+  if (itemType === "mcpToolCall") {
+    const name = typeof item.server === "string" && typeof item.tool === "string" ? `${item.server}/${item.tool}` : undefined;
+    return { kind: `tool_${phase}`, ...(name ? { summary: compactActivityText(name) } : {}) };
+  }
+  if (itemType === "dynamicToolCall") {
+    return { kind: `tool_${phase}`, ...(typeof item.tool === "string" ? { summary: compactActivityText(item.tool) } : {}) };
+  }
+  return { kind: `${itemType}_${phase}` };
+}
+
+function compactActivityText(value: string, maxLength = 240): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact.length <= maxLength ? compact : `${compact.slice(0, maxLength).trimEnd()}...`;
 }
 
 function formatError(error: unknown): string {

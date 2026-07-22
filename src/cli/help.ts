@@ -1,4 +1,4 @@
-export type CliHelpTopic = "root" | "linear" | "repo" | "issue" | "service" | "cluster" | "maintenance" | "sequence-check";
+export type CliHelpTopic = "root" | "linear" | "repo" | "issue" | "service" | "maintenance" | "sequence-check";
 
 export function rootHelpText(): string {
   return [
@@ -18,7 +18,7 @@ export function rootHelpText(): string {
     "  4. patchrelay linear sync",
     "  5. patchrelay repo link krasnoperov/usertold --workspace usertold --team USE",
     "  6. patchrelay doctor",
-    "  7. patchrelay service status",
+    "  7. patchrelay status",
     "",
     "Core commands:",
     "  init <public-base-url> [--force] [--json]               Bootstrap the machine-level PatchRelay home",
@@ -33,26 +33,17 @@ export function rootHelpText(): string {
     "  repo show <github-repo> [--json]                          Show one linked repository",
     "  repo unlink <github-repo> [--json]                        Remove one linked repository",
     "  repo sync [github-repo] [--json]                          Clone missing repositories or fetch origin",
-    "  issue list [--active] [--failed] [--repo <id>] [--json]",
-    "                                                          List tracked issues",
-    "  issue show <issueKey> [--json]                          Show the latest known issue state",
-    "  issue audit <issueKey> [--json]                         Show delegation/release audit events for one issue",
-    "  issue trace <issueKey> [--json]                         Show workflow observations, tasks, gates, and artifacts",
-    "  issue watch <issueKey> [--json]                         Follow the active run until it settles",
+    "  status [issueKey] [--follow] [--trace] [--json]         Show service health or one agent's current state",
+    "  logs [issueKey] [--follow] [--lines <count>] [--json]   Show service logs, optionally filtered by issue",
     "  issue open <issueKey> [--print] [--json]                Open Codex in the issue worktree",
-    "  issue sessions <issueKey> [--json]                      Show recorded Codex app-server sessions for one issue",
-    "  issue transcript-source <issueKey> [--run <id>] [--json]  Show the raw Codex session file for one issue run",
     "  issue prompt <issueKey> <text> [--json]                 Send operator guidance to the active or next run",
   "  issue close <issueKey> [--failed] [--reason <text>] [--json]",
   "                                                          Force-close one issue and release any active run",
-  "  service status [--json]                                 Show systemd state and local health",
   "  service codex-status [--json]                           Show Codex account and usage snapshot from this service",
-  "  cluster [--json]                                        Check service + workflow health across all tracked issues",
   "  maintenance prune-events [--dry-run] [--archive|--discard] [--retention-days <days>] [--json]",
   "                                                          Prune or archive old processed webhook events",
   "  maintenance prune-worktrees [--dry-run] [--retention-hours <hours>] [--json]",
   "                                                          Remove old clean terminal issue worktrees",
-  "  service logs [--lines <count>] [--json]                 Show recent service logs",
     "  serve                                                   Run the local PatchRelay service",
     "",
     "Operator commands:",
@@ -73,10 +64,9 @@ export function rootHelpText(): string {
     "  patchrelay linear sync",
     "  patchrelay repo link krasnoperov/usertold --workspace usertold --team USE",
     "  patchrelay repo list",
-    "  patchrelay issue list --active",
-    "  patchrelay issue watch USE-54",
-    "  patchrelay service status",
-    "  patchrelay cluster",
+    "  patchrelay status",
+    "  patchrelay status USE-54 --follow",
+    "  patchrelay logs USE-54 --follow",
     "  patchrelay version --json",
     "",
     "Command help:",
@@ -85,7 +75,6 @@ export function rootHelpText(): string {
     "  patchrelay help repo",
     "  patchrelay help issue",
     "  patchrelay help service",
-    "  patchrelay help cluster",
     "  patchrelay help maintenance",
   ].join("\n");
 }
@@ -159,26 +148,14 @@ export function issueHelpText(): string {
     "  patchrelay issue <command> [args] [options]",
     "",
     "Commands:",
-    "  show <issueKey>                 Show the latest known issue state",
-    "  audit <issueKey>                Show delegation/release audit events",
-    "  trace <issueKey>                Show workflow observations, tasks, gates, and artifacts",
-    "  list                            List tracked issues",
-    "  watch <issueKey>                Follow issue activity until it settles",
     "  path <issueKey>                 Print the issue worktree path",
     "  open <issueKey>                 Open Codex in the issue worktree",
-    "  sessions <issueKey>             Show recorded Codex app-server sessions",
-    "  transcript-source <issueKey>    Show the raw Codex session file for one issue run",
     "  prompt <issueKey> <text>        Send operator guidance to the active or next run",
     "  retry <issueKey>                Requeue a run",
     "  close <issueKey>                Force-close a stuck issue",
     "",
     "Examples:",
-    "  patchrelay issue list --active",
-    "  patchrelay issue show USE-54",
-    "  patchrelay issue trace USE-54",
-    "  patchrelay issue watch USE-54",
-    "  patchrelay issue sessions USE-54",
-    "  patchrelay issue transcript-source USE-54",
+    "  patchrelay status USE-54 --trace",
     "  patchrelay issue prompt USE-54 \"rebuild this branch cleanly from main\"",
     "  patchrelay close USE-54 --reason \"already handled manually\"",
   ].join("\n");
@@ -192,31 +169,11 @@ export function serviceHelpText(): string {
     "Commands:",
     "  install [--force] [--write-only] [--json]  Reinstall the systemd service unit",
     "  restart [--json]                           Reload-or-restart the service",
-    "  status [--json]                            Show systemd state and local health",
     "  codex-status [--json]                      Show Codex account and usage snapshot from this service",
-    "  logs [--lines <count>] [--json]            Show recent journal logs",
     "",
     "Examples:",
     "  patchrelay service install",
-    "  patchrelay service status",
-    "  patchrelay service logs --lines 100",
-  ].join("\n");
-}
-
-export function clusterHelpText(): string {
-  return [
-    "Usage:",
-    "  patchrelay cluster [--json]",
-    "",
-    "Behavior:",
-    "  Aggregates local PatchRelay service health with workflow checks for every",
-    "  tracked non-done issue. The command looks for unmanaged blockers, lost",
-    "  dispatch, stale PR handoffs, and downstream waits that no longer have a",
-    "  healthy automation owner.",
-    "",
-    "Examples:",
-    "  patchrelay cluster",
-    "  patchrelay cluster --json",
+    "  patchrelay service codex-status",
   ].join("\n");
 }
 
@@ -257,8 +214,6 @@ export function maintenanceHelpText(): string {
 
 export function helpTextFor(topic: CliHelpTopic): string {
   switch (topic) {
-    case "cluster":
-      return clusterHelpText();
     case "maintenance":
       return maintenanceHelpText();
     case "linear":

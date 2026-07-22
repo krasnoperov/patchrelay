@@ -58,14 +58,6 @@ export interface TimelineRunInput {
   endedAt?: string | undefined;
   threadId?: string | undefined;
   report?: StageReport | undefined;
-  events?: TimelineThreadEventInput[] | undefined;
-}
-
-export interface TimelineThreadEventInput {
-  id: number;
-  method: string;
-  createdAt: string;
-  parsedEvent?: Record<string, unknown> | undefined;
 }
 
 // ─── Build Timeline from Rehydration Data ─────────────────────────
@@ -99,13 +91,8 @@ export function buildTimelineFromRehydration(
       });
     }
 
-    // Items from completed run event history, with report fallback
-    if (run.id !== activeRunId) {
-      if (run.events && run.events.length > 0) {
-        entries.push(...itemsFromThreadEvents(run.id, run.events));
-      } else if (run.report) {
-        entries.push(...itemsFromReport(run.id, run.report, run.startedAt, run.endedAt));
-      }
+    if (run.id !== activeRunId && run.report) {
+      entries.push(...itemsFromReport(run.id, run.report, run.startedAt, run.endedAt));
     }
   }
 
@@ -164,79 +151,17 @@ function itemsFromReport(
   endedAt: string | undefined,
 ): TimelineEntry[] {
   const entries: TimelineEntry[] = [];
-  const start = new Date(startedAt).getTime();
-  const end = endedAt ? new Date(endedAt).getTime() : start + 60000;
-  let idx = 0;
-  const total = report.commands.length + report.assistantMessages.length + report.toolCalls.length;
-
-  for (const msg of report.assistantMessages) {
+  if (report.latestAssistantMessage) {
     entries.push({
-      id: `report-${runId}-msg-${idx}`,
-      at: syntheticTimestamp(start, end, idx, total),
+      id: `report-${runId}-summary`,
+      at: endedAt ?? startedAt,
       kind: "item",
       runId,
-      item: { id: `report-${runId}-msg-${idx}`, type: "agentMessage", status: "completed", text: msg },
-    });
-    idx++;
-  }
-
-  for (const cmd of report.commands) {
-    entries.push({
-      id: `report-${runId}-cmd-${idx}`,
-      at: syntheticTimestamp(start, end, idx, total),
-      kind: "item",
-      runId,
-      item: {
-        id: `report-${runId}-cmd-${idx}`,
-        type: "commandExecution",
-        status: "completed",
-        command: cmd.command,
-        ...(typeof cmd.exitCode === "number" ? { exitCode: cmd.exitCode } : {}),
-        ...(typeof cmd.durationMs === "number" ? { durationMs: cmd.durationMs } : {}),
-      },
-    });
-    idx++;
-  }
-
-  for (const tool of report.toolCalls) {
-    entries.push({
-      id: `report-${runId}-tool-${idx}`,
-      at: syntheticTimestamp(start, end, idx, total),
-      kind: "item",
-      runId,
-      item: {
-        id: `report-${runId}-tool-${idx}`,
-        type: tool.type === "mcp" ? "mcpToolCall" : "dynamicToolCall",
-        status: "completed",
-        toolName: tool.name,
-        ...(typeof tool.durationMs === "number" ? { durationMs: tool.durationMs } : {}),
-      },
-    });
-    idx++;
-  }
-
-  if (report.fileChanges.length > 0) {
-    entries.push({
-      id: `report-${runId}-files`,
-      at: syntheticTimestamp(start, end, idx, total),
-      kind: "item",
-      runId,
-      item: {
-        id: `report-${runId}-files`,
-        type: "fileChange",
-        status: "completed",
-        changes: report.fileChanges,
-      },
+      item: { id: `report-${runId}-summary`, type: "agentMessage", status: "completed", text: report.latestAssistantMessage },
     });
   }
 
   return entries;
-}
-
-function syntheticTimestamp(startMs: number, endMs: number, index: number, total: number): string {
-  if (total <= 1) return new Date(startMs).toISOString();
-  const fraction = index / (total - 1);
-  return new Date(startMs + fraction * (endMs - startMs)).toISOString();
 }
 
 // ─── Items from Live Thread ───────────────────────────────────────
@@ -314,163 +239,6 @@ function materializeItem(item: CodexThreadItem): TimelineItemPayload {
     default:
       return base;
   }
-}
-
-function itemsFromThreadEvents(runId: number, events: TimelineThreadEventInput[]): TimelineEntry[] {
-  const entries: TimelineEntry[] = [];
-
-  for (const event of events) {
-    const params = event.parsedEvent;
-    if (!params) continue;
-
-    switch (event.method) {
-      case "item/started": {
-        const item = materializeNotificationItem(params.item);
-        if (!item) break;
-        entries.push({
-          id: `event-${event.id}-item-${item.id}`,
-          at: event.createdAt,
-          kind: "item",
-          runId,
-          item,
-        });
-        break;
-      }
-
-      case "item/completed": {
-        const item = materializeNotificationItem(params.item);
-        if (!item) break;
-        const existing = findTimelineItem(entries, item.id);
-        if (existing) {
-          existing.item = mergeDefinedItemFields(existing.item!, item);
-        } else {
-          entries.push({
-            id: `event-${event.id}-item-${item.id}`,
-            at: event.createdAt,
-            kind: "item",
-            runId,
-            item,
-          });
-        }
-        break;
-      }
-
-      case "item/agentMessage/delta":
-      case "item/plan/delta":
-      case "item/reasoning/summaryTextDelta": {
-        const itemId = typeof params.itemId === "string" ? params.itemId : undefined;
-        const delta = typeof params.delta === "string" ? params.delta : undefined;
-        if (!itemId || !delta) break;
-        const existing = findTimelineItem(entries, itemId);
-        const target = existing ?? createReplayPlaceholder(entries, runId, event.createdAt, event.id, itemId, inferItemTypeFromDeltaMethod(event.method));
-        target.item = {
-          ...target.item!,
-          text: `${target.item?.text ?? ""}${delta}`,
-        };
-        break;
-      }
-
-      case "item/commandExecution/outputDelta": {
-        const itemId = typeof params.itemId === "string" ? params.itemId : undefined;
-        const delta = typeof params.delta === "string" ? params.delta : undefined;
-        if (!itemId || !delta) break;
-        const existing = findTimelineItem(entries, itemId);
-        const target = existing ?? createReplayPlaceholder(entries, runId, event.createdAt, event.id, itemId, "commandExecution");
-        target.item = {
-          ...target.item!,
-          output: `${target.item?.output ?? ""}${delta}`,
-        };
-        break;
-      }
-    }
-  }
-
-  return entries;
-}
-
-function findTimelineItem(entries: TimelineEntry[], itemId: string): TimelineEntry | undefined {
-  for (let i = entries.length - 1; i >= 0; i -= 1) {
-    const entry = entries[i]!;
-    if (entry.kind === "item" && entry.item?.id === itemId) {
-      return entry;
-    }
-  }
-  return undefined;
-}
-
-function createReplayPlaceholder(
-  entries: TimelineEntry[],
-  runId: number,
-  at: string,
-  eventId: number,
-  itemId: string,
-  type: string,
-): TimelineEntry {
-  const entry: TimelineEntry = {
-    id: `event-${eventId}-item-${itemId}`,
-    at,
-    kind: "item",
-    runId,
-    item: { id: itemId, type, status: "inProgress" },
-  };
-  entries.push(entry);
-  return entry;
-}
-
-function inferItemTypeFromDeltaMethod(method: string): string {
-  switch (method) {
-    case "item/agentMessage/delta":
-      return "agentMessage";
-    case "item/plan/delta":
-      return "plan";
-    case "item/reasoning/summaryTextDelta":
-      return "reasoning";
-    default:
-      return "unknown";
-  }
-}
-
-function materializeNotificationItem(raw: unknown): TimelineItemPayload | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const itemObj = raw as Record<string, unknown>;
-  const id = typeof itemObj.id === "string" ? itemObj.id : undefined;
-  const type = typeof itemObj.type === "string" ? itemObj.type : "unknown";
-  if (!id) return undefined;
-
-  const item: TimelineItemPayload = {
-    id,
-    type,
-    status: typeof itemObj.status === "string" ? itemObj.status : "inProgress",
-  };
-
-  if ((type === "agentMessage" || type === "userMessage" || type === "plan") && typeof itemObj.text === "string") {
-    item.text = itemObj.text;
-  }
-  if (type === "reasoning") {
-    if (Array.isArray(itemObj.summary)) {
-      item.text = (itemObj.summary as string[]).join("\n");
-    } else if (typeof itemObj.text === "string") {
-      item.text = itemObj.text;
-    }
-  }
-  if (type === "commandExecution") {
-    const cmd = itemObj.command;
-    item.command = Array.isArray(cmd) ? cmd.join(" ") : typeof cmd === "string" ? cmd : undefined;
-    if (typeof itemObj.aggregatedOutput === "string") item.output = itemObj.aggregatedOutput;
-  }
-  if (type === "fileChange" && Array.isArray(itemObj.changes)) {
-    item.changes = itemObj.changes as unknown[];
-  }
-  if (type === "mcpToolCall") {
-    item.toolName = `${String(itemObj.server ?? "")}/${String(itemObj.tool ?? "")}`;
-  }
-  if (type === "dynamicToolCall" && typeof itemObj.tool === "string") {
-    item.toolName = itemObj.tool;
-  }
-  if (typeof itemObj.exitCode === "number") item.exitCode = itemObj.exitCode;
-  if (typeof itemObj.durationMs === "number") item.durationMs = itemObj.durationMs;
-
-  return item;
 }
 
 function mergeDefinedItemFields(base: TimelineItemPayload, patch: TimelineItemPayload): TimelineItemPayload {

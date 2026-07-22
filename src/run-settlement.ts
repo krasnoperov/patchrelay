@@ -25,7 +25,6 @@ export interface SettleRunParams {
     turnId?: string;
     failureReason?: string;
     summaryJson?: string;
-    reportJson?: string;
   } | undefined;
   lease?: IssueSessionLease | undefined;
   /**

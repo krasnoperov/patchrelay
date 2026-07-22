@@ -1,14 +1,13 @@
 import type { CodexThreadItem, CodexThreadSummary, StageReport } from "./codex-types.ts";
 import { getThreadTurns } from "./codex-thread-utils.ts";
-import type { RunRecord, ThreadEventRecord, TrackedIssueRecord } from "./db-types.ts";
+import type { RunRecord, TrackedIssueRecord } from "./db-types.ts";
 
 export function extractStageSummary(report: StageReport): Record<string, unknown> {
   return {
-    assistantMessageCount: report.assistantMessages.length,
-    commandCount: report.commands.length,
-    fileChangeCount: report.fileChanges.length,
-    toolCallCount: report.toolCalls.length,
-    latestAssistantMessage: report.assistantMessages.at(-1) ?? null,
+    commandCount: report.commandCount,
+    fileChangeCount: report.fileChangeCount,
+    toolCallCount: report.toolCallCount,
+    latestAssistantMessage: report.latestAssistantMessage ?? null,
   };
 }
 
@@ -35,10 +34,7 @@ export function summarizeCurrentThread(thread: CodexThreadSummary): {
   const activeCommand = latestTurn?.items
     .filter((item): item is Extract<CodexThreadItem, { type: "commandExecution" }> => item.type === "commandExecution")
     .filter((item) => item.status === "inProgress" || item.status === "running")
-    .at(-1)?.command
-    ?? latestTurn?.items
-      .filter((item): item is Extract<CodexThreadItem, { type: "commandExecution" }> => item.type === "commandExecution")
-      .at(-1)?.command;
+    .at(-1)?.command;
   let commandCount = 0;
   let fileChangeCount = 0;
   let toolCallCount = 0;
@@ -72,56 +68,26 @@ export function buildStageReport(
   run: RunRecord,
   issue: TrackedIssueRecord,
   thread: CodexThreadSummary,
-  eventCounts: Record<string, number>,
 ): StageReport {
-  const assistantMessages: string[] = [];
-  const plans: string[] = [];
-  const reasoning: string[] = [];
-  const commands: StageReport["commands"] = [];
-  const fileChanges: Array<Record<string, unknown>> = [];
-  const toolCalls: StageReport["toolCalls"] = [];
+  let latestAssistantMessage: string | undefined;
+  let latestPlan: string | undefined;
+  let commandCount = 0;
+  let fileChangeCount = 0;
+  let toolCallCount = 0;
 
   for (const turn of getThreadTurns(thread)) {
     for (const rawItem of turn.items as CodexThreadItem[]) {
       const item = rawItem as CodexThreadItem & Record<string, unknown>;
       if (item.type === "agentMessage" && typeof item.text === "string") {
-        assistantMessages.push(item.text);
+        latestAssistantMessage = compactProjectionText(item.text);
       } else if (item.type === "plan" && typeof item.text === "string") {
-        plans.push(item.text);
-      } else if (item.type === "reasoning" && Array.isArray(item.summary) && Array.isArray(item.content)) {
-        reasoning.push(...(item.summary as string[]), ...(item.content as string[]));
-      } else if (item.type === "commandExecution" && typeof item.command === "string" && typeof item.cwd === "string") {
-        commands.push({
-          command: item.command,
-          cwd: item.cwd,
-          status: typeof item.status === "string" ? item.status : "unknown",
-          ...(typeof item.exitCode === "number" || item.exitCode === null
-            ? { exitCode: item.exitCode as number | null }
-            : {}),
-          ...(typeof item.durationMs === "number" || item.durationMs === null
-            ? { durationMs: item.durationMs as number | null }
-            : {}),
-        });
+        latestPlan = compactProjectionText(item.text);
+      } else if (item.type === "commandExecution") {
+        commandCount += 1;
       } else if (item.type === "fileChange" && Array.isArray(item.changes)) {
-        fileChanges.push(...(item.changes as Array<Record<string, unknown>>));
-      } else if (item.type === "mcpToolCall" && typeof item.server === "string" && typeof item.tool === "string") {
-        toolCalls.push({
-          type: "mcp",
-          name: `${item.server}/${item.tool}`,
-          status: typeof item.status === "string" ? item.status : "unknown",
-          ...(typeof item.durationMs === "number" || item.durationMs === null
-            ? { durationMs: item.durationMs as number | null }
-            : {}),
-        });
-      } else if (item.type === "dynamicToolCall" && typeof item.tool === "string") {
-        toolCalls.push({
-          type: "dynamic",
-          name: item.tool,
-          status: typeof item.status === "string" ? item.status : "unknown",
-          ...(typeof item.durationMs === "number" || item.durationMs === null
-            ? { durationMs: item.durationMs as number | null }
-            : {}),
-        });
+        fileChangeCount += item.changes.length;
+      } else if (item.type === "mcpToolCall" || item.type === "dynamicToolCall") {
+        toolCallCount += 1;
       }
     }
   }
@@ -133,15 +99,17 @@ export function buildStageReport(
     ...(run.threadId ? { threadId: run.threadId } : {}),
     ...(run.parentThreadId ? { parentThreadId: run.parentThreadId } : {}),
     ...(run.turnId ? { turnId: run.turnId } : {}),
-    prompt: run.promptText ?? "",
-    assistantMessages,
-    plans,
-    reasoning,
-    commands,
-    fileChanges,
-    toolCalls,
-    eventCounts,
+    ...(latestAssistantMessage ? { latestAssistantMessage } : {}),
+    ...(latestPlan ? { latestPlan } : {}),
+    commandCount,
+    fileChangeCount,
+    toolCallCount,
   };
+}
+
+function compactProjectionText(value: string, maxLength = 2_000): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact.length <= maxLength ? compact : `${compact.slice(0, maxLength).trimEnd()}...`;
 }
 
 export function buildFailedStageReport(
@@ -157,22 +125,10 @@ export function buildFailedStageReport(
     status,
     ...(options?.threadId ? { threadId: options.threadId } : {}),
     ...(options?.turnId ? { turnId: options.turnId } : {}),
-    prompt: run.promptText ?? "",
-    assistantMessages: [],
-    plans: [],
-    reasoning: [],
-    commands: [],
-    fileChanges: [],
-    toolCalls: [],
-    eventCounts: {},
+    commandCount: 0,
+    fileChangeCount: 0,
+    toolCallCount: 0,
   };
-}
-
-export function countEventMethods(events: ThreadEventRecord[]): Record<string, number> {
-  return events.reduce<Record<string, number>>((counts, event) => {
-    counts[event.method] = (counts[event.method] ?? 0) + 1;
-    return counts;
-  }, {});
 }
 
 export function resolveRunCompletionStatus(params: Record<string, unknown>): "completed" | "failed" {

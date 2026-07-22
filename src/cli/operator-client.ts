@@ -77,11 +77,64 @@ export interface ConnectStateResult {
   errorMessage?: string;
 }
 
+export interface OperatorIssueStatusResult {
+  issue: {
+    issueKey?: string;
+    title?: string;
+    currentLinearState?: string;
+    sessionState?: string;
+    phase?: string;
+    prNumber?: number;
+    prState?: string;
+    prReviewState?: string;
+    prCheckStatus?: string;
+    waitingReason?: string;
+    statusNote?: string;
+  };
+  activeRun?: {
+    id: number;
+    runType: string;
+    status: string;
+    startedAt: string;
+    threadId?: string;
+  };
+  latestRun?: {
+    id: number;
+    runType: string;
+    status: string;
+    startedAt: string;
+    endedAt?: string;
+  };
+  liveThread?: {
+    threadId: string;
+    threadStatus: string;
+    latestTurnId?: string;
+    latestTurnStatus?: string;
+    latestAgentMessage?: string;
+    latestPlan?: string;
+    activeCommand?: string;
+    commandCount: number;
+    fileChangeCount: number;
+    toolCallCount: number;
+  };
+  latestReportSummary?: {
+    latestAssistantMessage?: string | null;
+    commandCount?: number;
+    fileChangeCount?: number;
+    toolCallCount?: number;
+  };
+  activity?: { at: string; kind?: string; summary?: string };
+  codexError?: string;
+  runs: Array<{ run: { id: number; runType: string; status: string; startedAt: string; endedAt?: string } }>;
+  generatedAt: string;
+}
+
 export interface CliOperatorDataAccess {
   close(): void;
   connect(projectId?: string): Promise<ConnectResult>;
   connectStatus(state: string): Promise<ConnectStateResult>;
   promptIssue(issueKey: string, text: string): Promise<{ delivered: boolean; queued?: boolean }>;
+  getIssueStatus(issueKey: string): Promise<OperatorIssueStatusResult>;
   listInstallations(): Promise<InstallationListResult>;
   listLinearWorkspaces(): Promise<LinearWorkspaceListResult>;
   syncLinearWorkspace(workspace?: string): Promise<{
@@ -125,6 +178,11 @@ export class CliOperatorApiClient implements CliOperatorDataAccess {
       undefined,
       { method: "POST", body: { text } },
     );
+  }
+
+  async getIssueStatus(issueKey: string): Promise<OperatorIssueStatusResult> {
+    if (!issueKey.trim()) throw new Error("Issue key is required.");
+    return await this.requestJson<OperatorIssueStatusResult>(`/api/issues/${encodeURIComponent(issueKey)}/status`);
   }
 
   async listInstallations(): Promise<InstallationListResult> {

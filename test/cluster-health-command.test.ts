@@ -55,7 +55,6 @@ function createConfig(baseDir: string, port: number): AppConfig {
         args: ["app-server"],
         approvalPolicy: "never",
         sandboxMode: "danger-full-access",
-        persistExtendedHistory: false,
         serviceName: "patchrelay-test",
       },
     },
@@ -127,7 +126,7 @@ async function startPatchRelayHealthServer(config: AppConfig): Promise<Server> {
   return server;
 }
 
-test("cli cluster reports unmanaged blockers and lost dispatch", async () => {
+test("cli status reports unmanaged blockers and lost dispatch", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-health-"));
   const config = createConfig(baseDir, 19791);
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
@@ -171,7 +170,7 @@ test("cli cluster reports unmanaged blockers and lost dispatch", async () => {
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
-    const exitCode = await runCli(["cluster"], {
+    const exitCode = await runCli(["status"], {
       config,
       stdout: stdout.stream,
       stderr: stderr.stream,
@@ -190,7 +189,7 @@ test("cli cluster reports unmanaged blockers and lost dispatch", async () => {
   }
 });
 
-test("cli cluster reports a same-head requested-changes stall", async () => {
+test("cli status reports a same-head requested-changes stall", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-review-"));
   const config = createConfig(baseDir, 19792);
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
@@ -217,7 +216,7 @@ test("cli cluster reports a same-head requested-changes stall", async () => {
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
-    const exitCode = await runCli(["cluster"], {
+    const exitCode = await runCli(["status"], {
       config,
       stdout: stdout.stream,
       stderr: stderr.stream,
@@ -275,7 +274,7 @@ test("cli cluster reports a same-head requested-changes stall", async () => {
   }
 });
 
-test("cli cluster treats active PR repair runs as PatchRelay-owned", async () => {
+test("cli status treats active PR repair runs as PatchRelay-owned", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-active-pr-repair-"));
   const config = createConfig(baseDir, 19790);
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
@@ -315,7 +314,7 @@ test("cli cluster treats active PR repair runs as PatchRelay-owned", async () =>
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
-    const exitCode = await runCli(["cluster"], {
+    const exitCode = await runCli(["status"], {
       config,
       stdout: stdout.stream,
       stderr: stderr.stream,
@@ -369,7 +368,7 @@ test("cli cluster treats active PR repair runs as PatchRelay-owned", async () =>
   }
 });
 
-test("cli cluster ignores reviewer requests when the same head is still blocked", async () => {
+test("cli status ignores reviewer requests when the same head is still blocked", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-review-request-same-head-"));
   const config = createConfig(baseDir, 19795);
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
@@ -396,7 +395,7 @@ test("cli cluster ignores reviewer requests when the same head is still blocked"
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
-    const exitCode = await runCli(["cluster"], {
+    const exitCode = await runCli(["status"], {
       config,
       stdout: stdout.stream,
       stderr: stderr.stream,
@@ -451,7 +450,7 @@ test("cli cluster ignores reviewer requests when the same head is still blocked"
   }
 });
 
-test("cli cluster reports dirty requested-changes PRs as missing branch upkeep, not waiting on review", async () => {
+test("cli status reports dirty requested-changes PRs as missing branch upkeep, not waiting on review", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-dirty-review-upkeep-"));
   const config = createConfig(baseDir, 19796);
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
@@ -478,7 +477,7 @@ test("cli cluster reports dirty requested-changes PRs as missing branch upkeep, 
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
-    const exitCode = await runCli(["cluster"], {
+    const exitCode = await runCli(["status"], {
       config,
       stdout: stdout.stream,
       stderr: stderr.stream,
@@ -533,7 +532,7 @@ test("cli cluster reports dirty requested-changes PRs as missing branch upkeep, 
   }
 });
 
-test("cli cluster treats a live review-quill attempt on the current head as an owner", async () => {
+test("cli status treats a live review-quill attempt on the current head as an owner", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-review-quill-active-"));
   const config = createConfig(baseDir, 19794);
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
@@ -560,7 +559,7 @@ test("cli cluster treats a live review-quill attempt on the current head as an o
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
-    const exitCode = await runCli(["cluster"], {
+    const exitCode = await runCli(["status"], {
       config,
       stdout: stdout.stream,
       stderr: stderr.stream,
@@ -630,7 +629,7 @@ test("cli cluster treats a live review-quill attempt on the current head as an o
   }
 });
 
-test("cli cluster treats review-quill repo backlog as an owner for review-required PRs", async () => {
+test("cli status treats review-quill repo backlog as an owner for review-required PRs", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-review-quill-backlog-"));
   const config = createConfig(baseDir, 19801);
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
@@ -656,7 +655,7 @@ test("cli cluster treats review-quill repo backlog as an owner for review-requir
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
-    const exitCode = await runCli(["cluster"], {
+    const exitCode = await runCli(["status"], {
       config,
       stdout: stdout.stream,
       stderr: stderr.stream,
@@ -734,7 +733,7 @@ test("cli cluster treats review-quill repo backlog as an owner for review-requir
   }
 });
 
-test("cli cluster treats review-quill repo backlog as an owner for newer requested-changes heads", async () => {
+test("cli status treats review-quill repo backlog as an owner for newer requested-changes heads", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-review-quill-backlog-newer-head-"));
   const config = createConfig(baseDir, 19802);
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
@@ -762,7 +761,7 @@ test("cli cluster treats review-quill repo backlog as an owner for newer request
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
-    const exitCode = await runCli(["cluster"], {
+    const exitCode = await runCli(["status"], {
       config,
       stdout: stdout.stream,
       stderr: stderr.stream,
@@ -853,7 +852,7 @@ test("cli cluster treats review-quill repo backlog as an owner for newer request
   }
 });
 
-test("cli cluster ignores closed PRs on completed issues", async () => {
+test("cli status ignores closed PRs on completed issues", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-closed-pr-done-"));
   const config = createConfig(baseDir, 19795);
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
@@ -879,7 +878,7 @@ test("cli cluster ignores closed PRs on completed issues", async () => {
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
-    const exitCode = await runCli(["cluster"], {
+    const exitCode = await runCli(["status"], {
       config,
       stdout: stdout.stream,
       stderr: stderr.stream,
@@ -922,7 +921,7 @@ test("cli cluster ignores closed PRs on completed issues", async () => {
   }
 });
 
-test("cli cluster treats closed PRs on terminal issues as historical, not active PR ownership", async () => {
+test("cli status treats closed PRs on terminal issues as historical, not active PR ownership", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-closed-pr-terminal-"));
   const config = createConfig(baseDir, 19796);
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
@@ -950,7 +949,7 @@ test("cli cluster treats closed PRs on terminal issues as historical, not active
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
-    const exitCode = await runCli(["cluster"], {
+    const exitCode = await runCli(["status"], {
       config,
       stdout: stdout.stream,
       stderr: stderr.stream,
@@ -970,7 +969,7 @@ test("cli cluster treats closed PRs on terminal issues as historical, not active
   }
 });
 
-test("cli cluster treats in-progress CI as externally owned instead of orphaned", async () => {
+test("cli status treats in-progress CI as externally owned instead of orphaned", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-ci-pending-"));
   const config = createConfig(baseDir, 19793);
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
@@ -996,7 +995,7 @@ test("cli cluster treats in-progress CI as externally owned instead of orphaned"
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
-    const exitCode = await runCli(["cluster"], {
+    const exitCode = await runCli(["status"], {
       config,
       stdout: stdout.stream,
       stderr: stderr.stream,
@@ -1047,7 +1046,7 @@ test("cli cluster treats in-progress CI as externally owned instead of orphaned"
   }
 });
 
-test("cli cluster treats undelegated requested-changes PRs as paused instead of missing repair", async () => {
+test("cli status treats undelegated requested-changes PRs as paused instead of missing repair", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-undelegated-review-paused-"));
   const config = createConfig(baseDir, 19797);
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
@@ -1075,7 +1074,7 @@ test("cli cluster treats undelegated requested-changes PRs as paused instead of 
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
-    const exitCode = await runCli(["cluster"], {
+    const exitCode = await runCli(["status"], {
       config,
       stdout: stdout.stream,
       stderr: stderr.stream,
@@ -1132,7 +1131,7 @@ test("cli cluster treats undelegated requested-changes PRs as paused instead of 
   }
 });
 
-test("cli cluster treats undelegated failing CI PRs as paused instead of missing repair", async () => {
+test("cli status treats undelegated failing CI PRs as paused instead of missing repair", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-undelegated-ci-paused-"));
   const config = createConfig(baseDir, 19798);
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
@@ -1160,7 +1159,7 @@ test("cli cluster treats undelegated failing CI PRs as paused instead of missing
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
-    const exitCode = await runCli(["cluster"], {
+    const exitCode = await runCli(["status"], {
       config,
       stdout: stdout.stream,
       stderr: stderr.stream,
@@ -1212,7 +1211,7 @@ test("cli cluster treats undelegated failing CI PRs as paused instead of missing
   }
 });
 
-test("cli cluster treats undelegated paused no-pr work as paused instead of stuck dispatch", async () => {
+test("cli status treats undelegated paused no-pr work as paused instead of stuck dispatch", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-undelegated-local-paused-"));
   const config = createConfig(baseDir, 19799);
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
@@ -1236,7 +1235,7 @@ test("cli cluster treats undelegated paused no-pr work as paused instead of stuc
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
-    const exitCode = await runCli(["cluster"], {
+    const exitCode = await runCli(["status"], {
       config,
       stdout: stdout.stream,
       stderr: stderr.stream,
@@ -1254,7 +1253,7 @@ test("cli cluster treats undelegated paused no-pr work as paused instead of stuc
   }
 });
 
-test("cli cluster ignores canceled blockers", async () => {
+test("cli status ignores canceled blockers", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-canceled-blocker-"));
   const config = createConfig(baseDir, 19803);
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
@@ -1295,7 +1294,7 @@ test("cli cluster ignores canceled blockers", async () => {
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
-    const exitCode = await runCli(["cluster"], {
+    const exitCode = await runCli(["status"], {
       config,
       stdout: stdout.stream,
       stderr: stderr.stream,
@@ -1313,7 +1312,7 @@ test("cli cluster ignores canceled blockers", async () => {
   }
 });
 
-test("cli cluster warns when active repo work overlaps on the same files", async () => {
+test("cli status warns when active repo work overlaps on the same files", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-overlap-"));
   const config = createConfig(baseDir, 19796);
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
@@ -1376,7 +1375,7 @@ test("cli cluster warns when active repo work overlaps on the same files", async
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
-    const exitCode = await runCli(["cluster"], {
+    const exitCode = await runCli(["status"], {
       config,
       stdout: stdout.stream,
       stderr: stderr.stream,
@@ -1407,7 +1406,7 @@ test("cli cluster warns when active repo work overlaps on the same files", async
   }
 });
 
-test("cli cluster surfaces a review-quill Codex capacity pause as a degraded service", async () => {
+test("cli status surfaces a review-quill Codex capacity pause as a degraded service", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-review-quill-capacity-"));
   const config = createConfig(baseDir, 19797);
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
@@ -1433,7 +1432,7 @@ test("cli cluster surfaces a review-quill Codex capacity pause as a degraded ser
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
-    const exitCode = await runCli(["cluster"], {
+    const exitCode = await runCli(["status"], {
       config,
       stdout: stdout.stream,
       stderr: stderr.stream,

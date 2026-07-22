@@ -15,7 +15,11 @@ export class PublicAgentSessionStatusQuery {
     if (!overview) return undefined;
 
     const issueRecord = this.db.issues.getIssueByKey(issueKey);
-    const latestRunReport = parseStageReport(overview.latestRun?.reportJson, overview.latestRun?.status ?? "unknown");
+    const latestRunReport = parseStageReport(
+      overview.latestRun?.summaryJson,
+      overview.latestRun?.status ?? "unknown",
+      overview.latestRun?.runType,
+    );
     const latestRunNoLongerCurrent =
       isIssueDownstreamOrDoneProjection(overview.issue)
       && (overview.latestRun?.status === "failed" || overview.latestRun?.status === "superseded");
@@ -50,6 +54,18 @@ export class PublicAgentSessionStatusQuery {
       ...(overview.activeRun ? { activeRun: overview.activeRun } : {}),
       ...(overview.latestRun && !latestRunNoLongerCurrent ? { latestRun: overview.latestRun } : {}),
       ...(overview.liveThread ? { liveThread: summarizeCurrentThread(overview.liveThread) } : {}),
+      ...(overview.liveThreadError ? { codexError: overview.liveThreadError } : {}),
+      ...(() => {
+        const observedRun = overview.activeRun ?? overview.latestRun;
+        if (!observedRun?.lastCodexActivityAt) return {};
+        return {
+          activity: {
+            at: observedRun.lastCodexActivityAt,
+            ...(observedRun.lastCodexActivityKind ? { kind: observedRun.lastCodexActivityKind } : {}),
+            ...(observedRun.lastCodexActivitySummary ? { summary: observedRun.lastCodexActivitySummary } : {}),
+          },
+        };
+      })(),
       ...(latestRunReport && !latestRunNoLongerCurrent ? { latestReportSummary: extractStageSummary(latestRunReport) } : {}),
       runs,
       generatedAt: new Date().toISOString(),

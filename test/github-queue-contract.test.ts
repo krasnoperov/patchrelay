@@ -56,7 +56,6 @@ function createConfig(baseDir: string, options?: { gateChecks?: string[] }): App
         args: ["app-server"],
         approvalPolicy: "never",
         sandboxMode: "danger-full-access",
-        persistExtendedHistory: false,
       },
     },
     projects: [

@@ -217,7 +217,6 @@ export class RunOrchestrator {
     );
     this.runLauncher = new RunLauncher(config, db, codex, logger, this.worktreeManager);
     this.runNotificationHandler = new RunNotificationHandler(
-      config,
       db,
       logger,
       this.linearSync,

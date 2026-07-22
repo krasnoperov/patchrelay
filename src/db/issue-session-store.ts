@@ -495,7 +495,6 @@ export class IssueSessionStore {
     turnId?: string;
     failureReason?: string;
     summaryJson?: string;
-    reportJson?: string;
   }): boolean {
     return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
       this.runs.finishRun(runId, params);
@@ -509,7 +508,6 @@ export class IssueSessionStore {
     turnId?: string;
     failureReason?: string;
     summaryJson?: string;
-    reportJson?: string;
   }): boolean {
     const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
     if (!lease) {
@@ -604,7 +602,6 @@ export class IssueSessionStore {
           latest_run.run_type AS latest_run_type,
           latest_run.status AS latest_run_status,
           latest_run.summary_json AS latest_run_summary_json,
-          latest_run.report_json AS latest_run_report_json,
           latest_run.completion_check_thread_id AS latest_run_completion_check_thread_id,
           latest_run.completion_check_outcome AS latest_run_completion_check_outcome,
           latest_run.completion_check_summary AS latest_run_completion_check_summary,

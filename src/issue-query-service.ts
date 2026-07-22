@@ -23,10 +23,6 @@ export class IssueQueryService {
     return await this.overviewQuery.getIssueOverview(issueKey);
   }
 
-  async getActiveRunStatus(issueKey: string) {
-    return await this.runStatusProvider.getActiveRunStatus(issueKey);
-  }
-
   async getPublicAgentSessionStatus(issueKey: string) {
     return await this.publicStatusQuery.getStatus(issueKey);
   }

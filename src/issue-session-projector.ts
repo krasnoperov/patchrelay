@@ -257,7 +257,7 @@ function shouldKeepPreviousIssueSummary(issue: IssueRecord, latestRun: RunRecord
   if (!latestRun || latestRun.status !== "failed") {
     return false;
   }
-  if (latestRun.summaryJson || latestRun.reportJson) {
+  if (latestRun.summaryJson) {
     return false;
   }
   return isIssuePublishedOrDownstreamOrDoneProjection(issue);

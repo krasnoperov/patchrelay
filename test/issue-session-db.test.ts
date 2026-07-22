@@ -71,6 +71,26 @@ test("migrations create issue_sessions and upgrade legacy issue schema", () => {
   }
 });
 
+test("migrations delete PatchRelay's retired Codex transcript copies", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-run-history-migration-"));
+  try {
+    const connection = new SqliteConnection(path.join(baseDir, "legacy.sqlite"));
+    runPatchRelayMigrations(connection);
+    connection.exec("ALTER TABLE runs ADD COLUMN report_json TEXT");
+    connection.exec("CREATE TABLE run_thread_events (id INTEGER PRIMARY KEY, event_json TEXT NOT NULL)");
+
+    runPatchRelayMigrations(connection);
+
+    const runColumns = connection.prepare("PRAGMA table_info(runs)").all() as Array<Record<string, unknown>>;
+    assert.ok(!runColumns.some((column) => column.name === "report_json"));
+    assert.ok(runColumns.some((column) => column.name === "last_codex_activity_at"));
+    const retiredTable = connection.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'run_thread_events'").get();
+    assert.equal(retiredTable, undefined);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("issue upserts and run completion dual-write into issue_sessions", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-dual-write-"));
   try {

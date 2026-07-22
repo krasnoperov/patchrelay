@@ -12,7 +12,7 @@ import { loadConfig } from "../src/config.ts";
 import { CliDataAccess } from "../src/cli/data.ts";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { buildHttpServer } from "../src/http.ts";
-import type { AppConfig, CodexThreadSummary } from "../src/types.ts";
+import type { AppConfig } from "../src/types.ts";
 
 
 
@@ -62,7 +62,6 @@ function createConfig(baseDir: string): AppConfig {
         args: ["app-server"],
         approvalPolicy: "never",
         sandboxMode: "danger-full-access",
-        persistExtendedHistory: false,
         serviceName: "patchrelay-test",
       },
     },
@@ -206,32 +205,6 @@ function withEnv(values: Record<string, string | undefined>, run: () => Promise<
   }
 }
 
-function escapeRegExp(value: string): string {
-  return RegExp.escape(value);
-}
-
-function writeCodexSessionFile(baseDir: string, threadId: string, options?: {
-  startedAt?: string;
-  cwd?: string;
-  originator?: string;
-}): string {
-  const startedAt = options?.startedAt ?? "2026-04-11T12:00:00.000Z";
-  const sessionDir = path.join(baseDir, "sessions", "2026", "04", "11");
-  mkdirSync(sessionDir, { recursive: true });
-  const filePath = path.join(sessionDir, "rollout-2026-04-11T12-00-00-" + threadId + ".jsonl");
-  const sessionMeta = {
-    type: "session_meta",
-    payload: {
-      id: threadId,
-      timestamp: startedAt,
-      cwd: options?.cwd ?? path.join(baseDir, "workspace"),
-      originator: options?.originator ?? "patchrelay",
-    },
-  };
-  writeFileSync(filePath, JSON.stringify(sessionMeta) + "\n", "utf8");
-  return filePath;
-}
-
 function writeRunnerBinaries(configPath: string, binaries: { gitBin?: string; codexBin?: string }): void {
   const raw = JSON.parse(readFileSync(configPath, "utf8")) as {
     runner?: {
@@ -325,9 +298,7 @@ function writeExternalConfig(configPath: string, baseDir: string, overrides?: {
             bin: "codex",
             args: ["app-server"],
             approval_policy: "never",
-            sandbox_mode: "danger-full-access",
-            persist_extended_history: false,
-          },
+            sandbox_mode: "danger-full-access",          },
         },
         repos: {
           root: path.join(baseDir, "projects"),
@@ -341,35 +312,6 @@ function writeExternalConfig(configPath: string, baseDir: string, overrides?: {
     )}\n`,
     "utf8",
   );
-}
-
-function createStubCodex(
-  threads: Record<string, CodexThreadSummary>,
-  options?: { startThreadId?: string },
-) {
-  return {
-    async start() {},
-    async stop() {},
-    async readThread(threadId: string) {
-      const thread = threads[threadId];
-      if (!thread) {
-        throw new Error(`Missing thread ${threadId}`);
-      }
-      return thread;
-    },
-    async startThread(params: { cwd: string }) {
-      const id = options?.startThreadId ?? `thread-created-${Object.keys(threads).length + 1}`;
-      const thread: CodexThreadSummary = {
-        id,
-        preview: "Operator session",
-        cwd: params.cwd,
-        status: "running",
-        turns: [],
-      };
-      threads[id] = thread;
-      return thread;
-    },
-  };
 }
 
 function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
@@ -398,35 +340,12 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
   });
   mkdirSync(path.join(config.projects[0].worktreeRoot, "USE-54"), { recursive: true });
   db.runs.updateRunThread(completedRun.id, { threadId: "thread-54", turnId: "turn-54" });
-  db.runs.saveThreadEvent({
-    runId: completedRun.id,
-    threadId: "thread-54",
-    turnId: "turn-54",
-    method: "turn/started",
-    eventJson: JSON.stringify({ threadId: "thread-54", turnId: "turn-54" }),
-  });
   db.runs.finishRun(completedRun.id, {
     status: "failed",
     threadId: "thread-54",
     turnId: "turn-54",
     summaryJson: JSON.stringify({
       latestAssistantMessage: "Deploy did not complete because auth was missing.",
-    }),
-    reportJson: JSON.stringify({
-      issueKey: "USE-54",
-      runType: "implementation",
-      status: "failed",
-      threadId: "thread-54",
-      turnId: "turn-54",
-      prompt: "Deploy it",
-      
-      assistantMessages: ["Deploy did not complete because auth was missing."],
-      plans: [],
-      reasoning: [],
-      commands: [{ command: "npm run deploy", cwd: "/tmp/use-54", status: "failed", exitCode: 1 }],
-      fileChanges: [{ path: "src/session-detail.tsx", kind: "update" }],
-      toolCalls: [{ type: "dynamic", name: "apply_patch", status: "completed" }],
-      eventCounts: { "turn/started": 1 },
     }),
   });
 
@@ -475,7 +394,7 @@ function seedRuntimeFiles(config: AppConfig): void {
   }
 }
 
-test("cli inspect, worktree, and open render stored issue details", async () => {
+test("cli path and open render stored issue details", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-"));
   let data: CliDataAccess | undefined;
   try {
@@ -483,26 +402,9 @@ test("cli inspect, worktree, and open render stored issue details", async () => 
     const db = new PatchRelayDatabase(config.database.path, true);
     db.runMigrations();
     seedDatabase(db, config);
-    data = new CliDataAccess(config, {
-      db,
-      codex: createStubCodex({
-        "thread-54": {
-          id: "thread-54",
-          preview: "Deploy issue",
-          cwd: path.join(config.projects[0].worktreeRoot, "USE-54"),
-          status: "completed",
-          turns: [],
-        },
-      }) as never,
-    });
+    data = new CliDataAccess(config, { db });
 
-    const stdout = createBufferStream();
     const stderr = createBufferStream();
-    assert.equal(await runCli(["issue", "show", "USE-54"], { config, data, stdout: stdout.stream, stderr: stderr.stream }), 0);
-    assert.match(stdout.read(), /USE-54 {2}Human Needed/);
-    assert.match(stdout.read(), /Debug stage: failed/);
-    assert.match(stdout.read(), /Deploy did not complete because auth was missing/);
-
     const worktreeOut = createBufferStream();
     assert.equal(await runCli(["issue", "path", "USE-54", "--cd"], { config, data, stdout: worktreeOut.stream, stderr: stderr.stream }), 0);
     assert.equal(worktreeOut.read().trim(), path.join(config.projects[0].worktreeRoot, "USE-54"));
@@ -525,18 +427,7 @@ test("cli open launches codex in the issue worktree", async () => {
     const db = new PatchRelayDatabase(config.database.path, true);
     db.runMigrations();
     seedDatabase(db, config);
-    data = new CliDataAccess(config, {
-      db,
-      codex: createStubCodex({
-        "thread-54": {
-          id: "thread-54",
-          preview: "Deploy issue",
-          cwd: path.join(config.projects[0].worktreeRoot, "USE-54"),
-          status: "completed",
-          turns: [],
-        },
-      }) as never,
-    });
+    data = new CliDataAccess(config, { db });
 
     const calls: Array<{ command: string; args: string[] }> = [];
     const exitCode = await runCli(["issue", "open", "USE-54"], {
@@ -588,18 +479,7 @@ test("cli open resumes the thread stored on the issue record", async () => {
     const workspace = db.getIssue("usertold", "issue-1");
     assert.ok(workspace);
 
-    data = new CliDataAccess(config, {
-      db,
-      codex: createStubCodex({
-        "thread-newer": {
-          id: "thread-newer",
-          preview: "Reopened issue session",
-          cwd: workspace.worktreePath,
-          status: "running",
-          turns: [],
-        },
-      }) as never,
-    });
+    data = new CliDataAccess(config, { db });
 
     const calls: Array<{ command: string; args: string[] }> = [];
     const exitCode = await runCli(["issue", "open", "USE-54"], {
@@ -630,100 +510,7 @@ test("cli open resumes the thread stored on the issue record", async () => {
   }
 });
 
-test("cli open creates a fresh thread when the stored threadId cannot be resumed", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-open-fresh-"));
-  let data: CliDataAccess | undefined;
-  try {
-    const config = createConfig(baseDir);
-    const db = new PatchRelayDatabase(config.database.path, true);
-    db.runMigrations();
-    seedDatabase(db, config);
-
-    // Set a threadId that the stub codex will not recognise (simulates stale thread)
-    db.upsertIssue({
-      projectId: "usertold",
-      linearIssueId: "issue-1",
-      threadId: "thread-missing",
-    });
-
-    const workspace = db.getIssue("usertold", "issue-1");
-    assert.ok(workspace);
-
-    data = new CliDataAccess(config, {
-      db,
-      codex: createStubCodex({}, { startThreadId: "thread-created-1" }) as never,
-    });
-
-    const calls: Array<{ command: string; args: string[] }> = [];
-    const exitCode = await runCli(["issue", "open", "USE-54"], {
-      config,
-      data,
-      stdout: createBufferStream().stream,
-      stderr: createBufferStream().stream,
-      runInteractive: async (command, args) => {
-        calls.push({ command, args });
-        return 0;
-      },
-    });
-
-    assert.equal(exitCode, 0);
-    assert.deepEqual(calls.at(0)?.args, [
-      "--dangerously-bypass-approvals-and-sandbox",
-      "resume",
-      "-C",
-      workspace.worktreePath,
-      "thread-created-1",
-    ]);
-
-    // Verify the new threadId was persisted on the issue
-    const updated = db.getIssue("usertold", "issue-1");
-    assert.equal(updated?.threadId, "thread-created-1");
-  } finally {
-    data?.close();
-    rmSync(baseDir, { recursive: true, force: true });
-  }
-});
-
-test("cli open --print does not advertise a stale resume thread", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-open-print-fresh-"));
-  let data: CliDataAccess | undefined;
-  try {
-    const config = createConfig(baseDir);
-    const db = new PatchRelayDatabase(config.database.path, true);
-    db.runMigrations();
-    seedDatabase(db, config);
-
-    // Set a threadId that the stub codex will not recognise (stale)
-    db.upsertIssue({
-      projectId: "usertold",
-      linearIssueId: "issue-1",
-      threadId: "thread-missing",
-    });
-
-    data = new CliDataAccess(config, {
-      db,
-      codex: createStubCodex({}) as never,
-    });
-
-    const stdout = createBufferStream();
-    const exitCode = await runCli(["issue", "open", "USE-54", "--print"], {
-      config,
-      data,
-      stdout: stdout.stream,
-      stderr: createBufferStream().stream,
-    });
-
-    assert.equal(exitCode, 0);
-    assert.doesNotMatch(stdout.read(), /resume thread-missing/);
-    assert.match(stdout.read(), /create a fresh session/);
-    assert.match(stdout.read(), /codex --dangerously-bypass-approvals-and-sandbox -C /);
-  } finally {
-    data?.close();
-    rmSync(baseDir, { recursive: true, force: true });
-  }
-});
-
-test("cli list and retry cover operator control flows", async () => {
+test("cli retry covers operator control flows", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-"));
   let data: CliDataAccess | undefined;
   try {
@@ -748,12 +535,6 @@ test("cli list and retry cover operator control flows", async () => {
     });
     db.runs.finishRun(doneRun.id, { status: "failed", failureReason: "old failure" });
     data = new CliDataAccess(config, { db });
-
-    const failedList = createBufferStream();
-    assert.equal(await runCli(["issue", "list", "--failed"], { config, data, stdout: failedList.stream, stderr: createBufferStream().stream }), 0);
-    assert.match(failedList.read(), /USE-54/);
-    assert.doesNotMatch(failedList.read(), /USE-55/);
-    assert.doesNotMatch(failedList.read(), /USE-57/);
 
     const retryOut = createBufferStream();
     assert.equal(
@@ -834,9 +615,6 @@ test("cli list and retry cover operator control flows", async () => {
     const reviewFixTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-review-fix");
     assert.equal(reviewFixTask?.runType, "review_fix");
 
-    const inspectJson = createBufferStream();
-    assert.equal(await runCli(["issue", "show", "USE-54", "--json"], { config, data, stdout: inspectJson.stream, stderr: createBufferStream().stream }), 0);
-    assert.match(inspectJson.read(), /"issueKey": "USE-54"/);
   } finally {
     data?.close();
     rmSync(baseDir, { recursive: true, force: true });
@@ -847,9 +625,7 @@ test("cli prompt sends operator guidance through the operator API client", async
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-prompt-"));
   const promptCalls: Array<{ issueKey: string; text: string }> = [];
   const data = {
-    async inspect() {
-      return undefined;
-    },
+    db: {},
     async promptIssue(issueKey: string, text: string) {
       promptCalls.push({ issueKey, text });
       return { delivered: true };
@@ -871,186 +647,6 @@ test("cli prompt sends operator guidance through the operator API client", async
   rmSync(baseDir, { recursive: true, force: true });
 });
 
-test("cli sessions shows recorded app-server runs with resume commands", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-sessions-"));
-  let data: CliDataAccess | undefined;
-  try {
-    const config = createConfig(baseDir);
-    const db = new PatchRelayDatabase(config.database.path, true);
-    db.runMigrations();
-    seedDatabase(db, config);
-
-    const issue = db.getIssue("usertold", "issue-1");
-    assert.ok(issue);
-
-    const reviewRun = db.runs.createRun({
-      issueId: issue.id,
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      runType: "review_fix",
-      promptText: "Address requested review changes",
-    });
-    const codexHome = path.join(baseDir, "codex-home");
-    const sessionPath = writeCodexSessionFile(codexHome, "thread-54-review", {
-      startedAt: "2026-04-11T12:34:56.000Z",
-      cwd: path.join(config.projects[0].worktreeRoot, "USE-54"),
-      originator: "patchrelay",
-    });
-    db.runs.updateRunThread(reviewRun.id, {
-      threadId: "thread-54-review",
-      parentThreadId: "thread-54",
-      turnId: "turn-54-review",
-    });
-    db.runs.saveThreadEvent({
-      runId: reviewRun.id,
-      threadId: "thread-54-review",
-      turnId: "turn-54-review",
-      method: "turn/started",
-      eventJson: JSON.stringify({ threadId: "thread-54-review", turnId: "turn-54-review" }),
-    });
-    db.runs.finishRun(reviewRun.id, {
-      status: "completed",
-      threadId: "thread-54-review",
-      turnId: "turn-54-review",
-      summaryJson: JSON.stringify({
-        latestAssistantMessage: "Applied the requested review changes and pushed an update.",
-      }),
-    });
-
-    data = new CliDataAccess(config, { db });
-
-    const stdout = createBufferStream();
-    const stderr = createBufferStream();
-    await withEnv({ CODEX_HOME: codexHome }, async () => {
-      assert.equal(await runCli(["issue", "sessions", "USE-54"], { config, data, stdout: stdout.stream, stderr: stderr.stream }), 0);
-    });
-
-    const rendered = stdout.read();
-    assert.match(rendered, /run #\d+[ ]{2}review_fix[ ]{2}completed/);
-    assert.match(rendered, /Thread: thread-54-review/);
-    assert.match(rendered, /Parent thread: thread-54/);
-    assert.match(rendered, /Applied the requested review changes and pushed an update/);
-    assert.match(rendered, new RegExp("Session source: " + escapeRegExp(sessionPath)));
-    assert.match(rendered, /Started: 2026-04-11T12:34:56.000Z/);
-    assert.match(rendered, /Originator: patchrelay/);
-    assert.match(rendered, /Working directory: .*USE-54/);
-    assert.match(rendered, /Open: codex --dangerously-bypass-approvals-and-sandbox resume -C .*USE-54 thread-54-review/);
-    assert.match(rendered, /run #\d+[ ]{2}implementation[ ]{2}failed/);
-  } finally {
-    data?.close();
-    rmSync(baseDir, { recursive: true, force: true });
-  }
-});
-
-test("cli transcript-source prints the raw Codex session file for one run", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-transcript-source-"));
-  let data: CliDataAccess | undefined;
-  try {
-    const config = createConfig(baseDir);
-    const db = new PatchRelayDatabase(config.database.path, true);
-    db.runMigrations();
-    seedDatabase(db, config);
-
-    const issue = db.getIssue("usertold", "issue-1");
-    assert.ok(issue);
-
-    const reviewRun = db.runs.createRun({
-      issueId: issue.id,
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      runType: "review_fix",
-      promptText: "Address requested review changes",
-    });
-    db.runs.updateRunThread(reviewRun.id, {
-      threadId: "thread-54-transcript-source",
-      turnId: "turn-54-transcript-source",
-    });
-    db.runs.finishRun(reviewRun.id, {
-      status: "completed",
-      threadId: "thread-54-transcript-source",
-      turnId: "turn-54-transcript-source",
-    });
-
-    data = new CliDataAccess(config, { db });
-    const codexHome = path.join(baseDir, "codex-home");
-    const sessionPath = writeCodexSessionFile(codexHome, "thread-54-transcript-source", {
-      startedAt: "2026-04-11T14:00:00.000Z",
-      cwd: path.join(config.projects[0].worktreeRoot, "USE-54"),
-      originator: "patchrelay",
-    });
-
-    const stdout = createBufferStream();
-    const stderr = createBufferStream();
-    await withEnv({ CODEX_HOME: codexHome }, async () => {
-      assert.equal(
-        await runCli(["issue", "transcript-source", "USE-54", "--run", String(reviewRun.id)], {
-          config,
-          data,
-          stdout: stdout.stream,
-          stderr: stderr.stream,
-        }),
-        0,
-      );
-    });
-
-    const rendered = stdout.read();
-    assert.match(rendered, new RegExp("Run: #" + reviewRun.id + " review_fix \\(completed\\)"));
-    assert.match(rendered, /Thread: thread-54-transcript-source/);
-    assert.match(rendered, new RegExp("Session source: " + escapeRegExp(sessionPath)));
-    assert.match(rendered, /Started: 2026-04-11T14:00:00.000Z/);
-    assert.match(rendered, /Originator: patchrelay/);
-  } finally {
-    data?.close();
-    rmSync(baseDir, { recursive: true, force: true });
-  }
-});
-
-test("cli sessions explains when thread events are not persisted", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-sessions-no-history-"));
-  let data: CliDataAccess | undefined;
-  try {
-    const config = createConfig(baseDir);
-    const db = new PatchRelayDatabase(config.database.path, true);
-    db.runMigrations();
-    seedDatabase(db, config);
-
-    const issue = db.getIssue("usertold", "issue-1");
-    assert.ok(issue);
-
-    const reviewRun = db.runs.createRun({
-      issueId: issue.id,
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      runType: "review_fix",
-      promptText: "Address requested review changes",
-    });
-    db.runs.updateRunThread(reviewRun.id, {
-      threadId: "thread-54-review-no-history",
-      turnId: "turn-54-review-no-history",
-    });
-    db.runs.finishRun(reviewRun.id, {
-      status: "completed",
-      threadId: "thread-54-review-no-history",
-      turnId: "turn-54-review-no-history",
-      summaryJson: JSON.stringify({
-        latestAssistantMessage: "Finished without persisted raw thread events.",
-      }),
-    });
-
-    data = new CliDataAccess(config, { db });
-
-    const stdout = createBufferStream();
-    const stderr = createBufferStream();
-    assert.equal(await runCli(["issue", "sessions", "USE-54"], { config, data, stdout: stdout.stream, stderr: stderr.stream }), 0);
-
-    const rendered = stdout.read();
-    assert.match(rendered, /Events: not persisted \(persistExtendedHistory=false\)/);
-    assert.match(rendered, /Finished without persisted raw thread events/);
-  } finally {
-    data?.close();
-    rmSync(baseDir, { recursive: true, force: true });
-  }
-});
 
 test("cli rejects unknown commands and unknown flags", async () => {
   const commandError = createBufferStream();
@@ -1160,147 +756,6 @@ test("cli close force-terminates a stuck issue and releases its active run", asy
   }
 });
 
-test("cli resolves workspace, run context, and live summary from the unified issue+runs model", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-unified-model-"));
-  let data: CliDataAccess | undefined;
-  try {
-    const config = createConfig(baseDir);
-    const db = new PatchRelayDatabase(config.database.path, true);
-    db.runMigrations();
-    seedRuntimeFiles(config);
-
-    // Create issue-4 with a stale completed run, then an active development run
-    const issue4 = db.upsertIssue({
-      projectId: "usertold",
-      linearIssueId: "issue-4",
-      issueKey: "USE-57",
-      title: "Ledger-backed running issue",
-      currentLinearState: "Implementing",
-      branchName: "use/USE-57-ledger-backed-running-issue",
-      worktreePath: path.join(config.projects[0].worktreeRoot, "USE-57"),
-      workflowOutcome: undefined,
-    });
-
-    // First run: completed stale review
-    const staleRun = db.runs.createRun({
-      issueId: issue4.id,
-      projectId: "usertold",
-      linearIssueId: "issue-4",
-      runType: "implementation",
-      
-      promptText: "Stale review run",
-    });
-    db.runs.updateRunThread(staleRun.id, { threadId: "thread-57-stale", turnId: "turn-57-stale" });
-    db.runs.finishRun(staleRun.id, {
-      status: "completed",
-      threadId: "thread-57-stale",
-      turnId: "turn-57-stale",
-    });
-
-    // Second run: active development run
-    const activeRun = db.runs.createRun({
-      issueId: issue4.id,
-      projectId: "usertold",
-      linearIssueId: "issue-4",
-      runType: "implementation",
-    });
-    db.runs.updateRunThread(activeRun.id, { threadId: "thread-57", turnId: "turn-57" });
-    db.upsertIssue({
-      projectId: "usertold",
-      linearIssueId: "issue-4",
-      activeRunId: activeRun.id,
-      threadId: "thread-57",
-    });
-
-    data = new CliDataAccess(config, {
-      db,
-      codex: createStubCodex({
-        "thread-57": {
-          id: "thread-57",
-          preview: "Ledger-backed running issue",
-          cwd: path.join(config.projects[0].worktreeRoot, "USE-57"),
-          status: "running",
-          turns: [
-            {
-              id: "turn-57",
-              status: "inProgress",
-              items: [{ type: "agentMessage", id: "assistant-57", text: "Still implementing the change." }],
-            },
-          ],
-        },
-      }) as never,
-    });
-    const worktree = data.worktree("USE-57");
-    assert.equal(worktree?.worktreePath, path.join(config.projects[0].worktreeRoot, "USE-57"));
-
-    const opened = data.open("USE-57");
-    assert.equal(opened?.resumeThreadId, "thread-57");
-
-    const inspect = await data.inspect("USE-57");
-    assert.equal(inspect?.activeRun?.runType, "implementation");
-    assert.equal(inspect?.activeRun?.threadId, "thread-57");
-
-    const live = await data.live("USE-57");
-    assert.equal(live?.run.runType, "implementation");
-    assert.equal(live?.run.threadId, "thread-57");
-    assert.equal(live?.live?.latestTurnStatus, "inProgress");
-
-    const list = data.list({ active: true });
-    const listed = list.find((entry) => entry.issueKey === "USE-57");
-    assert.equal(listed?.activeRunType, "implementation");
-    assert.equal(listed?.latestRunType, "implementation");
-    assert.equal(listed?.latestRunStatus, "running");
-    assert.equal(listed?.sessionState, "running");
-  } finally {
-    data?.close();
-    rmSync(baseDir, { recursive: true, force: true });
-  }
-});
-
-test("cli inspect suppresses stale failed repair after downstream handoff", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-stale-repair-"));
-  let data: CliDataAccess | undefined;
-  try {
-    const config = createConfig(baseDir);
-    const db = new PatchRelayDatabase(config.database.path, true);
-    db.runMigrations();
-
-    const issue = db.upsertIssue({
-      projectId: "usertold",
-      linearIssueId: "issue-stale-repair",
-      issueKey: "USE-59",
-      title: "Hide stale repair",
-      currentLinearState: "Done",
-      workflowOutcome: "completed",
-      prNumber: 59,
-      prState: "merged",
-      prReviewState: "approved",
-      prCheckStatus: "success",
-    });
-    const run = db.runs.createRun({
-      issueId: issue.id,
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      runType: "review_fix",
-    });
-    db.runs.finishRun(run.id, {
-      status: "failed",
-      failureReason: "same_head_review_handoff_blocked",
-      reportJson: JSON.stringify({ assistantMessages: ["same_head_review_handoff_blocked"] }),
-    });
-
-    data = new CliDataAccess(config, { db });
-    const inspect = await data.inspect("USE-59");
-
-    assertIssuePhase(inspect?.issue, "done");
-    assert.equal(inspect?.latestRun, undefined);
-    assert.equal(inspect?.latestReport, undefined);
-    assert.equal(inspect?.statusNote, undefined);
-  } finally {
-    data?.close();
-    rmSync(baseDir, { recursive: true, force: true });
-  }
-});
 
 test("cli doctor reports deployment readiness problems", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-doctor-"));
@@ -1326,73 +781,6 @@ test("cli doctor reports deployment readiness problems", async () => {
   }
 });
 
-test("cli live falls back to the latest detached running run", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-detached-live-"));
-  let data: CliDataAccess | undefined;
-  try {
-    const config = createConfig(baseDir);
-    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
-    mkdirSync(config.projects[0].worktreeRoot, { recursive: true });
-
-    const issue = db.upsertIssue({
-      projectId: "usertold",
-      linearIssueId: "issue-detached-live",
-      issueKey: "USE-58",
-      title: "Detached resumed run",
-      workflowOutcome: undefined,
-      threadId: "thread-58",
-      activeRunId: null,
-    });
-    const run = db.runs.createRun({
-      issueId: issue.id,
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      runType: "implementation",
-    });
-    db.runs.updateRunThread(run.id, { threadId: "thread-58", turnId: "turn-58" });
-    db.unsafeRawConnectionForTests().prepare(`
-      UPDATE issue_sessions
-      SET active_run_id = NULL, session_state = ?, waiting_reason = ?
-      WHERE project_id = ? AND linear_issue_id = ?
-    `).run("idle", "PatchRelay work is complete", issue.projectId, issue.linearIssueId);
-
-    data = new CliDataAccess(config, {
-      db,
-      codex: createStubCodex({
-        "thread-58": {
-          id: "thread-58",
-          preview: "Detached running issue",
-          cwd: path.join(config.projects[0].worktreeRoot, "USE-58"),
-          status: "running",
-          turns: [
-            {
-              id: "turn-58",
-              status: "inProgress",
-              items: [{ type: "agentMessage", id: "assistant-58", text: "Resumed run is still publishing the PR." }],
-            },
-          ],
-        },
-      }) as never,
-    });
-
-    const inspect = await data.inspect("USE-58");
-    assert.equal(inspect?.activeRun?.id, run.id);
-
-    const live = await data.live("USE-58");
-    assert.equal(live?.run.id, run.id);
-    assert.equal(live?.run.runType, "implementation");
-    assert.equal(live?.live?.latestTurnStatus, "inProgress");
-
-    const listed = data.list({ active: true }).find((entry) => entry.issueKey === "USE-58");
-    assert.equal(listed?.activeRunType, "implementation");
-    assert.equal(listed?.latestRunStatus, "running");
-    assert.equal(listed?.sessionState, "running");
-  } finally {
-    data?.close();
-    rmSync(baseDir, { recursive: true, force: true });
-  }
-});
 
 test("cli doctor reports preflight status", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-doctor-"));
@@ -1445,12 +833,13 @@ test("cli help explains the setup sequence and default behavior", async () => {
   assert.match(stdout.read(), /patchrelay linear connect/);
   assert.match(stdout.read(), /patchrelay repo link krasnoperov\/usertold --workspace usertold --team USE/);
   assert.match(stdout.read(), /dashboard \[--issue <issueKey>\]/);
-  assert.match(stdout.read(), /service status \[--json\]/);
-  assert.match(stdout.read(), /cluster \[--json\]/);
-  assert.match(stdout.read(), /issue watch <issueKey>/);
   assert.match(stdout.read(), /Automation env vars:/);
   assert.match(stdout.read(), /Examples:/);
   assert.match(stdout.read(), /Mental model:/);
+  assert.match(stdout.read(), /status \[issueKey\]/);
+  assert.match(stdout.read(), /logs \[issueKey\]/);
+  assert.doesNotMatch(stdout.read(), /issue watch/);
+  assert.doesNotMatch(stdout.read(), /patchrelay cluster/);
 });
 
 test("cli linear and repo help print command-specific usage and legacy aliases point to replacements", async () => {
@@ -1603,60 +992,21 @@ test("cli repo link reuses the managed local clone root and supports --path over
   }
 });
 
-test("cli issue and service groups expose the supported operator flow", async () => {
+test("cli issue and service groups expose only control and account commands", async () => {
   const issueHelp = createBufferStream();
   assert.equal(await runCli(["issue", "--help"], { stdout: issueHelp.stream, stderr: createBufferStream().stream }), 0);
   assert.match(issueHelp.read(), /patchrelay issue <command>/);
-  assert.match(issueHelp.read(), /watch <issueKey>/);
-  assert.doesNotMatch(issueHelp.read(), /report <issueKey>/);
-  assert.doesNotMatch(issueHelp.read(), /events <issueKey>/);
+  assert.match(issueHelp.read(), /open <issueKey>/);
+  assert.match(issueHelp.read(), /prompt <issueKey>/);
+  assert.doesNotMatch(issueHelp.read(), /watch <issueKey>/);
+  assert.doesNotMatch(issueHelp.read(), /sessions <issueKey>/);
 
   const serviceHelp = createBufferStream();
   assert.equal(await runCli(["service", "--help"], { stdout: serviceHelp.stream, stderr: createBufferStream().stream }), 0);
   assert.match(serviceHelp.read(), /patchrelay service <command>/);
-  assert.match(serviceHelp.read(), /status \[--json\]/);
-
-  const serviceJson = createBufferStream();
-  assert.equal(
-    await runCli(["service", "status", "--json"], {
-      stdout: serviceJson.stream,
-      stderr: createBufferStream().stream,
-      runCommand: async (_command, args) => {
-        if (args[0] === "systemctl") {
-          return {
-            exitCode: 0,
-            stdout: [
-              "Id=patchrelay.service",
-              "LoadState=loaded",
-              "UnitFileState=enabled",
-              "ActiveState=active",
-              "SubState=running",
-              "FragmentPath=/etc/systemd/system/patchrelay.service",
-              "ExecMainPID=4242",
-            ].join("\n"),
-            stderr: "",
-          };
-        }
-        return { exitCode: 0, stdout: "", stderr: "" };
-      },
-    }),
-    0,
-  );
-  const parsed = JSON.parse(serviceJson.read()) as Record<string, unknown>;
-  assert.equal(parsed.service, "patchrelay");
-  assert.equal(parsed.unit, "patchrelay.service");
-  assert.equal((parsed.systemd as Record<string, unknown>).ActiveState, "active");
-  assert.equal((parsed.systemd as Record<string, unknown>).ExecMainPID, "4242");
-  assert.equal(typeof (parsed.health as { reachable?: boolean }).reachable, "boolean");
-  assert.equal(typeof (parsed.health as { ok?: boolean }).ok, "boolean");
-
-  const clusterHelp = createBufferStream();
-  assert.equal(await runCli(["cluster", "--help"], { stdout: clusterHelp.stream, stderr: createBufferStream().stream }), 0);
-  assert.match(clusterHelp.read(), /patchrelay cluster \[--json\]/);
-
-  const clusterStatusErr = createBufferStream();
-  assert.equal(await runCli(["cluster", "status"], { stdout: createBufferStream().stream, stderr: clusterStatusErr.stream }), 1);
-  assert.match(clusterStatusErr.read(), /Unknown cluster command: status/);
+  assert.match(serviceHelp.read(), /codex-status \[--json\]/);
+  assert.doesNotMatch(serviceHelp.read(), /\n  status \[--json\]/);
+  assert.doesNotMatch(serviceHelp.read(), /logs \[--lines/);
 });
 
 test("cli dashboard aliases resolve to the TUI command", async () => {
