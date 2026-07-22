@@ -1,6 +1,7 @@
 import { resolveLinkedPullRequest } from "../linear-linked-pr-reconciliation.ts";
 import { readRemotePrState } from "../remote-pr-state.ts";
 import { deriveLinkedPrAdoptionOutcome, type LinkedPrAdoptionOutcome } from "../delegation-linked-pr.ts";
+import { pullRequestOwnsIssue } from "../pull-request-issue-ownership.ts";
 import type { IssueMetadata, IssueRecord, ProjectConfig } from "../types.ts";
 
 export interface LinkedPrAdoptionInput {
@@ -40,6 +41,10 @@ export async function resolveLinkedPrAdoption(
         prUrl: resolution.reference.url,
       },
     };
+  }
+
+  if (!pullRequestOwnsIssue(remote, input.issue.identifier)) {
+    return undefined;
   }
 
   return deriveLinkedPrAdoptionOutcome(input.project, resolution.reference.prNumber, remote);

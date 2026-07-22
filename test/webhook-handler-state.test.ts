@@ -1938,6 +1938,7 @@ test("delegateChanged adopts a linked same-repo PR with requested changes", { co
     baseDir,
     JSON.stringify({
       url: "https://github.com/krasnoperov/mafia/pull/124",
+      body: "Linear: MAF-124",
       headRefName: "feat-existing-pr",
       headRefOid: "sha-linked-review",
       isDraft: false,
@@ -2032,6 +2033,7 @@ test("statusChanged adopts a linked same-repo PR before starting implementation"
     baseDir,
     JSON.stringify({
       url: "https://github.com/krasnoperov/mafia/pull/224",
+      body: "Linear: MAF-224",
       headRefName: "fix/existing-review-repair",
       headRefOid: "sha-linked-status-review",
       isDraft: false,
@@ -2124,6 +2126,7 @@ test("delegateChanged adopts a linked same-repo PR with failing CI", { concurren
     baseDir,
     JSON.stringify({
       url: "https://github.com/krasnoperov/mafia/pull/125",
+      body: "Linear: MAF-125",
       headRefName: "feat-linked-ci",
       headRefOid: "sha-linked-ci",
       isDraft: false,
@@ -2212,6 +2215,7 @@ test("delegateChanged adopts a linked draft PR as implementation work", { concur
     baseDir,
     JSON.stringify({
       url: "https://github.com/krasnoperov/mafia/pull/126",
+      body: "Linear: MAF-126",
       headRefName: "feat-linked-draft",
       headRefOid: "sha-linked-draft",
       isDraft: true,
@@ -2306,6 +2310,7 @@ test("delegateChanged adopts a linked closed same-repo PR as replacement impleme
     baseDir,
     JSON.stringify({
       url: "https://github.com/krasnoperov/mafia/pull/1260",
+      body: "Linear: MAF-1260",
       headRefName: "feat-linked-closed",
       headRefOid: "sha-linked-closed",
       isDraft: false,
@@ -2395,6 +2400,7 @@ test("delegateChanged moves linked cross-repo PR adoption to awaiting_input", { 
     baseDir,
     JSON.stringify({
       url: "https://github.com/krasnoperov/mafia/pull/127",
+      body: "Linear: MAF-127",
       headRefName: "feat-linked-fork",
       headRefOid: "sha-linked-fork",
       isDraft: false,
