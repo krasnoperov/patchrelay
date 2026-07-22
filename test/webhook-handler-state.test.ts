@@ -2483,7 +2483,7 @@ test("delegateChanged moves linked cross-repo PR adoption to awaiting_input", { 
   }
 });
 
-test("delegateChanged pauses for multiple linked PRs instead of guessing", async () => {
+test("delegateChanged treats multiple unowned PR attachments as references and starts implementation", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-linked-pr-ambiguous-"));
   try {
     const config = createConfig(baseDir);
@@ -2544,9 +2544,10 @@ test("delegateChanged pauses for multiple linked PRs instead of guessing", async
     await handler.processWebhookEvent(stored.id);
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-adopt-ambiguous");
-    assert.equal(issue?.factoryState, "awaiting_input");
-    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-adopt-ambiguous"), undefined);
-    assert.deepEqual(enqueued, []);
+    assert.equal(issue?.factoryState, "delegated");
+    assert.equal(db.workflowTasks.listOpenRunnableTasks("krasnoperov/mafia")
+      .some((task) => task.subjectId === "issue-maf-adopt-ambiguous" && task.taskId === "run:implementation"), true);
+    assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-adopt-ambiguous" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

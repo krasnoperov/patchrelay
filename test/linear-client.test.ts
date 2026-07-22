@@ -82,6 +82,7 @@ test("LinearGraphqlClient sends Bearer auth for access tokens", async () => {
                   title: "GitHub PR #24",
                   subtitle: "Pull request",
                   url: "https://github.com/krasnoperov/subtitles/pull/24",
+                  metadata: { patchrelayRelationship: "delivery_pr" },
                 },
               ],
             },
@@ -115,7 +116,47 @@ test("LinearGraphqlClient sends Bearer auth for access tokens", async () => {
       title: "GitHub PR #24",
       subtitle: "Pull request",
       url: "https://github.com/krasnoperov/subtitles/pull/24",
+      metadata: { patchrelayRelationship: "delivery_pr" },
     }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("LinearGraphqlClient upserts delivery PR attachments with metadata", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestBody = "";
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    requestBody = String(init?.body ?? "");
+    return new Response(JSON.stringify({
+      data: { attachmentCreate: { success: true, attachment: { id: "attachment-42" } } },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+
+  try {
+    const client = new LinearGraphqlClient({
+      accessToken: "secret-token",
+      graphqlUrl: "https://linear.example/graphql",
+    }, pino({ enabled: false }));
+
+    const result = await client.upsertIssueAttachment({
+      issueId: "issue-42",
+      title: "PatchRelay delivery PR #42",
+      subtitle: "open",
+      url: "https://github.com/example/repo/pull/42",
+      metadata: { patchrelayRelationship: "delivery_pr", patchrelayIssueKey: "EX-42" },
+    });
+
+    assert.deepEqual(result, { id: "attachment-42" });
+    const request = JSON.parse(requestBody) as { query?: string; variables?: Record<string, unknown> };
+    assert.match(request.query ?? "", /attachmentCreate/);
+    assert.deepEqual(request.variables, { input: {
+      issueId: "issue-42",
+      title: "PatchRelay delivery PR #42",
+      subtitle: "open",
+      url: "https://github.com/example/repo/pull/42",
+      metadata: { patchrelayRelationship: "delivery_pr", patchrelayIssueKey: "EX-42" },
+    } });
   } finally {
     globalThis.fetch = originalFetch;
   }

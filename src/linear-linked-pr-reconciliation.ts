@@ -4,39 +4,24 @@ export interface LinkedPrReference {
   repoFullName: string;
   prNumber: number;
   url: string;
+  attachment: LinearIssueAttachment;
 }
-
-export type LinkedPrResolution =
-  | { kind: "none" }
-  | { kind: "matched"; reference: LinkedPrReference }
-  | { kind: "ambiguous"; references: LinkedPrReference[] };
 
 const GITHUB_PR_URL_PATTERN = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:[/?#].*)?$/i;
 
-export function resolveLinkedPullRequest(
+export function resolveLinkedPullRequests(
   attachments: LinearIssueAttachment[] | undefined,
   repoFullName: string | undefined,
-): LinkedPrResolution {
-  if (!repoFullName || !attachments || attachments.length === 0) {
-    return { kind: "none" };
-  }
-
-  const matches = attachments
-    .map((attachment) => parseGitHubPullRequestUrl(attachment.url))
+): LinkedPrReference[] {
+  if (!repoFullName || !attachments || attachments.length === 0) return [];
+  return dedupeReferences(attachments
+    .map((attachment) => parseGitHubPullRequestAttachment(attachment))
     .filter((reference): reference is LinkedPrReference => Boolean(reference))
-    .filter((reference) => reference.repoFullName.toLowerCase() === repoFullName.toLowerCase());
-
-  const unique = dedupeReferences(matches);
-  if (unique.length === 0) {
-    return { kind: "none" };
-  }
-  if (unique.length === 1) {
-    return { kind: "matched", reference: unique[0]! };
-  }
-  return { kind: "ambiguous", references: unique };
+    .filter((reference) => reference.repoFullName.toLowerCase() === repoFullName.toLowerCase()));
 }
 
-function parseGitHubPullRequestUrl(url: string): LinkedPrReference | undefined {
+function parseGitHubPullRequestAttachment(attachment: LinearIssueAttachment): LinkedPrReference | undefined {
+  const { url } = attachment;
   const match = url.trim().match(GITHUB_PR_URL_PATTERN);
   if (!match) return undefined;
   const [, owner, repo, prNumberRaw] = match;
@@ -46,6 +31,7 @@ function parseGitHubPullRequestUrl(url: string): LinkedPrReference | undefined {
     repoFullName: `${owner}/${repo}`,
     prNumber,
     url,
+    attachment,
   };
 }
 

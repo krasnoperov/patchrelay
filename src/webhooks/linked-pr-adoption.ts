@@ -1,7 +1,7 @@
-import { resolveLinkedPullRequest } from "../linear-linked-pr-reconciliation.ts";
+import { resolveLinkedPullRequests, type LinkedPrReference } from "../linear-linked-pr-reconciliation.ts";
 import { readRemotePrState } from "../remote-pr-state.ts";
 import { deriveLinkedPrAdoptionOutcome, type LinkedPrAdoptionOutcome } from "../delegation-linked-pr.ts";
-import { pullRequestOwnsIssue } from "../pull-request-issue-ownership.ts";
+import { attachmentDeclaresDelivery, pullRequestOwnsIssue } from "../pull-request-issue-ownership.ts";
 import type { IssueMetadata, IssueRecord, ProjectConfig } from "../types.ts";
 
 export interface LinkedPrAdoptionInput {
@@ -23,29 +23,53 @@ export async function resolveLinkedPrAdoption(
   if (!input.delegated) return undefined;
   if (input.existingIssue?.prNumber !== undefined) return undefined;
 
-  const resolution = resolveLinkedPullRequest(input.issue.attachments, input.project.github?.repoFullName);
-  if (resolution.kind === "none") return undefined;
-  if (resolution.kind === "ambiguous") {
+  const references = resolveLinkedPullRequests(input.issue.attachments, input.project.github?.repoFullName);
+  if (references.length === 0) return undefined;
+
+  const declaredDelivery = references.filter((reference) =>
+    attachmentDeclaresDelivery(reference.attachment, input.issue.identifier)
+  );
+  if (declaredDelivery.length > 1) {
     return {
       factoryState: "awaiting_input" as const,
       issueUpdates: {},
     };
   }
 
-  const remote = await readRemotePrState(resolution.reference.repoFullName, resolution.reference.prNumber);
+  if (declaredDelivery.length === 1) {
+    return resolveDeclaredDelivery(input, declaredDelivery[0]!);
+  }
+
+  const inspected = await Promise.all(references.map(async (reference) => ({
+    reference,
+    remote: await readRemotePrState(reference.repoFullName, reference.prNumber),
+  })));
+  const owned = inspected.filter(({ remote }) => remote && pullRequestOwnsIssue(remote, input.issue.identifier));
+  if (owned.length > 1) {
+    return {
+      factoryState: "awaiting_input" as const,
+      issueUpdates: {},
+    };
+  }
+  if (owned.length === 0) return undefined;
+
+  const match = owned[0]!;
+  return deriveLinkedPrAdoptionOutcome(input.project, match.reference.prNumber, match.remote!);
+}
+
+async function resolveDeclaredDelivery(
+  input: LinkedPrAdoptionInput,
+  reference: LinkedPrReference,
+): Promise<LinkedPrAdoptionOutcome> {
+  const remote = await readRemotePrState(reference.repoFullName, reference.prNumber);
   if (!remote) {
     return {
       factoryState: "awaiting_input" as const,
       issueUpdates: {
-        prNumber: resolution.reference.prNumber,
-        prUrl: resolution.reference.url,
+        prNumber: reference.prNumber,
+        prUrl: reference.url,
       },
     };
   }
-
-  if (!pullRequestOwnsIssue(remote, input.issue.identifier)) {
-    return undefined;
-  }
-
-  return deriveLinkedPrAdoptionOutcome(input.project, resolution.reference.prNumber, remote);
+  return deriveLinkedPrAdoptionOutcome(input.project, reference.prNumber, remote);
 }

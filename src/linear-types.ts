@@ -237,6 +237,7 @@ export interface LinearIssueAttachment {
   title?: string;
   subtitle?: string;
   url: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface LinearIssueRelationSummary {
@@ -291,6 +292,13 @@ export interface LinearClient {
   createIssue?(params: { teamId: string; title: string; description?: string; labelNames?: string[] }): Promise<LinearIssueSnapshot>;
   setIssueState(issueId: string, stateName: string): Promise<LinearIssueSnapshot>;
   upsertIssueComment(params: { issueId: string; commentId?: string; body: string }): Promise<LinearCommentUpsertResult>;
+  upsertIssueAttachment?(params: {
+    issueId: string;
+    title: string;
+    subtitle?: string;
+    url: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ id: string }>;
   createAgentActivity(params: {
     agentSessionId: string;
     content: LinearAgentActivityContent;

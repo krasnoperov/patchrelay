@@ -13,6 +13,7 @@ import { LinearAgentSessionClient } from "./linear-agent-session-client.ts";
 import { LinearProgressReporter } from "./linear-progress-reporter.ts";
 import { syncActiveWorkflowState } from "./linear-workflow-state-sync.ts";
 import { sharedLinearWriteBackoff, type LinearWriteBackoff } from "./linear-rate-limit.ts";
+import { syncLinearDeliveryPrAttachment } from "./linear-delivery-pr-sync.ts";
 
 export class LinearSessionSync {
   private readonly agentSessions: LinearAgentSessionClient;
@@ -68,6 +69,7 @@ export class LinearSessionSync {
         ...(project ? { project } : {}),
       });
       await this.agentSessions.syncSessionPlan(syncedIssue, linear, options);
+      await syncLinearDeliveryPrAttachment(syncedIssue, linear);
       if (shouldSyncVisibleIssueComment(visibleIssue, Boolean(syncedIssue.agentSessionId))) {
         await syncVisibleStatusComment({
           db: this.db,

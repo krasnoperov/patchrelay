@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { pullRequestOwnsIssue } from "../src/pull-request-issue-ownership.ts";
+import { attachmentDeclaresDelivery, pullRequestOwnsIssue } from "../src/pull-request-issue-ownership.ts";
 import { resolveLinkedPrAdoption } from "../src/webhooks/linked-pr-adoption.ts";
 import type { ProjectConfig } from "../src/types.ts";
 
@@ -23,6 +23,17 @@ test("rejects relevant or regression PRs that belong to another issue", () => {
 
 test("does not confuse an issue key with a longer identifier", () => {
   assert.equal(pullRequestOwnsIssue({ body: "Linear: INV-8080" }, "INV-808"), false);
+});
+
+test("recognizes only exact PatchRelay delivery attachment metadata", () => {
+  const attachment = {
+    id: "attachment-808",
+    url: "https://github.com/krasnoperov/inventory/pull/920",
+    metadata: { patchrelayRelationship: "delivery_pr", patchrelayIssueKey: "INV-808" },
+  };
+  assert.equal(attachmentDeclaresDelivery(attachment, "INV-808"), true);
+  assert.equal(attachmentDeclaresDelivery(attachment, "INV-809"), false);
+  assert.equal(attachmentDeclaresDelivery({ ...attachment, metadata: undefined }, "INV-808"), false);
 });
 
 test("does not adopt a merged regression-evidence attachment as delivery", { concurrency: false }, async () => {
