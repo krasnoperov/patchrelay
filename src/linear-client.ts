@@ -36,6 +36,7 @@ interface LinearIssueRawFields {
       title?: string | null;
       subtitle?: string | null;
       url?: string | null;
+      metadata?: Record<string, unknown> | null;
     }>;
   } | null;
   priority?: number | null;
@@ -116,6 +117,7 @@ const LINEAR_ISSUE_SELECTION = `
       title
       subtitle
       url
+      metadata
     }
   }
   priority
@@ -394,6 +396,47 @@ export class LinearGraphqlClient implements LinearClient {
     }
 
     return response.commentCreate.comment;
+  }
+
+  async upsertIssueAttachment(params: {
+    issueId: string;
+    title: string;
+    subtitle?: string;
+    url: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ id: string }> {
+    const response = await this.request<{
+      attachmentCreate: {
+        success: boolean;
+        attachment?: { id: string } | null;
+      };
+    }>(
+      `
+      mutation PatchRelayUpsertIssueAttachment($input: AttachmentCreateInput!) {
+        attachmentCreate(input: $input) {
+          success
+          attachment {
+            id
+          }
+        }
+      }
+      `,
+      {
+        input: {
+          issueId: params.issueId,
+          title: params.title,
+          ...(params.subtitle ? { subtitle: params.subtitle } : {}),
+          url: params.url,
+          ...(params.metadata ? { metadata: params.metadata } : {}),
+        },
+      },
+    );
+
+    if (!response.attachmentCreate.success || !response.attachmentCreate.attachment) {
+      throw new Error(`Linear rejected attachment upsert for issue ${params.issueId}`);
+    }
+
+    return response.attachmentCreate.attachment;
   }
 
   async createAgentActivity(params: {
@@ -734,6 +777,7 @@ export class LinearGraphqlClient implements LinearClient {
         ...(attachment.title ? { title: attachment.title } : {}),
         ...(attachment.subtitle ? { subtitle: attachment.subtitle } : {}),
         url: attachment.url,
+        ...(attachment.metadata ? { metadata: attachment.metadata } : {}),
       }));
     return {
       id: issue.id,

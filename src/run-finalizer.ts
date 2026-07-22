@@ -855,7 +855,7 @@ export class RunFinalizer {
     if (linearActivity) {
       void this.linearSync.emitActivity(updatedIssue, linearActivity);
     }
-    void this.linearSync.syncSession(updatedIssue);
+    void this.linearSync.syncSession(updatedIssue, { syncDeliveryPr: true });
     this.clearProgressAndRelease(run, {
       ...(updatedIssue.issueKey ? { issueKey: updatedIssue.issueKey } : {}),
       publishDeferredFollowUp: true,

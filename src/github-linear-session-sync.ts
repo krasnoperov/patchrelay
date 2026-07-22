@@ -7,6 +7,7 @@ import { buildGitHubStateActivity } from "./linear-session-reporting.ts";
 import type { AppConfig, LinearClientProvider } from "./types.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
 import { sharedLinearWriteBackoff } from "./linear-rate-limit.ts";
+import { syncLinearDeliveryPrAttachment } from "./linear-delivery-pr-sync.ts";
 
 export async function emitGitHubLinearActivity(params: {
   linearProvider: LinearClientProvider;
@@ -83,5 +84,26 @@ export async function syncGitHubLinearSession(params: {
     const msg = error instanceof Error ? error.message : String(error);
     sharedLinearWriteBackoff.noteError(issue.projectId, error);
     logger.warn({ issueKey: issue.issueKey, error: msg }, "Failed to sync Linear session from GitHub webhook");
+  }
+}
+
+export async function syncGitHubLinearDeliveryPr(params: {
+  linearProvider: LinearClientProvider;
+  logger: Logger;
+  issue: IssueRecord;
+}): Promise<void> {
+  const { issue, linearProvider, logger } = params;
+  if (!sharedLinearWriteBackoff.shouldAttempt(issue.projectId)) {
+    logger.debug({ issueKey: issue.issueKey }, "Skipping GitHub Linear delivery PR sync during rate-limit backoff");
+    return;
+  }
+  try {
+    const linear = await linearProvider.forProject(issue.projectId);
+    if (!linear) return;
+    await syncLinearDeliveryPrAttachment(issue, linear);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    sharedLinearWriteBackoff.noteError(issue.projectId, error);
+    logger.warn({ issueKey: issue.issueKey, error: msg }, "Failed to sync Linear delivery PR from GitHub webhook");
   }
 }
