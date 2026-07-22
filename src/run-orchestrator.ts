@@ -7,7 +7,6 @@ import type { WorkflowOutcome } from "./issue-phase.ts";
 import type { RunType } from "./run-type.ts";
 import { isRequestedChangesRunType } from "./reactive-pr-state.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
-import { summarizeCurrentThread } from "./run-reporting.ts";
 import {
   buildReviewRoundStartedActivity,
   buildRunStartedActivity,
@@ -904,12 +903,9 @@ export class RunOrchestrator {
     if (!run?.threadId) return undefined;
 
     const trackedIssue = this.db.issueToTrackedIssue(issue);
-    const thread = await this.codex.readThread(run.threadId, true).catch(() => undefined);
-
     return {
       issue: trackedIssue,
       run,
-      ...(thread ? { liveThread: summarizeCurrentThread(thread) } : {}),
     };
   }
 

@@ -48,7 +48,7 @@ patchrelay status                       # service and workflow health
 patchrelay status APP-123               # what the agent is doing and who owns the next action
 patchrelay status APP-123 --follow      # refresh while the run is active
 patchrelay status APP-123 --trace       # add workflow facts when diagnosing routing
-patchrelay logs APP-123 --follow        # service journal filtered to one issue
+patchrelay logs APP-123 --follow        # best-effort journal filter for entries carrying the issue key
 patchrelay issue path APP-123 --cd      # print the worktree path (or cd into it)
 patchrelay issue open APP-123           # open a Codex CLI session in the worktree
 patchrelay issue retry APP-123          # requeue after a failure
@@ -76,7 +76,7 @@ Codex owns the full thread transcript. PatchRelay reads that thread live through
 1. **`patchrelay status`** — prove the service and cross-issue workflow health.
 2. **`patchrelay status APP-123`** — see the run, latest activity, ownership, PR state, and next wait.
 3. **`patchrelay status APP-123 --trace`** — add workflow observations and gates when routing looks wrong.
-4. **`patchrelay logs APP-123 --follow`** — inspect runtime events for that issue.
+4. **`patchrelay logs APP-123 --follow`** — inspect journal entries that carry that issue key; use unfiltered `patchrelay logs --follow` for internal run/thread diagnostics.
 5. **`patchrelay issue open APP-123`** — take over inside the same worktree and Codex thread.
 
 ### Where the logs live

@@ -43,9 +43,13 @@ export async function handleStatusCommand(params: StatusCommandParams): Promise<
         ? formatJson({ ...status, ...(trace ? { trace } : {}) })
         : `${formatIssueStatus(status)}${trace ? `\n${formatTrace(trace)}` : ""}`,
     );
-    if (!params.follow || status.activeRun?.status !== "running") return 0;
+    if (!params.follow || !isActiveRunStatus(status.activeRun?.status)) return 0;
     await delay(2000);
   }
+}
+
+function isActiveRunStatus(status: string | undefined): boolean {
+  return status === "queued" || status === "running";
 }
 
 function formatIssueStatus(status: OperatorIssueStatusResult): string {

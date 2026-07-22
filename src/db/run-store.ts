@@ -187,7 +187,7 @@ export class RunStore {
       UPDATE runs SET
         last_codex_activity_at = ?,
         last_codex_activity_kind = ?,
-        last_codex_activity_summary = COALESCE(?, last_codex_activity_summary)
+        last_codex_activity_summary = ?
       WHERE id = ? AND status = 'running'
     `).run(params.observedAt ?? isoNow(), params.kind, params.summary ?? null, runId);
   }

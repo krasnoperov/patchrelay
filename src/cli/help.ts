@@ -34,7 +34,7 @@ export function rootHelpText(): string {
     "  repo unlink <github-repo> [--json]                        Remove one linked repository",
     "  repo sync [github-repo] [--json]                          Clone missing repositories or fetch origin",
     "  status [issueKey] [--follow] [--trace] [--json]         Show service health or one agent's current state",
-    "  logs [issueKey] [--follow] [--lines <count>] [--json]   Show service logs, optionally filtered by issue",
+    "  logs [issueKey] [--follow] [--lines <count>] [--json]   Show service logs; issue filter is best-effort",
     "  issue open <issueKey> [--print] [--json]                Open Codex in the issue worktree",
     "  issue prompt <issueKey> <text> [--json]                 Send operator guidance to the active or next run",
   "  issue close <issueKey> [--failed] [--reason <text>] [--json]",

@@ -44,6 +44,35 @@ test("status ISSUE explains current ownership and compact Codex activity", async
   assert.match(stdout.read(), /3 commands · 4 file changes · 1 tool calls/);
 });
 
+test("status ISSUE --follow keeps watching queued runs until they settle", async () => {
+  const stdout = output();
+  let reads = 0;
+  const data = {
+    db: {},
+    getIssueStatus: async () => {
+      reads += 1;
+      return {
+        issue: { issueKey: "INV-810", phase: reads === 1 ? "delegated" : "done" },
+        ...(reads === 1
+          ? { activeRun: { id: 5412, runType: "implementation", status: "queued", startedAt: new Date().toISOString() } }
+          : { latestRun: { id: 5412, runType: "implementation", status: "completed", startedAt: new Date().toISOString() } }),
+        runs: [],
+        generatedAt: new Date().toISOString(),
+      };
+    },
+  } as unknown as CliDataAccess;
+
+  assert.equal(await runCli(["status", "INV-810", "--follow"], {
+    config,
+    data,
+    stdout: stdout.stream,
+    stderr: output().stream,
+  }), 0);
+  assert.equal(reads, 2);
+  assert.match(stdout.read(), /queued/);
+  assert.match(stdout.read(), /completed/);
+});
+
 test("logs ISSUE filters the service journal and supports JSON", async () => {
   const stdout = output();
   const calls: string[][] = [];

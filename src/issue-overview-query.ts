@@ -14,7 +14,6 @@ export interface RunStatusProvider {
   getActiveRunStatus(issueKey: string): Promise<{
     issue: TrackedIssueRecord;
     run: RunRecord;
-    liveThread?: unknown;
   } | undefined>;
 }
 
