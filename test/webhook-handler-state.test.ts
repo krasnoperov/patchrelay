@@ -1932,13 +1932,13 @@ test("re-delegation resumes requested-changes issue from PR state instead of res
   }
 });
 
-test("delegateChanged adopts a linked same-repo PR with requested changes", { concurrency: false }, async () => {
+test("delegateChanged adopts an attached same-repo PR without requiring hidden ownership metadata", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-linked-pr-review-fix-"));
   const restorePath = installFakeGh(
     baseDir,
     JSON.stringify({
       url: "https://github.com/krasnoperov/mafia/pull/124",
-      body: "Linear: MAF-124",
+      body: "Broken PR handed to PatchRelay for repair",
       headRefName: "feat-existing-pr",
       headRefOid: "sha-linked-review",
       isDraft: false,
@@ -2483,7 +2483,7 @@ test("delegateChanged moves linked cross-repo PR adoption to awaiting_input", { 
   }
 });
 
-test("delegateChanged treats multiple unowned PR attachments as references and starts implementation", async () => {
+test("delegateChanged rejects ambiguous multiple PR attachments instead of guessing ownership", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-linked-pr-ambiguous-"));
   try {
     const config = createConfig(baseDir);
@@ -2544,10 +2544,10 @@ test("delegateChanged treats multiple unowned PR attachments as references and s
     await handler.processWebhookEvent(stored.id);
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-adopt-ambiguous");
-    assert.equal(issue?.factoryState, "delegated");
+    assert.equal(issue?.factoryState, "awaiting_input");
     assert.equal(db.workflowTasks.listOpenRunnableTasks("krasnoperov/mafia")
-      .some((task) => task.subjectId === "issue-maf-adopt-ambiguous" && task.taskId === "run:implementation"), true);
-    assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-adopt-ambiguous" }]);
+      .some((task) => task.subjectId === "issue-maf-adopt-ambiguous" && task.taskId === "run:implementation"), false);
+    assert.deepEqual(enqueued, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
