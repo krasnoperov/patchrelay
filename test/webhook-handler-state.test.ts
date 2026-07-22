@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import pino from "pino";
 import test from "node:test";
+import { assertIssuePhase } from "./assert-issue-phase.ts";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { WebhookHandler } from "../src/webhook-handler.ts";
 import { TrackedIssueListQuery } from "../src/tracked-issue-list-query.ts";
@@ -283,7 +284,7 @@ test("delegated blocked issue is tracked but does not queue implementation until
       title: "API contracts",
       currentLinearState: "Completed",
       currentLinearStateType: "completed",
-      factoryState: "done",
+      workflowOutcome: "completed",
     });
     issueSnapshots.set("issue-maf-39", {
       ...(issueSnapshots.get("issue-maf-39")!),
@@ -314,7 +315,6 @@ test("delegated blocked issue is tracked but does not queue implementation until
     });
     await handler.processWebhookEvent(blockerDoneEvent.id);
 
-    const unblockedIssue = db.getIssue("krasnoperov/mafia", "issue-maf-40");
     const unblockedTask = db.workflowTasks.getTask("krasnoperov/mafia", "issue-maf-40", "run:implementation");
     assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-40"), undefined);
     assert.equal(unblockedTask?.runType, "implementation");
@@ -401,7 +401,7 @@ test("delegated issue with only completed blockers queues implementation immedia
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-completed-blocker");
     const workflowTask = db.workflowTasks.getTask("krasnoperov/mafia", "issue-maf-completed-blocker", "run:implementation");
-    assert.equal(issue?.factoryState, "delegated");
+    assertIssuePhase(issue, "delegated");
     assert.equal(db.listIssueDependencies("krasnoperov/mafia", "issue-maf-completed-blocker").length, 1);
     assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-completed-blocker"), 0);
     assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-completed-blocker"), undefined);
@@ -520,7 +520,7 @@ test("delegated blocked agent session is acknowledged without queueing implement
     await handler.processWebhookEvent(stored.id);
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-blocked-session");
-    assert.equal(issue?.factoryState, "delegated");
+    assertIssuePhase(issue, "delegated");
     assert.equal(issue?.agentSessionId, "session-blocked-97");
     assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-blocked-session"), 1);
     assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-blocked-session"), undefined);
@@ -845,7 +845,7 @@ test("delegated issue webhooks enqueue implementation workflowTask immediately w
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-delegated");
     const workflowTask = db.workflowTasks.getTask("krasnoperov/mafia", "issue-maf-delegated", "run:implementation");
-    assert.equal(issue?.factoryState, "delegated");
+    assertIssuePhase(issue, "delegated");
     assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-delegated"), undefined);
     assert.equal(workflowTask?.runType, "implementation");
     assert.equal(workflowTask?.gateAction, "start");
@@ -875,7 +875,7 @@ test("issue becoming blocked during implementation releases the active run and p
       issueKey: "MAF-42",
       title: "Sequencing bug",
       delegatedToPatchRelay: true,
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
     const run = db.runs.createRun({
       issueId: issueRecord.id,
@@ -961,7 +961,7 @@ test("issue becoming blocked during implementation releases the active run and p
     const finishedRun = db.runs.getRunById(run.id);
     const session = db.issueSessions.getIssueSession("krasnoperov/mafia", "issue-maf-blocked-active");
     const tracked = new TrackedIssueListQuery(db).listTrackedIssues().find((entry) => entry.issueKey === "MAF-42");
-    assert.equal(issue?.factoryState, "delegated");
+    assertIssuePhase(issue, "delegated");
     assert.equal(issue?.activeRunId, undefined);
     assert.equal(issue?.delegatedToPatchRelay, true);
     assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-blocked-active"), 1);
@@ -998,7 +998,7 @@ test("completed blocker added during implementation does not release the active 
       issueKey: "MAF-43",
       title: "Sequencing provenance",
       delegatedToPatchRelay: true,
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
     const run = db.runs.createRun({
       issueId: issueRecord.id,
@@ -1083,7 +1083,7 @@ test("completed blocker added during implementation does not release the active 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-completed-blocked-active");
     const activeRun = db.runs.getRunById(run.id);
     const tracked = new TrackedIssueListQuery(db).listTrackedIssues().find((entry) => entry.issueKey === "MAF-43");
-    assert.equal(issue?.factoryState, "implementing");
+    assertIssuePhase(issue, "implementing");
     assert.equal(issue?.activeRunId, run.id);
     assert.equal(db.listIssueDependencies("krasnoperov/mafia", "issue-maf-completed-blocked-active").length, 1);
     assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-completed-blocked-active"), 0);
@@ -1155,7 +1155,7 @@ test("delegated issue is tracked via repository-link installation fallback", asy
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-38");
     assert.ok(issue);
     assert.equal(issue?.issueKey, "MAF-38");
-    assert.equal(issue?.factoryState, "delegated");
+    assertIssuePhase(issue, "delegated");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -1210,7 +1210,7 @@ test("delegated issue is tracked via single-installation fallback", async () => 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-39");
     assert.ok(issue);
     assert.equal(issue?.issueKey, "MAF-39");
-    assert.equal(issue?.factoryState, "delegated");
+    assertIssuePhase(issue, "delegated");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -1305,7 +1305,7 @@ test("done delegated issue does not requeue implementation after merged status e
       title: "DB types + DAOs",
       currentLinearState: "Done",
       currentLinearStateType: "completed",
-      factoryState: "done",
+      workflowOutcome: "completed",
       prNumber: 105,
       prState: "merged",
     });
@@ -1345,7 +1345,7 @@ test("done delegated issue does not requeue implementation after merged status e
     await handler.processWebhookEvent(stored.id);
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-38");
-    assert.equal(issue?.factoryState, "done");
+    assertIssuePhase(issue, "done");
     assert.deepEqual(enqueued, []);
     assert.deepEqual(db.listIssuesReadyForExecution(), []);
   } finally {
@@ -1353,7 +1353,7 @@ test("done delegated issue does not requeue implementation after merged status e
   }
 });
 
-test("in-review status echo does not requeue implementation for an open delegated PR", async () => {
+test("in-review status echo keeps an undecided open PR in review without requeueing implementation", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-in-review-echo-"));
   try {
     const config = createConfig(baseDir);
@@ -1374,7 +1374,7 @@ test("in-review status echo does not requeue implementation for an open delegate
       title: "Printable facilitator sheet",
       currentLinearState: "In Review",
       currentLinearStateType: "started",
-      factoryState: "awaiting_queue",
+      workflowOutcome: undefined,
       prNumber: 130,
       prState: "open",
     });
@@ -1414,7 +1414,7 @@ test("in-review status echo does not requeue implementation for an open delegate
     await handler.processWebhookEvent(stored.id);
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-39");
-    assert.equal(issue?.factoryState, "awaiting_queue");
+    assertIssuePhase(issue, "pr_open");
     assert.deepEqual(enqueued, []);
     assert.deepEqual(db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-39", { pendingOnly: true }), []);
   } finally {
@@ -1422,7 +1422,7 @@ test("in-review status echo does not requeue implementation for an open delegate
   }
 });
 
-test("un-delegation during active run releases run and preserves implementing state", async () => {
+test("un-delegation during active run releases the run and derives a paused phase", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-undelegate-"));
   try {
     const config = createConfig(baseDir);
@@ -1449,7 +1449,7 @@ test("un-delegation during active run releases run and preserves implementing st
       linearIssueId: "issue-maf-50",
       issueKey: "MAF-50",
       title: "Implement feature X",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       worktreePath,
     });
     const run = db.runs.createRun({
@@ -1498,7 +1498,7 @@ test("un-delegation during active run releases run and preserves implementing st
     await handler.processWebhookEvent(stored.id);
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-50");
-    assert.equal(issue?.factoryState, "implementing");
+    assertIssuePhase(issue, "paused");
     assert.equal(issue?.delegatedToPatchRelay, false);
     assert.equal(issue?.activeRunId, undefined);
 
@@ -1535,7 +1535,7 @@ test("un-delegation webhook syncs the issue back to a queued Linear state immedi
       linearIssueId: "issue-maf-50-sync",
       issueKey: "MAF-50S",
       title: "Pause implementation",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       currentLinearState: "In Progress",
       currentLinearStateType: "started",
@@ -1657,7 +1657,7 @@ test("terminal Linear completion during active run records Linear state but keep
       delegatedToPatchRelay: true,
       currentLinearState: "In Progress",
       currentLinearStateType: "started",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
     const run = db.runs.createRun({
       issueId: issueRecord.id,
@@ -1709,7 +1709,7 @@ test("terminal Linear completion during active run records Linear state but keep
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-50-done");
     assert.equal(issue?.currentLinearState, "Done");
     assert.equal(issue?.currentLinearStateType, "completed");
-    assert.equal(issue?.factoryState, "implementing");
+    assertIssuePhase(issue, "implementing");
     assert.equal(issue?.activeRunId, run.id);
     assert.deepEqual(enqueued, []);
 
@@ -1721,7 +1721,7 @@ test("terminal Linear completion during active run records Linear state but keep
   }
 });
 
-test("un-delegation pauses awaiting_queue issue and preserves downstream PR-backed state", async () => {
+test("un-delegation preserves downstream PR facts while deriving a paused phase", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-noreturn-"));
   try {
     const config = createConfig(baseDir);
@@ -1741,7 +1741,7 @@ test("un-delegation pauses awaiting_queue issue and preserves downstream PR-back
       issueKey: "MAF-51",
       title: "Approved feature",
       delegatedToPatchRelay: true,
-      factoryState: "awaiting_queue",
+      workflowOutcome: undefined,
       prNumber: 120,
       prState: "open",
     });
@@ -1780,7 +1780,7 @@ test("un-delegation pauses awaiting_queue issue and preserves downstream PR-back
     await handler.processWebhookEvent(stored.id);
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-51");
-    assert.equal(issue?.factoryState, "awaiting_queue");
+    assertIssuePhase(issue, "paused");
     assert.equal(issue?.delegatedToPatchRelay, false);
     assert.equal(issue?.prNumber, 120);
     assert.equal(issue?.prState, "open");
@@ -1809,7 +1809,7 @@ test("status webhook preserves previous delegation when live Linear hydration fa
       issueKey: "MAF-57",
       title: "Preserve delegation on partial webhook",
       delegatedToPatchRelay: true,
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 157,
       prState: "open",
     });
@@ -1880,7 +1880,7 @@ test("re-delegation resumes requested-changes issue from PR state instead of res
       issueKey: "MAF-52",
       title: "Resume existing PR",
       delegatedToPatchRelay: false,
-      factoryState: "awaiting_input",
+      inputRequestKind: "completion_check_question",
       prNumber: 121,
       prState: "open",
       prHeadSha: "sha-redelegate-review",
@@ -1923,7 +1923,7 @@ test("re-delegation resumes requested-changes issue from PR state instead of res
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-52");
     assert.equal(issue?.delegatedToPatchRelay, true);
-    assert.equal(issue?.factoryState, "changes_requested");
+    assertIssuePhase(issue, "changes_requested");
     const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-52");
     assert.equal(workflowTask?.runType, "review_fix");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-52" }]);
@@ -2012,7 +2012,7 @@ test("delegateChanged adopts an attached same-repo PR without requiring hidden o
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-adopt-review");
     assert.equal(issue?.delegatedToPatchRelay, true);
-    assert.equal(issue?.factoryState, "changes_requested");
+    assertIssuePhase(issue, "changes_requested");
     assert.equal(issue?.prNumber, 124);
     assert.equal(issue?.branchName, "feat-existing-pr");
     assert.equal(issue?.prHeadSha, "sha-linked-review");
@@ -2107,7 +2107,7 @@ test("statusChanged adopts a linked same-repo PR before starting implementation"
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-adopt-status");
     assert.equal(issue?.delegatedToPatchRelay, true);
-    assert.equal(issue?.factoryState, "changes_requested");
+    assertIssuePhase(issue, "changes_requested");
     assert.equal(issue?.prNumber, 224);
     assert.equal(issue?.branchName, "fix/existing-review-repair");
     assert.equal(issue?.prHeadSha, "sha-linked-status-review");
@@ -2199,7 +2199,7 @@ test("delegateChanged adopts a linked same-repo PR with failing CI", { concurren
     await handler.processWebhookEvent(stored.id);
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-adopt-ci");
-    assert.equal(issue?.factoryState, "repairing_ci");
+    assertIssuePhase(issue, "repairing_ci");
     assert.equal(issue?.prCheckStatus, "failure");
     assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-adopt-ci")?.runType, "ci_repair");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-adopt-ci" }]);
@@ -2288,7 +2288,7 @@ test("delegateChanged adopts a linked draft PR as implementation work", { concur
     await handler.processWebhookEvent(stored.id);
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-adopt-draft");
-    assert.equal(issue?.factoryState, "delegated");
+    assertIssuePhase(issue, "delegated");
     assert.equal(issue?.prIsDraft, true);
     assert.equal(issue?.branchName, "feat-linked-draft");
     // drives a durable run:implementation workflow task (the session input below
@@ -2383,7 +2383,7 @@ test("delegateChanged adopts a linked closed same-repo PR as replacement impleme
     await handler.processWebhookEvent(stored.id);
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-adopt-closed");
-    assert.equal(issue?.factoryState, "delegated");
+    assertIssuePhase(issue, "delegated");
     assert.equal(issue?.prNumber, 1260);
     assert.equal(issue?.prState, "closed");
     assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-adopt-closed")?.runType, "implementation");
@@ -2473,7 +2473,7 @@ test("delegateChanged moves linked cross-repo PR adoption to awaiting_input", { 
     await handler.processWebhookEvent(stored.id);
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-adopt-cross");
-    assert.equal(issue?.factoryState, "awaiting_input");
+    assertIssuePhase(issue, "awaiting_input");
     assert.equal(issue?.prNumber, 127);
     assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-adopt-cross"), undefined);
     assert.deepEqual(enqueued, []);
@@ -2544,7 +2544,7 @@ test("delegateChanged rejects ambiguous multiple PR attachments instead of guess
     await handler.processWebhookEvent(stored.id);
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-adopt-ambiguous");
-    assert.equal(issue?.factoryState, "awaiting_input");
+    assertIssuePhase(issue, "awaiting_input");
     assert.equal(db.workflowTasks.listOpenRunnableTasks("krasnoperov/mafia")
       .some((task) => task.subjectId === "issue-maf-adopt-ambiguous" && task.taskId === "run:implementation"), false);
     assert.deepEqual(enqueued, []);
@@ -2577,7 +2577,7 @@ test("later issue webhooks recover missed re-delegation from live Linear delegat
       issueKey: "MAF-52C",
       title: "Repair missed re-delegation",
       delegatedToPatchRelay: false,
-      factoryState: "escalated",
+      workflowOutcome: "escalated",
       prNumber: 122,
       prState: "open",
       prHeadSha: "sha-redelegate-repair-review",
@@ -2646,7 +2646,7 @@ test("later issue webhooks recover missed re-delegation from live Linear delegat
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-52c");
     assert.equal(issue?.delegatedToPatchRelay, true);
-    assert.equal(issue?.factoryState, "changes_requested");
+    assertIssuePhase(issue, "changes_requested");
     const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-52c");
     assert.equal(workflowTask?.runType, "review_fix");
     // The recovery comment must enqueue the re-delegated issue so the
@@ -2678,7 +2678,7 @@ test("re-delegation preserves completion-check questions instead of restarting i
       issueKey: "MAF-52B",
       title: "Needs product answer",
       delegatedToPatchRelay: false,
-      factoryState: "awaiting_input",
+      inputRequestKind: "completion_check_question",
     });
     const run = db.runs.createRun({
       issueId: issue.id,
@@ -2735,7 +2735,7 @@ test("re-delegation preserves completion-check questions instead of restarting i
 
     const updatedIssue = db.getIssue("krasnoperov/mafia", "issue-maf-52b");
     assert.equal(updatedIssue?.delegatedToPatchRelay, true);
-    assert.equal(updatedIssue?.factoryState, "awaiting_input");
+    assertIssuePhase(updatedIssue, "awaiting_input");
     assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-52b"), undefined);
     assert.deepEqual(enqueued, []);
   } finally {
@@ -2763,7 +2763,7 @@ test("re-delegation resumes paused local work from implementing state", async ()
       issueKey: "MAF-52C",
       title: "Resume paused implementation",
       delegatedToPatchRelay: false,
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
 
     const enqueued: Array<{ projectId: string; issueId: string }> = [];
@@ -2802,7 +2802,7 @@ test("re-delegation resumes paused local work from implementing state", async ()
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-52c");
     assert.equal(issue?.delegatedToPatchRelay, true);
-    assert.equal(issue?.factoryState, "delegated");
+    assertIssuePhase(issue, "delegated");
     const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-52c");
     assert.equal(workflowTask?.runType, "implementation");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-52c" }]);
@@ -2830,7 +2830,7 @@ test("issueRemoved releases active run and transitions to failed", async () => {
       linearIssueId: "issue-maf-52",
       issueKey: "MAF-52",
       title: "Soon to be removed",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
     const run = db.runs.createRun({
       issueId: issueRecord.id,
@@ -2876,7 +2876,7 @@ test("issueRemoved releases active run and transitions to failed", async () => {
     await handler.processWebhookEvent(stored.id);
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-52");
-    assert.equal(issue?.factoryState, "failed");
+    assertIssuePhase(issue, "failed");
     assert.equal(issue?.activeRunId, undefined);
 
     const finishedRun = db.runs.getRunById(run.id);
@@ -2906,7 +2906,7 @@ test("issueRemoved without an active run marks the issue failed and clears pendi
       linearIssueId: "issue-maf-53",
       issueKey: "MAF-53",
       title: "Removed while idle",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
     });
 
     const handler = new WebhookHandler(
@@ -2941,7 +2941,7 @@ test("issueRemoved without an active run marks the issue failed and clears pendi
     await handler.processWebhookEvent(stored.id);
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-53");
-    assert.equal(issue?.factoryState, "failed");
+    assertIssuePhase(issue, "failed");
     assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-53"), undefined);
     assert.equal(db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-53", { pendingOnly: true }).length, 0);
   } finally {
@@ -2973,7 +2973,7 @@ test("idle delegated comments with explicit PatchRelay intent queue a follow-up 
       title: "Commentable issue",
       currentLinearState: "Review",
       currentLinearStateType: "started",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 91,
     });
 
@@ -3020,7 +3020,6 @@ test("idle delegated comments with explicit PatchRelay intent queue a follow-up 
     });
     await handler.processWebhookEvent(stored.id);
 
-    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-comment");
     const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-comment");
     assert.equal(workflowTask?.runType, "implementation");
     assert.equal(Array.isArray(workflowTask?.context.followUps), true);
@@ -3055,7 +3054,7 @@ test("idle comments without explicit PatchRelay intent are ignored", async () =>
       title: "Commentable issue",
       currentLinearState: "Review",
       currentLinearStateType: "started",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 92,
     });
 
@@ -3134,7 +3133,7 @@ test("idle delegated comments with PatchRelay status intent do not queue impleme
       title: "Comment status issue",
       currentLinearState: "Review",
       currentLinearStateType: "started",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 93,
     });
 
@@ -3215,7 +3214,7 @@ test("awaiting_input issue comments without explicit PatchRelay address are igno
       title: "Awaiting input issue",
       currentLinearState: "Needs input",
       currentLinearStateType: "unstarted",
-      factoryState: "awaiting_input",
+      inputRequestKind: "completion_check_question",
       threadId: "thread-awaiting-input-ignored",
     });
 
@@ -3299,7 +3298,7 @@ test("explicit PatchRelay comments on awaiting_input resume work as direct repli
       title: "Needs operator reply",
       currentLinearState: "Needs input",
       currentLinearStateType: "unstarted",
-      factoryState: "awaiting_input",
+      inputRequestKind: "completion_check_question",
       threadId: "thread-awaiting-input",
     });
 
@@ -3382,7 +3381,7 @@ test("explicit PatchRelay answers to outstanding questions are classified as dir
       title: "Needs direct answer",
       currentLinearState: "Needs input",
       currentLinearStateType: "unstarted",
-      factoryState: "awaiting_input",
+      inputRequestKind: "completion_check_question",
       threadId: "thread-direct-reply",
     });
     const run = db.runs.createRun({
@@ -3475,7 +3474,7 @@ test("PatchRelay-authored comments are recorded as inert session events without 
       title: "Self comment issue",
       currentLinearState: "Review",
       currentLinearStateType: "started",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 911,
     });
 
@@ -3556,7 +3555,7 @@ test("PatchRelay managed status comment updates stay inert even when the webhook
       title: "Managed status issue",
       currentLinearState: "Review",
       currentLinearStateType: "started",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 912,
       statusCommentId: "comment-status-1",
     });
@@ -3644,7 +3643,7 @@ test("PatchRelay-generated escalation activity comments stay inert even when Lin
       title: "Escalated issue",
       currentLinearState: "Review",
       currentLinearStateType: "started",
-      factoryState: "changes_requested",
+      workflowOutcome: undefined,
       prNumber: 913,
       prReviewState: "changes_requested",
     });
@@ -3728,7 +3727,7 @@ test("PatchRelay agent activity echoes do not steer active runs or queue follow-
       delegatedToPatchRelay: true,
       currentLinearState: "In Progress",
       currentLinearStateType: "started",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       agentSessionId: "session-echo-1",
     });
     const run = db.runs.createRun({
@@ -3840,7 +3839,7 @@ test("real agent prompt events still steer active runs", async () => {
       delegatedToPatchRelay: true,
       currentLinearState: "In Progress",
       currentLinearStateType: "started",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       agentSessionId: "session-real-prompt-1",
     });
     const run = db.runs.createRun({
@@ -3952,7 +3951,7 @@ test("active delegated agent status prompts answer as thoughts without steering 
       delegatedToPatchRelay: true,
       currentLinearState: "In Progress",
       currentLinearStateType: "started",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       agentSessionId: "session-active-status-1",
     });
     const run = db.runs.createRun({
@@ -4066,7 +4065,7 @@ test("active agent prompt delivery failure records diagnostics and Linear-visibl
       delegatedToPatchRelay: true,
       currentLinearState: "In Progress",
       currentLinearStateType: "started",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       agentSessionId: "session-prompt-failure-1",
     });
     const run = db.runs.createRun({
@@ -4185,7 +4184,7 @@ test("idle delegated agent status prompts respond without queueing implementatio
       delegatedToPatchRelay: true,
       currentLinearState: "Review",
       currentLinearStateType: "started",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 92,
       agentSessionId: "session-status-prompt-1",
     });
@@ -4289,7 +4288,7 @@ test("idle delegated agent retry prompts queue follow-up implementation", async 
       delegatedToPatchRelay: true,
       currentLinearState: "Needs input",
       currentLinearStateType: "unstarted",
-      factoryState: "awaiting_input",
+      inputRequestKind: "completion_check_question",
       agentSessionId: "session-retry-prompt-1",
     });
 
@@ -4385,7 +4384,7 @@ test("agent prompts on completed PRs reopen work as replacement PR runs with pri
       delegatedToPatchRelay: true,
       currentLinearState: "Done",
       currentLinearStateType: "completed",
-      factoryState: "done",
+      workflowOutcome: "completed",
       branchName: "maf/MAF-92R",
       prNumber: 929,
       prUrl: "https://github.example/pull/929",
@@ -4452,7 +4451,7 @@ test("agent prompts on completed PRs reopen work as replacement PR runs with pri
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-done-replacement");
     const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-done-replacement");
-    assert.equal(issue?.factoryState, "delegated");
+    assertIssuePhase(issue, "delegated");
     assert.equal(issue?.prNumber, undefined);
     assert.match(issue?.branchName ?? "", /^maf\/MAF-92R-replacement-/);
     assert.equal(workflowTask?.runType, "implementation");
@@ -4506,7 +4505,7 @@ test("agent signal stop requests halt the active run and emit a stop_requested s
       linearIssueId: "issue-maf-stop",
       issueKey: "MAF-97",
       title: "Stop requested issue",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       agentSessionId: "session-stop-1",
       worktreePath,
     });
@@ -4585,7 +4584,7 @@ test("agent signal stop requests halt the active run and emit a stop_requested s
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-stop");
     const runAfter = db.runs.getRunById(run.id);
     const events = db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-stop");
-    assert.equal(issue?.factoryState, "awaiting_input");
+    assertIssuePhase(issue, "awaiting_input");
     assert.equal(issue?.activeRunId, undefined);
     assert.equal(runAfter?.status, "released");
     assert.match(runAfter?.failureReason ?? "", /Worktree has/);
@@ -4875,7 +4874,7 @@ test("agent session creation before delegation persists the session id for later
 
     const preDelegationIssue = db.getIssue("krasnoperov/mafia", "issue-maf-session");
     assert.equal(preDelegationIssue?.agentSessionId, "session-94");
-    assert.equal(preDelegationIssue?.factoryState, "awaiting_input");
+    assertIssuePhase(preDelegationIssue, "awaiting_input");
     assert.deepEqual(
       activities.filter((entry) => entry.body?.includes("Delegate the issue to PatchRelay to start work.")),
       [],
@@ -4999,7 +4998,7 @@ test("issueCreated recovers delegated startup after an early agent session left 
     await handler.processWebhookEvent(sessionEvent.id);
 
     const preIssue = db.getIssue("krasnoperov/mafia", "issue-maf-startup");
-    assert.equal(preIssue?.factoryState, "awaiting_input");
+    assertIssuePhase(preIssue, "awaiting_input");
 
     hydratedDelegateId = "patchrelay-actor";
     const issueCreatedPayload: LinearWebhookPayload = {
@@ -5026,7 +5025,7 @@ test("issueCreated recovers delegated startup after an early agent session left 
 
     const recoveredIssue = db.getIssue("krasnoperov/mafia", "issue-maf-startup");
     const recoveredTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-startup");
-    assert.equal(recoveredIssue?.factoryState, "delegated");
+    assertIssuePhase(recoveredIssue, "delegated");
     assert.equal(recoveredTask?.runType, "implementation");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-startup" }]);
   } finally {
@@ -5148,7 +5147,7 @@ test("issueCreated recovers delegated blocked startup without queueing implement
     await handler.processWebhookEvent(issueCreatedEvent.id);
 
     const recoveredIssue = db.getIssue("krasnoperov/mafia", "issue-maf-blocked-startup");
-    assert.equal(recoveredIssue?.factoryState, "delegated");
+    assertIssuePhase(recoveredIssue, "delegated");
     assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-blocked-startup"), 1);
     assert.deepEqual(enqueued, []);
   } finally {
@@ -5176,7 +5175,7 @@ test("orchestration parents do not dispatch workflow tasks on non-terminal child
       issueKey: "MAF-200",
       title: "Umbrella parent",
       delegatedToPatchRelay: true,
-      factoryState: "delegated",
+      workflowOutcome: undefined,
       currentLinearState: "Start",
       currentLinearStateType: "started",
     });
@@ -5186,9 +5185,11 @@ test("orchestration parents do not dispatch workflow tasks on non-terminal child
       issueKey: "MAF-201",
       title: "Child implementation",
       delegatedToPatchRelay: true,
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       currentLinearState: "Implementing",
       currentLinearStateType: "started",
+      prNumber: 201,
+      prState: "open",
       parentLinearIssueId: "issue-maf-parent",
       parentIssueKey: "MAF-200",
     });

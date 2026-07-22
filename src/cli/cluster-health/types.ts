@@ -1,5 +1,6 @@
 import type { IssueDependencyRecord, IssueRecord, IssueSessionRecord } from "../../db-types.ts";
 import type { IssueExecutionState } from "../../issue-execution-state.ts";
+import type { IssuePhase } from "../../issue-phase.ts";
 
 export interface ClusterHealthCheck {
   status: "pass" | "warn" | "fail";
@@ -45,7 +46,7 @@ export interface ClusterCiEntry {
   gateStatus: CiGateStatus;
   owner: CiOwner;
   orphaned: boolean;
-  factoryState: string;
+  phase: IssuePhase;
   reviewDecision?: string | undefined;
   message: string;
 }

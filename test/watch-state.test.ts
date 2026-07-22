@@ -24,7 +24,7 @@ function makeIssue(key: string, overrides?: Partial<WatchIssue>): WatchIssue {
     issueKey: key,
     projectId: "test-project",
     delegatedToPatchRelay: true,
-    factoryState: "implementing",
+    workflowOutcome: undefined,
     blockedByCount: 0,
     blockedByKeys: [],
     readyForExecution: false,
@@ -217,8 +217,8 @@ test("feed-event appends to timeline when in detail view", () => {
 
 test("computeAggregates counts blocked and ready issues separately", () => {
   const issues = [
-    makeIssue("USE-1", { blockedByCount: 1, blockedByKeys: ["USE-0"], factoryState: "delegated" }),
-    makeIssue("USE-2", { readyForExecution: true, runnableTaskRunType: "implementation", factoryState: "delegated" }),
+    makeIssue("USE-1", { blockedByCount: 1, blockedByKeys: ["USE-0"], workflowOutcome: undefined }),
+    makeIssue("USE-2", { readyForExecution: true, runnableTaskRunType: "implementation", workflowOutcome: undefined }),
     makeIssue("USE-3", { activeRunType: "implementation" }),
   ];
 
@@ -232,12 +232,12 @@ test("computeAggregates does not count terminal issues as ready even if stale re
   const issues = [
     makeIssue("USE-1", {
       sessionState: "done",
-      factoryState: "done",
+      workflowOutcome: "completed",
       readyForExecution: true,
     }),
     makeIssue("USE-2", {
       sessionState: "failed",
-      factoryState: "failed",
+      workflowOutcome: "failed",
       readyForExecution: true,
     }),
   ];
@@ -251,13 +251,13 @@ test("computeAggregates does not count terminal issues as ready even if stale re
 test("computeAggregates does not count PR-backed issues as ready even if stale ready flags linger", () => {
   const issues = [
     makeIssue("TST-39", {
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 38,
       prReviewState: "review_required",
       readyForExecution: true,
     }),
     makeIssue("TST-43", {
-      factoryState: "awaiting_queue",
+      workflowOutcome: undefined,
       prNumber: 36,
       prReviewState: "approved",
       readyForExecution: true,
@@ -296,7 +296,7 @@ test("feed-event aggregates CI checks in timeline", () => {
 
 test("feed-event branch_not_advanced stays in timeline/history only", () => {
   const initial = stateWith({
-    issues: [makeIssue("USE-74", { factoryState: "repairing_ci" })],
+    issues: [makeIssue("USE-74", { workflowOutcome: undefined })],
     view: "detail",
     activeDetailKey: "USE-74",
   });
@@ -1198,12 +1198,12 @@ test("buildTimelineRows keeps active runs focused on the latest live context", (
 
 test("computeAggregates counts active, done, failed", () => {
   const issues = [
-    makeIssue("USE-1", { factoryState: "implementing", activeRunType: "implementation" }),
-    makeIssue("USE-2", { factoryState: "delegated", sessionState: "done" }),
-    makeIssue("USE-3", { factoryState: "implementing", sessionState: "failed" }),
-    makeIssue("USE-4", { factoryState: "escalated" }),
-    makeIssue("USE-5", { factoryState: "pr_open" }),
-    makeIssue("USE-6", { factoryState: "implementing", activeRunType: "implementation" }),
+    makeIssue("USE-1", { workflowOutcome: undefined, activeRunType: "implementation" }),
+    makeIssue("USE-2", { workflowOutcome: undefined, sessionState: "done" }),
+    makeIssue("USE-3", { workflowOutcome: undefined, sessionState: "failed" }),
+    makeIssue("USE-4", { workflowOutcome: "escalated" }),
+    makeIssue("USE-5", { workflowOutcome: undefined }),
+    makeIssue("USE-6", { workflowOutcome: undefined, activeRunType: "implementation" }),
   ];
   const agg = computeAggregates(issues);
   assert.equal(agg.active, 2);

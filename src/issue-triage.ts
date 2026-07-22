@@ -6,6 +6,7 @@ import type { IssueClass } from "./issue-class.ts";
 import type { IssueRecord } from "./db-types.ts";
 import type { CodexThreadSummary } from "./types.ts";
 import { extractFirstJsonObject, safeJsonParse } from "./utils.ts";
+import { deriveIssuePhase } from "./issue-phase.ts";
 
 const TRIAGE_TIMEOUT_MS = 45_000;
 const TRIAGE_POLL_MS = 1_000;
@@ -26,6 +27,13 @@ export interface IssueTriageResult {
   reason: string;
 }
 
+type TriageChildIssue = Pick<IssueRecord,
+  | "linearIssueId" | "issueKey" | "title" | "currentLinearState"
+  | "delegatedToPatchRelay" | "workflowOutcome" | "inputRequestKind"
+  | "prNumber" | "prState" | "prIsDraft" | "prReviewState" | "prCheckStatus"
+  | "lastGitHubFailureSource" | "deployStartedAt"
+>;
+
 interface CodexLike {
   startThreadForIssueTriage(): Promise<CodexThreadSummary>;
   startTurn(options: { threadId: string; cwd?: string; input: string }): Promise<{ threadId: string; turnId: string; status: string }>;
@@ -34,7 +42,7 @@ interface CodexLike {
 
 export function buildIssueTriageHash(params: {
   issue: Pick<IssueRecord, "linearIssueId" | "issueKey" | "title" | "description" | "parentLinearIssueId">;
-  childIssues: Array<Pick<IssueRecord, "linearIssueId" | "issueKey" | "title" | "currentLinearState" | "factoryState">>;
+  childIssues: TriageChildIssue[];
 }): string {
   const payload = {
     linearIssueId: params.issue.linearIssueId,
@@ -47,7 +55,7 @@ export function buildIssueTriageHash(params: {
       issueKey: child.issueKey ?? null,
       title: child.title ?? "",
       currentLinearState: child.currentLinearState ?? null,
-      factoryState: child.factoryState,
+      phase: deriveIssuePhase(child),
     })),
   };
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
@@ -61,7 +69,7 @@ export class IssueTriageService {
 
   async classify(params: {
     issue: Pick<IssueRecord, "linearIssueId" | "issueKey" | "title" | "description" | "parentLinearIssueId">;
-    childIssues: Array<Pick<IssueRecord, "linearIssueId" | "issueKey" | "title" | "currentLinearState" | "factoryState">>;
+    childIssues: TriageChildIssue[];
   }): Promise<IssueTriageResult | undefined> {
     const thread = await this.codex.startThreadForIssueTriage();
     const turn = await this.codex.startTurn({
@@ -124,7 +132,7 @@ export class IssueTriageService {
 
 function buildIssueTriagePrompt(params: {
   issue: Pick<IssueRecord, "linearIssueId" | "issueKey" | "title" | "description" | "parentLinearIssueId">;
-  childIssues: Array<Pick<IssueRecord, "linearIssueId" | "issueKey" | "title" | "currentLinearState" | "factoryState">>;
+  childIssues: TriageChildIssue[];
 }): string {
   return [
     "PatchRelay issue triage",
@@ -157,7 +165,7 @@ function buildIssueTriagePrompt(params: {
       ? params.childIssues.map((child) => {
         const label = child.issueKey ?? child.linearIssueId;
         const state = child.currentLinearState ? `; state ${child.currentLinearState}` : "";
-        return `- ${label}: ${child.title ?? "(untitled)"} (${child.factoryState}${state})`;
+        return `- ${label}: ${child.title ?? "(untitled)"} (${deriveIssuePhase(child)}${state})`;
       })
       : ["- none"]),
   ].join("\n");

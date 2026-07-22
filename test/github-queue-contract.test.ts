@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import pino from "pino";
 import test from "node:test";
+import { assertIssuePhase } from "./assert-issue-phase.ts";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { GitHubWebhookHandler } from "../src/github-webhook-handler.ts";
 import type { GitHubCiSnapshotResolver, GitHubFailureContextResolver } from "../src/github-failure-context.ts";
@@ -163,7 +164,7 @@ test("queue eviction check_run queues queue_repair with explicit provenance", as
       prNumber: 42,
       prHeadSha: "sha-42",
       prState: "open",
-      factoryState: "awaiting_queue",
+      workflowOutcome: undefined,
     });
     await handler.processGitHubWebhookEvent({
       eventType: "check_run",
@@ -193,7 +194,7 @@ test("queue eviction check_run queues queue_repair with explicit provenance", as
 
     const issue = db.getIssue("usertold", "issue-1");
     const workflowTask = resolveRuntimeTask(db, "usertold", "issue-1");
-    assert.equal(issue?.factoryState, "repairing_queue");
+    assertIssuePhase(issue, "repairing_queue");
     assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-1"), undefined);
     assert.equal(workflowTask?.runType, "queue_repair");
     assert.equal(workflowTask?.workflowReason, "run:queue_repair");
@@ -237,7 +238,7 @@ test("stale queue eviction webhooks do not resurrect terminal issues", async () 
       branchName: "feat-stale",
       prNumber: 7,
       prState: "open",
-      factoryState: "done",
+      workflowOutcome: "completed",
     });
 
     await handler.processGitHubWebhookEvent({
@@ -252,7 +253,7 @@ test("stale queue eviction webhooks do not resurrect terminal issues", async () 
     });
 
     const issue = db.getIssue("usertold", "issue-2");
-    assert.equal(issue?.factoryState, "done");
+    assertIssuePhase(issue, "done");
     assert.deepEqual(enqueueCalls, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -302,7 +303,7 @@ test("default gate fallback recognizes verify and enqueues CI repair", async () 
       prHeadSha: "sha-verify",
       prState: "open",
       prAuthorLogin: "patchrelay[bot]",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
     });
 
     await handler.processGitHubWebhookEvent({
@@ -340,7 +341,7 @@ test("queue eviction falls back to minimal context when incident payload is malf
       prNumber: 43,
       prHeadSha: "sha-43",
       prState: "open",
-      factoryState: "awaiting_queue",
+      workflowOutcome: undefined,
     });
 
     await handler.processGitHubWebhookEvent({
@@ -417,7 +418,7 @@ test("branch CI failures clear stale queue incident context", async () => {
       branchName: "feat-branch-fail",
       prNumber: 44,
       prState: "open",
-      factoryState: "awaiting_queue",
+      workflowOutcome: undefined,
       lastGitHubFailureSource: "queue_eviction",
       lastGitHubFailureCheckName: "merge-steward/queue",
       lastGitHubFailureCheckUrl: "https://github.com/owner/repo/actions/runs/44",
@@ -515,7 +516,7 @@ test("branch CI failures persist enriched Actions context in pending repair prom
       prNumber: 45,
       prHeadSha: "sha-45",
       prState: "open",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
     });
 
     await handler.processGitHubWebhookEvent({
@@ -587,7 +588,7 @@ test("same failure signature and head sha are not re-enqueued after an attempted
       branchName: "feat-ci-dedupe",
       prNumber: 46,
       prState: "open",
-      factoryState: "repairing_ci",
+      workflowOutcome: undefined,
       lastAttemptedFailureHeadSha: "sha-46",
       lastAttemptedFailureSignature: "branch_ci::sha-46::Checks::Run tests",
     });
@@ -603,7 +604,6 @@ test("same failure signature and head sha are not re-enqueued after an attempted
       }).toString("utf8"),
     });
 
-    const issue = db.getIssue("usertold", "issue-6");
     assert.deepEqual(enqueueCalls, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -621,7 +621,7 @@ test("non-gate branch CI failures wait for the settled Tests gate before enqueui
       branchName: "feat-ci-settlement",
       prNumber: 47,
       prState: "open",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
     });
 
     await handler.processGitHubWebhookEvent({
@@ -635,7 +635,6 @@ test("non-gate branch CI failures wait for the settled Tests gate before enqueui
       }).toString("utf8"),
     });
 
-    const issue = db.getIssue("usertold", "issue-7");
     assert.deepEqual(enqueueCalls, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -653,7 +652,7 @@ test("checks with similar names do not count as the Tests gate", async () => {
       branchName: "feat-ci-similar",
       prNumber: 48,
       prState: "open",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
     });
 
     await handler.processGitHubWebhookEvent({
@@ -688,7 +687,7 @@ test("gate failures wait when settled snapshot resolution is unavailable", async
       branchName: "feat-ci-unavailable",
       prNumber: 49,
       prState: "open",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       lastGitHubCiSnapshotHeadSha: "sha-49",
       lastGitHubCiSnapshotGateCheckName: "Tests",
       lastGitHubCiSnapshotGateCheckStatus: "pending",
@@ -727,7 +726,7 @@ test("stale passing gate events do not clear failure provenance for a newer head
       branchName: "feat-ci-stale-pass",
       prNumber: 50,
       prState: "open",
-      factoryState: "repairing_ci",
+      workflowOutcome: undefined,
       lastGitHubFailureSource: "branch_ci",
       lastGitHubFailureHeadSha: "sha-new",
       lastGitHubFailureSignature: "branch_ci::sha-new::Checks::Run tests",

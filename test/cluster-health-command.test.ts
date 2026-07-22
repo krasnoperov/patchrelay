@@ -143,7 +143,7 @@ test("cli cluster reports unmanaged blockers and lost dispatch", async () => {
       issueKey: "USE-31",
       title: "Lost dispatch",
       currentLinearState: "In Progress",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
     });
     db.upsertIssue({
       projectId: "usertold",
@@ -151,7 +151,7 @@ test("cli cluster reports unmanaged blockers and lost dispatch", async () => {
       issueKey: "USE-34",
       title: "Blocked downstream",
       currentLinearState: "In Progress",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
     });
     db.replaceIssueDependencies({
       projectId: "usertold",
@@ -206,7 +206,7 @@ test("cli cluster reports a same-head requested-changes stall", async () => {
       issueKey: "USE-33",
       title: "PR waiting on nobody",
       currentLinearState: "In Progress",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 27,
       prState: "open",
       prReviewState: "changes_requested",
@@ -291,7 +291,7 @@ test("cli cluster treats active PR repair runs as PatchRelay-owned", async () =>
       issueKey: "USE-ACTIVE-REPAIR",
       title: "Active PR repair",
       currentLinearState: "In Progress",
-      factoryState: "repairing_ci",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       prNumber: 41,
       prState: "open",
@@ -308,7 +308,7 @@ test("cli cluster treats active PR repair runs as PatchRelay-owned", async () =>
       projectId: "usertold",
       linearIssueId: "issue-use-active-repair",
       activeRunId: run.id,
-      factoryState: "repairing_ci",
+      workflowOutcome: undefined,
     });
     const staleTime = new Date(Date.now() - 300_000).toISOString();
     backdateAllRows(db, staleTime);
@@ -385,7 +385,7 @@ test("cli cluster ignores reviewer requests when the same head is still blocked"
       issueKey: "USE-36",
       title: "Reviewer request on same blocked head",
       currentLinearState: "In Progress",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 36,
       prState: "open",
       prReviewState: "changes_requested",
@@ -467,7 +467,7 @@ test("cli cluster reports dirty requested-changes PRs as missing branch upkeep, 
       issueKey: "USE-37",
       title: "Dirty requested-changes PR",
       currentLinearState: "In Progress",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 37,
       prState: "open",
       prReviewState: "changes_requested",
@@ -549,7 +549,7 @@ test("cli cluster treats a live review-quill attempt on the current head as an o
       issueKey: "USE-35",
       title: "Review quill is actively reviewing",
       currentLinearState: "In Progress",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 35,
       prState: "open",
       prReviewState: "review_required",
@@ -646,7 +646,7 @@ test("cli cluster treats review-quill repo backlog as an owner for review-requir
       issueKey: "USE-35B",
       title: "Review quill is draining repo backlog",
       currentLinearState: "In Progress",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 351,
       prState: "open",
       prReviewState: "review_required",
@@ -750,10 +750,12 @@ test("cli cluster treats review-quill repo backlog as an owner for newer request
       issueKey: "USE-35C",
       title: "Review quill backlog covers newer requested-changes head",
       currentLinearState: "In Progress",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 352,
       prState: "open",
       prReviewState: "changes_requested",
+      prHeadSha: "new-head",
+      lastBlockingReviewHeadSha: "old-head",
     });
     const staleTime = new Date(Date.now() - 300_000).toISOString();
     backdateAllRows(db, staleTime);
@@ -868,7 +870,7 @@ test("cli cluster ignores closed PRs on completed issues", async () => {
       title: "Closed report PR",
       currentLinearState: "Done",
       currentLinearStateType: "completed",
-      factoryState: "done",
+      workflowOutcome: "completed",
       prNumber: 193,
       prState: "closed",
       prReviewState: "commented",
@@ -937,7 +939,7 @@ test("cli cluster treats closed PRs on terminal issues as historical, not active
       title: "Closed escalated PR",
       currentLinearState: "In Progress",
       currentLinearStateType: "started",
-      factoryState: "escalated",
+      workflowOutcome: "escalated",
       prNumber: 194,
       prState: "closed",
       prReviewState: "changes_requested",
@@ -958,7 +960,7 @@ test("cli cluster treats closed PRs on terminal issues as historical, not active
     assert.equal(exitCode, 0);
     assert.equal(stderr.read(), "");
     const text = stdout.read();
-    assert.match(text, /WARN \[issue:terminal USE-CLOSED-TERM(?: PR #194)?\] Historical terminal issue is in failure state escalated/);
+    assert.match(text, /WARN \[issue:terminal USE-CLOSED-TERM(?: PR #194)?\] Historical terminal issue has outcome escalated/);
     assert.doesNotMatch(text, /CI USE-CLOSED-TERM PR #194/);
     assert.doesNotMatch(text, /github:reconcile USE-CLOSED-TERM/);
     assert.doesNotMatch(text, /missing_owner=1/);
@@ -984,7 +986,7 @@ test("cli cluster treats in-progress CI as externally owned instead of orphaned"
       issueKey: "USE-32",
       title: "Pending CI",
       currentLinearState: "In Progress",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 29,
       prState: "open",
       prReviewState: "commented",
@@ -1061,7 +1063,7 @@ test("cli cluster treats undelegated requested-changes PRs as paused instead of 
       issueKey: "USE-38",
       title: "Paused requested changes",
       currentLinearState: "In Progress",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: false,
       prNumber: 38,
       prState: "open",
@@ -1146,7 +1148,7 @@ test("cli cluster treats undelegated failing CI PRs as paused instead of missing
       issueKey: "USE-39",
       title: "Paused failing CI",
       currentLinearState: "In Progress",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: false,
       prNumber: 39,
       prState: "open",
@@ -1226,7 +1228,7 @@ test("cli cluster treats undelegated paused no-pr work as paused instead of stuc
       issueKey: "USE-40",
       title: "Paused local implementation",
       currentLinearState: "Backlog",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: false,
     });
     const staleTime = new Date(Date.now() - 300_000).toISOString();
@@ -1269,7 +1271,7 @@ test("cli cluster ignores canceled blockers", async () => {
       title: "Canceled blocker",
       currentLinearState: "Canceled",
       currentLinearStateType: "canceled",
-      factoryState: "failed",
+      workflowOutcome: "failed",
     });
     db.upsertIssue({
       projectId: "usertold",
@@ -1278,7 +1280,7 @@ test("cli cluster ignores canceled blockers", async () => {
       title: "Blocked by canceled issue",
       currentLinearState: "Start",
       currentLinearStateType: "unstarted",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
       blockedByJson: JSON.stringify([
         {
           blockerIssueId: blocker.linearIssueId,
@@ -1327,7 +1329,7 @@ test("cli cluster warns when active repo work overlaps on the same files", async
       issueKey: "USE-50",
       title: "First overlapping change",
       currentLinearState: "In Progress",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       worktreePath: path.join(baseDir, "worktrees", "USE-50"),
       threadId: "thread-use-50",
     });
@@ -1342,7 +1344,7 @@ test("cli cluster warns when active repo work overlaps on the same files", async
       projectId: "usertold",
       linearIssueId: "issue-use-50",
       activeRunId: run50.id,
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
 
     const issue51 = db.upsertIssue({
@@ -1351,7 +1353,7 @@ test("cli cluster warns when active repo work overlaps on the same files", async
       issueKey: "USE-51",
       title: "Second overlapping change",
       currentLinearState: "In Progress",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       worktreePath: path.join(baseDir, "worktrees", "USE-51"),
       threadId: "thread-use-51",
     });
@@ -1366,7 +1368,7 @@ test("cli cluster warns when active repo work overlaps on the same files", async
       projectId: "usertold",
       linearIssueId: "issue-use-51",
       activeRunId: run51.id,
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
 
     const staleTime = new Date(Date.now() - 300_000).toISOString();
@@ -1421,7 +1423,7 @@ test("cli cluster surfaces a review-quill Codex capacity pause as a degraded ser
       issueKey: "USE-90",
       title: "PR waiting on review while Codex is out of capacity",
       currentLinearState: "In Progress",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 90,
       prState: "open",
       prCheckStatus: "success",

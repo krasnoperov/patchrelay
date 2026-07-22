@@ -1,4 +1,3 @@
-import type { FactoryState } from "./factory-state.ts";
 import type { RunType } from "./run-type.ts";
 
 export interface ReactiveWorkflowIntentInput {
@@ -19,7 +18,6 @@ export interface ReactiveWorkflowIntentInput {
 export interface ReactiveWorkflowIntent {
   runType: Extract<RunType, "review_fix" | "branch_upkeep" | "ci_repair" | "queue_repair">;
   workflowReason: "review_changes_requested" | "branch_upkeep" | "settled_red_ci" | "merge_steward_incident";
-  compatibilityFactoryState: Extract<FactoryState, "changes_requested" | "repairing_ci" | "repairing_queue">;
 }
 
 export function deriveReactiveWorkflowIntent(
@@ -35,7 +33,6 @@ export function deriveReactiveWorkflowIntent(
     return {
       runType: "queue_repair",
       workflowReason: "merge_steward_incident",
-      compatibilityFactoryState: "repairing_queue",
     };
   }
 
@@ -43,7 +40,6 @@ export function deriveReactiveWorkflowIntent(
     return {
       runType: "ci_repair",
       workflowReason: "settled_red_ci",
-      compatibilityFactoryState: "repairing_ci",
     };
   }
 
@@ -56,13 +52,11 @@ export function deriveReactiveWorkflowIntent(
       return {
         runType: "branch_upkeep",
         workflowReason: "branch_upkeep",
-        compatibilityFactoryState: "changes_requested",
       };
     }
     return {
       runType: "review_fix",
       workflowReason: "review_changes_requested",
-      compatibilityFactoryState: "changes_requested",
     };
   }
 

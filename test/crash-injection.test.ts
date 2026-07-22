@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import pino from "pino";
 import test from "node:test";
+import { assertIssuePhase } from "./assert-issue-phase.ts";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { deriveIssueExecutionStateFromRecords } from "../src/issue-execution-state.ts";
 import { ISSUE_SESSION_LEASE_MS } from "../src/issue-session-lease-service.ts";
@@ -251,7 +252,7 @@ test("crash before settlement: interrupted ci_repair run settles, budget is refu
         prHeadSha: "sha-red",
         prAuthorLogin: "patchrelay[bot]",
         prCheckStatus: "failure",
-        factoryState: "repairing_ci",
+        workflowOutcome: undefined,
         delegatedToPatchRelay: true,
         ciRepairAttempts: 1,
         lastGitHubFailureSource: "branch_ci",
@@ -295,7 +296,7 @@ test("crash before settlement: interrupted ci_repair run settles, budget is refu
       assert.equal(issue?.lastAttemptedFailureSignature, undefined);
       assert.equal(issue?.lastAttemptedFailureHeadSha, undefined);
       // The same idle pass routes the still-red failure again.
-      assert.equal(issue?.factoryState, "repairing_ci");
+      assertIssuePhase(issue, "repairing_ci");
       assert.equal(new RunTaskPlanner(db).resolveRunTask(db.getIssue(PROJECT, "issue-interrupted")!)?.runType, "ci_repair");
       // D4: the dead worker's heartbeat-stale lease was reclaimed without
       // waiting for TTL expiry, and is not left held after recovery.
@@ -326,7 +327,7 @@ test("launch race: slot claimed but no thread persisted - restart settles the zo
         linearIssueId: "issue-launch-race",
         issueKey: "USE-CR2",
         branchName: "feat-launch-race",
-        factoryState: "delegated",
+        workflowOutcome: undefined,
         delegatedToPatchRelay: true,
       });
       const run = db.runs.createRun({
@@ -379,7 +380,7 @@ test("thread persisted but gone after restart: stale foreign lease is reclaimed 
         linearIssueId: "issue-stale-thread",
         issueKey: "USE-CR3",
         branchName: "feat-stale-thread",
-        factoryState: "implementing",
+        workflowOutcome: undefined,
         delegatedToPatchRelay: true,
       });
       const run = db.runs.createRun({
@@ -450,7 +451,7 @@ test("workflowTask appended but dispatch lost: restart dispatches exactly once w
         prAuthorLogin: "patchrelay[bot]",
         prReviewState: "changes_requested",
         prCheckStatus: "success",
-        factoryState: "changes_requested",
+        workflowOutcome: undefined,
         delegatedToPatchRelay: true,
       });
       db.issueSessions.appendIssueSessionEventRespectingActiveLease(PROJECT, issue.linearIssueId, {
@@ -472,7 +473,7 @@ test("workflowTask appended but dispatch lost: restart dispatches exactly once w
       assert.equal(new RunTaskPlanner(db).resolveRunTask(db.getIssue(PROJECT, "issue-lost-dispatch")!)?.runType, "review_fix");
       const events = db.issueSessions.listIssueSessionEvents(PROJECT, "issue-lost-dispatch");
       assert.equal(events.length, 1, "re-derivation must not append a duplicate workflowTask event");
-      assert.equal(db.getIssue(PROJECT, "issue-lost-dispatch")?.factoryState, "changes_requested");
+      assertIssuePhase(db.getIssue(PROJECT, "issue-lost-dispatch"), "changes_requested");
       assert.equal(db.runs.listRunsForIssue(PROJECT, "issue-lost-dispatch").length, 0, "no duplicate run may be created by the dispatch itself");
       assertConvergedIssue(db, "issue-lost-dispatch");
     } finally {
@@ -516,7 +517,7 @@ test("finalizer seam: run already terminal but slot not cleared - settle and rou
         prAuthorLogin: "patchrelay[bot]",
         prReviewState: "approved",
         prCheckStatus: "success",
-        factoryState: "pr_open",
+        workflowOutcome: undefined,
         delegatedToPatchRelay: true,
       });
       const run = db.runs.createRun({
@@ -550,7 +551,7 @@ test("finalizer seam: run already terminal but slot not cleared - settle and rou
       assert.equal(issue?.activeRunId, undefined, "the dangling slot must be cleared");
       assert.equal(db.runs.getLatestRunForIssue(PROJECT, "issue-dangling")?.status, "completed", "the terminal run record is untouched");
       // The same pass routes the freed issue from GitHub truth.
-      assert.equal(issue?.factoryState, "awaiting_queue");
+      assertIssuePhase(issue, "awaiting_queue");
       assertConvergedIssue(db, "issue-dangling");
     } finally {
       db.close();
@@ -579,7 +580,7 @@ test("stranded expired lease on runnable work: restart with a different worker d
         linearIssueId: "issue-stranded-lease",
         issueKey: "USE-CR6",
         branchName: "feat-stranded-lease",
-        factoryState: "delegated",
+        workflowOutcome: undefined,
         delegatedToPatchRelay: true,
       });
       db.issueSessions.appendIssueSessionEventRespectingActiveLease(PROJECT, issue.linearIssueId, {

@@ -26,7 +26,7 @@ test("migrations create issue_sessions and upgrade legacy issue schema", () => {
         url TEXT,
         current_linear_state TEXT,
         current_linear_state_type TEXT,
-        factory_state TEXT NOT NULL DEFAULT 'delegated',
+        workflow_outcome TEXT,
         ${legacyRunColumn} TEXT,
         ${legacyContextColumn} TEXT,
         branch_name TEXT,
@@ -82,7 +82,7 @@ test("issue upserts and run completion dual-write into issue_sessions", () => {
       linearIssueId: "issue-1",
       issueKey: "USE-1",
       title: "Implement sessions",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
       branchName: "use/USE-1-implement-sessions",
       worktreePath: "/tmp/use-1",
       threadId: "thread-1",
@@ -99,7 +99,7 @@ test("issue upserts and run completion dual-write into issue_sessions", () => {
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-1",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
     });
     const queuedSession = db.issueSessions.getIssueSession("usertold", "issue-1");
     assert.equal(queuedSession?.sessionState, "idle");
@@ -118,7 +118,7 @@ test("issue upserts and run completion dual-write into issue_sessions", () => {
       projectId: "usertold",
       linearIssueId: "issue-1",
       activeRunId: run.id,
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
     db.runs.updateRunThread(run.id, { threadId: "thread-2", turnId: "turn-1" });
     assert.equal(db.runs.getRunById(run.id)?.launchPhase, "running");
@@ -134,7 +134,7 @@ test("issue upserts and run completion dual-write into issue_sessions", () => {
       projectId: "usertold",
       linearIssueId: "issue-1",
       activeRunId: null,
-      factoryState: "awaiting_queue",
+      workflowOutcome: undefined,
       prNumber: 10,
       prHeadSha: "sha-1",
       prAuthorLogin: "patchrelay[bot]",
@@ -159,7 +159,7 @@ test("issue session keeps the last published summary when a later stale repair f
       projectId: "usertold",
       linearIssueId: "issue-summary",
       issueKey: "USE-SUMMARY",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
       branchName: "use/USE-SUMMARY",
     });
 
@@ -174,7 +174,7 @@ test("issue session keeps the last published summary when a later stale repair f
       projectId: "usertold",
       linearIssueId: "issue-summary",
       activeRunId: implementationRun.id,
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
     db.runs.finishRun(implementationRun.id, {
       status: "completed",
@@ -184,7 +184,7 @@ test("issue session keeps the last published summary when a later stale repair f
       projectId: "usertold",
       linearIssueId: "issue-summary",
       activeRunId: null,
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 42,
       prHeadSha: "sha-42",
       prAuthorLogin: "patchrelay[bot]",
@@ -201,7 +201,7 @@ test("issue session keeps the last published summary when a later stale repair f
       projectId: "usertold",
       linearIssueId: "issue-summary",
       activeRunId: staleRepair.id,
-      factoryState: "repairing_queue",
+      workflowOutcome: undefined,
     });
     db.runs.finishRun(staleRepair.id, {
       status: "failed",
@@ -211,7 +211,7 @@ test("issue session keeps the last published summary when a later stale repair f
       projectId: "usertold",
       linearIssueId: "issue-summary",
       activeRunId: null,
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prCheckStatus: "success",
       prReviewState: null,
     });
@@ -232,7 +232,7 @@ test("issue session leases can be acquired, renewed, and reclaimed after expiry"
       projectId: "usertold",
       linearIssueId: "issue-lease",
       issueKey: "USE-LEASE",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
     });
 
     assert.equal(
@@ -295,7 +295,7 @@ test("lease-guarded writes reject stale issue-session leases", () => {
       projectId: "usertold",
       linearIssueId: "issue-lease-guards",
       issueKey: "USE-LEASE-GUARDS",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
       branchName: "use/USE-LEASE-GUARDS",
     });
 
@@ -336,11 +336,11 @@ test("lease-guarded writes reject stale issue-session leases", () => {
       update: {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
-        factoryState: "implementing",
+        workflowOutcome: undefined,
       },
     });
     assert.equal(staleIssueWrite.outcome, "lease_denied");
-    assert.equal(db.getIssue(issue.projectId, issue.linearIssueId)?.factoryState, "delegated");
+    assert.equal(db.getIssue(issue.projectId, issue.linearIssueId)?.workflowOutcome, undefined);
 
     const staleRunFinish = db.issueSessions.finishRunWithLease(
       { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId: "lease-1" },
@@ -356,11 +356,12 @@ test("lease-guarded writes reject stale issue-session leases", () => {
       update: {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
-        factoryState: "implementing",
+        workflowOutcome: undefined,
         activeRunId: run.id,
       },
     });
-    assert.equal(freshIssueWrite.outcome === "applied" ? freshIssueWrite.issue.factoryState : undefined, "implementing");
+    assert.equal(freshIssueWrite.outcome, "applied");
+    assert.equal(freshIssueWrite.outcome === "applied" ? freshIssueWrite.issue.activeRunId : undefined, run.id);
 
     const freshRunFinish = db.issueSessions.finishRunWithLease(
       { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId: "lease-2" },
@@ -383,7 +384,7 @@ test("startup lease cleanup expires only stale issue-session leases", () => {
       projectId: "usertold",
       linearIssueId: "issue-stale-lease",
       issueKey: "USE-LEASE-EXPIRE",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
     });
 
     assert.equal(
@@ -402,7 +403,7 @@ test("startup lease cleanup expires only stale issue-session leases", () => {
       projectId: "usertold",
       linearIssueId: "issue-fresh-lease",
       issueKey: "USE-LEASE-FRESH",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
     });
     assert.equal(
       db.issueSessions.acquireIssueSessionLease({
@@ -434,7 +435,7 @@ test("active-lease-aware helpers use the current live lease for control writes",
       projectId: "usertold",
       linearIssueId: "issue-active-lease",
       issueKey: "USE-ACTIVE-LEASE",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
     });
     db.issueSessions.appendIssueSessionEvent({
       projectId: "usertold",
@@ -471,10 +472,11 @@ test("active-lease-aware helpers use the current live lease for control writes",
       update: {
         projectId: "usertold",
         linearIssueId: "issue-active-lease",
-        factoryState: "implementing",
+        workflowOutcome: undefined,
       },
     });
-    assert.equal(issueWrite.outcome === "applied" ? issueWrite.issue.factoryState : undefined, "implementing");
+    assert.equal(issueWrite.outcome, "applied");
+    assert.equal(issueWrite.outcome === "applied" ? issueWrite.issue.workflowOutcome : "not-applied", undefined);
 
     assert.equal(
       db.issueSessions.clearPendingIssueSessionEventsWithLease({
@@ -504,7 +506,7 @@ test("issue session input derives follow-up mode and thread reuse from queued ev
       projectId: "usertold",
       linearIssueId: "issue-followup",
       issueKey: "USE-14",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 14,
       threadId: "thread-followup",
       prReviewState: "approved",
@@ -543,7 +545,7 @@ test("followup_comment alone reuses the main thread for the next turn", () => {
       projectId: "usertold",
       linearIssueId: "issue-comment-followup",
       issueKey: "USE-16",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 16,
       threadId: "thread-comment-followup",
       prReviewState: "approved",
@@ -575,7 +577,7 @@ test("orchestration child delivery queues workflow tasks the next turn on the sa
       linearIssueId: "issue-parent",
       issueKey: "USE-PARENT",
       issueClass: "orchestration",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
       threadId: "thread-parent",
     });
     db.issueSessions.appendIssueSessionEventRespectingActiveLease("usertold", "issue-parent", {
@@ -607,13 +609,13 @@ test("canonical child issues exclude duplicate and canceled Linear children", ()
       projectId: "usertold",
       linearIssueId: "issue-parent",
       issueKey: "USE-PARENT",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
     });
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-active-child",
       issueKey: "USE-ACTIVE",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
       currentLinearState: "Backlog",
       currentLinearStateType: "backlog",
       parentLinearIssueId: "issue-parent",
@@ -622,7 +624,7 @@ test("canonical child issues exclude duplicate and canceled Linear children", ()
       projectId: "usertold",
       linearIssueId: "issue-done-child",
       issueKey: "USE-DONE",
-      factoryState: "done",
+      workflowOutcome: "completed",
       currentLinearState: "Done",
       currentLinearStateType: "completed",
       parentLinearIssueId: "issue-parent",
@@ -631,7 +633,7 @@ test("canonical child issues exclude duplicate and canceled Linear children", ()
       projectId: "usertold",
       linearIssueId: "issue-duplicate-child",
       issueKey: "USE-DUP",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
       currentLinearState: "Duplicate",
       currentLinearStateType: "canceled",
       parentLinearIssueId: "issue-parent",
@@ -640,7 +642,7 @@ test("canonical child issues exclude duplicate and canceled Linear children", ()
       projectId: "usertold",
       linearIssueId: "issue-canceled-child",
       issueKey: "USE-CANCELED",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
       currentLinearState: "Canceled",
       currentLinearStateType: "canceled",
       parentLinearIssueId: "issue-parent",
@@ -681,7 +683,7 @@ test("direct_reply queues workflow tasks the next turn in direct-reply mode on t
       projectId: "usertold",
       linearIssueId: "issue-direct-reply",
       issueKey: "USE-17",
-      factoryState: "awaiting_input",
+      inputRequestKind: "completion_check_question",
       threadId: "thread-direct-reply",
     });
     db.issueSessions.appendIssueSessionEvent({
@@ -711,7 +713,7 @@ test("terminal session events suppress queued follow-up workflow tasks", () => {
       projectId: "usertold",
       linearIssueId: "issue-terminal",
       issueKey: "USE-15",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 15,
       threadId: "thread-terminal",
     });
@@ -744,7 +746,7 @@ test("self comments are not treated as pending actionable workflow tasks", () =>
       projectId: "usertold",
       linearIssueId: "issue-self-comment",
       issueKey: "USE-SELF",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 16,
     });
     db.issueSessions.appendIssueSessionEvent({
@@ -770,7 +772,7 @@ test("same-head requested-changes events coalesce and keep the richer payload", 
       projectId: "usertold",
       linearIssueId: "issue-review-coalesce",
       issueKey: "USE-REVIEW-COALESCE",
-      factoryState: "changes_requested",
+      workflowOutcome: undefined,
       prNumber: 17,
       prHeadSha: "sha-reviewed",
       prReviewState: "changes_requested",
@@ -830,7 +832,7 @@ test("updateRunThread does not resurrect a run that already ended", () => {
       projectId: "usertold",
       linearIssueId: "issue-ended-run",
       issueKey: "USE-15",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
     });
     const run = db.runs.createRun({
       issueId: issue.id,
@@ -865,7 +867,6 @@ test("reactive intent is derived from GitHub truth instead of compatibility stag
     {
       runType: "ci_repair",
       workflowReason: "settled_red_ci",
-      compatibilityFactoryState: "repairing_ci",
     },
   );
 
@@ -880,7 +881,6 @@ test("reactive intent is derived from GitHub truth instead of compatibility stag
     {
       runType: "review_fix",
       workflowReason: "review_changes_requested",
-      compatibilityFactoryState: "changes_requested",
     },
   );
 
@@ -894,7 +894,6 @@ test("reactive intent is derived from GitHub truth instead of compatibility stag
     {
       runType: "queue_repair",
       workflowReason: "merge_steward_incident",
-      compatibilityFactoryState: "repairing_queue",
     },
   );
 });

@@ -3,6 +3,7 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
+import { deriveIssuePhase } from "./issue-phase.ts";
 import { isTerminalRunStatus } from "./run-settlement.ts";
 
 type FetchLike = typeof fetch;
@@ -72,7 +73,7 @@ export async function maybeCloseLatePublishedImplementationPr(params: {
     kind: "github",
     issueKey: issue.issueKey,
     projectId: issue.projectId,
-    stage: issue.factoryState,
+    stage: deriveIssuePhase(issue),
     status: "late_pr_detected",
     summary: `Detected late PR #${event.prNumber} from a settled implementation run (${latestRun.status})`,
     detail: latestRun.failureReason ?? `Latest implementation run status: ${latestRun.status}`,
@@ -130,7 +131,7 @@ export async function maybeCloseLatePublishedImplementationPr(params: {
       kind: "github",
       issueKey: issue.issueKey,
       projectId: issue.projectId,
-      stage: issue.factoryState,
+      stage: deriveIssuePhase(issue),
       status: "late_pr_close_failed",
       summary: `Could not auto-close late PR #${event.prNumber}`,
       detail: latestRun.failureReason ?? `Latest implementation run status: ${latestRun.status}`,
@@ -152,7 +153,7 @@ export async function maybeCloseLatePublishedImplementationPr(params: {
     kind: "github",
     issueKey: issue.issueKey,
     projectId: issue.projectId,
-    stage: issue.factoryState,
+    stage: deriveIssuePhase(issue),
     status: "late_pr_closed",
     summary: `Auto-closed late PR #${event.prNumber} from a released implementation run`,
     detail: latestRun.failureReason ?? `Latest implementation run status: ${latestRun.status}`,

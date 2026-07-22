@@ -1,7 +1,8 @@
 import type { Logger } from "pino";
 import { getThreadTurns } from "./codex-thread-utils.ts";
 import { isThreadMaterializingError } from "./codex-thread-errors.ts";
-import type { FactoryState, RunType } from "./factory-state.ts";
+import type { IssuePhase } from "./issue-phase.ts";
+import type { RunType } from "./run-type.ts";
 import type { CodexThreadSummary } from "./types.ts";
 import { extractFirstJsonObject, safeJsonParse } from "./utils.ts";
 
@@ -21,7 +22,7 @@ export type FollowupIntent =
 export interface FollowupIntentContext {
   source: "agentPrompted" | "comment";
   activeRunType?: RunType | undefined;
-  factoryState?: FactoryState | undefined;
+  phase?: IssuePhase | undefined;
   directReply?: boolean | undefined;
   delegatedToPatchRelay?: boolean | undefined;
   prReviewState?: string | undefined;
@@ -141,7 +142,7 @@ export function buildFollowupIntentPrompt(input: string, context: FollowupIntent
     "Routing facts:",
     `- Source: ${context.source}`,
     `- Active run type: ${context.activeRunType ?? "none"}`,
-    `- Factory state: ${context.factoryState ?? "unknown"}`,
+    `- Derived phase: ${context.phase ?? "unknown"}`,
     `- Direct reply to outstanding PatchRelay question: ${context.directReply ? "yes" : "no"}`,
     `- Delegated to PatchRelay: ${context.delegatedToPatchRelay ? "yes" : "no"}`,
     `- PR review state: ${context.prReviewState ?? "none"}`,

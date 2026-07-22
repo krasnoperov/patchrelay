@@ -68,7 +68,7 @@ flowchart TB
 
 The codebase uses focused top-level modules with small subdirectories where a responsibility has grown enough to need internal structure:
 
-- `factory-state.ts` — compatibility/display state names for operator-facing projections and legacy API fields
+- `issue-phase.ts` — presentation-only phase derived from durable facts and current run/task context
 - `issue-session-events.ts`, `issue-session-projector.ts`, `issue-session-state.ts` — session event parsing and session read-model projection
 - `reactive-workflow-intent.ts` — PR-derived follow-up intent used to create durable workflow signals/tasks
 - `workflow-model.ts`, `workflow-observation-context.ts`, `workflow-snapshot.ts`, `workflow-task-derivation.ts`, `workflow-gates.ts` — the durable workflow model: observations plus issue facts become a snapshot, open workflow tasks, and gate decisions
@@ -262,13 +262,13 @@ input, verifying, or escalating. The dispatcher and run planner only launch
 from open runnable workflow tasks. Session events are inbox/history facts and
 diagnostics; they do not dispatch runs by themselves.
 
-## Compatibility Factory State
+## One workflow model
 
-`factoryState` remains a compatibility/debug/projection field on `issues`.
-It is useful for old API fields, concise operator display, and Linear
-workflow-state mapping, but it is not executor admission authority. Executor
-admission is open runnable rows in `workflow_tasks`. The equivalent display
-vocabulary is:
+PatchRelay stores external facts, explicit outcomes/input requests, observations,
+tasks, and runs. `WorkflowSnapshot` derives the currently open tasks from those
+facts. Open runnable rows in `workflow_tasks` are the only executor admission
+source. Operator and Linear views derive an `IssuePhase` at the presentation
+boundary; the phase is never persisted and never drives execution.
 
 ```mermaid
 stateDiagram-v2
@@ -292,9 +292,9 @@ stateDiagram-v2
 
 ### Mapping to Linear workflow states
 
-PatchRelay maps compatibility `factoryState` codes onto the four-state Linear vocabulary the operator already reads. See [concepts.md](./concepts.md#four-states) for the model and the per-state owners.
+PatchRelay maps the derived `IssuePhase` onto the four-state Linear vocabulary the operator already reads. See [concepts.md](./concepts.md#four-states) for the model and the per-state owners.
 
-| Linear state | `factoryState` codes |
+| Linear state | Derived phases |
 |-|-|
 | In Progress | `implementing`, `changes_requested`, `repairing_ci`, `repairing_queue` |
 | In Review | `pr_open` (review pending or approved-but-CI-not-yet-green) |
@@ -316,7 +316,7 @@ A complementary `shouldNotPublish` flag on the run record makes cancellation har
 
 PatchRelay treats the Linear agent session as the chat surface for the delegated agent. A human `agentPrompted` event is ordinary Codex input: if a run is active, PatchRelay delivers it through `turn/steer`; if the issue is idle but still delegated, PatchRelay queues the next run on the existing issue thread. Linear issue comments are different. They are issue discussion by default and become Codex input only when the comment explicitly addresses PatchRelay at the start, for example `PatchRelay, ...` or `@PatchRelay ...`.
 
-Accepted natural-language input is routed through the Codex conversation adapter, not a command parser. The adapter uses the structured follow-up classifier only for narrow control decisions such as status and stop, with state facts like source surface, active run type, factory state, delegation state, direct-reply status, and PR review state. Explicit protocol fields, such as Linear's agent stop signal, remain deterministic; ordinary operator language must not be routed by keyword-only intent gates.
+Accepted natural-language input is routed through the Codex conversation adapter, not a command parser. The adapter uses the structured follow-up classifier only for narrow control decisions such as status and stop, with facts like source surface, active run type, delegation state, outstanding input, direct-reply status, and PR review state. Explicit protocol fields, such as Linear's agent stop signal, remain deterministic; ordinary operator language must not be routed by keyword-only intent gates.
 
 When a run is active, accepted follow-up input is delivered to the active Codex turn instead of being dropped. The steering prompt carries a checkpoint contract: finish any non-interruptible command, then fold the new instruction into the next decision before the next meaningful side effect when possible. Status questions during an active run are answered as ephemeral `thought` activity so they do not close the agent session; idle status questions can use a normal `response`.
 
@@ -346,7 +346,7 @@ A complementary prompt rule in `src/prompting/patchrelay.ts` instructs the agent
 For undelegated issues:
 
 - no PR yet — preserve the literal local-work state and expose a paused waiting reason
-- PR exists — preserve the PR-backed factory state and expose a paused waiting reason
+- PR exists — preserve the PR facts and expose a paused waiting reason
 
 That keeps operator-facing state truthful without letting PatchRelay continue writing code. `awaiting_input` is reserved for real human-needed states, not generic paused local work.
 
@@ -382,7 +382,7 @@ Classification happens in GitHub fact derivation (which calls `isQueueEvictionFa
 
 PatchRelay uses SQLite. Current tables:
 
-- `issues` — one record per tracked issue: compatibility factory state, PR state, run pointers, repair counters
+- `issues` — one record per tracked issue: external facts, explicit outcome/input facts, run pointers, and repair counters
 - `workflow_observations` — append-only workflow facts and inbox signals
 - `workflow_tasks` — derived open/closed tasks; open runnable run tasks are the executor admission source
 - `issue_sessions` — session/read-model projection: visible state, waiting reason, summaries, and display fields
@@ -402,8 +402,8 @@ GitHub remains the source of truth for PR readiness, review, and merge state —
 There is one recovery mechanism for lost or unprocessed webhooks: **re-derivation
 from GitHub/Linear truth via reconciliation**. The idle reconciler polls the
 upstream state, builds the same normalized facts a webhook would have carried,
-and feeds them through the same derivation (`pr-facts-derivation.ts`) the
-webhook projector uses — so a dropped webhook converges to the same state the
+and feeds them through the same `WorkflowSnapshot` and workflow-task derivation
+used by webhook handling — so a dropped webhook converges to the same tasks the
 delivered webhook would have produced.
 
 `webhook_events` is therefore a **dedupe + forensics log, never a replay

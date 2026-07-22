@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import pino from "pino";
 import test from "node:test";
+import { assertIssuePhase } from "./assert-issue-phase.ts";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { MergedLinearCompletionReconciler } from "../src/merged-linear-completion-reconciler.ts";
 import type { LinearClient } from "../src/types.ts";
@@ -56,7 +57,7 @@ test("reconciler reopens stale local done issues back into requested-changes rep
       linearIssueId: "issue-review-fix",
       issueKey: "USE-201",
       delegatedToPatchRelay: true,
-      factoryState: "done",
+      workflowOutcome: "completed",
       currentLinearState: "In Progress",
       currentLinearStateType: "started",
       prNumber: 201,
@@ -89,8 +90,8 @@ test("reconciler reopens stale local done issues back into requested-changes rep
     await reconciler.reconcile();
 
     const issue = db.getIssue("usertold", "issue-review-fix");
-    assert.equal(issue?.factoryState, "changes_requested");
-    // S6: reopening restores the PR-fact-derived factoryState and reconciles the
+    assertIssuePhase(issue, "changes_requested");
+    // S6: reopening restores the PR-fact-derived workflowOutcome and reconciles the
     const reviewFixTask = db.workflowTasks.listOpenRunnableTasks("usertold")
       .find((task) => task.subjectId === "issue-review-fix" && task.taskId === "run:review_fix");
     assert.ok(reviewFixTask, "expected an open runnable run:review_fix task after reopen");
@@ -109,7 +110,7 @@ test("reconciler reopens stale blocked local done issues back into delegated sta
       linearIssueId: "issue-blocked-done",
       issueKey: "USE-202",
       delegatedToPatchRelay: true,
-      factoryState: "done",
+      workflowOutcome: "completed",
       currentLinearState: "Todo",
       currentLinearStateType: "unstarted",
     });
@@ -143,7 +144,7 @@ test("reconciler reopens stale blocked local done issues back into delegated sta
     await reconciler.reconcile();
 
     const issue = db.getIssue("usertold", "issue-blocked-done");
-    assert.equal(issue?.factoryState, "delegated");
+    assertIssuePhase(issue, "delegated");
     assert.equal(issue?.currentLinearState, "Todo");
     assert.equal(db.countUnresolvedBlockers("usertold", "issue-blocked-done"), 1);
   } finally {
@@ -159,7 +160,7 @@ test("reconciler keeps canceled issues buried instead of reopening stale local d
       linearIssueId: "issue-canceled-done",
       issueKey: "USE-202A",
       delegatedToPatchRelay: false,
-      factoryState: "done",
+      workflowOutcome: "completed",
       currentLinearState: "In Review",
       currentLinearStateType: "started",
     });
@@ -186,7 +187,7 @@ test("reconciler keeps canceled issues buried instead of reopening stale local d
     await reconciler.reconcile();
 
     const issue = db.getIssue("usertold", "issue-canceled-done");
-    assert.equal(issue?.factoryState, "done");
+    assertIssuePhase(issue, "done");
     assert.equal(issue?.delegatedToPatchRelay, false);
     assert.equal(issue?.currentLinearState, "Canceled");
     assert.equal(issue?.currentLinearStateType, "canceled");
@@ -203,7 +204,7 @@ test("reconciler completes trusted no-PR done issues in Linear instead of reopen
       linearIssueId: "issue-no-pr-complete",
       issueKey: "USE-203",
       delegatedToPatchRelay: true,
-      factoryState: "done",
+      workflowOutcome: "completed",
       currentLinearState: "In Progress",
       currentLinearStateType: "started",
     });
@@ -244,7 +245,7 @@ test("reconciler completes trusted no-PR done issues in Linear instead of reopen
 
     const refreshed = db.getIssue("usertold", "issue-no-pr-complete");
     assert.equal(requestedState, "Done");
-    assert.equal(refreshed?.factoryState, "done");
+    assertIssuePhase(refreshed, "done");
     assert.equal(refreshed?.currentLinearState, "Done");
     assert.equal(refreshed?.currentLinearStateType, "completed");
   } finally {
@@ -260,7 +261,7 @@ test("reconciler skips stale historical completed issues outside the recent wind
       linearIssueId: "issue-old-done",
       issueKey: "USE-204",
       delegatedToPatchRelay: true,
-      factoryState: "done",
+      workflowOutcome: "completed",
       currentLinearState: "In Progress",
       currentLinearStateType: "started",
     });
@@ -313,7 +314,7 @@ test("reconciler backs off recent completed issues after a rate-limited Linear f
       linearIssueId: "issue-rate-limited",
       issueKey: "USE-205",
       delegatedToPatchRelay: true,
-      factoryState: "done",
+      workflowOutcome: "completed",
       currentLinearState: "In Progress",
       currentLinearStateType: "started",
     });
@@ -352,7 +353,7 @@ test("reconciler does not immediately revisit recently settled completed issues"
       linearIssueId: "issue-settled",
       issueKey: "USE-206",
       delegatedToPatchRelay: true,
-      factoryState: "done",
+      workflowOutcome: "completed",
       currentLinearState: "Done",
       currentLinearStateType: "completed",
     });
@@ -398,7 +399,7 @@ test("reconciler caps completion checks per pass to avoid startup fanout", async
         linearIssueId: `issue-cap-${index}`,
         issueKey: `USE-${300 + index}`,
         delegatedToPatchRelay: true,
-        factoryState: "done",
+        workflowOutcome: "completed",
         currentLinearState: "Done",
         currentLinearStateType: "completed",
       });

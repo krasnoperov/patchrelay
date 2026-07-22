@@ -66,7 +66,7 @@ function createConfig(): AppConfig {
 test("agent session plans reflect implementation, review, checks, queue, and merge states", () => {
   assert.deepEqual(
     buildAgentSessionPlan({
-      factoryState: "delegated",
+      phase: "delegated",
     }),
     [
       { content: "Prepare workspace", status: "inProgress" },
@@ -78,7 +78,7 @@ test("agent session plans reflect implementation, review, checks, queue, and mer
 
   assert.deepEqual(
     buildAgentSessionPlan({
-      factoryState: "changes_requested",
+      phase: "changes_requested",
       activeRunType: "review_fix",
     }),
     [
@@ -91,7 +91,7 @@ test("agent session plans reflect implementation, review, checks, queue, and mer
 
   assert.deepEqual(
     buildAgentSessionPlan({
-      factoryState: "pr_open",
+      phase: "pr_open",
       prReviewState: "review_required",
       prCheckStatus: "success",
     }),
@@ -105,7 +105,7 @@ test("agent session plans reflect implementation, review, checks, queue, and mer
 
   assert.deepEqual(
     buildAgentSessionPlan({
-      factoryState: "pr_open",
+      phase: "pr_open",
       prReviewState: "approved",
       prCheckStatus: "pending",
     }),
@@ -119,7 +119,7 @@ test("agent session plans reflect implementation, review, checks, queue, and mer
 
   assert.deepEqual(
     buildAgentSessionPlan({
-      factoryState: "repairing_ci",
+      phase: "repairing_ci",
       activeRunType: "ci_repair",
       ciRepairAttempts: 2,
     }),
@@ -133,7 +133,11 @@ test("agent session plans reflect implementation, review, checks, queue, and mer
 
   assert.deepEqual(
     buildAgentSessionPlanForIssue({
-      factoryState: "awaiting_queue",
+      delegatedToPatchRelay: true,
+      workflowOutcome: undefined,
+      prNumber: 42,
+      prState: "open",
+      prReviewState: "approved",
       ciRepairAttempts: 1,
       queueRepairAttempts: 0,
     }),
@@ -147,7 +151,7 @@ test("agent session plans reflect implementation, review, checks, queue, and mer
 
   assert.deepEqual(
     buildAgentSessionPlan({
-      factoryState: "repairing_queue",
+      phase: "repairing_queue",
       activeRunType: "queue_repair",
       queueRepairAttempts: 3,
     }),
@@ -161,7 +165,7 @@ test("agent session plans reflect implementation, review, checks, queue, and mer
 
   assert.deepEqual(
     buildAgentSessionPlan({
-      factoryState: "done",
+      phase: "done",
     }),
     [
       { content: "Prepare workspace", status: "completed" },
@@ -173,7 +177,8 @@ test("agent session plans reflect implementation, review, checks, queue, and mer
 
   assert.deepEqual(
     buildAgentSessionPlanForIssue({
-      factoryState: "delegated",
+      delegatedToPatchRelay: true,
+      workflowOutcome: undefined,
       issueClass: "orchestration",
       ciRepairAttempts: 0,
       queueRepairAttempts: 0,
@@ -343,10 +348,10 @@ test("review round activities summarize reviewer and captured comments without c
   );
 });
 
-test("linear summaries prefer session state over factory state", () => {
+test("linear summaries prefer session state over a derived display phase", () => {
   assert.equal(
     summarizeIssueStateForLinear({
-      factoryState: "awaiting_queue",
+      workflowOutcome: undefined,
       sessionState: "waiting_input",
       waitingReason: "Waiting for a merge queue retry.",
       prNumber: 7,
@@ -360,7 +365,7 @@ test("linear summaries prefer session state over factory state", () => {
 
   assert.equal(
     summarizeIssueStateForLinear({
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       sessionState: "running",
       waitingReason: "PatchRelay is finalizing a published PR",
       prNumber: 8,
@@ -376,7 +381,7 @@ test("linear summaries prefer session state over factory state", () => {
 test("linear summaries describe closed historical PRs as non-merged completion", () => {
   assert.equal(
     summarizeIssueStateForLinear({
-      factoryState: "done",
+      workflowOutcome: "completed",
       prNumber: 193,
       prState: "closed",
     }),
@@ -387,19 +392,19 @@ test("linear summaries describe closed historical PRs as non-merged completion",
 test("linear summaries describe closed PR replacement work explicitly", () => {
   assert.equal(
     summarizeIssueStateForLinear({
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       prNumber: 194,
       prState: "closed",
       delegatedToPatchRelay: true,
     }),
-    "Replacing closed PR #194 with a fresh PR.",
+    "Queued to replace closed PR #194.",
   );
 });
 
 test("linear summaries describe paused undelegated PR-backed states explicitly", () => {
   assert.equal(
     summarizeIssueStateForLinear({
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       sessionState: "idle",
       delegatedToPatchRelay: false,
       prNumber: 41,
@@ -412,7 +417,7 @@ test("linear summaries describe paused undelegated PR-backed states explicitly",
 
   assert.equal(
     summarizeIssueStateForLinear({
-      factoryState: "changes_requested",
+      workflowOutcome: undefined,
       sessionState: "idle",
       delegatedToPatchRelay: false,
       prNumber: 42,
@@ -425,7 +430,7 @@ test("linear summaries describe paused undelegated PR-backed states explicitly",
 
   assert.equal(
     summarizeIssueStateForLinear({
-      factoryState: "awaiting_queue",
+      workflowOutcome: undefined,
       sessionState: "idle",
       delegatedToPatchRelay: false,
       prNumber: 43,
@@ -440,7 +445,7 @@ test("linear summaries describe paused undelegated PR-backed states explicitly",
 test("linear summaries describe paused undelegated no-PR states explicitly", () => {
   assert.equal(
     summarizeIssueStateForLinear({
-      factoryState: "delegated",
+      workflowOutcome: undefined,
       sessionState: "idle",
       delegatedToPatchRelay: false,
       prState: undefined,
@@ -448,18 +453,6 @@ test("linear summaries describe paused undelegated no-PR states explicitly", () 
       prCheckStatus: undefined,
     }),
     "PatchRelay is queued to start work, but automation is paused.",
-  );
-
-  assert.equal(
-    summarizeIssueStateForLinear({
-      factoryState: "implementing",
-      sessionState: "idle",
-      delegatedToPatchRelay: false,
-      prState: undefined,
-      prReviewState: undefined,
-      prCheckStatus: undefined,
-    }),
-    "Implementation is paused because the issue is undelegated.",
   );
 });
 

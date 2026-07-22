@@ -1,4 +1,3 @@
-import type { FactoryState } from "./factory-state.ts";
 import type { ProjectConfig } from "./types.ts";
 import type { RemotePrState } from "./remote-pr-state.ts";
 import { deriveGateCheckStatusFromRollup } from "./github-rollup.ts";
@@ -12,9 +11,11 @@ import {
 import { workflowRunIntent, type WorkflowRunIntent } from "./workflow-intent.ts";
 
 export interface LinkedPrAdoptionOutcome {
-  factoryState: FactoryState;
   workflowIntent?: WorkflowRunIntent | undefined;
   issueUpdates: {
+    workflowOutcome?: "completed" | null;
+    workflowOutcomeReason?: string | null;
+    inputRequestKind?: "completion_check_question" | null;
     branchName?: string;
     prNumber?: number;
     prUrl?: string | null;
@@ -71,38 +72,40 @@ export function deriveLinkedPrAdoptionOutcome(
 
   if (prState === "merged") {
     return {
-      factoryState: "done",
       issueUpdates: {
         ...issueUpdates,
         prIsDraft: false,
+        workflowOutcome: "completed",
+        workflowOutcomeReason: "adopted_pr_already_merged",
+        inputRequestKind: null,
       },
     };
   }
 
   if (prState === "closed") {
     return {
-      factoryState: "delegated",
       workflowIntent: workflowRunIntent("implementation"),
       issueUpdates: {
         ...issueUpdates,
         prIsDraft: false,
         ...buildClosedPrCleanupFields(),
+        workflowOutcome: null,
+        workflowOutcomeReason: null,
+        inputRequestKind: null,
       },
     };
   }
 
   if (remote.isCrossRepository) {
     return {
-      factoryState: "awaiting_input",
-      issueUpdates,
+      issueUpdates: { ...issueUpdates, inputRequestKind: "completion_check_question" },
     };
   }
 
   if (remote.isDraft) {
     return {
-      factoryState: "delegated",
       workflowIntent: workflowRunIntent("implementation"),
-      issueUpdates,
+      issueUpdates: { ...issueUpdates, workflowOutcome: null, workflowOutcomeReason: null, inputRequestKind: null },
     };
   }
 
@@ -119,7 +122,6 @@ export function deriveLinkedPrAdoptionOutcome(
   });
   if (reactiveIntent) {
     return {
-      factoryState: reactiveIntent.compatibilityFactoryState,
       workflowIntent: workflowRunIntent(
         reactiveIntent.runType,
         reactiveIntent.runType === "branch_upkeep"
@@ -135,14 +137,8 @@ export function deriveLinkedPrAdoptionOutcome(
   }
 
   if (reviewState === "approved") {
-    return {
-      factoryState: "awaiting_queue",
-      issueUpdates,
-    };
+    return { issueUpdates };
   }
 
-  return {
-    factoryState: "pr_open",
-    issueUpdates,
-  };
+  return { issueUpdates };
 }

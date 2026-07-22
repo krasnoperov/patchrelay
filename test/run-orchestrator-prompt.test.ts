@@ -20,7 +20,7 @@ function createIssue(): IssueRecord {
     linearIssueId: "issue-1",
     issueKey: "TST-3",
     title: "Implement scoring for correct guesses, successful bluffs, and title winners",
-    factoryState: "delegated",
+    workflowOutcome: undefined,
     ciRepairAttempts: 0,
     queueRepairAttempts: 0,
     reviewFixAttempts: 0,
@@ -112,7 +112,7 @@ test("repair prompts publish to the existing PR branch with concise self-review 
     const prompt = buildLayeredRunPrompt({
       issue: {
         ...createIssue(),
-        factoryState: "repairing_ci",
+        workflowOutcome: undefined,
         prNumber: 12,
       },
       runType: "ci_repair",
@@ -148,7 +148,7 @@ test("dirty repair continuation prompt preserves unpublished local work", () => 
     const prompt = buildLayeredRunPrompt({
       issue: {
         ...createIssue(),
-        factoryState: "changes_requested",
+        workflowOutcome: undefined,
         prNumber: 311,
         prHeadSha: "old-head",
       },
@@ -184,7 +184,7 @@ test("fresh-head queue repair prompt overrides patch-id no-op guard", () => {
     const prompt = buildLayeredRunPrompt({
       issue: {
         ...createIssue(),
-        factoryState: "repairing_queue",
+        workflowOutcome: undefined,
         prNumber: 1125,
         prHeadSha: "evictedhead",
         lastPublishedPatchId: "patch-id-1",
@@ -248,7 +248,7 @@ test("orchestration prompts keep child-reuse and convergence babysitting guidanc
             issueKey: "TST-4",
             title: "Migrate public pages to Lingui",
             currentLinearState: "In Progress",
-            factoryState: "implementing",
+            workflowOutcome: undefined,
             delegatedToPatchRelay: true,
             hasOpenPr: true,
           },
@@ -256,7 +256,7 @@ test("orchestration prompts keep child-reuse and convergence babysitting guidanc
             issueKey: "TST-5",
             title: "Audit lingering translation helpers",
             currentLinearState: "Start",
-            factoryState: "delegated",
+            workflowOutcome: undefined,
             delegatedToPatchRelay: true,
             hasOpenPr: false,
           },
@@ -274,8 +274,8 @@ test("orchestration prompts keep child-reuse and convergence babysitting guidanc
     assert.match(prompt, /Create new child issues only for genuinely missing required work needed to satisfy the parent goal\./);
     assert.match(prompt, /Leave later-wave child issues queued unless they are immediately actionable\./);
     assert.match(prompt, /### Child Issue Summaries/);
-    assert.match(prompt, /TST-4: Migrate public pages to Lingui \(In Progress; implementing; delegated; open PR\)/);
-    assert.match(prompt, /TST-5: Audit lingering translation helpers \(Start; delegated; delegated; no open PR\)/);
+    assert.match(prompt, /TST-4: Migrate public pages to Lingui \(In Progress; delegated; open PR\)/);
+    assert.match(prompt, /TST-5: Audit lingering translation helpers \(Start; delegated; no open PR\)/);
     assert.match(prompt, /## Workflow/);
     assert.match(prompt, /Use the workflow reason and child issue summaries to decide the next orchestration step\./);
     assert.match(prompt, /Prefer supervising, auditing, and unblocking existing child work over creating more issues\./);
@@ -306,7 +306,7 @@ test("orchestration follow-up prompts reason explicitly from the workflowTask ca
             issueKey: "TST-4",
             title: "Migrate public pages to Lingui",
             currentLinearState: "Done",
-            factoryState: "done",
+            workflowOutcome: "completed",
             delegatedToPatchRelay: true,
             hasOpenPr: false,
           },
@@ -331,7 +331,7 @@ test("branch_upkeep prompt folds follow-up and PR facts into current context", (
     const prompt = buildFollowUpRunPrompt({
       issue: {
         ...createIssue(),
-        factoryState: "changes_requested",
+        workflowOutcome: undefined,
         prNumber: 12,
         prReviewState: "changes_requested",
       },
@@ -370,7 +370,7 @@ test("review_fix prompt keeps concise reviewer context plus structured comments"
     const prompt = buildFollowUpRunPrompt({
       issue: {
         ...createIssue(),
-        factoryState: "changes_requested",
+        workflowOutcome: undefined,
         prNumber: 26,
         prReviewState: "changes_requested",
       },
@@ -421,7 +421,7 @@ test("review_fix prompt surfaces degraded GitHub review context before launch", 
     const prompt = buildFollowUpRunPrompt({
       issue: {
         ...createIssue(),
-        factoryState: "changes_requested",
+        workflowOutcome: undefined,
         prNumber: 27,
         prReviewState: "changes_requested",
       },
@@ -504,7 +504,7 @@ test("buildRunPrompt folds implementation follow-ups into current context", () =
     const prompt = buildLayeredRunPrompt({
       issue: {
         ...createIssue(),
-        factoryState: "pr_open",
+        workflowOutcome: undefined,
         prNumber: 22,
         prHeadSha: "abc123def456",
         prReviewState: "commented",
@@ -542,7 +542,7 @@ test("buildRunPrompt keeps direct-reply follow-ups concise inside current contex
     const prompt = buildLayeredRunPrompt({
       issue: {
         ...createIssue(),
-        factoryState: "awaiting_input",
+        inputRequestKind: "completion_check_question",
         prNumber: 22,
         prHeadSha: "abc123def456",
       },
@@ -575,7 +575,7 @@ test("buildRunPrompt includes recovered Linear agent activity context", () => {
     const prompt = buildLayeredRunPrompt({
       issue: {
         ...createIssue(),
-        factoryState: "delegated",
+        workflowOutcome: undefined,
       },
       runType: "implementation",
       repoPath: baseDir,
@@ -605,7 +605,7 @@ test("follow-up prompts describe closed PRs as replacement context instead of cu
     const prompt = buildFollowUpRunPrompt({
       issue: {
         ...createIssue(),
-        factoryState: "implementing",
+        workflowOutcome: undefined,
         prNumber: 260,
         prState: "closed",
         prHeadSha: "deadbeef",
@@ -644,7 +644,7 @@ test("buildRunPrompt applies extra instructions and section replacement without 
     const prompt = buildLayeredRunPrompt({
       issue: {
         ...createIssue(),
-        factoryState: "delegated",
+        workflowOutcome: undefined,
       },
       runType: "implementation",
       repoPath: baseDir,

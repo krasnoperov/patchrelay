@@ -2,7 +2,6 @@ import { hasOpenPr } from "../../pr-state.ts";
 import {
   isIssuePrOpenProjection,
   isIssuePublishedOrDownstreamProjection,
-  isIssueQueueRepairProjection,
 } from "../../issue-execution-state.ts";
 import type { WatchIssue } from "./watch-state.ts";
 
@@ -95,7 +94,7 @@ export function hasDisplayPrBlocker(issue: WatchIssue): boolean {
   if (!hasOpenPr(issue.prNumber, issue.prState) || issue.activeRunType) {
     return false;
   }
-  if (isIssuePublishedOrDownstreamProjection(issue) || isIssueQueueRepairProjection(issue)) {
+  if (isIssuePublishedOrDownstreamProjection(issue) || issue.phase === "repairing_queue") {
     return true;
   }
   if (hasPendingPrChecks(issue) || hasFailedPrChecks(issue)) {

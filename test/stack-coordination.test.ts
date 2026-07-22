@@ -30,21 +30,21 @@ test("listIssuesWithParentBranch returns active children of a parent branch", ()
   withDb((db) => {
     db.issues.upsertIssue({
       projectId: "p", linearIssueId: "PARENT", issueKey: "P-1",
-      factoryState: "pr_open", branchName: "feat/parent", prNumber: 100,
+      workflowOutcome: undefined, branchName: "feat/parent", prNumber: 100,
     });
     db.issues.upsertIssue({
       projectId: "p", linearIssueId: "CHILD-A", issueKey: "C-A",
-      factoryState: "pr_open", branchName: "feat/child-a", prNumber: 101,
+      workflowOutcome: undefined, branchName: "feat/child-a", prNumber: 101,
       parentPrBranch: "feat/parent",
     });
     db.issues.upsertIssue({
       projectId: "p", linearIssueId: "CHILD-B", issueKey: "C-B",
-      factoryState: "implementing", branchName: "feat/child-b", prNumber: 102,
+      workflowOutcome: undefined, branchName: "feat/child-b", prNumber: 102,
       parentPrBranch: "feat/parent",
     });
     db.issues.upsertIssue({
       projectId: "p", linearIssueId: "CHILD-DONE", issueKey: "C-DONE",
-      factoryState: "done", branchName: "feat/child-done",
+      workflowOutcome: "completed", branchName: "feat/child-done",
       parentPrBranch: "feat/parent",
     });
 
@@ -58,11 +58,11 @@ test("maybeFanChildRebaseDispatches enqueues branch_upkeep on stacked children f
   withDb((db) => {
     db.issues.upsertIssue({
       projectId: "p", linearIssueId: "PARENT",
-      factoryState: "pr_open", branchName: "feat/parent", prNumber: 100,
+      workflowOutcome: undefined, branchName: "feat/parent", prNumber: 100,
     });
     db.issues.upsertIssue({
       projectId: "p", linearIssueId: "CHILD",
-      factoryState: "pr_open", branchName: "feat/child", prNumber: 101,
+      workflowOutcome: undefined, branchName: "feat/child", prNumber: 101,
       parentPrBranch: "feat/parent", delegatedToPatchRelay: true,
     });
 
@@ -83,8 +83,6 @@ test("maybeFanChildRebaseDispatches enqueues branch_upkeep on stacked children f
     assert.deepEqual(enqueued, [["p", "CHILD"]]);
 
     // workflow task is now the only dispatch source.
-    const child = db.issues.getIssue("p", "CHILD")!;
-
     // The durable v2 signal is appended and materialized into a runnable
     // workflow task, so the workflow_task dispatch rung drives the run.
     const observations = db.workflowObservations.listObservations("p", "CHILD")
@@ -106,7 +104,7 @@ test("maybeFanChildRebaseDispatches is a no-op for non-pr_synchronize events", (
   withDb((db) => {
     db.issues.upsertIssue({
       projectId: "p", linearIssueId: "CHILD",
-      factoryState: "pr_open", branchName: "feat/child", prNumber: 101,
+      workflowOutcome: undefined, branchName: "feat/child", prNumber: 101,
       parentPrBranch: "feat/parent",
     });
 
@@ -131,7 +129,7 @@ test("maybeFanChildRebaseDispatches skips children with an active run", () => {
   withDb((db) => {
     db.issues.upsertIssue({
       projectId: "p", linearIssueId: "CHILD",
-      factoryState: "pr_open", branchName: "feat/child", prNumber: 101,
+      workflowOutcome: undefined, branchName: "feat/child", prNumber: 101,
       parentPrBranch: "feat/parent",
     });
     const child = db.issues.getIssue("p", "CHILD")!;
@@ -160,6 +158,5 @@ test("maybeFanChildRebaseDispatches skips children with an active run", () => {
     });
 
     assert.deepEqual(enqueued, []);
-    const after = db.issues.getIssue("p", "CHILD")!;
   });
 });

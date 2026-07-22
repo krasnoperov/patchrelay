@@ -65,8 +65,8 @@ Choosing the conflict policy:
 
 - Fields that are facts from an external payload or live API response:
   commit unconditionally (no `expectedVersion`).
-- Updates derived from a previously-read row (counters, factory-state
-  decisions): pass `expectedVersion` and recompute from the fresh row in
+- Updates derived from a previously-read row (counters and fact
+  transitions): pass `expectedVersion` and recompute from the fresh row in
   `onConflict`, or return `undefined` to skip and let reconciliation
   re-derive.
 - Writes that clear a run slot: re-check `current.activeRunId === run.id`

@@ -1,47 +1,20 @@
 import type { IssueRecord } from "./db-types.ts";
-import { deriveIssueExecutionState, deriveIssueTerminalOutcome } from "./issue-execution-state.ts";
 import { deriveAuthority, deriveWorkflowContext } from "./workflow-observation-context.ts";
 import { deriveWorkflowTasks } from "./workflow-task-derivation.ts";
 import type { WorkflowArtifact, WorkflowProjectionInput, WorkflowSnapshot } from "./workflow-model.ts";
 
 function issueStatus(issue: IssueRecord, blockerCount: number): WorkflowSnapshot["status"] {
   if (issue.activeRunId !== undefined) return "running";
-  const terminalOutcome = deriveIssueTerminalOutcome(issue);
-  if (terminalOutcome === "done") return "done";
-  if (terminalOutcome === "failed" || terminalOutcome === "escalated") return "failed";
-
-  const executionState = deriveIssueExecutionState({
-    delegatedToPatchRelay: issue.delegatedToPatchRelay,
-    factoryState: issue.factoryState,
-    currentLinearState: issue.currentLinearState,
-    currentLinearStateType: issue.currentLinearStateType,
-    prNumber: issue.prNumber,
-    prState: issue.prState,
-    prHeadSha: issue.prHeadSha,
-    prReviewState: issue.prReviewState,
-    prCheckStatus: issue.prCheckStatus,
-    lastBlockingReviewHeadSha: issue.lastBlockingReviewHeadSha,
-    latestFailureCheckName: issue.lastGitHubFailureCheckName,
-    blockedByKeys: blockerCount > 0 ? ["__workflow_blocker__"] : [],
-  });
-
-  switch (executionState.kind) {
-    case "running":
-    case "inconsistent":
-      return "running";
-    case "terminal":
-      return executionState.outcome === "done" ? "done" : "failed";
-    case "undelegated":
-    case "settling":
-    case "blocked":
-    case "waiting_input":
-      return "waiting";
-    case "awaiting_followup":
-    case "idle_awaiting_external":
-    case "ready":
-    case "idle":
-      return "idle";
-  }
+  if (
+    issue.workflowOutcome === "completed"
+    || issue.prState === "merged"
+    || issue.currentLinearStateType === "completed"
+    || issue.currentLinearState?.trim().toLowerCase() === "done"
+  ) return "done";
+  if (issue.workflowOutcome === "failed" || issue.workflowOutcome === "escalated") return "failed";
+  if (issue.currentLinearStateType === "canceled" || issue.currentLinearStateType === "cancelled") return "failed";
+  if (!issue.delegatedToPatchRelay || issue.inputRequestKind || blockerCount > 0) return "waiting";
+  return "idle";
 }
 
 function issueArtifacts(issue: IssueRecord): WorkflowArtifact[] {

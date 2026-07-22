@@ -7,7 +7,7 @@ function makeIssue(overrides?: Partial<WatchIssue>): WatchIssue {
   return {
     projectId: "test-project",
     delegatedToPatchRelay: true,
-    factoryState: "implementing",
+    phase: "delegated",
     blockedByCount: 0,
     blockedByKeys: [],
     readyForExecution: false,
@@ -19,7 +19,7 @@ function makeIssue(overrides?: Partial<WatchIssue>): WatchIssue {
 test("issueTokenFor renders undelegated paused local work explicitly", () => {
   const token = issueTokenFor(makeIssue({
     delegatedToPatchRelay: false,
-    factoryState: "implementing",
+    phase: "implementing",
   }));
 
   assert.deepEqual(token, {
@@ -33,7 +33,7 @@ test("issueTokenFor renders undelegated paused local work explicitly", () => {
 test("issueTokenFor keeps delegated implementation work visibly active", () => {
   const token = issueTokenFor(makeIssue({
     delegatedToPatchRelay: true,
-    factoryState: "implementing",
+    phase: "implementing",
   }));
 
   assert.deepEqual(token, {
@@ -81,7 +81,7 @@ test("prTokenFor shows replacement work for closed PRs on active delegated issue
   const token = prTokenFor(makeIssue({
     prNumber: 260,
     prState: "closed",
-    factoryState: "implementing",
+    workflowOutcome: undefined,
     delegatedToPatchRelay: true,
   }));
 

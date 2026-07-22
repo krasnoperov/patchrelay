@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import pino from "pino";
 import test from "node:test";
+import { assertIssuePhase } from "./assert-issue-phase.ts";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { RunOrchestrator } from "../src/run-orchestrator.ts";
 import type { AppConfig } from "../src/types.ts";
@@ -124,7 +125,7 @@ function insertQueuedIssue(db: PatchRelayDatabase, overrides?: Record<string, un
     prState: "open",
     prReviewState: "approved",
     prCheckStatus: "success",
-    factoryState: "awaiting_queue",
+    workflowOutcome: undefined,
     ...overrides,
   });
   // Force updatedAt back to bypass grace period
@@ -149,13 +150,14 @@ test("reconcileQueueHealth skips issues within the grace period", { concurrency:
       branchName: "feat-queued",
       prNumber: 42,
       prState: "open",
-      factoryState: "awaiting_queue",
+      prReviewState: "approved",
+      workflowOutcome: undefined,
     });
 
     await harness.reconcileQueueHealth();
 
     const issue = harness.db.getIssue("proj", "issue-1");
-    assert.equal(issue?.factoryState, "awaiting_queue");
+    assertIssuePhase(issue, "awaiting_queue");
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });
@@ -181,7 +183,7 @@ exit 1`;
     await harness.reconcileQueueHealth();
 
     const issue = harness.db.getIssue("proj", "issue-1");
-    assert.equal(issue?.factoryState, "done");
+    assertIssuePhase(issue, "done");
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });
@@ -207,7 +209,7 @@ exit 1`;
     await harness.reconcileQueueHealth();
 
     const issue = harness.db.getIssue("proj", "issue-1");
-    assert.equal(issue?.factoryState, "awaiting_queue");
+    assertIssuePhase(issue, "awaiting_queue");
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });
@@ -233,7 +235,7 @@ exit 1`;
     await harness.reconcileQueueHealth();
 
     const issue = harness.db.getIssue("proj", "issue-1");
-    assert.equal(issue?.factoryState, "repairing_queue");
+    assertIssuePhase(issue, "repairing_queue");
     const workflowTask = harness.db.issueSessions.peekPendingSessionInputPlanForDiagnostics("proj", "issue-1");
     assert.equal(workflowTask?.runType, "queue_repair");
     const ctx = workflowTask?.context ?? {};
@@ -266,7 +268,7 @@ exit 1`;
     await harness.reconcileQueueHealth();
 
     const issue = harness.db.getIssue("proj", "issue-1");
-    assert.equal(issue?.factoryState, "repairing_queue");
+    assertIssuePhase(issue, "repairing_queue");
     assert.equal(harness.db.issueSessions.peekPendingSessionInputPlanForDiagnostics("proj", "issue-1")?.runType, "queue_repair");
     assert.deepEqual(harness.enqueueCalls, [{ projectId: "proj", issueId: "issue-1" }]);
   } finally {
@@ -294,7 +296,7 @@ exit 1`;
     await harness.reconcileQueueHealth();
 
     const issue = harness.db.getIssue("proj", "issue-1");
-    assert.equal(issue?.factoryState, "awaiting_queue");
+    assertIssuePhase(issue, "awaiting_queue");
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });
@@ -327,7 +329,7 @@ exit 1`;
     await harness.reconcileQueueHealth();
 
     const issue = harness.db.getIssue("proj", "issue-1");
-    assert.equal(issue?.factoryState, "repairing_queue");
+    assertIssuePhase(issue, "repairing_queue");
     const workflowTask = harness.db.issueSessions.peekPendingSessionInputPlanForDiagnostics("proj", "issue-1");
     assert.equal(workflowTask?.runType, "queue_repair");
     assert.equal(workflowTask?.context.failureReason, "queue_eviction_missed");
@@ -360,7 +362,7 @@ exit 1`;
     // First call — dispatches repair
     await harness.reconcileQueueHealth();
     const after1 = harness.db.getIssue("proj", "issue-1");
-    assert.equal(after1?.factoryState, "repairing_queue");
+    assertIssuePhase(after1, "repairing_queue");
     assert.equal(harness.db.issueSessions.peekPendingSessionInputPlanForDiagnostics("proj", "issue-1")?.runType, "queue_repair");
 
     // Reset state to awaiting_queue to simulate the issue coming back
@@ -368,7 +370,7 @@ exit 1`;
     harness.db.upsertIssue({
       projectId: "proj",
       linearIssueId: "issue-1",
-      factoryState: "awaiting_queue",
+      workflowOutcome: undefined,
       activeRunId: null,
     });
     harness.db.issueSessions.consumeIssueSessionEvents("proj", "issue-1", harness.db.issueSessions.listIssueSessionEvents("proj", "issue-1", { pendingOnly: true }).map((event) => event.id), 999);
@@ -382,7 +384,7 @@ exit 1`;
     // Second call — should be deduplicated (same headRefOid)
     await harness.reconcileQueueHealth();
     const after2 = harness.db.getIssue("proj", "issue-1");
-    assert.equal(after2?.factoryState, "awaiting_queue");
+    assertIssuePhase(after2, "repairing_queue");
     assert.deepEqual(harness.enqueueCalls, []);
   } finally {
     process.env.PATH = oldPath;
@@ -407,10 +409,10 @@ test("listApprovedRedCiIssues returns approved+red issues with no run", () => {
       prState: "open",
       prReviewState: "approved",
       prCheckStatus: "failure",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
     });
-    // Same shape but factoryState repairing_ci → excluded (run is implicit).
-    harness.db.upsertIssue({
+    // Same shape with an active repair run → excluded.
+    const repairingIssue = harness.db.upsertIssue({
       projectId: "proj",
       linearIssueId: "issue-2",
       issueKey: "PRJ-2",
@@ -419,7 +421,18 @@ test("listApprovedRedCiIssues returns approved+red issues with no run", () => {
       prState: "open",
       prReviewState: "approved",
       prCheckStatus: "failure",
-      factoryState: "repairing_ci",
+      workflowOutcome: undefined,
+    });
+    const repairRun = harness.db.runs.createRun({
+      issueId: repairingIssue.id,
+      projectId: "proj",
+      linearIssueId: repairingIssue.linearIssueId,
+      runType: "ci_repair",
+    });
+    harness.db.upsertIssue({
+      projectId: "proj",
+      linearIssueId: repairingIssue.linearIssueId,
+      activeRunId: repairRun.id,
     });
     // Not approved → excluded.
     harness.db.upsertIssue({
@@ -431,7 +444,7 @@ test("listApprovedRedCiIssues returns approved+red issues with no run", () => {
       prState: "open",
       prReviewState: "review_requested",
       prCheckStatus: "failure",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
     });
 
     const stuck = harness.db.issues.listApprovedRedCiIssues();
@@ -455,7 +468,7 @@ test("reconcileQueueHealth does not transition state on probe failure", { concur
     await harness.reconcileQueueHealth();
 
     const issue = harness.db.getIssue("proj", "issue-1");
-    assert.equal(issue?.factoryState, "awaiting_queue");
+    assertIssuePhase(issue, "awaiting_queue");
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });

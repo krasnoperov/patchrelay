@@ -109,7 +109,7 @@ export class RunReconciler {
 
     if (isIssueTerminalProjection(effectiveIssue)) {
       this.logger.info(
-        { issueKey: effectiveIssue.issueKey, runId: run.id, factoryState: effectiveIssue.factoryState },
+        { issueKey: effectiveIssue.issueKey, runId: run.id, workflowOutcome: effectiveIssue.workflowOutcome },
         "Reconciliation: terminal issue state observed while run is active; keeping run until Codex turn completes",
       );
     }
@@ -411,7 +411,6 @@ export class RunReconciler {
           projectId: run.projectId,
           linearIssueId: run.linearIssueId,
           activeRunId: null,
-          factoryState: issue.factoryState,
           delegatedToPatchRelay: false,
           ...(linearIssue.identifier ? { issueKey: linearIssue.identifier } : {}),
           ...(linearIssue.title ? { title: linearIssue.title } : {}),

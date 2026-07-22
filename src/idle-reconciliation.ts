@@ -1,21 +1,12 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
-import type { FactoryState, RunType } from "./factory-state.ts";
+import type { RunType } from "./run-type.ts";
 import {
   CLEARED_FAILURE_PROVENANCE,
   mayClearFailureProvenance,
   type ObservedProvenanceEvidence,
 } from "./failure-provenance.ts";
-import {
-  isIssueAwaitingInputProjection,
-  isIssueAwaitingQueueProjection,
-  isIssueDeployingProjection,
-  isIssueDownstreamOwnedProjection,
-  isIssueTerminalFailureProjection,
-  isIssueTerminalDisplayStateProjection,
-} from "./issue-execution-state.ts";
-import { deriveFactoryStateFromPrFacts, type CurrentIssueFacts, type ObservedPrFacts } from "./pr-facts-derivation.ts";
 import type { AppConfig } from "./types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import {
@@ -115,8 +106,8 @@ export class IdleIssueReconciler {
           // No PR to poll means no fresh GitHub evidence — provenance may
           // only be cleared when nothing concrete is recorded to preserve.
           const clear = hasFailureProvenance(issue) && mayClearFailureProvenance(issue, {});
-          if (!isIssueAwaitingQueueProjection(issue) || clear) {
-            this.advanceIdleIssue(issue, "awaiting_queue", clear ? { clearFailureProvenance: true } : {});
+          if (clear) {
+            this.advanceIdleIssue(issue, clear ? { clearFailureProvenance: true } : {});
           }
         }
         continue;
@@ -206,22 +197,22 @@ export class IdleIssueReconciler {
     // queue. This matters for deploy-failed issues (escalated while
     // prState === "merged") — recovery-to-awaiting_queue would be wrong.
     if (issue.prState === "merged") return false;
-    return isIssueTerminalFailureProjection(issue);
+    return issue.workflowOutcome === "failed" || issue.workflowOutcome === "escalated";
   }
 
   // PR3: route a merged PR either into post-merge deploy tracking or
   // straight to done. Called from both the idle pass and the GitHub
   // reconcile path, so the deploying-vs-done decision lives in one place.
   private async handleMergedIssue(issue: IssueRecord): Promise<void> {
-    if (isIssueDeployingProjection(issue)) {
+    if (issue.deployStartedAt) {
       await this.watchDeploy(issue);
       return;
     }
     // Already finalized (done/escalated/failed) — never re-open it.
-    if (isIssueTerminalDisplayStateProjection(issue)) return;
+    if (issue.workflowOutcome) return;
     const project = this.config.projects.find((candidate) => candidate.id === issue.projectId);
     if (isDeployTrackingEnabled(project)) {
-      if (this.advanceIdleIssue(issue, "deploying", { clearFailureProvenance: true }) !== "skipped") {
+      if (this.advanceIdleIssue(issue, { clearFailureProvenance: true }) !== "skipped") {
         this.db.issueSessions.commitIssueState({
           writer: WRITER,
           update: {
@@ -232,7 +223,11 @@ export class IdleIssueReconciler {
         });
       }
     } else {
-      this.advanceIdleIssue(issue, "done", { clearFailureProvenance: true });
+      this.advanceIdleIssue(issue, {
+        workflowOutcome: "completed",
+        workflowOutcomeReason: "merged_without_deploy_tracking",
+        clearFailureProvenance: true,
+      });
     }
   }
 
@@ -297,7 +292,11 @@ export class IdleIssueReconciler {
   }
 
   private finishDeploy(issue: IssueRecord, state: "done" | "escalated"): void {
-    if (this.advanceIdleIssue(issue, state, state === "done" ? { clearFailureProvenance: true } : undefined) === "skipped") {
+    if (this.advanceIdleIssue(issue, {
+      workflowOutcome: state === "done" ? "completed" : "escalated",
+      workflowOutcomeReason: state === "done" ? "deployment_completed" : "deployment_failed",
+      ...(state === "done" ? { clearFailureProvenance: true } : {}),
+    }) === "skipped") {
       return;
     }
     this.db.issueSessions.commitIssueState({
@@ -312,10 +311,14 @@ export class IdleIssueReconciler {
 
   advanceIdleIssue(
     issue: IssueRecord,
-    newState: FactoryState,
     options?: {
       workflowIntent?: WorkflowRunIntent;
       clearFailureProvenance?: boolean;
+      workflowOutcome?: "completed" | "failed" | "escalated";
+      workflowOutcomeReason?: string;
+      clearWorkflowOutcome?: boolean;
+      inputRequestKind?: "paused_local_work" | "completion_check_question";
+      clearInputRequest?: boolean;
       failureProvenance?: {
         source: "branch_ci" | "queue_eviction";
         headSha?: string | undefined;
@@ -324,7 +327,7 @@ export class IdleIssueReconciler {
       } | undefined;
     },
   ): "applied" | "noop" | "skipped" {
-    if (issue.factoryState === newState && !options?.workflowIntent && !options?.clearFailureProvenance) {
+    if (!options || Object.keys(options).length === 0) {
       return "noop";
     }
     const commit = this.db.issueSessions.commitIssueState({
@@ -333,7 +336,11 @@ export class IdleIssueReconciler {
       update: {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
-        factoryState: newState,
+        ...(options.workflowOutcome ? { workflowOutcome: options.workflowOutcome } : {}),
+        ...(options.workflowOutcomeReason ? { workflowOutcomeReason: options.workflowOutcomeReason } : {}),
+        ...(options.clearWorkflowOutcome ? { workflowOutcome: null, workflowOutcomeReason: null } : {}),
+        ...(options.inputRequestKind ? { inputRequestKind: options.inputRequestKind } : {}),
+        ...(options.clearInputRequest ? { inputRequestKind: null } : {}),
         ...(options?.clearFailureProvenance
           ? { ...CLEARED_FAILURE_PROVENANCE }
           : {}),
@@ -352,14 +359,14 @@ export class IdleIssueReconciler {
     });
     if (commit.outcome !== "applied") {
       this.logger.info(
-        { issueKey: issue.issueKey, from: issue.factoryState, to: newState, outcome: commit.outcome },
-        "Reconciliation: skipped advancing idle issue after a concurrent write",
+        { issueKey: issue.issueKey, outcome: commit.outcome },
+        "Reconciliation: skipped updating idle issue facts after a concurrent write",
       );
       return "skipped";
     }
     this.logger.info(
-      { issueKey: issue.issueKey, from: issue.factoryState, to: newState, workflowRunType: options?.workflowIntent?.runType },
-      "Reconciliation: advancing idle issue",
+      { issueKey: issue.issueKey, workflowRunType: options?.workflowIntent?.runType },
+      "Reconciliation: updated idle issue facts",
     );
     const updatedIssue = commit.issue;
     if (this.syncIssue) {
@@ -380,9 +387,9 @@ export class IdleIssueReconciler {
       kind: "stage",
       issueKey: issue.issueKey,
       projectId: issue.projectId,
-      stage: newState,
+      stage: options.workflowOutcome ?? options.inputRequestKind ?? options.workflowIntent?.runType,
       status: "reconciled",
-      summary: `Reconciliation: ${issue.factoryState} \u2192 ${newState}`,
+      summary: "Reconciliation: workflow facts updated",
     });
     // The dispatcher's recordEventAndDispatch in recordWorkflowIntentEvent already
     // handles the enqueue when no run is in flight, so no extra poke
@@ -459,10 +466,9 @@ export class IdleIssueReconciler {
       latestFailureSource: issue.lastGitHubFailureSource,
     });
 
-    if (!reactiveIntent && isIssueAwaitingQueueProjection(issue)) {
+    if (!reactiveIntent && issue.prReviewState === "approved") {
       const inferred = await this.inferFailureSourceFromGitHub(issue) ?? "branch_ci";
       const inferRunType = inferred === "queue_eviction" ? "queue_repair" : "ci_repair";
-      const inferState = inferred === "queue_eviction" ? "repairing_queue" : "repairing_ci";
       this.logger.info(
         { issueKey: issue.issueKey, prNumber: issue.prNumber, inferred },
         "Inferred failure provenance for awaiting_queue issue",
@@ -471,7 +477,7 @@ export class IdleIssueReconciler {
       const failureHeadSha = issue.lastGitHubFailureHeadSha ?? issue.prHeadSha;
       const failureSignature = issue.lastGitHubFailureSignature
         ?? (failureHeadSha ? `${inferred}:${failureHeadSha}` : undefined);
-      this.advanceIdleIssue(issue, inferState as never, {
+      this.advanceIdleIssue(issue, {
         workflowIntent: workflowRunIntent(inferRunType, workflowRunContext),
         failureProvenance: {
           source: inferred,
@@ -492,9 +498,9 @@ export class IdleIssueReconciler {
       && !ignoreDuplicateAttempt
       && isDuplicateRepairAttempt(issue, workflowRunContext);
     if (duplicateRepair) {
-      this.advanceIdleIssue(issue, reactiveIntent.compatibilityFactoryState);
+      this.advanceIdleIssue(issue);
     } else {
-      this.advanceIdleIssue(issue, reactiveIntent.compatibilityFactoryState, {
+      this.advanceIdleIssue(issue, {
         workflowIntent: workflowRunIntent(reactiveIntent.runType, workflowRunContext),
       });
     }
@@ -535,14 +541,14 @@ export class IdleIssueReconciler {
       return (commit.outcome === "conflict_skipped" ? commit.issue : undefined) ?? issue;
     }
     this.logger.info(
-      { issueKey: issue.issueKey, prNumber: issue.prNumber, inferred, factoryState: issue.factoryState },
+      { issueKey: issue.issueKey, prNumber: issue.prNumber, inferred },
       "Recovered missing failure provenance from GitHub state",
     );
     return commit.issue;
   }
 
   private async reclassifyStaleBranchFailure(issue: IssueRecord): Promise<IssueRecord> {
-    const downstreamOwned = isIssueDownstreamOwnedProjection(issue);
+    const downstreamOwned = issue.prReviewState === "approved";
     if (issue.lastGitHubFailureSource !== "branch_ci" || !downstreamOwned) {
       return issue;
     }
@@ -604,8 +610,10 @@ export class IdleIssueReconciler {
       const pr = JSON.parse(stdout) as {
         mergeable?: string;
         mergeStateStatus?: string;
+        labels?: Array<{ name?: string }>;
       };
-      const downstreamOwned = isIssueDownstreamOwnedProjection(issue);
+      const queueAdmitted = pr.labels?.some((label) => label.name === protocol.admissionLabel) ?? false;
+      const downstreamOwned = issue.prReviewState === "approved" || queueAdmitted;
       if ((pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY")
         && downstreamOwned) {
         return "queue_eviction";
@@ -614,7 +622,7 @@ export class IdleIssueReconciler {
         return undefined;
       }
     } catch {
-      return isIssueDownstreamOwnedProjection(issue) ? "branch_ci" : undefined;
+      return issue.prReviewState === "approved" ? "branch_ci" : undefined;
     }
     return "branch_ci";
   }
@@ -639,8 +647,8 @@ export class IdleIssueReconciler {
         // recorded failure provenance on this path (a green-looking local
         // row must not swallow a pending repair).
         const clear = hasFailureProvenance(issue) && mayClearFailureProvenance(issue, {});
-        if (!isIssueAwaitingQueueProjection(issue) || clear) {
-          this.advanceIdleIssue(issue, "awaiting_queue", clear ? { clearFailureProvenance: true } : {});
+        if (clear) {
+          this.advanceIdleIssue(issue, clear ? { clearFailureProvenance: true } : {});
         }
       }
       return;
@@ -652,11 +660,9 @@ export class IdleIssueReconciler {
       const gateCheckStatus = deriveGateCheckStatusFromRollup(pr.statusCheckRollup, gateCheckNames);
       const headAdvanced = Boolean(pr.headRefOid && pr.headRefOid !== previousHeadSha);
       const prState = pr.state === "MERGED" ? "merged" as const : pr.state === "CLOSED" ? "closed" as const : "open" as const;
-      // Normalized level observation shared with the webhook path (plan §C1):
-      // every factory-state decision below goes through
-      // deriveFactoryStateFromPrFacts so both ingestion paths derive the same
-      // state from the same facts.
-      const observed: ObservedPrFacts = {
+      // Persist the normalized poll observation before projecting workflow
+      // tasks, so polling and webhooks converge through the same facts.
+      const observed = {
         source: "poll",
         prState,
         prNumber,
@@ -688,11 +694,6 @@ export class IdleIssueReconciler {
           pr.mergeable ?? "",
           pr.mergeStateStatus ?? "",
         ].join(":"),
-      });
-      const currentFacts = (record: IssueRecord): CurrentIssueFacts => ({
-        factoryState: record.factoryState,
-        prReviewState: record.prReviewState,
-        activeRunId: record.activeRunId,
       });
       // Evidence for the provenance rule: the polled head is current truth.
       const provenanceEvidence: ObservedProvenanceEvidence = {
@@ -733,7 +734,7 @@ export class IdleIssueReconciler {
       if (pr.state === "CLOSED") {
         // State decision shared with the webhook path; a closed PR is always
         // newer evidence than any recorded failure, so clearing is allowed.
-        const closedState = deriveFactoryStateFromPrFacts(observed, currentFacts(issue));
+        const closedDisposition = resolveClosedPrDisposition(issue);
         const closedCommit = this.db.issueSessions.commitIssueState({
           writer: WRITER,
           update: {
@@ -746,17 +747,21 @@ export class IdleIssueReconciler {
         if (closedCommit.outcome === "applied") {
           issue = closedCommit.issue;
         }
-        if (closedState === "done") {
+        if (closedDisposition === "done") {
           this.logger.info(
             { issueKey: issue.issueKey, prNumber: issue.prNumber },
             "Reconciliation: PR was closed for an already completed issue; preserving done state",
           );
-          this.advanceIdleIssue(issue, "done", { clearFailureProvenance: true });
+          this.advanceIdleIssue(issue, {
+            workflowOutcome: "completed",
+            workflowOutcomeReason: "closed_pr_already_completed",
+            clearFailureProvenance: true,
+          });
           return;
         }
-        if (closedState === undefined) {
+        if (closedDisposition === "terminal") {
           this.logger.info(
-            { issueKey: issue.issueKey, prNumber: issue.prNumber, factoryState: issue.factoryState },
+            { issueKey: issue.issueKey, prNumber: issue.prNumber },
             "Reconciliation: PR was closed on a terminal issue; preserving terminal state",
           );
           return;
@@ -766,30 +771,32 @@ export class IdleIssueReconciler {
             { issueKey: issue.issueKey, prNumber: issue.prNumber },
             "Reconciliation: PR was closed on unfinished delegated work, re-delegating for implementation",
           );
-          this.advanceIdleIssue(issue, "delegated" as never, {
+          this.advanceIdleIssue(issue, {
             workflowIntent: workflowRunIntent("implementation"),
             clearFailureProvenance: true,
+            clearWorkflowOutcome: true,
+            clearInputRequest: true,
           });
         } else {
           this.logger.info(
             { issueKey: issue.issueKey, prNumber: issue.prNumber },
             "Reconciliation: PR was closed while undelegated; preserving paused local-work state",
           );
-          this.advanceIdleIssue(issue, "delegated", { clearFailureProvenance: true });
+          this.advanceIdleIssue(issue, { clearFailureProvenance: true, clearWorkflowOutcome: true });
         }
         return;
       }
 
-      if (!isIssueAwaitingInputProjection(issue)
-        && isIssueTerminalFailureProjection(issue)) {
-        const terminalRecoveryState = deriveFactoryStateFromPrFacts(observed, currentFacts(issue));
-        if (terminalRecoveryState) {
+      if (!issue.inputRequestKind
+        && (issue.workflowOutcome === "failed" || issue.workflowOutcome === "escalated")) {
+        const sameHeadStillNeedsRepair = !headAdvanced
+          && pr.reviewDecision?.trim().toUpperCase() === "CHANGES_REQUESTED";
+        if (prState === "open" && !sameHeadStillNeedsRepair) {
           this.logger.info(
             {
               issueKey: issue.issueKey,
               prNumber: issue.prNumber,
-              from: issue.factoryState,
-              to: terminalRecoveryState,
+              from: issue.workflowOutcome,
               gateCheckStatus,
               reviewDecision: pr.reviewDecision,
               headAdvanced,
@@ -797,7 +804,10 @@ export class IdleIssueReconciler {
             "Reconciliation: recovered terminal issue from newer GitHub truth",
           );
           const clear = mayClearFailureProvenance(issue, provenanceEvidence);
-          this.advanceIdleIssue(issue, terminalRecoveryState, clear ? { clearFailureProvenance: true } : {});
+          this.advanceIdleIssue(issue, {
+            ...(clear ? { clearFailureProvenance: true } : {}),
+            clearWorkflowOutcome: true,
+          });
           return;
         }
       }
@@ -810,7 +820,7 @@ export class IdleIssueReconciler {
           { issueKey: issue.issueKey, prNumber: issue.prNumber, reviewDecision: pr.reviewDecision },
           "Reconciliation: review-quill completed without a decisive GitHub review; escalating for operator input",
         );
-        this.advanceIdleIssue(issue, "awaiting_input");
+        this.advanceIdleIssue(issue, { inputRequestKind: "completion_check_question" });
         this.feed?.publish({
           level: "warn",
           kind: "github",
@@ -823,7 +833,7 @@ export class IdleIssueReconciler {
         return;
       }
 
-      const downstreamOwned = isIssueDownstreamOwnedProjection(issue) || pr.reviewDecision === "APPROVED";
+      const downstreamOwned = issue.prReviewState === "approved" || pr.reviewDecision === "APPROVED";
       const mergeConflictDetected = pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY";
       const refreshedIssue = this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
       const reactiveIntent = deriveReactiveWorkflowIntent({
@@ -838,7 +848,7 @@ export class IdleIssueReconciler {
         downstreamOwned,
       });
       if (issue.delegatedToPatchRelay
-        && isIssueTerminalFailureProjection(issue)
+        && (issue.workflowOutcome === "failed" || issue.workflowOutcome === "escalated")
         && (reactiveIntent?.runType === "review_fix" || reactiveIntent?.runType === "branch_upkeep")) {
         const reviewFixBudget = getReviewFixBudget(project);
         if (issue.reviewFixAttempts >= reviewFixBudget) {
@@ -846,7 +856,7 @@ export class IdleIssueReconciler {
             {
               issueKey: issue.issueKey,
               prNumber: issue.prNumber,
-              from: issue.factoryState,
+              from: issue.workflowOutcome,
               runType: reactiveIntent.runType,
               reviewFixAttempts: issue.reviewFixAttempts,
               reviewFixBudget,
@@ -867,14 +877,15 @@ export class IdleIssueReconciler {
           {
             issueKey: issue.issueKey,
             prNumber: issue.prNumber,
-            from: issue.factoryState,
+            from: issue.workflowOutcome,
             runType: reactiveIntent.runType,
             mergeStateStatus: pr.mergeStateStatus,
           },
           "Reconciliation: recovered terminal requested-changes issue from GitHub truth",
         );
-        this.advanceIdleIssue(issue, reactiveIntent.compatibilityFactoryState, {
+        this.advanceIdleIssue(issue, {
           workflowIntent: workflowRunIntent(reactiveIntent.runType, workflowRunContext),
+          clearWorkflowOutcome: true,
           ...(mayClearFailureProvenance(issue, provenanceEvidence) ? { clearFailureProvenance: true } : {}),
         });
         return;
@@ -887,14 +898,13 @@ export class IdleIssueReconciler {
           {
             issueKey: issue.issueKey,
             prNumber: issue.prNumber,
-            from: issue.factoryState,
+            from: issue.workflowOutcome,
             runType: reactiveIntent.runType,
           },
           "Reconciliation: re-queued requested-changes follow-up from GitHub truth",
         );
         this.advanceIdleIssue(
           issue,
-          reactiveIntent.compatibilityFactoryState,
           mayClearFailureProvenance(issue, provenanceEvidence)
             ? { clearFailureProvenance: true }
             : undefined,
@@ -909,7 +919,7 @@ export class IdleIssueReconciler {
           kind: "github",
           issueKey: issue.issueKey,
           projectId: issue.projectId,
-          stage: reactiveIntent.compatibilityFactoryState,
+          stage: reactiveIntent.runType,
           status: "review_fix_queued",
           summary: `PR #${issue.prNumber} still has requested changes on the current head, dispatching review fix`,
         });
@@ -920,7 +930,7 @@ export class IdleIssueReconciler {
           { issueKey: issue.issueKey, prNumber: issue.prNumber, mergeable: pr.mergeable, mergeStateStatus: pr.mergeStateStatus },
           "Reconciliation: PR still needs branch upkeep after requested changes",
         );
-        this.advanceIdleIssue(issue, reactiveIntent.compatibilityFactoryState, {
+        this.advanceIdleIssue(issue, {
           workflowIntent: workflowRunIntent(
             reactiveIntent.runType,
             buildBranchUpkeepContext(
@@ -936,7 +946,7 @@ export class IdleIssueReconciler {
           kind: "github",
           issueKey: issue.issueKey,
           projectId: issue.projectId,
-          stage: reactiveIntent.compatibilityFactoryState,
+          stage: reactiveIntent.runType,
           status: "branch_upkeep_queued",
           summary: `PR #${issue.prNumber} is still dirty after requested changes, dispatching branch upkeep`,
         });
@@ -947,7 +957,7 @@ export class IdleIssueReconciler {
           { issueKey: issue.issueKey, prNumber: issue.prNumber, mergeable: pr.mergeable },
           "Reconciliation: PR needs queue repair from fresh GitHub truth",
         );
-        this.advanceIdleIssue(issue, reactiveIntent.compatibilityFactoryState, {
+        this.advanceIdleIssue(issue, {
           workflowIntent: workflowRunIntent(reactiveIntent.runType, {
             source: "idle_reconciliation",
             failureReason: "merge_conflict_detected",
@@ -965,7 +975,7 @@ export class IdleIssueReconciler {
           kind: "github",
           issueKey: issue.issueKey,
           projectId: issue.projectId,
-          stage: reactiveIntent.compatibilityFactoryState,
+          stage: reactiveIntent.runType,
           status: "conflict_detected",
           summary: `PR #${issue.prNumber} has merge conflicts with main, dispatching rebase`,
         });
@@ -988,13 +998,12 @@ export class IdleIssueReconciler {
         if (reviewCommit.outcome === "applied") {
           issue = reviewCommit.issue;
         }
-        const approvedState = deriveFactoryStateFromPrFacts(observed, currentFacts(issue));
-        if (approvedState === "awaiting_queue") {
+        {
           // Provenance survives unless the polled evidence is newer than the
           // recorded failure (head advanced, gate green on the failure head).
           const clear = hasFailureProvenance(issue) && mayClearFailureProvenance(issue, provenanceEvidence);
-          if (!isIssueAwaitingQueueProjection(issue) || clear) {
-            this.advanceIdleIssue(issue, "awaiting_queue", clear ? { clearFailureProvenance: true } : undefined);
+          if (clear) {
+            this.advanceIdleIssue(issue, clear ? { clearFailureProvenance: true } : undefined);
           }
         }
         return;

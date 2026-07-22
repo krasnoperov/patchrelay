@@ -98,7 +98,7 @@ export async function runPreflight(config: AppConfig, options?: { connectivity?:
     checks.push(...checkPath(`project:${project.id}:repo`, project.repoPath, "directory", { writable: true }));
     checks.push(...checkPath(`project:${project.id}:worktrees`, project.worktreeRoot, "directory", { createIfMissing: true, writable: true }));
     checks.push(...checkGitHubProtocol(project, config.server.publicBaseUrl));
-    // Workflow file checks removed — factory state machine replaces workflow definitions
+    // Workflow file checks removed — canonical workflow tasks replace workflow definitions.
   }
 
   checks.push(await checkExecutable("git", config.runner.gitBin));

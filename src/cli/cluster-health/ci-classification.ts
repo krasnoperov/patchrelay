@@ -8,6 +8,7 @@ import type {
   ClusterCiEntry,
   ReviewQuillAttemptOwnership,
 } from "./types.ts";
+import { deriveIssuePhase } from "../../issue-phase.ts";
 
 export function getGateCheckNames(project: AppConfig["projects"][number] | undefined): string[] {
   const configured = project?.gateChecks?.map((entry) => entry.trim()).filter(Boolean) ?? [];
@@ -109,7 +110,6 @@ export function deriveCiOwner(params: CiOwnerParams): CiOwner {
 
 function executionStateOwnsRunType(state: IssueExecutionState, ...runTypes: string[]): boolean {
   if (state.kind === "ready") return runTypes.includes(state.runnableTaskRunType);
-  if (state.kind === "awaiting_followup") return runTypes.includes(state.followup);
   return false;
 }
 
@@ -249,7 +249,7 @@ export function buildCiEntry(params: BuildCiEntryParams): ClusterCiEntry {
     gateStatus: gateCheckStatus,
     owner,
     orphaned: owner === "unknown",
-    factoryState: issue.factoryState,
+    phase: deriveIssuePhase(issue),
     ...(reviewDecision ? { reviewDecision } : {}),
     message: describeCiOwnership({
       delegatedToPatchRelay,

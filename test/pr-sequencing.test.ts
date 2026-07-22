@@ -112,10 +112,10 @@ test("scoring prefers approved+green over plain approved", async () => {
   }
 });
 
-test("scoring prefers awaiting_queue (in queue) over plain approved", async () => {
+test("scoring prefers a queue signal over plain approved", async () => {
   const candidates: SequenceCandidate[] = [
     { prNumber: 1, branch: "a", headSha: "candA", reviewState: "approved", checkStatus: "success" },
-    { prNumber: 2, branch: "b", headSha: "candB", factoryState: "awaiting_queue" },
+    { prNumber: 2, branch: "b", headSha: "candB", queueSignalled: true },
   ];
   const result = await detectStackingTarget({
     self: { branch: "feature", headSha: "self", baseRef: "origin/main" },
@@ -126,7 +126,7 @@ test("scoring prefers awaiting_queue (in queue) over plain approved", async () =
     }),
   });
   if (result.recommendation === "rebase_onto") {
-    assert.equal(result.parentPr, 2, "awaiting_queue should outrank approved+green");
+    assert.equal(result.parentPr, 2, "a queue signal should outrank approved+green");
   } else {
     assert.fail("expected rebase_onto");
   }

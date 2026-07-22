@@ -39,7 +39,7 @@ function makeIssue(db: PatchRelayDatabase, patch: Partial<IssueRecord> = {}): Is
       linearIssueId,
       issueKey: "USE-1",
       title: "Implement the thing",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       ...patch,
     },
@@ -187,7 +187,7 @@ test("delegated draft PR derives run:implementation (S6 — draft continues impl
     // continues on it. This mirrors deriveReactiveWorkflowIntent (which
     // that the linked-PR-adoption / re-delegation writers used to set.
     const issue = makeIssue(db, {
-      factoryState: "delegated",
+      workflowOutcome: undefined,
       prNumber: 77,
       prState: "open",
       prIsDraft: true,
@@ -210,7 +210,7 @@ test("draft PR masks the reactive review/repair gates (S6)", () => {
     // Even with changes_requested facts on the row, a draft PR routes to
     // implementation rather than review_fix — a draft is not review-blocked.
     const issue = makeIssue(db, {
-      factoryState: "delegated",
+      workflowOutcome: undefined,
       prNumber: 78,
       prState: "open",
       prIsDraft: true,
@@ -318,7 +318,7 @@ test("parent head moved derives a branch_upkeep task carrying upkeep context", (
   const { db, cleanup } = createDb();
   try {
     const issue = makeIssue(db, {
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 101,
       prState: "open",
       prHeadSha: "child-head-1",
@@ -359,7 +359,7 @@ test("branch_upkeep task closes once the child head advances past the moved pare
   const { db, cleanup } = createDb();
   try {
     const issue = makeIssue(db, {
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 101,
       prState: "open",
       prHeadSha: "child-head-1",
@@ -411,7 +411,7 @@ test("queue eviction outranks a pending branch_upkeep signal", () => {
   const { db, cleanup } = createDb();
   try {
     const issue = makeIssue(db, {
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 101,
       prState: "open",
       prHeadSha: "child-head-1",
@@ -449,7 +449,7 @@ test("settled red CI outranks a pending branch_upkeep signal", () => {
   const { db, cleanup } = createDb();
   try {
     const issue = makeIssue(db, {
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 101,
       prState: "open",
       prHeadSha: "child-head-1",
@@ -488,7 +488,7 @@ test("branch_upkeep outranks review_fix when both signals are present", () => {
   const { db, cleanup } = createDb();
   try {
     const issue = makeIssue(db, {
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 101,
       prState: "open",
       prHeadSha: "child-head-1",
@@ -697,7 +697,7 @@ test("active run keeps workflow running even when external state is terminal", (
   const { db, cleanup } = createDb();
   try {
     const issue = makeIssue(db, {
-      factoryState: "done",
+      workflowOutcome: "completed",
       prNumber: 42,
       prState: "merged",
       activeRunId: 77,
@@ -717,7 +717,7 @@ test("awaiting-input workflows do not derive implementation work", () => {
   const { db, cleanup } = createDb();
   try {
     const issue = makeIssue(db, {
-      factoryState: "awaiting_input",
+      inputRequestKind: "completion_check_question",
     });
     const reconciled = reconcileWorkflowTasksForIssue(db, issue);
 
@@ -1009,7 +1009,7 @@ test("umbrella workflows with open children wait instead of starting implementat
       linearIssueId: "child-1",
       issueKey: "USE-101",
       title: "Child task",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
     });
     db.replaceIssueParentLink({
       projectId: parent.projectId,
@@ -1047,7 +1047,7 @@ test("umbrella workflows with completed children derive verification, not implem
       linearIssueId: "child-1",
       issueKey: "USE-101",
       title: "Child task",
-      factoryState: "done",
+      workflowOutcome: "completed",
       currentLinearStateType: "completed",
     });
     db.replaceIssueParentLink({
@@ -1080,7 +1080,7 @@ test("terminal Linear parent state closes umbrella verification tasks", () => {
       linearIssueId: "child-1",
       issueKey: "USE-101",
       title: "Child task",
-      factoryState: "done",
+      workflowOutcome: "completed",
       currentLinearStateType: "completed",
     });
     db.replaceIssueParentLink({
@@ -1128,7 +1128,7 @@ test("orchestration child changes cannot bypass a wait-children workflow task", 
       linearIssueId: "child-1",
       issueKey: "USE-101",
       title: "Child task",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
       currentLinearState: "Start",
       currentLinearStateType: "unstarted",
       parentLinearIssueId: parent.linearIssueId,
@@ -1181,7 +1181,7 @@ test("workflow wait tasks suppress legacy delegated session inputs", () => {
       linearIssueId: "child-1",
       issueKey: "USE-101",
       title: "Child task",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
       currentLinearState: "Start",
       currentLinearStateType: "unstarted",
     });
@@ -1226,7 +1226,7 @@ test("terminal Linear truth exposes no runnable workflow task from stale delegat
       issueKey: "USE-DONE",
       currentLinearState: "Done",
       currentLinearStateType: "completed",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
     });
     db.issueSessions.appendIssueSessionEvent({
       projectId: issue.projectId,

@@ -1,9 +1,9 @@
 import { extractCompletionCheck } from "./completion-check.ts";
 import type { IssueRecord, IssueSessionEventRecord, RunRecord } from "./db-types.ts";
 import { extractLatestAssistantSummary, parseIssueSessionEventOrWarn } from "./issue-session-events.ts";
-import { isIssueDoneProjection, isIssueDownstreamOrDoneProjection } from "./issue-execution-state.ts";
 import { sanitizeOperatorFacingText } from "./presentation-text.ts";
 import { assertNever } from "./utils.ts";
+import { deriveIssuePhase, type IssuePhaseInput } from "./issue-phase.ts";
 
 function clean(value: string | undefined): string | undefined {
   return sanitizeOperatorFacingText(value);
@@ -60,7 +60,7 @@ function eventStatusNote(event: IssueSessionEventRecord | undefined): string | u
 }
 
 export function deriveIssueStatusNote(params: {
-  issue: Pick<IssueRecord, "factoryState">;
+  issue: IssuePhaseInput & Pick<IssueRecord, "currentLinearState" | "currentLinearStateType">;
   sessionSummary?: string | undefined;
   latestRun?: RunRecord | undefined;
   latestEvent?: IssueSessionEventRecord | undefined;
@@ -90,11 +90,12 @@ export function deriveIssueStatusNote(params: {
   const latestEventNote = clean(eventStatusNote(params.latestEvent));
   const failureSummary = clean(params.failureSummary);
   const waitingReason = clean(params.waitingReason);
-  if (!isIssueDoneProjection(params.issue) && waitingReason === "PatchRelay work is complete") {
+  const phase = deriveIssuePhase(params.issue);
+  if (phase !== "done" && waitingReason === "PatchRelay work is complete") {
     return undefined;
   }
   const staleRunNoLongerCurrent =
-    isIssueDownstreamOrDoneProjection(params.issue)
+    (phase === "awaiting_queue" || phase === "done")
     && (params.latestRun?.status === "failed" || params.latestRun?.status === "superseded");
   if (staleRunNoLongerCurrent) {
     return undefined;
@@ -104,7 +105,7 @@ export function deriveIssueStatusNote(params: {
   if (completionCheckActive) {
     note = "No PR found; checking next step";
   } else {
-    switch (params.issue.factoryState) {
+    switch (phase) {
       case "awaiting_input":
         note = completionCheckNote ?? latestRunNote ?? latestEventNote ?? sessionSummary;
         break;

@@ -1,4 +1,4 @@
-import type { RunType } from "./factory-state.ts";
+import type { RunType } from "./run-type.ts";
 import type { SecretSource } from "./resolve-secret.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
 

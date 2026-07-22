@@ -8,25 +8,26 @@ import type { AppConfig, LinearClientProvider } from "./types.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
 import { sharedLinearWriteBackoff } from "./linear-rate-limit.ts";
 import { syncLinearDeliveryPrAttachment } from "./linear-delivery-pr-sync.ts";
+import type { IssuePhase } from "./issue-phase.ts";
 
 export async function emitGitHubLinearActivity(params: {
   linearProvider: LinearClientProvider;
   logger: Logger;
   feed: OperatorEventFeed | undefined;
   issue: IssueRecord;
-  newState: string;
+  phase: IssuePhase;
   event: NormalizedGitHubEvent;
 }): Promise<void> {
-  const { issue, newState, event, linearProvider, logger, feed } = params;
+  const { issue, phase, event, linearProvider, logger, feed } = params;
   if (!issue.agentSessionId) return;
   if (!sharedLinearWriteBackoff.shouldAttempt(issue.projectId)) {
-    logger.debug({ issueKey: issue.issueKey, newState }, "Skipping GitHub Linear activity during rate-limit backoff");
+    logger.debug({ issueKey: issue.issueKey, phase }, "Skipping GitHub Linear activity during rate-limit backoff");
     return;
   }
   try {
     const linear = await linearProvider.forProject(issue.projectId);
     if (!linear?.createAgentActivity) return;
-    const content = buildGitHubStateActivity(issue.factoryState, event);
+    const content = buildGitHubStateActivity(phase, event);
     if (!content) return;
     const allowEphemeral = content.type === "thought" || content.type === "action";
     await linear.createAgentActivity({
@@ -37,7 +38,7 @@ export async function emitGitHubLinearActivity(params: {
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     sharedLinearWriteBackoff.noteError(issue.projectId, error);
-    logger.warn({ issueKey: issue.issueKey, newState, error: msg }, "Failed to emit Linear activity from GitHub webhook");
+    logger.warn({ issueKey: issue.issueKey, phase, error: msg }, "Failed to emit Linear activity from GitHub webhook");
     feed?.publish({
       level: "warn",
       kind: "linear",

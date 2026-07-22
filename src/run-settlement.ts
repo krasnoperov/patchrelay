@@ -30,7 +30,7 @@ export interface SettleRunParams {
   lease?: IssueSessionLease | undefined;
   /**
    * Extra fields merged into the slot-clearing issue write (e.g. the
-   * finalizer's post-run factoryState). Always computed from the fresh row
+   * finalizer's post-run fact update). Always computed from the fresh row
    * read inside the transaction, never from a stale caller-side read.
    */
   buildIssueUpdate?: ((current: IssueRecord) => Omit<UpsertIssueParams, "projectId" | "linearIssueId" | "activeRunId">) | undefined;

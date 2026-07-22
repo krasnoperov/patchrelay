@@ -1,7 +1,7 @@
 import type { Logger } from "pino";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
-import type { FactoryState, RunType } from "./factory-state.ts";
+import type { RunType } from "./run-type.ts";
 import type { WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import type { AppConfig } from "./types.ts";
 import { ImplementationOutcomePolicy } from "./implementation-outcome-policy.ts";
@@ -12,7 +12,6 @@ import type { WorkflowRunIntent } from "./workflow-intent.ts";
 
 export interface PostRunFollowUp {
   workflowIntent: WorkflowRunIntent;
-  factoryState: FactoryState;
   summary: string;
 }
 
@@ -21,8 +20,7 @@ export type PostRunOutcome = "completed" | "recovered";
 
 export type PostRunStateIssue = Pick<
   IssueRecord,
-  "factoryState"
-    | "activeRunId"
+  "activeRunId"
     | "prNumber"
     | "prState"
     | "prHeadSha"
@@ -32,7 +30,13 @@ export type PostRunStateIssue = Pick<
     | "lastGitHubFailureSource"
 >;
 
-// Plan §B3: the one post-run factory-state resolver. Unifies the former
+export interface PostRunFactUpdate {
+  workflowOutcome?: "completed" | null;
+  workflowOutcomeReason?: string | null;
+  inputRequestKind?: null;
+}
+
+// Plan §B3: the one post-run fact resolver. Unifies the former
 // `resolveCompletedRunState` (run-completion-policy) and
 // `resolveRecoverablePostRunState` (interrupted-run-recovery).
 //
@@ -51,19 +55,21 @@ export type PostRunStateIssue = Pick<
 //     (changes_requested / red CI) refers to the head the run just
 //     replaced, and routing it again would loop the fix forever.
 //   - outcome "recovered" (the run died without doing its work): GitHub
-//     truth is authoritative regardless of the local factory state —
+//     truth is authoritative regardless of the derived display phase —
 //     merged → done unconditionally, and an open PR re-derives the
 //     reactive intent (repairing_ci / repairing_queue / changes_requested)
 //     so the original problem is routed again.
-export function resolvePostRunFactoryState(
+export function resolvePostRunFactUpdate(
   issue: PostRunStateIssue,
   run: Pick<RunRecord, "id" | "runType">,
   options?: { outcome?: PostRunOutcome },
-): FactoryState | undefined {
+): PostRunFactUpdate | undefined {
   if (!issue.prNumber) return undefined;
 
   if (options?.outcome === "recovered") {
-    if (issue.prState === "merged") return "done";
+    if (issue.prState === "merged") {
+      return { workflowOutcome: "completed", workflowOutcomeReason: "pr_merged", inputRequestKind: null };
+    }
     if (issue.prState === "open") {
       const reactiveIntent = deriveReactiveWorkflowIntent({
         prNumber: issue.prNumber,
@@ -74,17 +80,17 @@ export function resolvePostRunFactoryState(
         lastBlockingReviewHeadSha: issue.lastBlockingReviewHeadSha,
         latestFailureSource: issue.lastGitHubFailureSource,
       });
-      if (reactiveIntent) return reactiveIntent.compatibilityFactoryState;
-      if (issue.prReviewState === "approved") return "awaiting_queue";
-      return "pr_open";
+      if (reactiveIntent) return { workflowOutcome: null, workflowOutcomeReason: null, inputRequestKind: null };
+      return { workflowOutcome: null, workflowOutcomeReason: null, inputRequestKind: null };
     }
-    // Closed (or unknown) PR: fall through to the factory-state-gated rule.
+    // Closed (or unknown) PR: fall through to the active-run guard.
   }
 
   if (issue.activeRunId !== run.id) return undefined;
-  if (issue.prState === "merged") return "done";
-  if (issue.prReviewState === "approved") return "awaiting_queue";
-  return "pr_open";
+  if (issue.prState === "merged") {
+    return { workflowOutcome: "completed", workflowOutcomeReason: "pr_merged", inputRequestKind: null };
+  }
+  return { workflowOutcome: null, workflowOutcomeReason: null, inputRequestKind: null };
 }
 
 export class RunCompletionPolicy {

@@ -5,6 +5,7 @@ import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import { hasDetachedActiveLatestRun } from "./effective-active-run.ts";
 import { deriveIssueExecutionState, isIssueExecutionReadyForExecution } from "./issue-execution-state.ts";
+import { deriveIssuePhase, type IssuePhase } from "./issue-phase.ts";
 
 function shouldSuppressStatusNote(params: {
   activeRunType?: string | null | undefined;
@@ -90,7 +91,7 @@ export class TrackedIssueListQuery {
     projectId: string;
     delegatedToPatchRelay: boolean;
     sessionState?: string;
-    factoryState: string;
+    phase: IssuePhase;
     blockedByCount: number;
     blockedByKeys: string[];
     readyForExecution: boolean;
@@ -152,22 +153,29 @@ export class TrackedIssueListQuery {
         : detachedActiveRun && row.latest_run_status !== null
           ? String(row.latest_run_status)
           : undefined;
+      const issueFacts = {
+        delegatedToPatchRelay: row.delegated_to_patchrelay === null ? true : Number(row.delegated_to_patchrelay) !== 0,
+        workflowOutcome: row.workflow_outcome === null ? undefined : String(row.workflow_outcome) as "completed" | "failed" | "escalated",
+        inputRequestKind: row.input_request_kind === null ? undefined : String(row.input_request_kind) as "paused_local_work" | "completion_check_question",
+        currentLinearState: row.current_linear_state === null ? undefined : String(row.current_linear_state),
+        currentLinearStateType: row.current_linear_state_type === null ? undefined : String(row.current_linear_state_type),
+        prNumber: row.pr_number === null ? undefined : Number(row.pr_number),
+        prState: row.pr_state === null ? undefined : String(row.pr_state),
+        prIsDraft: row.pr_is_draft === null ? undefined : Boolean(row.pr_is_draft),
+        prReviewState: row.pr_review_state === null ? undefined : String(row.pr_review_state),
+        prCheckStatus: row.pr_check_status === null ? undefined : String(row.pr_check_status),
+        lastGitHubFailureSource: row.last_github_failure_source === null ? undefined : String(row.last_github_failure_source) as "branch_ci" | "queue_eviction",
+        deployStartedAt: row.deploy_started_at === null ? undefined : String(row.deploy_started_at),
+      };
       const executionState = deriveIssueExecutionState({
-        factoryState: String(row.factory_state ?? "delegated") as never,
-        ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
-        ...(row.current_linear_state_type !== null ? { currentLinearStateType: String(row.current_linear_state_type) } : {}),
-        ...(row.delegated_to_patchrelay !== null ? { delegatedToPatchRelay: Number(row.delegated_to_patchrelay) !== 0 } : {}),
+        ...issueFacts,
         ...((row.active_run_type !== null || detachedActiveRun) ? { activeRunId: 1 } : {}),
         ...(effectiveActiveRunType ? { activeRunType: effectiveActiveRunType } : {}),
         ...(effectiveActiveRunStatus ? { activeRunStatus: effectiveActiveRunStatus } : {}),
         blockedByKeys,
         ...(runnableWorkflowTask?.runType ? { runnableTaskRunType: runnableWorkflowTask.runType } : {}),
         ...(row.orchestration_settle_until !== null ? { orchestrationSettleUntil: String(row.orchestration_settle_until) } : {}),
-        ...(row.pr_number !== null ? { prNumber: Number(row.pr_number) } : {}),
-        ...(row.pr_state !== null ? { prState: String(row.pr_state) } : {}),
         ...(row.pr_head_sha !== null ? { prHeadSha: String(row.pr_head_sha) } : {}),
-        ...(row.pr_review_state !== null ? { prReviewState: String(row.pr_review_state) } : {}),
-        ...(row.pr_check_status !== null ? { prCheckStatus: String(row.pr_check_status) } : {}),
         ...(row.last_blocking_review_head_sha !== null ? { lastBlockingReviewHeadSha: String(row.last_blocking_review_head_sha) } : {}),
         ...(row.last_github_failure_check_name !== null ? { latestFailureCheckName: String(row.last_github_failure_check_name) } : {}),
       });
@@ -180,19 +188,12 @@ export class TrackedIssueListQuery {
         ? row.summary_text
         : undefined;
       const derivedWaitingReason = derivePatchRelayWaitingReason({
-        ...(row.delegated_to_patchrelay !== null ? { delegatedToPatchRelay: Number(row.delegated_to_patchrelay) !== 0 } : {}),
-        ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
-        ...(row.current_linear_state_type !== null ? { currentLinearStateType: String(row.current_linear_state_type) } : {}),
+        ...issueFacts,
         ...((row.active_run_type !== null || detachedActiveRun) ? { activeRunId: 1 } : {}),
         blockedByKeys,
-        factoryState: String(row.factory_state ?? "delegated"),
         ...(runnableWorkflowTask?.runType ? { runnableTaskRunType: runnableWorkflowTask.runType } : {}),
         ...(row.orchestration_settle_until !== null ? { orchestrationSettleUntil: String(row.orchestration_settle_until) } : {}),
-        ...(row.pr_number !== null ? { prNumber: Number(row.pr_number) } : {}),
-        ...(row.pr_state !== null ? { prState: String(row.pr_state) } : {}),
         ...(row.pr_head_sha !== null ? { prHeadSha: String(row.pr_head_sha) } : {}),
-        ...(row.pr_review_state !== null ? { prReviewState: String(row.pr_review_state) } : {}),
-        ...(row.pr_check_status !== null ? { prCheckStatus: String(row.pr_check_status) } : {}),
         ...(row.last_blocking_review_head_sha !== null ? { lastBlockingReviewHeadSha: String(row.last_blocking_review_head_sha) } : {}),
         ...(row.last_github_failure_check_name !== null ? { latestFailureCheckName: String(row.last_github_failure_check_name) } : {}),
       });
@@ -222,7 +223,7 @@ export class TrackedIssueListQuery {
         : undefined;
       const latestEvent = this.db.issueSessions.listIssueSessionEvents(String(row.project_id), String(row.linear_issue_id), { limit: 1 }).at(-1);
       const derivedStatusNote = deriveIssueStatusNote({
-        issue: { factoryState: String(row.factory_state ?? "delegated") } as never,
+        issue: issueFacts,
         sessionSummary,
         latestRun: latestRun as never,
         latestEvent,
@@ -261,7 +262,11 @@ export class TrackedIssueListQuery {
         projectId: String(row.project_id),
         delegatedToPatchRelay: row.delegated_to_patchrelay === null ? true : Number(row.delegated_to_patchrelay) !== 0,
         ...(row.session_state !== null ? { sessionState: detachedActiveRun ? "running" : String(row.session_state) } : {}),
-        factoryState: String(row.factory_state ?? "delegated"),
+        phase: deriveIssuePhase({
+          ...issueFacts,
+          activeRunType: effectiveActiveRunType as never,
+          runnableTaskRunType: runnableWorkflowTask?.runType,
+        }),
         blockedByCount,
         blockedByKeys,
         readyForExecution,

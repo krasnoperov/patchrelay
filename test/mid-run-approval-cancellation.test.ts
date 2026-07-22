@@ -7,7 +7,7 @@ import { PatchRelayDatabase } from "../src/db.ts";
 
 // Plan §4.4: end-to-end smoke test for the mid-run approval
 // cancellation primitive. The transition rule is exercised in
-// `factory-state.test.ts`; this test covers the run-store side
+// `issue-phase.test.ts`; this test covers the run-store side
 // (markSuperseded + shouldNotPublish flag) and verifies the round
 // trip through the row mapper.
 
@@ -27,7 +27,7 @@ function seedRun(db: PatchRelayDatabase) {
     projectId: "demo",
     linearIssueId: "ISSUE-1",
     issueKey: "DEMO-1",
-    factoryState: "changes_requested",
+    workflowOutcome: undefined,
     prNumber: 42,
     prHeadSha: "headsha",
   });

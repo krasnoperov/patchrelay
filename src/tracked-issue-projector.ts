@@ -12,6 +12,7 @@ import { deriveIssueStatusNote } from "./status-note.ts";
 import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
 import { hasDetachedActiveLatestRun, resolveEffectiveActiveRun } from "./effective-active-run.ts";
 import type { RunType } from "./run-type.ts";
+import { deriveIssuePhase } from "./issue-phase.ts";
 
 export function isResolvedLinearState(stateType: string | undefined, stateName: string | undefined): boolean {
   return stateType === "completed" || stateName?.trim().toLowerCase() === "done";
@@ -45,7 +46,8 @@ export function buildTrackedIssueRecord(params: {
     currentLinearStateType: params.issue.currentLinearStateType,
     ...(effectiveActiveRun ? { activeRunId: effectiveActiveRun.id } : {}),
     blockedByKeys,
-    factoryState: params.issue.factoryState,
+    workflowOutcome: params.issue.workflowOutcome,
+    inputRequestKind: params.issue.inputRequestKind,
     ...(params.runnableTaskRunType ? { runnableTaskRunType: params.runnableTaskRunType } : {}),
     orchestrationSettleUntil: params.issue.orchestrationSettleUntil,
     prNumber: params.issue.prNumber,
@@ -55,6 +57,8 @@ export function buildTrackedIssueRecord(params: {
     prCheckStatus: params.issue.prCheckStatus,
     lastBlockingReviewHeadSha: params.issue.lastBlockingReviewHeadSha,
     latestFailureCheckName: params.issue.lastGitHubFailureCheckName,
+    lastGitHubFailureSource: params.issue.lastGitHubFailureSource,
+    deployStartedAt: params.issue.deployStartedAt,
   });
   const statusNote = deriveIssueStatusNote({
     issue: params.issue,
@@ -83,7 +87,11 @@ export function buildTrackedIssueRecord(params: {
     ...(statusNote ? { statusNote } : {}),
     ...(params.issue.currentLinearState ? { currentLinearState: params.issue.currentLinearState } : {}),
     ...(params.session?.sessionState ? { sessionState: params.session.sessionState } : {}),
-    factoryState: params.issue.factoryState,
+    phase: deriveIssuePhase({
+      ...params.issue,
+      activeRunType: effectiveActiveRun?.runType,
+      runnableTaskRunType: params.runnableTaskRunType,
+    }),
     ...(params.issue.prNumber !== undefined ? { prNumber: params.issue.prNumber } : {}),
     ...(params.issue.prState ? { prState: params.issue.prState } : {}),
     ...(params.issue.prReviewState ? { prReviewState: params.issue.prReviewState } : {}),

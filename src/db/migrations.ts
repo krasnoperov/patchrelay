@@ -17,7 +17,9 @@ CREATE TABLE IF NOT EXISTS issues (
   url TEXT,
   current_linear_state TEXT,
   current_linear_state_type TEXT,
-  factory_state TEXT NOT NULL DEFAULT 'delegated',
+  workflow_outcome TEXT,
+  workflow_outcome_reason TEXT,
+  input_request_kind TEXT,
   branch_name TEXT,
   worktree_path TEXT,
   thread_id TEXT,
@@ -292,10 +294,6 @@ CREATE INDEX IF NOT EXISTS idx_issues_branch ON issues(branch_name);
 -- getIssueByPrNumber() runs on the GitHub webhook hot path; without this it
 -- full-scanned the issues table for every inbound PR/review/comment event.
 CREATE INDEX IF NOT EXISTS idx_issues_pr_number ON issues(pr_number);
--- Reconcilers filter the issue set by lifecycle state (most issues are
--- terminal 'done' and never need re-scanning); this composite lets those
--- filtered passes seek instead of full-scanning the issues table.
-CREATE INDEX IF NOT EXISTS idx_issues_factory_state ON issues(factory_state, updated_at);
 CREATE INDEX IF NOT EXISTS idx_runs_issue ON runs(issue_id);
 CREATE INDEX IF NOT EXISTS idx_runs_active ON runs(status, project_id, linear_issue_id);
 CREATE INDEX IF NOT EXISTS idx_runs_thread ON runs(thread_id);
@@ -346,6 +344,10 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   addColumnIfMissing(connection, "issues", "parent_linear_issue_id", "TEXT");
   addColumnIfMissing(connection, "issues", "parent_issue_key", "TEXT");
   addColumnIfMissing(connection, "issues", "orchestration_settle_until", "TEXT");
+  addColumnIfMissing(connection, "issues", "workflow_outcome", "TEXT");
+  addColumnIfMissing(connection, "issues", "workflow_outcome_reason", "TEXT");
+  addColumnIfMissing(connection, "issues", "input_request_kind", "TEXT");
+  backfillWorkflowFacts(connection);
   // Earlier releases persisted derived classifications as "explicit", which
   // made bad umbrella guesses sticky forever. We do not have a user-authored
   // explicit classification path yet, so downgrade old rows back to heuristic
@@ -453,9 +455,6 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   addColumnIfMissing(connection, "workflow_tasks", "gate_reason", "TEXT");
   addColumnIfMissing(connection, "issues", "last_blocking_review_head_sha", "TEXT");
 
-  // Collapse awaiting_review into pr_open (state normalization)
-  connection.prepare("UPDATE issues SET factory_state = 'pr_open' WHERE factory_state = 'awaiting_review'").run();
-
   // Add Linear issue description, priority, estimate
   addColumnIfMissing(connection, "issues", "description", "TEXT");
   addColumnIfMissing(connection, "issues", "priority", "INTEGER");
@@ -511,7 +510,7 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   addColumnIfMissing(connection, "issues", "issue_triage_hash", "TEXT");
   addColumnIfMissing(connection, "issues", "issue_triage_result_json", "TEXT");
   // PR3: post-merge deploy tracking. Timestamp the issue entered the
-  // `deploying` state, so the deploy watcher only considers deploy runs
+  // deploy window, so the deploy watcher only considers deploy runs
   // created at/after the merge (and can time out a never-arriving deploy).
   addColumnIfMissing(connection, "issues", "deploy_started_at", "TEXT");
 
@@ -526,6 +525,7 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   // Consecutive Codex capacity failures for an issue, driving an escalating
   // backoff (2/5/10 min). Reset when a run completes successfully.
   addColumnIfMissing(connection, "issues", "capacity_backoff_attempts", "INTEGER NOT NULL DEFAULT 0");
+  connection.exec("CREATE INDEX IF NOT EXISTS idx_issues_workflow_outcome ON issues(workflow_outcome, updated_at)");
 }
 
 function addColumnIfMissing(connection: DatabaseConnection, table: string, column: string, definition: string): void {
@@ -537,6 +537,45 @@ function addColumnIfMissing(connection: DatabaseConnection, table: string, colum
 function columnExists(connection: DatabaseConnection, table: string, column: string): boolean {
   const cols = connection.prepare(`PRAGMA table_info(${table})`).all() as Array<Record<string, unknown>>;
   return cols.some((c) => c.name === column);
+}
+
+function backfillWorkflowFacts(connection: DatabaseConnection): void {
+  if (columnExists(connection, "issues", "factory_state")) {
+    connection.prepare(`
+    UPDATE issues
+    SET workflow_outcome = CASE factory_state
+      WHEN 'done' THEN 'completed'
+      WHEN 'failed' THEN 'failed'
+      WHEN 'escalated' THEN 'escalated'
+      ELSE workflow_outcome
+    END,
+    workflow_outcome_reason = CASE
+      WHEN factory_state IN ('done', 'failed', 'escalated')
+        THEN COALESCE(workflow_outcome_reason, 'migrated_from_legacy_lifecycle')
+      ELSE workflow_outcome_reason
+    END,
+    input_request_kind = CASE
+      WHEN factory_state = 'awaiting_input'
+        THEN COALESCE(input_request_kind, 'completion_check_question')
+      ELSE input_request_kind
+    END
+    WHERE workflow_outcome IS NULL OR input_request_kind IS NULL
+    `).run();
+  }
+
+  const invalid = connection.prepare(`
+    SELECT project_id, linear_issue_id, workflow_outcome, input_request_kind
+    FROM issues
+    WHERE (workflow_outcome IS NOT NULL AND workflow_outcome NOT IN ('completed', 'failed', 'escalated'))
+       OR (input_request_kind IS NOT NULL AND input_request_kind NOT IN ('paused_local_work', 'completion_check_question'))
+    LIMIT 1
+  `).get();
+  if (invalid) {
+    throw new Error(
+      `Invalid workflow facts on ${String(invalid.project_id)}/${String(invalid.linear_issue_id)}: `
+      + `outcome=${String(invalid.workflow_outcome)}, input=${String(invalid.input_request_kind)}`,
+    );
+  }
 }
 
 const LEGACY_PENDING_RUN_TYPES = new Set(["implementation", "ci_repair", "review_fix", "branch_upkeep", "queue_repair"]);
@@ -650,7 +689,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
     "pending_run_type",
     "pending_run_context_json",
   ];
-  if (!retired.some((name) => columnNames.has(name))) {
+  if (!columnNames.has("factory_state") && !retired.some((name) => columnNames.has(name))) {
     return;
   }
 
@@ -676,7 +715,9 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         estimate REAL,
         current_linear_state TEXT,
         current_linear_state_type TEXT,
-        factory_state TEXT NOT NULL DEFAULT 'delegated',
+        workflow_outcome TEXT,
+        workflow_outcome_reason TEXT,
+        input_request_kind TEXT,
         branch_name TEXT,
         worktree_path TEXT,
         thread_id TEXT,
@@ -743,7 +784,9 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         estimate,
         current_linear_state,
         current_linear_state_type,
-        factory_state,
+        workflow_outcome,
+        workflow_outcome_reason,
+        input_request_kind,
         branch_name,
         worktree_path,
         thread_id,
@@ -808,7 +851,9 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         estimate,
         current_linear_state,
         current_linear_state_type,
-        COALESCE(factory_state, 'delegated'),
+        workflow_outcome,
+        workflow_outcome_reason,
+        input_request_kind,
         branch_name,
         worktree_path,
         thread_id,

@@ -21,7 +21,7 @@ test("progress reporter emits deduped ephemeral and durable root-cause updates",
       projectId: "project-1",
       linearIssueId: "issue-1",
       issueKey: "TST-1",
-      factoryState: "repairing_ci",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       agentSessionId: "session-1",
     });
@@ -88,7 +88,7 @@ test("progress reporter retries once after a transient SQLite schema read error"
       projectId: "project-1",
       linearIssueId: "issue-schema-retry",
       issueKey: "TST-SCHEMA",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       agentSessionId: "session-1",
     });
@@ -158,7 +158,7 @@ test("progress reporter emits verification and publishing history alongside acti
       projectId: "project-1",
       linearIssueId: "issue-2",
       issueKey: "TST-2",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       agentSessionId: "session-2",
       prNumber: 64,
@@ -255,7 +255,7 @@ test("progress reporter surfaces generic active plan steps as 'Working on' updat
       projectId: "project-1",
       linearIssueId: "issue-steps",
       issueKey: "TST-STEPS",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       agentSessionId: "session-steps",
     });
@@ -279,7 +279,7 @@ test("progress reporter surfaces generic active plan steps as 'Working on' updat
       method: "turn/plan/updated",
       params: {
         plan: [
-          { step: "Add the issues factory_state index", status: "in_progress" },
+          { step: "Add the issues workflow_outcome index", status: "in_progress" },
           { step: "Wire the reconciler to the new query", status: "pending" },
         ],
       },
@@ -289,8 +289,8 @@ test("progress reporter surfaces generic active plan steps as 'Working on' updat
       method: "turn/plan/updated",
       params: {
         plan: [
-          { step: "Add the issues factory_state index", status: "completed" },
-          { step: "Add the issues factory_state index", status: "in_progress" },
+          { step: "Add the issues workflow_outcome index", status: "completed" },
+          { step: "Add the issues workflow_outcome index", status: "in_progress" },
         ],
       },
     }, run);
@@ -306,8 +306,8 @@ test("progress reporter surfaces generic active plan steps as 'Working on' updat
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.deepEqual(emitted, [
-      { content: { type: "action", action: "Working on", parameter: "Add the issues factory_state index" }, options: { ephemeral: true } },
-      { content: { type: "action", action: "Working on", parameter: "Add the issues factory_state index" }, options: undefined },
+      { content: { type: "action", action: "Working on", parameter: "Add the issues workflow_outcome index" }, options: { ephemeral: true } },
+      { content: { type: "action", action: "Working on", parameter: "Add the issues workflow_outcome index" }, options: undefined },
       { content: { type: "action", action: "Working on", parameter: "Wire the reconciler to the new query" }, options: { ephemeral: true } },
       { content: { type: "action", action: "Working on", parameter: "Wire the reconciler to the new query" }, options: undefined },
     ]);
@@ -323,7 +323,7 @@ test("progress reporter ignores raw command chatter", async () => {
       projectId: "project-1",
       linearIssueId: "issue-3",
       issueKey: "TST-3",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       agentSessionId: "session-3",
     });
@@ -368,7 +368,7 @@ test("progress reporter re-emits durable history when the run meaning advances",
       projectId: "project-1",
       linearIssueId: "issue-4",
       issueKey: "TST-4",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       agentSessionId: "session-4",
     });
@@ -431,7 +431,7 @@ test("progress reporter ignores first-person operational chatter", async () => {
       projectId: "project-1",
       linearIssueId: "issue-5",
       issueKey: "TST-5",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       agentSessionId: "session-5",
     });
@@ -476,7 +476,7 @@ test("progress reporter emits a quiet-period heartbeat without durable history n
       projectId: "project-1",
       linearIssueId: "issue-6",
       issueKey: "TST-6",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       agentSessionId: "session-6",
     });
@@ -537,7 +537,7 @@ test("progress reporter resets heartbeat quiet window after meaningful progress"
       projectId: "project-1",
       linearIssueId: "issue-7",
       issueKey: "TST-7",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       agentSessionId: "session-7",
     });

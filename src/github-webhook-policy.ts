@@ -1,11 +1,9 @@
 import type { IssueRecord } from "./db-types.ts";
-import type { FactoryState } from "./factory-state.ts";
 import { mayClearFailureProvenance } from "./failure-provenance.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
 import {
   resolveMergeQueueProtocol,
 } from "./merge-queue-protocol.ts";
-import { deriveFactoryStateFromPrFacts } from "./pr-facts-derivation.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
 
 const DEFAULT_GATE_CHECK_NAMES = ["Tests", "verify"];
@@ -115,42 +113,4 @@ export function canClearFailureProvenance(issue: IssueRecord, event: NormalizedG
     headSha: event.headSha,
     gateCheckStatus: "success",
   });
-}
-
-export function resolveGitHubFactoryStateForEvent(
-  issue: IssueRecord,
-  event: NormalizedGitHubEvent,
-  project: ProjectConfig | undefined,
-  activeRun?: { runType?: string; sourceHeadSha?: string },
-): FactoryState | undefined {
-  // Classify check_failed events so the rule table can route them.
-  // The duplicate short-circuit that lived here before is gone — the
-  // table now handles queue_eviction via failureSource (plan §4.3).
-  const failureSource: "queue_eviction" | "branch_ci" | undefined =
-    event.triggerEvent === "check_failed"
-      ? (isQueueEvictionFailure(issue, event, project) ? "queue_eviction" : "branch_ci")
-      : undefined;
-
-  const approvalHeadSha = event.triggerEvent === "review_approved"
-    ? (event.reviewCommitId ?? event.headSha)
-    : undefined;
-
-  return deriveFactoryStateFromPrFacts(
-    {
-      source: "webhook",
-      triggerEvent: event.triggerEvent,
-      prState: event.prState,
-      prNumber: event.prNumber,
-      headSha: event.headSha,
-      failureSource,
-      ...(approvalHeadSha ? { approvalHeadSha } : {}),
-    },
-    {
-      factoryState: issue.factoryState,
-      prReviewState: issue.prReviewState,
-      activeRunId: issue.activeRunId,
-      ...(activeRun?.runType ? { activeRunType: activeRun.runType } : {}),
-      ...(activeRun?.sourceHeadSha ? { activeRunSourceHeadSha: activeRun.sourceHeadSha } : {}),
-    },
-  );
 }

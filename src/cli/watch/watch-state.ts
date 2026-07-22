@@ -12,6 +12,7 @@ import {
 } from "./timeline-builder.ts";
 import type { CodexThreadSummary } from "../../types.ts";
 import { isIssueDoneProjection, isIssueTerminalFailureProjection } from "../../issue-execution-state.ts";
+import type { IssuePhase } from "../../issue-phase.ts";
 
 // Re-export for consumers
 export type { TimelineEntry, TimelineItemPayload, TimelineRunInput } from "./timeline-builder.ts";
@@ -26,7 +27,7 @@ export interface WatchIssue {
   projectId: string;
   delegatedToPatchRelay: boolean;
   sessionState?: string | undefined;
-  factoryState: string;
+  phase: IssuePhase;
   blockedByCount: number;
   blockedByKeys: string[];
   readyForExecution: boolean;
@@ -185,10 +186,10 @@ export const initialWatchState: WatchState = {
   ...DETAIL_INITIAL,
 };
 
-const TERMINAL_FACTORY_STATES = new Set(["done", "failed"]);
+const TERMINAL_ISSUE_PHASES = new Set(["done", "failed"]);
 
 function effectiveSessionState(issue: WatchIssue): string | undefined {
-  return issue.sessionState ?? (TERMINAL_FACTORY_STATES.has(issue.factoryState) ? issue.factoryState : undefined);
+  return issue.sessionState ?? (TERMINAL_ISSUE_PHASES.has(issue.phase) ? issue.phase : undefined);
 }
 
 export function filterIssues(issues: WatchIssue[], filter: WatchFilter): WatchIssue[] {
@@ -200,7 +201,7 @@ export function filterIssues(issues: WatchIssue[], filter: WatchFilter): WatchIs
     case "non-done":
       return issues.filter((i) => {
         const sessionState = effectiveSessionState(i);
-        return sessionState !== "done" && sessionState !== "failed" && !TERMINAL_FACTORY_STATES.has(i.factoryState);
+        return sessionState !== "done" && sessionState !== "failed" && !TERMINAL_ISSUE_PHASES.has(i.phase);
       });
   }
 }
@@ -213,9 +214,6 @@ export interface IssueAggregates {
   failed: number;
   total: number;
 }
-
-const DONE_STATES = new Set(["done"]);
-const FAILED_STATES = new Set(["failed", "escalated"]);
 
 export function computeAggregates(issues: WatchIssue[]): IssueAggregates {
   let active = 0;

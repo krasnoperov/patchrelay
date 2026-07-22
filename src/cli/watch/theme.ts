@@ -1,4 +1,4 @@
-// ─── Factory State Colors ─────────────────────────────────────────
+// ─── Derived Phase Colors ─────────────────────────────────────────
 
 export const FACTORY_STATE_COLORS: Record<string, string> = {
   delegated: "cyan",

@@ -4,7 +4,7 @@ import { derivePatchRelayWaitingReason, PATCHRELAY_WAITING_REASONS } from "../sr
 
 test("changes requested with green checks on the same head stays blocked", () => {
   const waitingReason = derivePatchRelayWaitingReason({
-    factoryState: "pr_open",
+    workflowOutcome: undefined,
     prNumber: 12,
     prHeadSha: "sha-1",
     prReviewState: "changes_requested",
@@ -17,7 +17,7 @@ test("changes requested with green checks on the same head stays blocked", () =>
 
 test("changes requested with green checks on a newer head waits for review", () => {
   const waitingReason = derivePatchRelayWaitingReason({
-    factoryState: "pr_open",
+    workflowOutcome: undefined,
     prNumber: 12,
     prHeadSha: "sha-2",
     prReviewState: "changes_requested",
@@ -30,7 +30,7 @@ test("changes requested with green checks on a newer head waits for review", () 
 
 test("changes requested without green checks still waits for review feedback", () => {
   const waitingReason = derivePatchRelayWaitingReason({
-    factoryState: "pr_open",
+    workflowOutcome: undefined,
     prNumber: 12,
     prReviewState: "changes_requested",
     prCheckStatus: "pending",

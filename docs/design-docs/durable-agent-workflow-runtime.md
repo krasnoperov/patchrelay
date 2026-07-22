@@ -23,7 +23,7 @@ PatchRelay's hardest failures are not simple webhook routing failures. They are 
 - work appears complete without evidence,
 - human input is ambiguous but still triggers work.
 
-The v1 core encodes too much into factory states. States such as `changes_requested`, `awaiting_queue`, and `repairing_ci` mix human-facing display, routing, authority, retry memory, and GitHub truth.
+The former core encoded too much into persisted display states. Names such as `changes_requested`, `awaiting_queue`, and `repairing_ci` mixed human-facing display, routing, authority, retry memory, and GitHub truth.
 
 The v2 core should unmix these concerns.
 
@@ -549,11 +549,11 @@ The v1 implementation has valuable hard-won invariants:
 - Linear and GitHub handlers become thin connectors,
 - idle reconciliation becomes runtime reconciliation.
 
-The v1 factory states should become connector-facing projections, not the core workflow model.
+Connector-facing phases are now derived projections, not the core workflow model.
 
 ## Current Runtime
 
-PatchRelay keeps the existing factory-state projection for UI and Linear sync, but executor admission reads durable workflow tasks:
+PatchRelay derives UI and Linear phases from the canonical snapshot, while executor admission reads durable workflow tasks:
 
 ```text
 observations -> snapshot -> workflow_tasks -> runs -> projections

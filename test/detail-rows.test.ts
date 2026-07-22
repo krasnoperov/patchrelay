@@ -10,7 +10,8 @@ function makeIssue(key: string, overrides?: Partial<WatchIssue>): WatchIssue {
   return {
     issueKey: key,
     projectId: "test-project",
-    factoryState: "implementing",
+    delegatedToPatchRelay: true,
+    phase: "delegated",
     blockedByCount: 0,
     blockedByKeys: [],
     readyForExecution: false,
@@ -66,7 +67,8 @@ test("detail header renders issue token, phrase, PR token, and title", () => {
   const lines = buildDetailLines({
     issue: makeIssue("EQ-42", {
       title: "Fix the race in loadUser",
-      factoryState: "implementing",
+      phase: "implementing",
+      activeRunType: "implementation",
       prNumber: 1135,
       prState: "open",
       prChecksSummary: {

@@ -110,7 +110,7 @@ function baseIssue() {
     prHeadSha: "sha-pr",
     prReviewState: "approved" as const,
     prCheckStatus: "failed" as const,
-    factoryState: "repairing_queue" as const,
+    workflowOutcome: undefined as const,
     lastGitHubFailureSource: "queue_eviction" as const,
     lastGitHubFailureHeadSha: "sha-pr",
     lastGitHubFailureSignature: "queue_eviction::sha-pr::merge-steward/queue",
@@ -193,7 +193,7 @@ test("verifyReactiveRunAdvancedBranch keeps failing ci_repair when head did not 
     process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
 
     const { db, policy } = setupPolicy(baseDir);
-    const issue = db.upsertIssue({ ...baseIssue(), factoryState: "repairing_ci", lastGitHubFailureSource: "branch_ci" });
+    const issue = db.upsertIssue({ ...baseIssue(), workflowOutcome: undefined, lastGitHubFailureSource: "branch_ci" });
     const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
@@ -230,7 +230,7 @@ test("verifyReactiveRunAdvancedBranch accepts ci_repair same head after fresh su
     process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
 
     const { db, policy } = setupPolicy(baseDir);
-    const issue = db.upsertIssue({ ...baseIssue(), factoryState: "repairing_ci", lastGitHubFailureSource: "branch_ci" });
+    const issue = db.upsertIssue({ ...baseIssue(), workflowOutcome: undefined, lastGitHubFailureSource: "branch_ci" });
     const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,

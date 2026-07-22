@@ -7,7 +7,7 @@ test("derivePrDisplayContext classifies open, merged, and replacement states det
     derivePrDisplayContext({
       prNumber: 12,
       prState: "open",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
     }),
     { kind: "active_pr", prNumber: 12 },
@@ -17,7 +17,7 @@ test("derivePrDisplayContext classifies open, merged, and replacement states det
     derivePrDisplayContext({
       prNumber: 13,
       prState: "merged",
-      factoryState: "done",
+      workflowOutcome: "completed",
       delegatedToPatchRelay: true,
     }),
     { kind: "merged_pr", prNumber: 13 },
@@ -27,7 +27,7 @@ test("derivePrDisplayContext classifies open, merged, and replacement states det
     derivePrDisplayContext({
       prNumber: 14,
       prState: "closed",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
     }),
     { kind: "closed_replacement_pending", prNumber: 14 },
@@ -37,7 +37,7 @@ test("derivePrDisplayContext classifies open, merged, and replacement states det
     derivePrDisplayContext({
       prNumber: 15,
       prState: "closed",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: false,
     }),
     { kind: "closed_pr_paused", prNumber: 15 },
@@ -47,7 +47,7 @@ test("derivePrDisplayContext classifies open, merged, and replacement states det
     derivePrDisplayContext({
       prNumber: 16,
       prState: "closed",
-      factoryState: "done",
+      workflowOutcome: "completed",
       delegatedToPatchRelay: true,
     }),
     { kind: "closed_historical_pr", prNumber: 16 },

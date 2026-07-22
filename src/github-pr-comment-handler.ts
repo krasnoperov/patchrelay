@@ -5,6 +5,7 @@ import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 import { HUMAN_INPUT_OBSERVATION } from "./workflow-model.ts";
+import { deriveIssuePhase } from "./issue-phase.ts";
 
 export class GitHubPrCommentHandler {
   constructor(
@@ -36,7 +37,7 @@ export class GitHubPrCommentHandler {
       kind: "comment",
       issueKey: issue.issueKey,
       projectId: issue.projectId,
-      stage: issue.factoryState,
+      stage: deriveIssuePhase(issue),
       status: "pr_comment",
       summary: `GitHub PR comment from ${author}`,
       detail: body.slice(0, 200),

@@ -47,7 +47,7 @@ Implementation:
 - Treat the Linear agent session as the normal chat surface for PatchRelay.
 - Treat Linear issue comments as issue discussion unless the comment explicitly addresses PatchRelay at the start, such as `PatchRelay, ...` or `@PatchRelay ...`.
 - Introduce a structured follow-up intent classifier for accepted input.
-- Inputs: prompt/comment body, source (`agentPrompted` or explicitly addressed Linear comment), active run type, current factory state, whether the issue is awaiting input, delegation state, PR/review state.
+- Inputs: prompt/comment body, source (`agentPrompted` or explicitly addressed Linear comment), active run type, outstanding input, delegation state, and PR/review facts.
 - Output a small explicit enum, for example:
   - `stop`
   - `status`

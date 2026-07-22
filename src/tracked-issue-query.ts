@@ -1,5 +1,4 @@
 import type { IssueRecord, RunRecord, TrackedIssueRecord } from "./db-types.ts";
-import type { FactoryState } from "./factory-state.ts";
 import { buildTrackedIssueRecord } from "./tracked-issue-projector.ts";
 import type { IssueStore } from "./db/issue-store.ts";
 import type { IssueSessionStore } from "./db/issue-session-store.ts";
@@ -77,7 +76,4 @@ export class TrackedIssueQuery {
     };
   }
 
-  listIssuesByState(projectId: string, state: FactoryState): IssueRecord[] {
-    return this.issues.listIssuesByState(projectId, state);
-  }
 }

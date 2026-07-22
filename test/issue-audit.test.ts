@@ -85,7 +85,7 @@ test("issue audit surfaces delegation observations and authority releases", () =
       issueKey: "USE-77",
       title: "Audit delegation drift",
       delegatedToPatchRelay: true,
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 77,
       prState: "open",
     });

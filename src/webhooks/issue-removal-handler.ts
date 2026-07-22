@@ -29,7 +29,8 @@ export class IssueRemovalHandler {
           projectId: params.projectId,
           linearIssueId: params.issue.id,
           activeRunId: null,
-          factoryState: "failed" as never,
+          workflowOutcome: "failed" as const,
+          workflowOutcomeReason: "issue_removed",
         };
         const commit = this.db.issueSessions.commitIssueState({
           writer: WRITER,
@@ -47,7 +48,8 @@ export class IssueRemovalHandler {
         const update = {
           projectId: params.projectId,
           linearIssueId: params.issue.id,
-          factoryState: "failed" as never,
+          workflowOutcome: "failed" as const,
+          workflowOutcomeReason: "issue_removed",
         };
         this.db.issueSessions.commitIssueState({
           writer: WRITER,

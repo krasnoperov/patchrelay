@@ -39,7 +39,7 @@ export function formatInspect(result: InspectResult): string {
     value("Title", result.issue?.title),
     value("Session", result.issue?.sessionState),
     value("Waiting reason", result.issue?.waitingReason ?? result.issue?.statusNote),
-    value("Debug stage", result.issue?.factoryState),
+    value("Debug stage", result.issue?.phase),
     result.activeRun ? value("Active run", `${result.activeRun.runType} (${result.activeRun.status})`) : undefined,
     result.latestRun && !result.activeRun ? value("Latest run", `${result.latestRun.runType} (${result.latestRun.status})`) : undefined,
     result.prNumber
@@ -222,7 +222,7 @@ export function formatTrace(result: IssueTraceResult): string {
 export function formatClose(result: CloseResult): string {
   return `${[
     value("Issue", result.issue.issueKey ?? result.issue.linearIssueId),
-    value("Closed as", result.factoryState),
+    value("Closed as", result.phase),
     result.releasedRunId ? value("Released run", result.releasedRunId) : undefined,
     result.reason ? value("Reason", result.reason) : undefined,
   ]
@@ -339,7 +339,7 @@ export function formatList(items: ListResultItem[]): string {
         item.activeRunType ?? "-",
         item.latestRunType ? `${item.latestRunType}:${item.latestRunStatus ?? "-"}` : "-",
         item.updatedAt,
-        item.factoryState,
+        item.phase,
       ].join("\t"),
     )
     .join("\n")}\n`;

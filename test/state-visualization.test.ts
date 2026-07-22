@@ -9,7 +9,8 @@ function makeIssue(overrides?: Partial<WatchIssue>): WatchIssue {
   return {
     issueKey: "USE-88",
     projectId: "proj-1",
-    factoryState: "awaiting_queue",
+    delegatedToPatchRelay: true,
+    phase: "awaiting_queue",
     blockedByCount: 0,
     blockedByKeys: [],
     readyForExecution: false,
@@ -71,7 +72,7 @@ test("patchrelay graph marks visited side trips and current node", () => {
 });
 
 test("patchrelay queue observations report handoff and external queue failure", () => {
-  const issue = makeIssue({ factoryState: "repairing_queue", activeRunType: "queue_repair" });
+  const issue = makeIssue({ phase: "repairing_queue", activeRunType: "queue_repair" });
   const events: OperatorFeedEvent[] = [
     makeEvent({
       id: 1,
@@ -98,7 +99,7 @@ test("patchrelay queue observations report handoff and external queue failure", 
 
 test("patchrelay queue observations prefer session state and waiting reason", () => {
   const issue = makeIssue({
-    factoryState: "awaiting_queue",
+    phase: "awaiting_input",
     sessionState: "waiting_input",
     waitingReason: "Waiting for the next instruction.",
   });
@@ -111,7 +112,7 @@ test("patchrelay queue observations prefer session state and waiting reason", ()
 });
 
 test("patchrelay queue observations report merge completion", () => {
-  const issue = makeIssue({ factoryState: "done" });
+  const issue = makeIssue({ phase: "done" });
   const observations = buildPatchRelayQueueObservations(issue, [
     makeEvent({ status: "pr_merged", summary: "GitHub: pr_merged on PR #88" }),
   ]);
@@ -122,7 +123,7 @@ test("patchrelay queue observations report merge completion", () => {
 
 test("patchrelay queue observations show closed PRs as historical", () => {
   const issue = makeIssue({
-    factoryState: "done",
+    phase: "done",
     delegatedToPatchRelay: true,
     prState: "closed",
     prReviewState: "commented",
@@ -135,7 +136,7 @@ test("patchrelay queue observations show closed PRs as historical", () => {
 
 test("patchrelay queue observations show closed PR replacement work explicitly", () => {
   const issue = makeIssue({
-    factoryState: "implementing",
+    phase: "delegated",
     delegatedToPatchRelay: true,
     prState: "closed",
     prReviewState: "commented",

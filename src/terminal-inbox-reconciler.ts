@@ -36,7 +36,7 @@ export class TerminalInboxReconciler {
       this.logger.info(
         {
           issueKey: issue.issueKey,
-          factoryState: issue.factoryState,
+          workflowOutcome: issue.workflowOutcome,
           droppedEventTypes: pendingEvents.map((event) => event.eventType),
         },
         "Reconciliation: cleared stale terminal inbox",

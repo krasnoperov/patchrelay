@@ -1,4 +1,6 @@
-import type { FactoryState, RunType } from "./factory-state.ts";
+import type { InputRequestKind, WorkflowOutcome } from "./issue-phase.ts";
+import type { IssuePhase } from "./issue-phase.ts";
+import type { RunType } from "./run-type.ts";
 import type { IssueClass, IssueClassSource } from "./issue-class.ts";
 import type { IssueSessionState } from "./issue-session-state.ts";
 import type { CompletionCheckOutcome } from "./completion-check-types.ts";
@@ -49,7 +51,9 @@ export interface IssueRecord {
   estimate?: number | undefined;
   currentLinearState?: string | undefined;
   currentLinearStateType?: string | undefined;
-  factoryState: FactoryState;
+  workflowOutcome?: WorkflowOutcome | undefined;
+  workflowOutcomeReason?: string | undefined;
+  inputRequestKind?: InputRequestKind | undefined;
   branchName?: string | undefined;
   worktreePath?: string | undefined;
   threadId?: string | undefined;
@@ -231,7 +235,7 @@ export interface TrackedIssueRecord {
   statusNote?: string | undefined;
   currentLinearState?: string | undefined;
   sessionState?: IssueSessionState | undefined;
-  factoryState: FactoryState;
+  phase: IssuePhase;
   prNumber?: number | undefined;
   prState?: string | undefined;
   prReviewState?: string | undefined;

@@ -113,7 +113,7 @@ test("orchestrator.run() logs reason=active_run_present when an active run is in
       issueKey: "PRJ-1",
       branchName: "feat/x",
       delegatedToPatchRelay: true,
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
     const run = db.runs.createRun({
       issueId: issue.id,
@@ -142,7 +142,7 @@ test("orchestrator.run() logs reason=no_workflow_task_derivable when nothing is 
       issueKey: "PRJ-2",
       branchName: "feat/y",
       delegatedToPatchRelay: true,
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 9,
       prState: "open",
     });

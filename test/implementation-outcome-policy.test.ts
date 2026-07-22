@@ -138,7 +138,7 @@ test("failed implementation recovery does not resume when GitHub already has an 
       title: "Do not auto-resume published implementation work",
       branchName: "use/issue-1",
       worktreePath: repoDir,
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
     const lease = acquireLease(db, issue.projectId, issue.linearIssueId);
     const policy = new ImplementationOutcomePolicy(

@@ -176,11 +176,9 @@ export class ServiceStartupRecovery {
           ...(liveIssue.estimate != null ? { estimate: liveIssue.estimate } : {}),
           ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
           ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
-          ...(shouldRecoverPausedLocalWork
-            ? { factoryState: "delegated" as never }
-            : shouldRecoverReactivePrWork
-              ? { factoryState: reactiveIntent.compatibilityFactoryState }
-              : {}),
+          ...(shouldRecoverPausedLocalWork || shouldRecoverReactivePrWork
+            ? { workflowOutcome: null, workflowOutcomeReason: null, inputRequestKind: null }
+            : {}),
         },
         // The recovery decision was derived from the row read at loop start
         // plus stale PR facts; a concurrent writer (webhook, another recovery
@@ -275,14 +273,12 @@ export class ServiceStartupRecovery {
   private upsertDiscoveredDelegatedIssue(project: ProjectConfig, liveIssue: LinearIssueSnapshot): void {
     upsertLinearIssueProjection(this.db, project.id, liveIssue);
 
-    const existing = this.db.issues.getIssue(project.id, liveIssue.id);
     const commit = this.db.issueSessions.commitIssueState({
       writer: WRITER,
       update: {
         projectId: project.id,
         linearIssueId: liveIssue.id,
         delegatedToPatchRelay: true,
-        factoryState: existing?.factoryState ?? "delegated",
         ...(liveIssue.identifier ? { issueKey: liveIssue.identifier } : {}),
         ...(liveIssue.title ? { title: liveIssue.title } : {}),
         ...(liveIssue.description ? { description: liveIssue.description } : {}),

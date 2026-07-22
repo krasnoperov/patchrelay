@@ -62,7 +62,7 @@ test("buildWatchDetailExportText renders the current detail surface as plain tex
       issueKey: "USE-17",
       projectId: "test-project",
       title: "Stabilize transcript view",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       blockedByCount: 0,
       blockedByKeys: [],
       readyForExecution: false,

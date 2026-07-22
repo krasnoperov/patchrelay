@@ -13,7 +13,7 @@ function issue(overrides: Partial<IssueRecord> = {}): IssueRecord {
     projectId: "project-1",
     linearIssueId: "issue-1",
     delegatedToPatchRelay: true,
-    factoryState: "delegated",
+    workflowOutcome: undefined,
     ciRepairAttempts: 0,
     queueRepairAttempts: 0,
     reviewFixAttempts: 0,
@@ -53,13 +53,17 @@ test("plans fresh delegated issue implementation without pending-column writes",
   const plan = planIssueWebhookWorkflow(baseInput());
 
   assert.equal(plan.desiredStage, "implementation");
-  assert.equal(plan.resolvedIssueUpdate.factoryState, "delegated");
+  assert.deepEqual(plan.resolvedIssueUpdate, {
+    workflowOutcome: null,
+    workflowOutcomeReason: null,
+    inputRequestKind: null,
+  });
   assert.equal(plan.startupResume.workflowIntent, undefined);
 });
 
 test("linked PR adoption suppresses fresh implementation startup", () => {
   const linkedPrAdoption: LinkedPrAdoptionOutcome = {
-    factoryState: "pr_open",
+    workflowOutcome: undefined,
     issueUpdates: { prNumber: 42, prState: "open" },
   };
 
@@ -67,28 +71,28 @@ test("linked PR adoption suppresses fresh implementation startup", () => {
 
   assert.equal(plan.desiredStage, undefined);
   assert.equal(plan.startupResume.source, "linked_pr_adoption");
-  assert.equal(plan.resolvedIssueUpdate.factoryState, "pr_open");
+  assert.deepEqual(plan.resolvedIssueUpdate, {});
 });
 
 test("undelegation preserves current nonterminal state and clears pending", () => {
   const plan = planIssueWebhookWorkflow(baseInput({
     delegated: false,
-    existingIssue: issue({ factoryState: "pr_open", delegatedToPatchRelay: true }),
+    existingIssue: issue({ workflowOutcome: undefined, delegatedToPatchRelay: true }),
     triggerEvent: "delegateChanged",
     triggerAllowed: true,
     existingWorkflowTaskRunType: "review_fix",
     hasRunnableWorkflowTask: true,
   }));
 
-  assert.equal(plan.undelegation.factoryState, "pr_open");
+  assert.equal(plan.undelegation.paused, true);
   assert.equal(plan.clearPending, true);
-  assert.equal(plan.resolvedIssueUpdate.factoryState, "pr_open");
+  assert.deepEqual(plan.resolvedIssueUpdate, { agentSessionId: null });
 });
 
 test("undelegation stops active work even when discovered from a status webhook", () => {
   const plan = planIssueWebhookWorkflow(baseInput({
     delegated: false,
-    existingIssue: issue({ factoryState: "implementing", delegatedToPatchRelay: true }),
+    existingIssue: issue({ workflowOutcome: undefined, delegatedToPatchRelay: true }),
     triggerEvent: "statusChanged",
     triggerAllowed: true,
     hasActiveRun: true,
@@ -100,7 +104,7 @@ test("undelegation stops active work even when discovered from a status webhook"
     release: true,
     reason: "Un-delegated from PatchRelay",
   });
-  assert.equal(plan.undelegation.factoryState, "implementing");
+  assert.equal(plan.undelegation.paused, true);
   assert.equal(plan.clearPending, true);
   assert.equal(plan.resolvedIssueUpdate.activeRunId, null);
 });
@@ -117,7 +121,6 @@ test("blocked active implementation releases the run and returns to delegated", 
     release: true,
     reason: "Issue became blocked during implementation",
   });
-  assert.equal(plan.resolvedIssueUpdate.factoryState, "delegated");
   assert.equal(plan.resolvedIssueUpdate.activeRunId, null);
 });
 

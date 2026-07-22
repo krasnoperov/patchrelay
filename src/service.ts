@@ -503,7 +503,7 @@ export class PatchRelayService {
     statusNote?: string;
     projectId: string;
     sessionState?: string;
-    factoryState: string;
+    phase: string;
     blockedByCount: number;
     blockedByKeys: string[];
     readyForExecution: boolean;
@@ -556,7 +556,7 @@ export class PatchRelayService {
   async closeIssue(
     issueKey: string,
     options?: { failed?: boolean; reason?: string },
-  ): Promise<{ issueKey: string; factoryState: "done" | "failed"; releasedRunId?: number } | { error: string } | undefined> {
+  ): Promise<{ issueKey: string; phase: "done" | "failed"; releasedRunId?: number } | { error: string } | undefined> {
     return await this.issueActions.closeIssue(issueKey, options);
   }
 

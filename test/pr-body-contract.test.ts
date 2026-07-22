@@ -14,7 +14,7 @@ function fakeIssue(overrides: Partial<IssueRecord> = {}): IssueRecord {
     issueUrl: "https://linear.app/example/issue/EX-1",
     currentLinearState: "In Progress",
     sessionState: "active",
-    factoryState: "active",
+    workflowOutcome: undefined,
     blockedByCount: 0,
     blockedByKeys: [],
     readyForExecution: true,

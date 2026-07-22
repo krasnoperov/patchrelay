@@ -591,7 +591,7 @@ function renderAgentSessionStatusPage(params: {
       issueUrl?: string;
       currentLinearState?: string;
       sessionState?: string;
-      factoryState?: string;
+      phase?: string;
       prNumber?: number;
       prUrl?: string;
       prState?: string;
@@ -649,7 +649,7 @@ function renderAgentSessionStatusPage(params: {
   const fileChangeCount = params.sessionStatus.liveThread?.fileChangeCount ?? params.sessionStatus.latestReportSummary?.fileChangeCount ?? 0;
   const toolCallCount = params.sessionStatus.liveThread?.toolCallCount ?? params.sessionStatus.latestReportSummary?.toolCallCount ?? 0;
   const sessionState = params.sessionStatus.issue.sessionState ?? "unknown";
-  const factoryState = params.sessionStatus.issue.factoryState ?? "unknown";
+  const phase = params.sessionStatus.issue.phase ?? "unknown";
   const linearState = params.sessionStatus.issue.currentLinearState ?? "unknown";
   const prState = params.sessionStatus.issue.prState ?? "unknown";
   const reviewState = params.sessionStatus.issue.prReviewState ?? "unknown";
@@ -734,7 +734,7 @@ function renderAgentSessionStatusPage(params: {
       <div class="chips">
         <span class="chip"><strong>Session:</strong> <code>${escapeHtml(sessionState)}</code></span>
         <span class="chip"><strong>Waiting reason:</strong> <code>${escapeHtml(waitingReason)}</code></span>
-        <span class="chip"><strong>Debug stage:</strong> <code>${escapeHtml(factoryState)}</code></span>
+        <span class="chip"><strong>Derived phase:</strong> <code>${escapeHtml(phase)}</code></span>
         <span class="chip"><strong>Linear:</strong> <code>${escapeHtml(linearState)}</code></span>
         <span class="chip"><strong>Active:</strong> ${activeStage}</span>
         <span class="chip"><strong>Latest:</strong> ${latestStage}</span>

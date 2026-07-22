@@ -239,7 +239,7 @@ test("http routes handle webhook validation and issue/live lookups", async () =>
             issueKey: "USE-42",
             title: "Important work",
             projectId: "usertold",
-            factoryState: "delegated",
+            phase: "awaiting_queue",
             blockedByCount: 1,
             blockedByKeys: ["USE-41"],
             readyForExecution: false,
@@ -399,7 +399,7 @@ test("http routes handle webhook validation and issue/live lookups", async () =>
           issueKey: "USE-42",
           title: "Important work",
           projectId: "usertold",
-          factoryState: "delegated",
+          phase: "awaiting_queue",
           blockedByCount: 1,
           blockedByKeys: ["USE-41"],
           readyForExecution: false,
@@ -515,7 +515,7 @@ test("public agent session status page validates token and exposes operator sess
                 issueKey,
                 title: "Implement API endpoint",
                 issueUrl: "https://linear.app/example/issue/USE-42",
-                factoryState: "awaiting_queue",
+                phase: "awaiting_queue",
                 prNumber: 42,
                 prReviewState: "approved",
                 waitingReason: "Waiting on downstream review/merge automation",
@@ -573,7 +573,7 @@ test("public agent session status page validates token and exposes operator sess
     assert.match(page.body, /Implement API endpoint/);
     assert.match(page.body, /Session:/);
     assert.match(page.body, /Waiting reason:/);
-    assert.match(page.body, /Debug stage:/);
+    assert.match(page.body, /Derived phase:/);
     assert.match(page.body, /Waiting reason/);
     assert.match(page.body, /awaiting_queue/);
     assert.match(page.body, /Recent Stages/);

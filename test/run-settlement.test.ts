@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { assertIssuePhase } from "./assert-issue-phase.ts";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { settleRun } from "../src/run-settlement.ts";
 
@@ -21,7 +22,7 @@ function createIssueWithRun(db: PatchRelayDatabase) {
     branchName: "feat-settle",
     prNumber: 7,
     prState: "open",
-    factoryState: "pr_open",
+    workflowOutcome: undefined,
     delegatedToPatchRelay: true,
   });
   const run = db.runs.createRun({
@@ -78,14 +79,14 @@ test("settleRun records the terminal outcome and clears the slot in one call", (
       db,
       run,
       finish: { status: "completed", threadId: "thread-1" },
-      buildIssueUpdate: () => ({ factoryState: "pr_open" }),
+      buildIssueUpdate: () => ({ workflowOutcome: undefined }),
     });
     assert.equal(result.runFinished, true);
     assert.equal(result.slotCleared, true);
     assert.equal(db.runs.getRunById(run.id)?.status, "completed");
     const settled = db.getIssue(issue.projectId, issue.linearIssueId);
     assert.equal(settled?.activeRunId, undefined);
-    assert.equal(settled?.factoryState, "pr_open");
+    assertIssuePhase(settled, "pr_open");
 
     // Crash replay: the same finalize call after a restart changes nothing.
     const versionAfterFirst = settled?.version;
@@ -93,7 +94,7 @@ test("settleRun records the terminal outcome and clears the slot in one call", (
       db,
       run,
       finish: { status: "completed", threadId: "thread-1" },
-      buildIssueUpdate: () => ({ factoryState: "pr_open" }),
+      buildIssueUpdate: () => ({ workflowOutcome: undefined }),
     });
     assert.equal(replay.runFinished, false);
     assert.equal(replay.slotCleared, false);

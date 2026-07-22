@@ -1,7 +1,7 @@
 import type { Logger } from "pino";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
-import type { RunType } from "./factory-state.ts";
+import type { RunType } from "./run-type.ts";
 import { CLEARED_FAILURE_PROVENANCE } from "./failure-provenance.ts";
 import type { WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import {
@@ -381,7 +381,6 @@ export class ReactiveRunPolicy {
       );
       return {
         workflowIntent: workflowRunIntent("branch_upkeep", context),
-        factoryState: "changes_requested",
         summary: `PR #${issue.prNumber} is still dirty after review fix; queued branch upkeep`,
       };
     } catch (error) {

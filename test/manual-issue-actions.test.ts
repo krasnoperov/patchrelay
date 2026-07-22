@@ -8,14 +8,13 @@ test("manual retry treats approved awaiting_queue PRs as queue repair", () => {
     prState: "open",
     prReviewState: "approved",
     prCheckStatus: "pending",
-    factoryState: "awaiting_queue",
+    workflowOutcome: undefined,
     lastRunType: "queue_repair",
     lastGitHubFailureSource: undefined,
   });
 
   assert.deepEqual(retryTarget, {
     runType: "queue_repair",
-    factoryState: "repairing_queue",
   });
 });
 
@@ -25,13 +24,12 @@ test("manual retry keeps ordinary open PRs on implementation retry", () => {
     prState: "open",
     prReviewState: "review_required",
     prCheckStatus: "pending",
-    factoryState: "pr_open",
+    workflowOutcome: undefined,
     lastRunType: "implementation",
     lastGitHubFailureSource: undefined,
   });
 
   assert.deepEqual(retryTarget, {
     runType: "implementation",
-    factoryState: "implementing",
   });
 });

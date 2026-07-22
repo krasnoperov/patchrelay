@@ -122,7 +122,7 @@ function runToState(run: TimelineRunInput): string {
 
 function buildFromRuns(
   runs: TimelineRunInput[],
-  currentFactoryState: string,
+  currentIssuePhase: string,
 ): StateHistoryNode[] {
   if (runs.length === 0) return [];
 
@@ -161,13 +161,13 @@ function buildFromRuns(
     }
   }
 
-  // If the current factory state differs from the last node's state,
+  // If the current derived phase differs from the last node's phase,
   // add a final node (e.g., implementing → failed)
   const lastNodeState = nodes[nodes.length - 1]!.state;
-  if (currentFactoryState !== lastNodeState && currentFactoryState !== "delegated") {
+  if (currentIssuePhase !== lastNodeState && currentIssuePhase !== "delegated") {
     const lastRun = runs[runs.length - 1]!;
     nodes.push({
-      state: currentFactoryState,
+      state: currentIssuePhase,
       enteredAt: lastRun.endedAt ?? lastRun.startedAt,
       isCurrent: false,
       runs: [],
@@ -183,7 +183,7 @@ function buildFromRuns(
 function buildFromEvents(
   runs: TimelineRunInput[],
   transitions: StateTransition[],
-  currentFactoryState: string,
+  currentIssuePhase: string,
 ): StateHistoryNode[] {
   // Build a chronological queue of runs per state
   const runQueues = new Map<string, HistoryRunInfo[]>();
@@ -250,7 +250,7 @@ function buildFromEvents(
   // Close any open side-trip
   if (currentSideTrip && currentMainNode) {
     currentSideTrip.runs = consumeNextRun(currentSideTrip.state);
-    currentSideTrip.returnState = currentFactoryState;
+    currentSideTrip.returnState = currentIssuePhase;
     currentMainNode.sideTrips.push(currentSideTrip);
   }
 
@@ -283,18 +283,18 @@ function buildFromEvents(
 export function buildStateHistory(
   runs: TimelineRunInput[],
   feedEvents: OperatorFeedEvent[],
-  currentFactoryState: string,
+  currentIssuePhase: string,
   activeRunId: number | null,
 ): StateHistoryNode[] {
   const transitions = extractTransitions(feedEvents);
 
   const nodes = transitions.length > 0
-    ? buildFromEvents(runs, transitions, currentFactoryState)
-    : buildFromRuns(runs, currentFactoryState);
+    ? buildFromEvents(runs, transitions, currentIssuePhase)
+    : buildFromRuns(runs, currentIssuePhase);
 
   if (nodes.length === 0) return [];
 
-  markCurrent(nodes, currentFactoryState);
+  markCurrent(nodes, currentIssuePhase);
 
   if (activeRunId !== null) {
     markActiveRun(nodes, activeRunId);

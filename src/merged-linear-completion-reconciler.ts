@@ -1,7 +1,6 @@
 import type { Logger } from "pino";
 import type { IssueRecord } from "./db-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
-import type { FactoryState } from "./factory-state.ts";
 import { deriveReactiveWorkflowIntent } from "./reactive-workflow-intent.ts";
 import { workflowRunIntent, type WorkflowRunIntent } from "./workflow-intent.ts";
 import { resolvePreferredCompletedLinearState } from "./linear-workflow.ts";
@@ -137,14 +136,15 @@ export class MergedLinearCompletionReconciler {
     issue: IssueRecord,
     liveIssue: Awaited<ReturnType<NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>["getIssue"]>>,
   ): void {
-    const buildReopenUpdate = (record: Parameters<typeof resolveOpenWorkflowState>[0]) => {
-      const restored = resolveOpenWorkflowState(record);
+    const buildReopenUpdate = (_record: Parameters<typeof resolveOpenWorkflowState>[0]) => {
       return {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
         ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
-        ...(restored ? { factoryState: restored.factoryState } : {}),
+        workflowOutcome: null,
+        workflowOutcomeReason: null,
+        inputRequestKind: null,
         // Reopening restores the PR-fact-derived display state; the reconcile below
         // re-derives the equivalent runnable workflow task (review_fix / ci_repair /
         // queue_repair) from the PR facts already on the row.
@@ -169,8 +169,8 @@ export class MergedLinearCompletionReconciler {
     this.logger.info(
       {
         issueKey: issue.issueKey,
-        previousFactoryState: issue.factoryState,
-        restoredFactoryState: restored?.factoryState,
+        previousWorkflowOutcome: issue.workflowOutcome,
+        restoredWorkflowIntent: restored?.workflowIntent?.runType,
         liveLinearState: liveIssue.stateName,
       },
       "Reopened stale local done state from live Linear workflow",
@@ -269,7 +269,7 @@ function resolveOpenWorkflowState(
     | "lastBlockingReviewHeadSha"
     | "lastGitHubFailureSource"
   >,
-): { factoryState: FactoryState; workflowIntent?: WorkflowRunIntent | undefined } | undefined {
+): { workflowIntent?: WorkflowRunIntent | undefined } | undefined {
   const reactiveIntent = deriveReactiveWorkflowIntent({
     delegatedToPatchRelay: issue.delegatedToPatchRelay,
     prNumber: issue.prNumber,
@@ -281,21 +281,18 @@ function resolveOpenWorkflowState(
     latestFailureSource: issue.lastGitHubFailureSource,
   });
   if (reactiveIntent) {
-    return {
-      factoryState: reactiveIntent.compatibilityFactoryState,
-      workflowIntent: workflowRunIntent(reactiveIntent.runType),
-    };
+    return { workflowIntent: workflowRunIntent(reactiveIntent.runType) };
   }
 
   if (issue.prNumber !== undefined && (issue.prState === undefined || issue.prState === "open")) {
     if (issue.prReviewState === "approved" && (issue.prCheckStatus === "success" || issue.prCheckStatus === "passed")) {
-      return { factoryState: "awaiting_queue" };
+      return {};
     }
-    return { factoryState: "pr_open" };
+    return {};
   }
 
   if (issue.delegatedToPatchRelay) {
-    return { factoryState: "delegated" };
+    return {};
   }
 
   return undefined;

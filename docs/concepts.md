@@ -117,13 +117,13 @@ stateDiagram-v2
 
 Two ways back to Implementing: the reviewer asks for changes, or the lander can't integrate (eviction).
 
-Every state is decided from durable signals — `factoryState`, `prState`, the review verdict — never from whichever transient webhook happens to fire. The state moves only on a real lifecycle handoff, so it does not flap.
+Every operator-visible phase is derived from durable signals — authority, outcome/input facts, PR facts, workflow tasks, and runs — never from whichever transient webhook happens to fire. The display does not create a second lifecycle.
 
 If a project's Linear workflow omits a state, the issue collapses to the nearest earlier phase and PatchRelay never invents a state that doesn't exist: without **In Merge Queue** the issue stays in Reviewing with a `queued-for-deploy` sub-label (configurable; see [github-queue-contract.md](./github-queue-contract.md)); without **Deploying** a merged issue advances straight to Done.
 
 Deploying is **opt-in** per project: set `github.deployWorkflowName` to the GitHub Actions workflow that deploys `main`. PatchRelay then holds the merged issue in Deploying and watches that workflow's runs on the base branch — success advances to Done, failure escalates to Human Needed, and a 20-minute timeout completes the issue if no deploy ever runs (the change is already on `main`). With no `deployWorkflowName`, a merge completes immediately.
 
-The factory's internal `factoryState` codes (`pr_open`, `awaiting_queue`, `repairing_queue`, …) map onto these five — see [architecture.md](./architecture.md#factory-state-machine).
+PatchRelay's derived phases (`pr_open`, `awaiting_queue`, `repairing_queue`, …) map onto these five — see [architecture.md](./architecture.md#one-workflow-model).
 
 ## The author rule — don't originate redundant pushes
 
@@ -233,7 +233,7 @@ Once we sequence PRs, stacked PRs exist in the factory. They are *not* a new fir
 - A Linear `blockedBy` edge — declares the dependency at planning time.
 - A PR's `base` ref — declares it at the GitHub layer (`B.base = A.branch`).
 
-That's the whole contract. Every actor reads the chain from those two places. No new tables, no new factory states, no "stack id," no new CLI verbs.
+That's the whole contract. Every actor reads the chain from those two places. No parallel lifecycle, no "stack id," no new CLI verbs.
 
 For a stacked PR, the diff base is the parent PR's head, not main. Everything else flows from that one substitution:
 
@@ -260,6 +260,6 @@ Five waste classes were directly observed in production transcripts (LSR-272 / L
 
 - [github-queue-contract.md](./github-queue-contract.md) — the bus artifacts, configurable names, identity algorithms.
 - [merge-queue.md](./merge-queue.md) — the end-to-end story across all three services.
-- [architecture.md](./architecture.md) — patchrelay internals, factory state, run types, ownership.
+- [architecture.md](./architecture.md) — PatchRelay facts, workflow tasks, run types, and ownership.
 - [review-quill.md](./review-quill.md) and [merge-steward.md](./merge-steward.md) — operator references.
 - [operator-guide.md](./operator-guide.md) — the operator alert vocabulary and daily loop.

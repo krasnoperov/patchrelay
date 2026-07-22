@@ -31,10 +31,6 @@ export function isDeployTrackingEnabled(project: ProjectConfig | undefined): boo
   return Boolean(resolveMergeQueueProtocol(project).deployWorkflowName);
 }
 
-export function resolvePostMergeFactoryState(project: ProjectConfig | undefined): "deploying" | "done" {
-  return isDeployTrackingEnabled(project) ? "deploying" : "done";
-}
-
 /**
  * Decide the deploy outcome from the recent runs of the deploy workflow on
  * the base branch. Pure and total so it can be unit-tested without GitHub.

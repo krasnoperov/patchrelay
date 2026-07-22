@@ -9,7 +9,7 @@ import type {
   WorkflowObservationRecord,
   WorkflowTaskRecord,
 } from "./db-types.ts";
-import type { FactoryState, RunType } from "./factory-state.ts";
+import type { RunType } from "./run-type.ts";
 import {
   type IssueSessionEventType,
 } from "./issue-session-events.ts";
@@ -295,10 +295,6 @@ export class PatchRelayDatabase {
    */
   listAwaitingQueueIssues(): IssueRecord[] {
     return this.issues.listAwaitingQueueIssues();
-  }
-
-  listIssuesByState(projectId: string, state: FactoryState): IssueRecord[] {
-    return this.trackedIssues.listIssuesByState(projectId, state);
   }
 
   // ─── View builders ──────────────────────────────────────────────

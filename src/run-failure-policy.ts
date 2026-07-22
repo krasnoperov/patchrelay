@@ -3,7 +3,8 @@ import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { UpsertIssueParams } from "./db/issue-store.ts";
 import { hasRunnableWorkflowTask } from "./pending-workflow-task.ts";
-import type { FactoryState, RunType } from "./factory-state.ts";
+import type { WorkflowOutcome } from "./issue-phase.ts";
+import type { RunType } from "./run-type.ts";
 import type { ReleaseIssueSessionLease, WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import { buildRunFailureActivity } from "./linear-session-reporting.ts";
 import type { LinearSessionSync } from "./linear-session-sync.ts";
@@ -13,7 +14,7 @@ import type { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
 import type { CodexCapacityFailure } from "./codex-capacity.ts";
 import { getRemainingZombieRecoveryDelayMs, getZombieRecoveryBudget, resolveCapacityBackoffUntil } from "./run-budgets.ts";
 import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
-import { resolvePostRunFactoryState } from "./run-completion-policy.ts";
+import { resolvePostRunFactUpdate } from "./run-completion-policy.ts";
 import type { RunCompletionPolicy } from "./run-completion-policy.ts";
 import { isRequestedChangesRunType } from "./reactive-pr-state.ts";
 import { type RunContext } from "./run-context.ts";
@@ -23,20 +24,6 @@ import { settleRun } from "./run-settlement.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
 
 const WRITER = "run-failure-policy";
-
-function retryFactoryStateForRunType(runType: RunType): FactoryState {
-  switch (runType) {
-    case "implementation":
-      return "delegated";
-    case "ci_repair":
-      return "repairing_ci";
-    case "queue_repair":
-      return "repairing_queue";
-    case "review_fix":
-    case "branch_upkeep":
-      return "changes_requested";
-  }
-}
 
 type AttemptRefundFields = Partial<Pick<
   UpsertIssueParams,
@@ -184,7 +171,8 @@ export class RunFailurePolicy {
           update: {
             projectId: fresh.projectId,
             linearIssueId: fresh.linearIssueId,
-            factoryState: "escalated",
+            workflowOutcome: "escalated",
+            workflowOutcomeReason: "requested_changes_run_failed_without_new_head",
           },
         });
         return true;
@@ -216,7 +204,8 @@ export class RunFailurePolicy {
           update: {
             projectId: fresh.projectId,
             linearIssueId: fresh.linearIssueId,
-            factoryState: "done",
+            workflowOutcome: "completed",
+            workflowOutcomeReason: "recovery_observed_merged_pr",
             zombieRecoveryAttempts: 0,
             lastZombieRecoveryAt: null,
           },
@@ -243,7 +232,8 @@ export class RunFailurePolicy {
           update: {
             projectId: fresh.projectId,
             linearIssueId: fresh.linearIssueId,
-            factoryState: "escalated",
+            workflowOutcome: "escalated",
+            workflowOutcomeReason: "recovery_budget_exhausted",
           },
         });
         return true;
@@ -280,7 +270,9 @@ export class RunFailurePolicy {
             update: {
               projectId: fresh.projectId,
               linearIssueId: fresh.linearIssueId,
-              factoryState: retryFactoryStateForRunType(runType),
+              workflowOutcome: null,
+              workflowOutcomeReason: null,
+              inputRequestKind: null,
             },
           });
           this.appendRunIntentEventWithLease(lease, fresh, runType, undefined, `recovery:${attempts}`);
@@ -301,7 +293,9 @@ export class RunFailurePolicy {
       const buildRequeueUpdate = (record: Pick<IssueRecord, "zombieRecoveryAttempts">) => ({
         projectId: fresh.projectId,
         linearIssueId: fresh.linearIssueId,
-        factoryState: retryFactoryStateForRunType(runType),
+        workflowOutcome: null,
+        workflowOutcomeReason: null,
+        inputRequestKind: null,
         zombieRecoveryAttempts: record.zombieRecoveryAttempts + 1,
         lastZombieRecoveryAt: new Date().toISOString(),
       });
@@ -360,8 +354,11 @@ export class RunFailurePolicy {
             // The hold state that routes this work again, resolved from fresh
             // GitHub truth like the interrupted-run recovery path. Never a
             // terminal state: an unresolvable hold keeps the current one.
-            factoryState: resolvePostRunFactoryState(record, run, { outcome: "recovered" })
-              ?? (run.runType === "implementation" ? "delegated" : record.factoryState),
+            ...(resolvePostRunFactUpdate(record, run, { outcome: "recovered" }) ?? {
+              workflowOutcome: null,
+              workflowOutcomeReason: null,
+              inputRequestKind: null,
+            }),
             capacityBackoffUntil,
             capacityBackoffAttempts,
           };
@@ -412,7 +409,9 @@ export class RunFailurePolicy {
       // holds the slot, settleRun owns the paired run-release + slot-clear;
       // it refuses to clear a slot that was re-pointed at another run.
       const escalateFields = {
-        factoryState: "escalated" as const,
+        workflowOutcome: "escalated" as const,
+        workflowOutcomeReason: reason,
+        inputRequestKind: null,
       };
       if (issue.activeRunId !== undefined) {
         const settled = settleRun({
@@ -464,18 +463,22 @@ export class RunFailurePolicy {
   failRunAndClear(params: {
     run: RunRecord;
     message: string;
-    nextState: FactoryState;
+    outcome?: WorkflowOutcome | undefined;
   }): void {
-    const { run, message, nextState } = params;
+    const { run, message, outcome } = params;
     const updated = this.withHeldLease(run.projectId, run.linearIssueId, (lease) => {
       settleRun({
         db: this.db,
         run,
         finish: { status: "failed", failureReason: message },
         lease,
-        buildIssueUpdate: () => ({ factoryState: nextState }),
+        buildIssueUpdate: () => ({
+          workflowOutcome: outcome ?? null,
+          workflowOutcomeReason: outcome ? message : null,
+          inputRequestKind: null,
+        }),
       });
-      if (nextState === "failed" || nextState === "escalated" || nextState === "awaiting_input" || nextState === "done") {
+      if (outcome) {
         this.db.issueSessions.clearPendingIssueSessionEventsWithLease(lease);
       }
       return true;
@@ -525,23 +528,27 @@ export class RunFailurePolicy {
       return;
     }
 
-    const recoveredState = resolvePostRunFactoryState(
+    const recoveredFacts = resolvePostRunFactUpdate(
       this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue,
       run,
       { outcome: "recovered" },
     );
-    this.failRunAndClear({ run, message: "Codex turn was interrupted", nextState: recoveredState ?? "failed" });
+    this.failRunAndClear({
+      run,
+      message: "Codex turn was interrupted",
+      ...(recoveredFacts?.workflowOutcome ? { outcome: recoveredFacts.workflowOutcome } : {}),
+    });
     await this.restoreIdleWorktree(issue);
     const failedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
-    if (recoveredState) {
+    if (recoveredFacts) {
       this.feed?.publish({
         level: "info",
         kind: "stage",
         issueKey: issue.issueKey,
         projectId: run.projectId,
-        stage: recoveredState,
+        stage: run.runType,
         status: "reconciled",
-        summary: `Interrupted ${run.runType} recovered -> ${recoveredState}`,
+        summary: `Interrupted ${run.runType} recovered from current workflow facts`,
       });
     } else {
       void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, "The Codex turn was interrupted."));
@@ -552,7 +559,7 @@ export class RunFailurePolicy {
 
   private async handleInterruptedImplementationRun(run: RunRecord, issue: IssueRecord): Promise<void> {
     const interruptedMessage = "Implementation run was interrupted before PatchRelay could publish a PR";
-    this.failRunAndClear({ run, message: "Codex turn was interrupted", nextState: "delegated" });
+    this.failRunAndClear({ run, message: "Codex turn was interrupted" });
     await this.restoreIdleWorktree(issue);
 
     const refreshedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
@@ -611,13 +618,17 @@ export class RunFailurePolicy {
         : undefined,
     );
     const retryRunType = resolveRetryRunType(run.runType, retryContext);
-    const recoveredState = resolvePostRunFactoryState(refreshedIssue, run, { outcome: "recovered" }) ?? "failed";
+    const recoveredFacts = resolvePostRunFactUpdate(refreshedIssue, run, { outcome: "recovered" });
     const interruptedMessage = "Requested-changes run was interrupted before PatchRelay could verify that a new PR head was published";
-    this.failRunAndClear({ run, message: interruptedMessage, nextState: recoveredState });
+    this.failRunAndClear({
+      run,
+      message: interruptedMessage,
+      ...(recoveredFacts?.workflowOutcome ? { outcome: recoveredFacts.workflowOutcome } : {}),
+    });
     await this.restoreIdleWorktree(issue);
     const recoveredIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? refreshedIssue;
 
-    if (recoveredState === "changes_requested") {
+    if (!recoveredFacts?.workflowOutcome) {
       // Fold the retry intent into the durable observation the workflow-task
       // path derives the retry run from. A `branch_upkeep` retry needs the `github.parent_head_moved`
       // signal to derive `run:branch_upkeep`; a `review_fix` retry is already

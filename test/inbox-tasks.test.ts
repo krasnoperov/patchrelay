@@ -35,7 +35,7 @@ function makeIssue(db: PatchRelayDatabase, patch: Partial<IssueRecord> = {}): Is
       linearIssueId,
       issueKey: "USE-1",
       title: "Do the thing",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       ...patch,
     },
@@ -122,7 +122,7 @@ test("direct_reply with current-head requested changes derives run:input (review
   const { db, cleanup } = createDb();
   try {
     const issue = makeIssue(db, {
-      factoryState: "changes_requested",
+      workflowOutcome: undefined,
       prNumber: 7,
       prState: "open",
       prHeadSha: "head-9",
@@ -173,7 +173,7 @@ test("orchestration child update derives run:orchestration_followup only when th
       subjectId: parent.linearIssueId,
       source: "linear",
       type: "orchestration.child_delivered",
-      payloadJson: JSON.stringify({ childIssueId: "child-1", factoryState: "done" }),
+      payloadJson: JSON.stringify({ childIssueId: "child-1", workflowOutcome: "completed" }),
       dedupeKey: "child_delivered:parent-1:child-1:done:no-pr",
     });
 
@@ -311,7 +311,7 @@ test("precedence — a settled CI repair signal outranks unconsumed human input"
   const { db, cleanup } = createDb();
   try {
     const issue = makeIssue(db, {
-      factoryState: "repairing_ci",
+      workflowOutcome: undefined,
       prNumber: 3,
       prState: "open",
       prHeadSha: "head-1",

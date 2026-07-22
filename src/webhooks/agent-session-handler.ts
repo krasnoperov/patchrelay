@@ -1,12 +1,13 @@
 import type { Logger } from "pino";
 import {
-  buildAgentSessionPlanForIssue,
+  buildAgentSessionPlan,
 } from "../agent-session-plan.ts";
 import { buildAgentSessionExternalUrls } from "../agent-session-presentation.ts";
 import type { CodexAppServerClient } from "../codex-app-server.ts";
 import type { AgentInputService } from "../agent-input-service.ts";
 import type { PatchRelayDatabase } from "../db.ts";
-import { type RunType } from "../factory-state.ts";
+import type { RunType } from "../run-type.ts";
+import { deriveIssuePhase } from "../issue-phase.ts";
 import {
   buildAlreadyRunningThought,
   buildAgentSessionAcknowledgementThought,
@@ -250,7 +251,7 @@ export class AgentSessionHandler {
           projectId: params.project.id,
           linearIssueId: issueId,
           activeRunId: null,
-          factoryState: "awaiting_input",
+          inputRequestKind: "paused_local_work",
           agentSessionId: sessionId,
         },
       });
@@ -326,13 +327,12 @@ export class AgentSessionHandler {
         ...(externalUrls ? { externalUrls } : {}),
         ...(issue
           ? {
-              plan: buildAgentSessionPlanForIssue(
+              plan: buildAgentSessionPlan(
                 {
-                  factoryState: issue.factoryState,
+                  phase: "phase" in issue ? issue.phase : deriveIssuePhase(issue),
                   ciRepairAttempts: "ciRepairAttempts" in issue ? issue.ciRepairAttempts : 0,
                   queueRepairAttempts: "queueRepairAttempts" in issue ? issue.queueRepairAttempts : 0,
-                },
-                (() => {
+                  ...(() => {
                   const runnableTaskRunType = options?.runnableTaskRunType ?? peekRunnableWorkflowTaskRunType(
                     issue.projectId,
                     issue.linearIssueId,
@@ -341,7 +341,8 @@ export class AgentSessionHandler {
                     ...(options?.activeRunType ? { activeRunType: options.activeRunType } : {}),
                     ...(runnableTaskRunType ? { runnableTaskRunType } : {}),
                   };
-                })(),
+                  })(),
+                },
               ),
             }
           : {}),

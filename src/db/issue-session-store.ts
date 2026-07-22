@@ -1,5 +1,5 @@
 import type { IssueRecord, IssueSessionEventRecord, IssueSessionRecord, RunStatus } from "../db-types.ts";
-import type { RunType } from "../factory-state.ts";
+import type { RunType } from "../run-type.ts";
 import type { IssueSessionProjectionInvalidator } from "../issue-session-projection-invalidator.ts";
 import type { IssueStore, UpsertIssueParams } from "./issue-store.ts";
 import type { RunStore } from "./run-store.ts";
@@ -587,7 +587,9 @@ export class IssueSessionStore {
       .prepare(
         `SELECT
           s.project_id, s.linear_issue_id, s.issue_key, i.title,
-          i.current_linear_state, i.current_linear_state_type, i.factory_state, i.delegated_to_patchrelay, s.session_state, s.waiting_reason, s.summary_text, s.display_updated_at,
+          i.current_linear_state, i.current_linear_state_type, i.delegated_to_patchrelay,
+          i.workflow_outcome, i.input_request_kind, i.pr_is_draft, i.last_github_failure_source, i.deploy_started_at,
+          s.session_state, s.waiting_reason, s.summary_text, s.display_updated_at,
           i.orchestration_settle_until,
           i.pr_number, i.pr_state, i.pr_head_sha, i.pr_review_state, i.pr_check_status, i.last_blocking_review_head_sha,
           i.last_github_ci_snapshot_json,

@@ -98,7 +98,7 @@ function upsertBlockedImplementationIssue(db: PatchRelayDatabase, params?: {
     issueKey: params?.issueKey ?? "USE-2",
     title: "Blocked issue",
     delegatedToPatchRelay: true,
-    factoryState: "delegated",
+    workflowOutcome: undefined,
   });
 }
 
@@ -146,7 +146,7 @@ test("unblock while idle enqueues implementation and clears stale blocked read-m
       issueKey: "USE-1",
       currentLinearState: "Done",
       currentLinearStateType: "completed",
-      factoryState: "done",
+      workflowOutcome: "completed",
     });
 
     assert.deepEqual(readiness.reconcile("usertold", "issue-blocker"), ["issue-child"]);
@@ -193,7 +193,7 @@ test("blocked active issue emits invariant telemetry when dispatch is suppressed
       projectId: "usertold",
       linearIssueId: "issue-child",
       activeRunId: 123,
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
 
     assert.equal(dispatcher.dispatchIfWorkflowTaskPending("usertold", "issue-child"), undefined);
@@ -267,7 +267,7 @@ test("multiple blockers keep the remaining blocker until the final unblock queue
       linearIssueId: "issue-child",
       issueKey: "USE-2",
       delegatedToPatchRelay: true,
-      factoryState: "delegated",
+      workflowOutcome: undefined,
     });
 
     db.issues.updateDependencyBlockerSnapshot({
@@ -329,7 +329,7 @@ test("blocked requested-changes work waits until unblock and then queues review_
       linearIssueId: "issue-review",
       issueKey: "USE-4",
       delegatedToPatchRelay: true,
-      factoryState: "changes_requested",
+      workflowOutcome: undefined,
       prNumber: 44,
       prState: "open",
       prHeadSha: "sha-review",
@@ -384,7 +384,7 @@ test("blocked red-CI work waits until unblock and then queues ci_repair workflow
       linearIssueId: "issue-ci",
       issueKey: "USE-5",
       delegatedToPatchRelay: true,
-      factoryState: "repairing_ci",
+      workflowOutcome: undefined,
       prNumber: 55,
       prState: "open",
       prHeadSha: "sha-1",
@@ -440,7 +440,7 @@ test("unblock under a held lease preserves lease ownership and dedupes enqueue w
       update: {
         projectId: "usertold",
         linearIssueId: "issue-child",
-        factoryState: "implementing",
+        workflowOutcome: undefined,
       },
     }).outcome, "lease_denied");
 
