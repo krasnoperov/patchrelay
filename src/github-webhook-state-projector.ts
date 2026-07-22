@@ -24,7 +24,11 @@ import {
   buildGitHubQueueFailureContext,
   resolveGitHubBranchFailureContext,
 } from "./github-webhook-failure-context.ts";
-import { emitGitHubLinearActivity, syncGitHubLinearSession } from "./github-linear-session-sync.ts";
+import {
+  emitGitHubLinearActivity,
+  syncGitHubLinearDeliveryPr,
+  syncGitHubLinearSession,
+} from "./github-linear-session-sync.ts";
 import { buildQueueRepairContextFromEvent } from "./merge-queue-incident.ts";
 
 const WRITER = "github-webhook-state-projector";
@@ -181,6 +185,17 @@ export async function projectGitHubWebhookState(
   }
 
   const freshIssue = deps.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+
+  // A PR-opened webhook resolved to this issue is a proven linkage event. Keep
+  // this separate from generic session sync so stale cached PR fields can never
+  // turn an ordinary evidence attachment into PatchRelay's delivery PR.
+  if (event.triggerEvent === "pr_opened") {
+    void syncGitHubLinearDeliveryPr({
+      linearProvider: deps.linearProvider,
+      logger: deps.logger,
+      issue: freshIssue,
+    });
+  }
 
   if (event.triggerEvent === "pr_synchronize" && !freshIssue.activeRunId) {
     // A push always resets the repair budgets and the CI snapshot for the new

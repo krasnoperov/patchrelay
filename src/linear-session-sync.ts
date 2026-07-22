@@ -41,7 +41,7 @@ export class LinearSessionSync {
     await this.agentSessions.emitActivity(issue, content, options);
   }
 
-  async syncSession(issue: IssueRecord, options?: { activeRunType?: RunType }): Promise<void> {
+  async syncSession(issue: IssueRecord, options?: { activeRunType?: RunType; syncDeliveryPr?: boolean }): Promise<void> {
     const syncedIssue = this.agentSessions.ensureAgentSessionIssue(issue);
     if (!this.linearBackoff.shouldAttempt(syncedIssue.projectId)) {
       this.logger.debug({ issueKey: syncedIssue.issueKey }, "Skipping Linear session sync during rate-limit backoff");
@@ -69,7 +69,9 @@ export class LinearSessionSync {
         ...(project ? { project } : {}),
       });
       await this.agentSessions.syncSessionPlan(syncedIssue, linear, options);
-      await syncLinearDeliveryPrAttachment(syncedIssue, linear);
+      if (options?.syncDeliveryPr) {
+        await syncLinearDeliveryPrAttachment(syncedIssue, linear);
+      }
       if (shouldSyncVisibleIssueComment(visibleIssue, Boolean(syncedIssue.agentSessionId))) {
         await syncVisibleStatusComment({
           db: this.db,
