@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import pino from "pino";
 import test from "node:test";
+import { assertIssuePhase } from "./assert-issue-phase.ts";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { PatchRelayService } from "../src/service.ts";
 import type { AppConfig } from "../src/types.ts";
@@ -94,7 +95,7 @@ test("promptIssue queues operator input for the next run when no run is active",
       projectId: "usertold",
       linearIssueId: "issue-1",
       issueKey: "USE-1",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
       title: "Queued prompt",
     });
 
@@ -140,7 +141,7 @@ test("promptIssue steers active runs through the shared agent input path", async
       projectId: "usertold",
       linearIssueId: "issue-active",
       issueKey: "USE-1A",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       title: "Active prompt",
     });
@@ -197,7 +198,7 @@ test("retryIssue preserves branch upkeep retries for requested-changes issues", 
       linearIssueId: "issue-2",
       issueKey: "USE-2",
       title: "Requested changes upkeep",
-      factoryState: "changes_requested",
+      workflowOutcome: undefined,
       prNumber: 42,
       prReviewState: "changes_requested",
       prHeadSha: "abc123",
@@ -245,7 +246,7 @@ test("retryIssue treats closed PR issues as fresh implementation retries", async
       linearIssueId: "issue-closed-retry",
       issueKey: "USE-2C",
       title: "Closed PR should not stay in review repair",
-      factoryState: "failed",
+      workflowOutcome: "failed",
       prNumber: 193,
       prState: "closed",
       prReviewState: "changes_requested",
@@ -284,7 +285,7 @@ test("closeIssue releases active runs and clears pending work", async () => {
       linearIssueId: "issue-close-1",
       issueKey: "USE-CLOSE-1",
       title: "Close me",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
     const run = db.runs.createRun({
       issueId: issue.id,
@@ -307,11 +308,11 @@ test("closeIssue releases active runs and clears pending work", async () => {
 
     const result = await service.closeIssue("USE-CLOSE-1", { reason: "handled manually" });
 
-    assert.deepEqual(result, { issueKey: "USE-CLOSE-1", factoryState: "done", releasedRunId: run.id });
+    assert.deepEqual(result, { issueKey: "USE-CLOSE-1", phase: "done", releasedRunId: run.id });
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId);
     const updatedRun = db.runs.getRunById(run.id);
     const events = db.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 10 });
-    assert.equal(updatedIssue?.factoryState, "done");
+    assertIssuePhase(updatedIssue, "done");
     assert.equal(updatedIssue?.delegatedToPatchRelay, false);
     assert.equal(updatedIssue?.activeRunId, undefined);
     assert.equal(updatedRun?.status, "released");

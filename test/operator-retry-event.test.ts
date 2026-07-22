@@ -10,7 +10,7 @@ function createIssue(overrides: Partial<IssueRecord> = {}): IssueRecord {
     linearIssueId: "issue-1",
     delegatedToPatchRelay: true,
     issueKey: "USE-1",
-    factoryState: "failed",
+    workflowOutcome: "failed",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     ...overrides,

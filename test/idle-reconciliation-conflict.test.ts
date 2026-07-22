@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import pino from "pino";
 import test from "node:test";
+import { assertIssuePhase } from "./assert-issue-phase.ts";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { IdleIssueReconciler } from "../src/idle-reconciliation.ts";
 import { WorkflowTaskDispatcher } from "../src/workflow-task-dispatcher.ts";
@@ -38,18 +39,28 @@ test("advanceIdleIssue skips when a concurrent writer landed after the tick's re
       linearIssueId: "issue-1",
       issueKey: "USE-1",
       delegatedToPatchRelay: true,
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 7,
     });
 
     // A webhook lands mid-tick and moves the issue forward.
-    db.upsertIssue({ projectId: "proj", linearIssueId: "issue-1", factoryState: "repairing_ci" });
+    db.upsertIssue({
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      prState: "open",
+      prHeadSha: "sha-1",
+      prCheckStatus: "failed",
+      lastGitHubFailureSource: "branch_ci",
+      lastGitHubFailureHeadSha: "sha-1",
+    });
 
-    const outcome = reconciler.advanceIdleIssue(staleRow, "awaiting_queue", { clearFailureProvenance: true });
+    const outcome = reconciler.advanceIdleIssue(staleRow, { clearFailureProvenance: true });
 
     assert.equal(outcome, "skipped");
     // The webhook's state survives; the stale advance did not clobber it.
-    assert.equal(db.getIssue("proj", "issue-1")?.factoryState, "repairing_ci");
+    const current = db.getIssue("proj", "issue-1");
+    assert.equal(current?.lastGitHubFailureSource, "branch_ci");
+    assertIssuePhase(current, "repairing_ci");
     const conflicts = telemetry.list("state.write_conflict");
     assert.equal(conflicts.length, 1);
     assert.equal(conflicts[0]?.writer, "idle-reconciliation");
@@ -67,15 +78,15 @@ test("advanceIdleIssue applies and records no conflict when the row is fresh", (
       linearIssueId: "issue-1",
       issueKey: "USE-1",
       delegatedToPatchRelay: true,
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 7,
       prReviewState: "approved",
     });
 
-    const outcome = reconciler.advanceIdleIssue(fresh, "awaiting_queue", { clearFailureProvenance: true });
+    const outcome = reconciler.advanceIdleIssue(fresh, { clearFailureProvenance: true });
 
     assert.equal(outcome, "applied");
-    assert.equal(db.getIssue("proj", "issue-1")?.factoryState, "awaiting_queue");
+    assertIssuePhase(db.getIssue("proj", "issue-1"), "awaiting_queue");
     assert.equal(telemetry.list("state.write_conflict").length, 0);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

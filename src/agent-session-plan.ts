@@ -1,5 +1,6 @@
 import type { IssueRecord, RunRecord } from "./db-types.ts";
-import type { FactoryState, RunType } from "./factory-state.ts";
+import { deriveIssuePhase, type IssuePhase } from "./issue-phase.ts";
+import type { RunType } from "./run-type.ts";
 import type { IssueClass } from "./issue-class.ts";
 
 export type AgentSessionPlanStatus = "pending" | "inProgress" | "completed" | "canceled";
@@ -110,7 +111,7 @@ function setStatuses(
 }
 
 function resolvePlanRunType(params: {
-  factoryState: FactoryState;
+  phase: IssuePhase;
   activeRunType?: RunType;
   runnableTaskRunType?: RunType;
 }): RunType {
@@ -120,7 +121,7 @@ function resolvePlanRunType(params: {
   if (params.runnableTaskRunType) {
     return params.runnableTaskRunType;
   }
-  switch (params.factoryState) {
+  switch (params.phase) {
     case "changes_requested":
       return params.runnableTaskRunType === "branch_upkeep" || params.activeRunType === "branch_upkeep"
         ? "branch_upkeep"
@@ -135,7 +136,7 @@ function resolvePlanRunType(params: {
 }
 
 export function buildAgentSessionPlan(params: {
-  factoryState: FactoryState;
+  phase: IssuePhase;
   issueClass?: IssueClass;
   orchestrationSettleUntil?: string;
   activeRunType?: RunType;
@@ -157,10 +158,11 @@ export function buildAgentSessionPlan(params: {
         { content: "Audit delivered outcome", status: "pending" },
       ];
     }
-    switch (params.factoryState) {
+    switch (params.phase) {
       case "done":
         return setStatuses(orchestrationPlan(), ["completed", "completed", "completed", "completed"]);
       case "awaiting_input":
+      case "paused":
       case "failed":
       case "escalated":
         return setStatuses(orchestrationPlan(), ["completed", "completed", "completed", "inProgress"]);
@@ -180,7 +182,7 @@ export function buildAgentSessionPlan(params: {
 
   const runType = resolvePlanRunType(params);
 
-  switch (params.factoryState) {
+  switch (params.phase) {
     case "delegated":
       return setStatuses(planForRunType(runType, params), ["inProgress", "pending", "pending", "pending"]);
     case "implementing":
@@ -216,6 +218,7 @@ export function buildAgentSessionPlan(params: {
         { content: "Deploying", status: "inProgress" },
       ], ["completed", "completed", "completed", "inProgress"]);
     case "awaiting_input":
+    case "paused":
       return awaitingInputPlan();
     case "escalated":
       return failedPlan("Needs human help");
@@ -295,7 +298,14 @@ function planForRunType(
 export function buildAgentSessionPlanForIssue(
   issue: Pick<
     IssueRecord,
-    | "factoryState"
+    | "delegatedToPatchRelay"
+    | "workflowOutcome"
+    | "inputRequestKind"
+    | "prNumber"
+    | "prState"
+    | "prIsDraft"
+    | "lastGitHubFailureSource"
+    | "deployStartedAt"
     | "ciRepairAttempts"
     | "queueRepairAttempts"
     | "issueClass"
@@ -306,7 +316,11 @@ export function buildAgentSessionPlanForIssue(
   options?: { activeRunType?: RunType; runnableTaskRunType?: RunType },
 ): AgentSessionPlanStep[] {
   return buildAgentSessionPlan({
-    factoryState: issue.factoryState,
+    phase: deriveIssuePhase({
+      ...issue,
+      activeRunType: options?.activeRunType,
+      runnableTaskRunType: options?.runnableTaskRunType,
+    }),
     ciRepairAttempts: issue.ciRepairAttempts,
     queueRepairAttempts: issue.queueRepairAttempts,
     ...(issue.issueClass ? { issueClass: issue.issueClass } : {}),
@@ -320,7 +334,7 @@ export function buildAgentSessionPlanForIssue(
 
 export function buildRunningSessionPlan(runType: string): AgentSessionPlanStep[] {
   return buildAgentSessionPlan({
-    factoryState: runType === "ci_repair" ? "repairing_ci"
+    phase: runType === "ci_repair" ? "repairing_ci"
       : runType === "main_repair" ? "implementing"
       : runType === "review_fix" || runType === "branch_upkeep" ? "changes_requested"
       : runType === "queue_repair" ? "repairing_queue"
@@ -331,9 +345,9 @@ export function buildRunningSessionPlan(runType: string): AgentSessionPlanStep[]
 
 export function buildCompletedSessionPlan(runType: string): AgentSessionPlanStep[] {
   if (runType === "ci_repair" || runType === "queue_repair") {
-    return buildAgentSessionPlan({ factoryState: "awaiting_queue" });
+    return buildAgentSessionPlan({ phase: "awaiting_queue" });
   }
-  return buildAgentSessionPlan({ factoryState: "pr_open" });
+  return buildAgentSessionPlan({ phase: "pr_open" });
 }
 
 export function buildAwaitingHandoffSessionPlan(runType: string): AgentSessionPlanStep[] {
@@ -343,7 +357,7 @@ export function buildAwaitingHandoffSessionPlan(runType: string): AgentSessionPl
 export function buildFailedSessionPlan(runType: string, run?: Pick<RunRecord, "threadId" | "turnId">): AgentSessionPlanStep[] {
   void run;
   return buildAgentSessionPlan({
-    factoryState: "failed",
+    phase: "failed",
     activeRunType: runType as RunType,
   });
 }

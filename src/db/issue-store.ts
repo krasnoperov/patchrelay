@@ -5,11 +5,30 @@ import type {
   IssueDependencyRecord,
   IssueRecord,
 } from "../db-types.ts";
-import { FACTORY_STATES, isFactoryState, type FactoryState } from "../factory-state.ts";
+import type { InputRequestKind, WorkflowOutcome } from "../issue-phase.ts";
 import type { IssueSessionProjectionInvalidator } from "../issue-session-projection-invalidator.ts";
 import type { IssueClass, IssueClassSource } from "../issue-class.ts";
 import { buildInsertBindings, buildUpdateAssignments } from "./issue-upsert-columns.ts";
 import { isoNow, type DatabaseConnection } from "./shared.ts";
+
+const WORKFLOW_OUTCOMES = new Set<WorkflowOutcome>(["completed", "failed", "escalated"]);
+const INPUT_REQUEST_KINDS = new Set<InputRequestKind>(["paused_local_work", "completion_check_question"]);
+
+function parseWorkflowOutcome(value: unknown): WorkflowOutcome {
+  const outcome = String(value);
+  if (!WORKFLOW_OUTCOMES.has(outcome as WorkflowOutcome)) {
+    throw new Error(`Invalid persisted workflow_outcome: ${outcome}`);
+  }
+  return outcome as WorkflowOutcome;
+}
+
+function parseInputRequestKind(value: unknown): InputRequestKind {
+  const kind = String(value);
+  if (!INPUT_REQUEST_KINDS.has(kind as InputRequestKind)) {
+    throw new Error(`Invalid persisted input_request_kind: ${kind}`);
+  }
+  return kind as InputRequestKind;
+}
 
 export interface UpsertIssueParams {
   projectId: string;
@@ -29,7 +48,9 @@ export interface UpsertIssueParams {
   estimate?: number | null;
   currentLinearState?: string;
   currentLinearStateType?: string;
-  factoryState?: FactoryState;
+  workflowOutcome?: WorkflowOutcome | null;
+  workflowOutcomeReason?: string | null;
+  inputRequestKind?: InputRequestKind | null;
   branchName?: string;
   worktreePath?: string;
   threadId?: string | null;
@@ -162,13 +183,6 @@ export class IssueStore {
     return rows.map(mapIssueRow);
   }
 
-  listIssuesByState(projectId: string, state: FactoryState): IssueRecord[] {
-    const rows = this.connection
-      .prepare("SELECT * FROM issues WHERE project_id = ? AND factory_state = ? ORDER BY pr_number ASC")
-      .all(projectId, state) as Array<Record<string, unknown>>;
-    return rows.map(mapIssueRow);
-  }
-
   // Terminal issues (escalated/failed) that still carry an idle PR worth
   // re-probing against GitHub. The vast majority of issues are 'done' and
   // never qualify, so filtering in SQL avoids loading the whole table and
@@ -179,7 +193,7 @@ export class IssueStore {
     const rows = this.connection
       .prepare(
         `SELECT * FROM issues
-         WHERE factory_state IN ('escalated', 'failed')
+         WHERE workflow_outcome IN ('escalated', 'failed')
            AND pr_number IS NOT NULL
            AND active_run_id IS NULL
            AND (pr_state IS NULL OR pr_state != 'merged')`,
@@ -214,7 +228,7 @@ export class IssueStore {
       .prepare(
         `SELECT * FROM issues
          WHERE updated_at >= ?
-           AND (factory_state = 'done' OR pr_state = 'merged')
+           AND (workflow_outcome = 'completed' OR pr_state = 'merged')
          ORDER BY updated_at DESC`,
       )
       .all(updatedSinceIso) as Array<Record<string, unknown>>;
@@ -230,8 +244,8 @@ export class IssueStore {
     const rows = this.connection
       .prepare(
         `SELECT * FROM issues AS i
-         WHERE i.factory_state IS NULL
-            OR i.factory_state != 'done'
+         WHERE i.workflow_outcome IS NULL
+            OR i.workflow_outcome != 'completed'
             OR EXISTS (
                  SELECT 1 FROM workflow_tasks t
                  WHERE t.project_id = i.project_id
@@ -256,7 +270,7 @@ export class IssueStore {
       .prepare(
         `SELECT * FROM issues AS i
          WHERE i.active_run_id IS NULL
-           AND i.factory_state IN ('done', 'escalated', 'failed', 'awaiting_input')
+           AND (i.workflow_outcome IS NOT NULL OR i.input_request_kind IS NOT NULL)
            AND EXISTS (
              SELECT 1 FROM issue_session_events e
              WHERE e.project_id = i.project_id
@@ -282,7 +296,8 @@ export class IssueStore {
     const rows = this.connection
       .prepare(
         `SELECT * FROM issues
-         WHERE factory_state NOT IN ('done', 'escalated', 'failed', 'awaiting_input')
+         WHERE workflow_outcome IS NULL
+         AND input_request_kind IS NULL
          AND active_run_id IS NULL
          AND pr_number IS NOT NULL`,
       )
@@ -331,7 +346,8 @@ export class IssueStore {
            AND t.run_type IS NOT NULL
            AND i.active_run_id IS NULL
            AND i.delegated_to_patchrelay = 1
-           AND i.factory_state NOT IN ('done', 'escalated', 'failed', 'awaiting_input')`,
+           AND i.workflow_outcome IS NULL
+           AND i.input_request_kind IS NULL`,
       )
       .all() as Array<Record<string, unknown>>;
     return rows.map(mapIssueRow);
@@ -342,7 +358,9 @@ export class IssueStore {
       .prepare(
         `SELECT DISTINCT i.* FROM issues i
          JOIN issue_dependencies d ON d.project_id = i.project_id AND d.linear_issue_id = i.linear_issue_id
-         WHERE i.factory_state = 'delegated'
+         WHERE i.delegated_to_patchrelay = 1
+         AND i.workflow_outcome IS NULL
+         AND i.input_request_kind IS NULL
          AND i.active_run_id IS NULL`,
       )
       .all() as Array<Record<string, unknown>>;
@@ -353,9 +371,11 @@ export class IssueStore {
     const rows = this.connection
       .prepare(
         `SELECT * FROM issues
-         WHERE factory_state = 'awaiting_queue'
+         WHERE workflow_outcome IS NULL
+         AND input_request_kind IS NULL
          AND active_run_id IS NULL
-         AND pr_number IS NOT NULL`,
+         AND pr_number IS NOT NULL
+         AND pr_review_state = 'approved'`,
       )
       .all() as Array<Record<string, unknown>>;
     return rows.map(mapIssueRow);
@@ -367,7 +387,7 @@ export class IssueStore {
   // `pr_synchronize` for a parent so it must stay cheap.
   listIssuesWithParentBranch(branchName: string): IssueRecord[] {
     const rows = this.connection
-      .prepare(`SELECT * FROM issues WHERE parent_pr_branch = ? AND factory_state NOT IN ('done', 'failed')`)
+      .prepare(`SELECT * FROM issues WHERE parent_pr_branch = ? AND workflow_outcome IS NULL`)
       .all(branchName) as Array<Record<string, unknown>>;
     return rows.map(mapIssueRow);
   }
@@ -380,8 +400,9 @@ export class IssueStore {
     const rows = this.connection
       .prepare(
         `SELECT * FROM issues
-         WHERE factory_state = 'pr_open'
-         AND active_run_id IS NULL
+         WHERE active_run_id IS NULL
+         AND workflow_outcome IS NULL
+         AND input_request_kind IS NULL
          AND pr_number IS NOT NULL
          AND pr_review_state = 'approved'
          AND pr_check_status = 'failure'`,
@@ -670,7 +691,16 @@ export class IssueStore {
           i.title,
           i.current_linear_state,
           i.current_linear_state_type,
-          i.factory_state,
+          i.delegated_to_patchrelay,
+          i.workflow_outcome,
+          i.input_request_kind,
+          i.pr_number,
+          i.pr_state,
+          i.pr_is_draft,
+          i.pr_review_state,
+          i.pr_check_status,
+          i.last_github_failure_source,
+          i.deploy_started_at,
           i.updated_at,
           s.session_state,
           s.waiting_reason,
@@ -696,15 +726,6 @@ export class IssueStore {
 }
 
 export function mapIssueRow(row: Record<string, unknown>): IssueRecord {
-  const factoryState = String(row.factory_state ?? "delegated");
-  if (!isFactoryState(factoryState)) {
-    throw new Error(
-      `Invalid factory_state '${factoryState}' on issue row `
-      + `${String(row.project_id)}/${String(row.linear_issue_id)}`
-      + `${row.issue_key != null ? ` (${String(row.issue_key)})` : ""}; `
-      + "expected one of: " + [...FACTORY_STATES].join(", "),
-    );
-  }
   return {
     id: Number(row.id),
     projectId: String(row.project_id),
@@ -734,7 +755,15 @@ export function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.current_linear_state_type !== null && row.current_linear_state_type !== undefined
       ? { currentLinearStateType: String(row.current_linear_state_type) }
       : {}),
-    factoryState,
+    ...(row.workflow_outcome !== null && row.workflow_outcome !== undefined
+      ? { workflowOutcome: parseWorkflowOutcome(row.workflow_outcome) }
+      : {}),
+    ...(row.workflow_outcome_reason !== null && row.workflow_outcome_reason !== undefined
+      ? { workflowOutcomeReason: String(row.workflow_outcome_reason) }
+      : {}),
+    ...(row.input_request_kind !== null && row.input_request_kind !== undefined
+      ? { inputRequestKind: parseInputRequestKind(row.input_request_kind) }
+      : {}),
     ...(row.branch_name !== null ? { branchName: String(row.branch_name) } : {}),
     ...(row.worktree_path !== null ? { worktreePath: String(row.worktree_path) } : {}),
     ...(row.thread_id !== null ? { threadId: String(row.thread_id) } : {}),

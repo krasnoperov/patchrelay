@@ -1,4 +1,5 @@
 import type { GitHubFailureSource, IssueRecord, WorkflowObservationRecord } from "./db-types.ts";
+import type { InputRequestKind } from "./issue-phase.ts";
 import type { RunType } from "./run-type.ts";
 import type { RunContext } from "./run-context.ts";
 
@@ -49,8 +50,7 @@ export interface WorkflowTask {
 export interface WorkflowContext {
   issueKey?: string | undefined;
   title?: string | undefined;
-  displayState: IssueRecord["factoryState"];
-  awaitingInput: boolean;
+  inputRequestKind?: InputRequestKind | undefined;
   lastBlockingReviewHeadSha?: string | undefined;
   lastGitHubFailureSource?: GitHubFailureSource | undefined;
   lastGitHubFailureHeadSha?: string | undefined;

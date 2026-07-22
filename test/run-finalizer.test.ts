@@ -4,10 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
+import { assertIssuePhase } from "./assert-issue-phase.ts";
 import pino from "pino";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { RunFinalizer } from "../src/run-finalizer.ts";
-import type { FactoryState } from "../src/factory-state.ts";
+import type { WorkflowOutcome } from "../src/issue-phase.ts";
 import { reconcileWorkflowTasksForIssue } from "../src/workflow-task-reconciler.ts";
 import { createTestWorkflowTaskDispatcher } from "./helpers/workflow-task-dispatcher.ts";
 
@@ -42,7 +43,7 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
   reactiveAdvanceError?: string | null;
   reviewFixAdvanceError?: string | null;
   onEnqueue?: (projectId: string, issueId: string) => void;
-  failRunAndClear?: (runId: number, message: string, nextState?: FactoryState) => void;
+  failRunAndClear?: (runId: number, message: string, nextState?: WorkflowOutcome) => void;
 }) {
   const feedEvents: Array<Record<string, unknown>> = [];
   const activities: Array<Record<string, unknown>> = [];
@@ -134,7 +135,7 @@ test("repair run finalizer continues automatically with a preserved dirty worktr
       linearIssueId: "issue-1",
       issueKey: "USE-REPAIR",
       title: "Repair dirty worktree",
-      factoryState: "changes_requested",
+      workflowOutcome: undefined,
       worktreePath,
       prNumber: 123,
     });
@@ -178,7 +179,7 @@ test("repair run finalizer continues automatically with a preserved dirty worktr
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
     const updatedRun = db.runs.getRunById(run.id)!;
     const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics(issue.projectId, issue.linearIssueId);
-    assert.equal(updatedIssue.factoryState, "delegated");
+    assertIssuePhase(updatedIssue, "pr_open");
     assert.equal(updatedRun.status, "completed");
     assert.equal(workflowTask?.runType, "branch_upkeep");
     assert.equal(workflowTask?.resumeThread, true);
@@ -200,7 +201,7 @@ test("run finalizer moves no-PR runs into awaiting_input when completion check n
       linearIssueId: "issue-1",
       issueKey: "USE-110",
       title: "Harden worker security headers",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       agentSessionId: "session-1",
     });
     const run = db.runs.createRun({
@@ -242,7 +243,7 @@ test("run finalizer moves no-PR runs into awaiting_input when completion check n
 
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
     const updatedRun = db.runs.getRunById(run.id)!;
-    assert.equal(updatedIssue.factoryState, "awaiting_input");
+    assertIssuePhase(updatedIssue, "awaiting_input");
     assert.equal(updatedRun.status, "completed");
     assert.equal(updatedRun.completionCheckOutcome, "needs_input");
     assert.equal(updatedRun.completionCheckQuestion, "Approve routing /v1/* through the worker?");
@@ -260,7 +261,7 @@ test("run finalizer suppresses late completion after authority is revoked", asyn
       linearIssueId: "issue-1",
       issueKey: "USE-REVOKED",
       title: "Do not publish after undelegation",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: false,
     });
     const run = db.runs.createRun({
@@ -334,7 +335,7 @@ test("run finalizer accepts a review-fix verifier result despite a stale workflo
       linearIssueId: "issue-1",
       issueKey: "USE-111B",
       title: "Fix requested review changes",
-      factoryState: "changes_requested",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       prNumber: 42,
       prState: "open",
@@ -390,7 +391,7 @@ test("run finalizer accepts a review-fix verifier result despite a stale workflo
 
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
     const updatedRun = db.runs.getRunById(run.id)!;
-    assert.notEqual(updatedIssue.factoryState, "escalated");
+    assert.notEqual(updatedIssue.workflowOutcome, "escalated");
     assert.equal(updatedIssue.activeRunId, undefined);
     assert.equal(updatedRun.status, "completed");
     assert.equal(updatedRun.failureReason, undefined);
@@ -407,7 +408,7 @@ test("run finalizer escalates a review fix only when the verifier rejects it", a
       linearIssueId: "issue-1",
       issueKey: "USE-111V",
       title: "Fix requested review changes",
-      factoryState: "changes_requested",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       prNumber: 42,
       prState: "open",
@@ -442,7 +443,7 @@ test("run finalizer escalates a review fix only when the verifier rejects it", a
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           activeRunId: null,
-          factoryState: nextState ?? "failed",
+          workflowOutcome: nextState ?? "failed",
         });
       },
     });
@@ -464,7 +465,7 @@ test("run finalizer escalates a review fix only when the verifier rejects it", a
 
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
     const updatedRun = db.runs.getRunById(run.id)!;
-    assert.equal(updatedIssue.factoryState, "escalated");
+    assertIssuePhase(updatedIssue, "escalated");
     assert.equal(updatedRun.status, "failed");
     assert.equal(updatedRun.failureReason, verificationError);
   } finally {
@@ -480,7 +481,7 @@ test("run finalizer summarizes task-backed review blocker in Linear activity", a
       linearIssueId: "issue-1",
       issueKey: "USE-111R",
       title: "Fix requested review changes",
-      factoryState: "changes_requested",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       prNumber: 42,
       prState: "open",
@@ -584,7 +585,7 @@ test("run finalizer requeues task-backed CI repairs that do not advance the fail
       linearIssueId: "issue-1",
       issueKey: "USE-111C",
       title: "Fix failing CI",
-      factoryState: "repairing_ci",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       prNumber: 42,
       prState: "open",
@@ -613,7 +614,7 @@ test("run finalizer requeues task-backed CI repairs that do not advance the fail
     reconcileWorkflowTasksForIssue(db, db.getIssue(issue.projectId, issue.linearIssueId)!);
 
     let failedMessage: string | undefined;
-    let failedNextState: FactoryState | undefined;
+    let failedNextState: WorkflowOutcome | undefined;
     const { finalizer, feedEvents, enqueueCalls } = createFinalizer(db, {
       outcome: "done",
       summary: "unused",
@@ -628,7 +629,7 @@ test("run finalizer requeues task-backed CI repairs that do not advance the fail
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           activeRunId: null,
-          factoryState: nextState ?? "failed",
+          workflowOutcome: nextState ?? "failed",
         });
       },
     });
@@ -659,7 +660,7 @@ test("run finalizer requeues task-backed CI repairs that do not advance the fail
     const retryTask = db.workflowTasks.getTask(issue.projectId, issue.linearIssueId, "run:ci_repair");
     assert.equal(failedMessage, undefined);
     assert.equal(failedNextState, undefined);
-    assert.equal(updatedIssue.factoryState, "repairing_ci");
+    assertIssuePhase(updatedIssue, "repairing_ci");
     assert.equal(updatedIssue.activeRunId, undefined);
     assert.equal(updatedIssue.lastAttemptedFailureHeadSha, undefined);
     assert.equal(updatedIssue.lastAttemptedFailureSignature, undefined);
@@ -682,7 +683,7 @@ test("run finalizer requeues task-backed queue repairs that do not advance the f
       linearIssueId: "issue-1",
       issueKey: "USE-111Q",
       title: "Recover from merge queue eviction",
-      factoryState: "repairing_ci",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       prNumber: 42,
       prState: "open",
@@ -711,7 +712,7 @@ test("run finalizer requeues task-backed queue repairs that do not advance the f
     reconcileWorkflowTasksForIssue(db, db.getIssue(issue.projectId, issue.linearIssueId)!);
 
     let failedMessage: string | undefined;
-    let failedNextState: FactoryState | undefined;
+    let failedNextState: WorkflowOutcome | undefined;
     const { finalizer, feedEvents, enqueueCalls } = createFinalizer(db, {
       outcome: "done",
       summary: "unused",
@@ -726,7 +727,7 @@ test("run finalizer requeues task-backed queue repairs that do not advance the f
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           activeRunId: null,
-          factoryState: nextState ?? "failed",
+          workflowOutcome: nextState ?? "failed",
         });
       },
     });
@@ -757,7 +758,7 @@ test("run finalizer requeues task-backed queue repairs that do not advance the f
     const retryTask = db.workflowTasks.getTask(issue.projectId, issue.linearIssueId, "run:queue_repair");
     assert.equal(failedMessage, undefined);
     assert.equal(failedNextState, undefined);
-    assert.equal(updatedIssue.factoryState, "repairing_queue");
+    assertIssuePhase(updatedIssue, "repairing_queue");
     assert.equal(updatedIssue.activeRunId, undefined);
     assert.equal(updatedIssue.lastAttemptedFailureHeadSha, undefined);
     assert.equal(updatedIssue.lastAttemptedFailureSignature, undefined);
@@ -780,7 +781,7 @@ test("run finalizer queues a same-thread follow-up when completion check says co
       linearIssueId: "issue-1",
       issueKey: "USE-111",
       title: "Harden worker security headers",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
     const run = db.runs.createRun({
       issueId: issue.id,
@@ -819,7 +820,7 @@ test("run finalizer queues a same-thread follow-up when completion check says co
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
     const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics(issue.projectId, issue.linearIssueId);
     const pendingEvent = db.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { pendingOnly: true }).at(-1);
-    assert.equal(updatedIssue.factoryState, "delegated");
+    assertIssuePhase(updatedIssue, "delegated");
     assert.equal(db.runs.getRunById(run.id)?.completionCheckOutcome, "continue");
     assert.equal(workflowTask?.runType, "implementation");
     assert.equal(workflowTask?.resumeThread, true);
@@ -837,7 +838,7 @@ test("run finalizer re-enqueues a pending requested-changes workflowTask after t
       linearIssueId: "issue-1",
       issueKey: "USE-111A",
       title: "Finish implementation before replaying review work",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       prNumber: 41,
       prState: "open",
       prReviewState: "changes_requested",
@@ -899,7 +900,7 @@ test("run finalizer re-enqueues a pending requested-changes workflowTask after t
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
     const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics(issue.projectId, issue.linearIssueId);
     assert.equal(updatedIssue.activeRunId, undefined);
-    assert.equal(updatedIssue.factoryState, "pr_open");
+    assertIssuePhase(updatedIssue, "changes_requested");
     assert.equal(workflowTask?.runType, "review_fix");
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-1" }]);
     assert.equal(feedEvents.at(-1)?.status, "deferred_follow_up_queued");
@@ -916,7 +917,7 @@ test("run finalizer continues automatically when no-PR done leaves local changes
       linearIssueId: "issue-1",
       issueKey: "USE-112A",
       title: "Publish local changes before closing the issue",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
     const run = db.runs.createRun({
       issueId: issue.id,
@@ -958,7 +959,7 @@ test("run finalizer continues automatically when no-PR done leaves local changes
     const updatedRun = db.runs.getRunById(run.id)!;
     const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics(issue.projectId, issue.linearIssueId);
     const pendingEvent = db.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { pendingOnly: true }).at(-1);
-    assert.equal(updatedIssue.factoryState, "delegated");
+    assertIssuePhase(updatedIssue, "delegated");
     assert.equal(updatedRun.status, "completed");
     assert.equal(updatedRun.completionCheckOutcome, "continue");
     assert.match(String(updatedRun.completionCheckSummary ?? ""), /has not published them yet/);
@@ -979,7 +980,7 @@ test("run finalizer marks no-PR completion checks done when the fork confirms de
       linearIssueId: "issue-1",
       issueKey: "USE-112",
       title: "Write rollout summary in Linear only",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
     const run = db.runs.createRun({
       issueId: issue.id,
@@ -1017,7 +1018,7 @@ test("run finalizer marks no-PR completion checks done when the fork confirms de
 
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
     const updatedRun = db.runs.getRunById(run.id)!;
-    assert.equal(updatedIssue.factoryState, "done");
+    assertIssuePhase(updatedIssue, "done");
     assert.equal(updatedRun.status, "completed");
     assert.equal(updatedRun.completionCheckOutcome, "done");
     assert.equal(feedEvents.at(-1)?.status, "completion_check_done");
@@ -1034,7 +1035,7 @@ test("run finalizer fails no-PR completion checks when the fork says the run sto
       linearIssueId: "issue-1",
       issueKey: "USE-113",
       title: "Finish task or fail clearly",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
     const run = db.runs.createRun({
       issueId: issue.id,
@@ -1073,7 +1074,7 @@ test("run finalizer fails no-PR completion checks when the fork says the run sto
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
     const updatedRun = db.runs.getRunById(run.id)!;
     const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics(issue.projectId, issue.linearIssueId);
-    assert.equal(updatedIssue.factoryState, "failed");
+    assertIssuePhase(updatedIssue, "failed");
     assert.equal(updatedRun.status, "failed");
     assert.equal(updatedRun.completionCheckOutcome, "failed");
     assert.equal(workflowTask, undefined);
@@ -1091,7 +1092,7 @@ test("run finalizer recovers failed implementation turns when unpublished local 
       linearIssueId: "issue-1",
       issueKey: "USE-114",
       title: "Recover failed implementation publication",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
     const run = db.runs.createRun({
       issueId: issue.id,
@@ -1133,7 +1134,7 @@ test("run finalizer recovers failed implementation turns when unpublished local 
     const updatedRun = db.runs.getRunById(run.id)!;
     const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics(issue.projectId, issue.linearIssueId);
     assert.equal(recovered, true);
-    assert.equal(updatedIssue.factoryState, "delegated");
+    assertIssuePhase(updatedIssue, "delegated");
     assert.equal(updatedRun.status, "failed");
     assert.equal(updatedRun.failureReason, "Codex reported the turn completed in a failed state");
     assert.equal(updatedRun.completionCheckOutcome, "continue");
@@ -1153,7 +1154,7 @@ test("run finalizer leaves failed implementation turns alone when no unpublished
       linearIssueId: "issue-1",
       issueKey: "USE-115",
       title: "Do not recover clean failed implementation turns",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
     const run = db.runs.createRun({
       issueId: issue.id,
@@ -1208,7 +1209,7 @@ test("run finalizer builds Linear-visible completion text without an extra recap
       linearIssueId: "issue-1",
       issueKey: "USE-116",
       title: "Publish concise Linear recap",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       prNumber: 42,
       prState: "open",
     });

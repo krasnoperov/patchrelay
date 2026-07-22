@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { IssueRecord } from "../db-types.ts";
-import type { RunType } from "../factory-state.ts";
+import type { RunType } from "../run-type.ts";
 import type { IssueClass } from "../issue-class.ts";
 import { derivePrDisplayContext } from "../pr-display-context.ts";
 import type { RunContext } from "../run-context.ts";
@@ -130,7 +130,7 @@ function summarizeRelationEntries(
       : typeof entry.currentLinearState === "string" && entry.currentLinearState.trim()
         ? entry.currentLinearState.trim()
         : undefined;
-    const factoryState = typeof entry.factoryState === "string" && entry.factoryState.trim() ? entry.factoryState.trim() : undefined;
+    const phase = typeof entry.phase === "string" && entry.phase.trim() ? entry.phase.trim() : undefined;
     const delegated = typeof entry.delegatedToPatchRelay === "boolean"
       ? (entry.delegatedToPatchRelay ? "delegated" : "not delegated")
       : undefined;
@@ -141,8 +141,8 @@ function summarizeRelationEntries(
     return [
       `- ${issueRef}`,
       title ? `: ${title}` : "",
-      [stateName, factoryState, delegated, openPr].filter(Boolean).length > 0
-        ? ` (${[stateName, factoryState, delegated, openPr].filter(Boolean).join("; ")})`
+      [stateName, phase, delegated, openPr].filter(Boolean).length > 0
+        ? ` (${[stateName, phase, delegated, openPr].filter(Boolean).join("; ")})`
         : "",
     ].join("");
   });

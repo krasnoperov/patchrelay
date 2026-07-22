@@ -41,7 +41,7 @@ export function evaluateTerminalIssueHealth(issue: IssueRecord): ClusterHealthCh
     return {
       status: "warn",
       scope: "issue:terminal",
-      message: `Historical terminal issue is in failure state ${issue.factoryState}`,
+      message: `Historical terminal issue has outcome ${issue.workflowOutcome ?? "failed"}`,
     };
   }
   return undefined;

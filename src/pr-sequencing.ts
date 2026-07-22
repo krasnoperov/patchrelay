@@ -10,7 +10,7 @@ export interface SequenceCandidate {
   headSha: string;
   reviewState?: "approved" | "changes_requested" | "review_required" | string | undefined;
   checkStatus?: "success" | "failure" | "pending" | string | undefined;
-  factoryState?: string | undefined;
+  queueSignalled?: boolean | undefined;
   queueAgeMs?: number | undefined;
   labels?: string[] | undefined;
 }
@@ -163,10 +163,9 @@ export async function detectStackingTarget(
 function scoreCandidate(candidate: SequenceCandidate): number {
   const review = (candidate.reviewState ?? "").trim().toLowerCase();
   const checks = (candidate.checkStatus ?? "").trim().toLowerCase();
-  const factory = (candidate.factoryState ?? "").trim().toLowerCase();
   let score = 0;
   // Already in the queue → most likely to land first.
-  if (factory === "awaiting_queue") score += 100;
+  if (candidate.queueSignalled) score += 100;
   if (review === "approved") score += 50;
   if (checks === "success" || checks === "passed") score += 25;
   if (review === "changes_requested") score -= 30;
@@ -181,8 +180,7 @@ function hasSkipLabel(candidate: SequenceCandidate, skipLabels: string[]): boole
 function describeReadiness(candidate: SequenceCandidate): string {
   const review = (candidate.reviewState ?? "").trim().toLowerCase();
   const checks = (candidate.checkStatus ?? "").trim().toLowerCase();
-  const factory = (candidate.factoryState ?? "").trim().toLowerCase();
-  if (factory === "awaiting_queue") return "is in the merge queue";
+  if (candidate.queueSignalled) return "is in the merge queue";
   if (review === "approved" && (checks === "success" || checks === "passed")) {
     return "is approved + green";
   }

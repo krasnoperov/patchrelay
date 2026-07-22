@@ -1,10 +1,4 @@
 import type { WatchIssue } from "./watch-state.ts";
-import { isUndelegatedPausedIssue } from "../../paused-issue-state.ts";
-import {
-  deriveIssueTerminalOutcome,
-  isIssueAwaitingInputProjection,
-  isIssueDelegatedProjection,
-} from "../../issue-execution-state.ts";
 import { derivePrDisplayContext } from "../../pr-display-context.ts";
 import {
   hasFailedPrChecks,
@@ -56,23 +50,22 @@ const COLOR: Record<IssueTokenKind, IssueTokenColor> = {
 };
 
 export function issueTokenFor(issue: WatchIssue): IssueToken {
-  if (isUndelegatedPausedIssue(issue)) {
+  if (!issue.delegatedToPatchRelay && issue.phase !== "done" && issue.phase !== "failed" && issue.phase !== "escalated") {
     return { glyph: GLYPH.queued, color: COLOR.queued, kind: "queued", phrase: phraseForPaused(issue) };
   }
-  const terminalOutcome = deriveIssueTerminalOutcome(issue);
-  if (terminalOutcome === "done") {
+  if (issue.phase === "done") {
     return { glyph: GLYPH.approved, color: COLOR.approved, kind: "approved", phrase: "done" };
   }
-  if (terminalOutcome === "failed") {
+  if (issue.phase === "failed") {
     return { glyph: GLYPH.declined, color: COLOR.declined, kind: "declined", phrase: "failed" };
   }
-  if (terminalOutcome === "escalated") {
+  if (issue.phase === "escalated") {
     return { glyph: GLYPH.attention, color: COLOR.attention, kind: "attention", phrase: "escalated" };
   }
-  if (isIssueAwaitingInputProjection(issue) || issue.sessionState === "waiting_input") {
+  if (issue.phase === "awaiting_input" || issue.sessionState === "waiting_input") {
     return { glyph: GLYPH.attention, color: COLOR.attention, kind: "attention", phrase: "needs human" };
   }
-  if (isIssueDelegatedProjection(issue)) {
+  if (issue.phase === "delegated") {
     return { glyph: GLYPH.queued, color: COLOR.queued, kind: "queued", phrase: "delegated" };
   }
   return {
@@ -84,7 +77,7 @@ export function issueTokenFor(issue: WatchIssue): IssueToken {
 }
 
 function phraseForRunning(issue: WatchIssue): string {
-  switch (issue.factoryState) {
+  switch (issue.phase) {
     case "implementing":
       return "implementing";
     case "pr_open":
@@ -98,12 +91,12 @@ function phraseForRunning(issue: WatchIssue): string {
     case "repairing_queue":
       return "repairing queue";
     default:
-      return issue.factoryState;
+      return issue.phase;
   }
 }
 
 function phraseForPaused(issue: WatchIssue): string {
-  switch (issue.factoryState) {
+  switch (issue.phase) {
     case "implementing":
       return "paused impl";
     case "pr_open":

@@ -4,8 +4,8 @@ import type { GitHubAppBotIdentity } from "./github-app-token.ts";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
-import type { FactoryState, RunType } from "./factory-state.ts";
-import { resolveFailureFactoryState } from "./reactive-pr-state.ts";
+import type { RunType } from "./run-type.ts";
+import { resolveFailureOutcome } from "./reactive-pr-state.ts";
 import { buildHookEnv, type HookEnv, type HookResult, runProjectHook } from "./hook-runner.ts";
 import { buildRunFailureActivity } from "./linear-session-reporting.ts";
 import { loadPatchRelayRepoPrompting } from "./patchrelay-customization.ts";
@@ -292,11 +292,9 @@ export class RunLauncher {
           activeRunId: created.id,
           branchName: params.branchName,
           worktreePath: params.worktreePath,
-          factoryState: params.runType === "implementation" ? "implementing" as const
-            : params.runType === "ci_repair" ? "repairing_ci" as const
-            : params.runType === "review_fix" || params.runType === "branch_upkeep" ? "changes_requested" as const
-            : params.runType === "queue_repair" ? "repairing_queue" as const
-            : "implementing" as const,
+          workflowOutcome: null,
+          workflowOutcomeReason: null,
+          inputRequestKind: null,
           ...((params.runType === "ci_repair" || params.runType === "queue_repair") && failureSignature
             ? {
                 lastAttemptedFailureSignature: failureSignature,
@@ -480,7 +478,7 @@ export class RunLauncher {
       const message = error instanceof Error ? error.message : String(error);
       const lostLease = error instanceof Error && error.name === "IssueSessionLeaseLostError";
       if (!lostLease) {
-        const nextState: FactoryState = resolveFailureFactoryState(params.runType);
+        const workflowOutcome = resolveFailureOutcome(params.runType);
         // Issue clear + run-terminal write ride in one transaction; the run
         // finish is gated on the issue commit so a lost lease skips both.
         this.db.transaction(() => {
@@ -491,7 +489,8 @@ export class RunLauncher {
               projectId: params.project.id,
               linearIssueId: params.issue.linearIssueId,
               activeRunId: null,
-              factoryState: nextState,
+              workflowOutcome,
+              workflowOutcomeReason: `run_launch_failed:${params.runType}`,
             },
           });
           if (commit.outcome !== "applied") return;

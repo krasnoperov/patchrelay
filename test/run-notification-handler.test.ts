@@ -39,7 +39,7 @@ test("notification handler keeps completion authoritative when Linear progress r
       projectId: "project-1",
       linearIssueId: "issue-1",
       issueKey: "TST-1",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       agentSessionId: "session-1",
     });
@@ -133,7 +133,7 @@ test("notification handler interrupts a stuck git push command", async () => {
       projectId: "project-1",
       linearIssueId: "issue-push",
       issueKey: "TST-PUSH",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
     });
     const run = db.runs.createRun({
@@ -216,7 +216,7 @@ test("notification handler clears git push watchdog when the command completes",
       projectId: "project-1",
       linearIssueId: "issue-push-complete",
       issueKey: "TST-PUSH-DONE",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
     });
     const run = db.runs.createRun({

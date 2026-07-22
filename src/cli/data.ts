@@ -14,15 +14,15 @@ import type { WorkflowSnapshot } from "../workflow-model.ts";
 import {
   deriveIssueExecutionStateFromRecords,
   isIssueDownstreamOwnedProjection,
-  isIssueTerminalFailureProjection,
   type IssueExecutionState,
 } from "../issue-execution-state.ts";
 import { WorktreeManager } from "../worktree-manager.ts";
 import { parseDelegationObservedPayload, parseRunReleasedAuthorityPayload } from "../delegation-audit.ts";
 import { CliOperatorApiClient } from "./operator-client.ts";
-import type { RunType } from "../factory-state.ts";
+import type { RunType } from "../run-type.ts";
 import { resolveEffectiveActiveRun } from "../effective-active-run.ts";
 import { derivePatchRelayWaitingReason } from "../waiting-reason.ts";
+import { deriveIssuePhase, type IssuePhase } from "../issue-phase.ts";
 import type {
   AppConfig,
   CodexThreadItem,
@@ -124,7 +124,7 @@ export interface IssueTraceResult {
 
 export interface CloseResult {
   issue: TrackedIssueRecord;
-  factoryState: "done" | "failed";
+  phase: "done" | "failed";
   reason?: string;
   releasedRunId?: number;
 }
@@ -170,7 +170,7 @@ export interface ListResultItem {
   projectId: string;
   currentLinearState?: string;
   sessionState?: string;
-  factoryState: string;
+  phase: IssuePhase;
   activeRunType?: string;
   latestRunType?: string;
   latestRunStatus?: string;
@@ -262,7 +262,7 @@ function summarizeRun(run: RunRecord): string | undefined {
   return run.failureReason?.trim() || undefined;
 }
 
-// resolveStageFromState removed — factory state replaces workflow stage resolution
+// Display phase is derived at the presentation boundary.
 
 export type LiveResult = Awaited<ReturnType<CliDataAccess["live"]>> extends infer T ? Exclude<T, undefined> : never;
 
@@ -428,25 +428,18 @@ export class CliDataAccess extends CliOperatorApiClient {
         prState: dbIssue.prState,
         prReviewState: dbIssue.prReviewState,
         prCheckStatus: dbIssue.prCheckStatus,
-        factoryState: dbIssue.factoryState,
         runnableTaskRunType: peekRunnableWorkflowTaskRunType(this.db, dbIssue.projectId, dbIssue.linearIssueId),
         lastRunType: issueSession?.lastRunType,
         lastGitHubFailureSource: issue.latestFailureSource,
       }).runType) as RunType;
 
-    const factoryState = runType === "queue_repair"
-      ? "repairing_queue"
-      : runType === "ci_repair"
-        ? "repairing_ci"
-        : runType === "review_fix" || runType === "branch_upkeep"
-          ? "changes_requested"
-          : "delegated";
-
     this.appendRetryWorkflowEvent(dbIssue, runType);
     this.db.issues.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
-      factoryState,
+      workflowOutcome: null,
+      workflowOutcomeReason: null,
+      inputRequestKind: null,
       ...buildManualRetryAttemptReset(runType),
     });
     const updated = this.db.getTrackedIssue(issue.projectId, issue.linearIssueId)!;
@@ -486,7 +479,9 @@ export class CliDataAccess extends CliOperatorApiClient {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       delegatedToPatchRelay: false,
-      factoryState: terminalState,
+      workflowOutcome: terminalState === "done" ? "completed" : "failed",
+      workflowOutcomeReason: options?.reason ?? "operator_closed",
+      inputRequestKind: null,
       activeRunId: null,
     });
     this.db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(issue.projectId, issue.linearIssueId);
@@ -494,7 +489,7 @@ export class CliDataAccess extends CliOperatorApiClient {
     const updated = this.db.getTrackedIssue(issue.projectId, issue.linearIssueId)!;
     return {
       issue: updated,
-      factoryState: terminalState,
+      phase: terminalState,
       ...(options?.reason ? { reason: options.reason } : {}),
       ...(run ? { releasedRunId: run.id } : {}),
     };
@@ -692,7 +687,7 @@ export class CliDataAccess extends CliOperatorApiClient {
       const waitingReason = detachedActiveRun
         ? derivePatchRelayWaitingReason({
           activeRunId: 1,
-          factoryState: String(row.factory_state ?? "delegated"),
+          workflowOutcome: row.workflow_outcome === null ? undefined : String(row.workflow_outcome) as "completed" | "failed" | "escalated",
           ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
           ...(row.current_linear_state_type !== null ? { currentLinearStateType: String(row.current_linear_state_type) } : {}),
         })
@@ -705,7 +700,19 @@ export class CliDataAccess extends CliOperatorApiClient {
         projectId: String(row.project_id),
         ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
         ...(row.session_state !== null ? { sessionState: detachedActiveRun ? "running" : String(row.session_state) } : {}),
-        factoryState: String(row.factory_state ?? "delegated"),
+        phase: deriveIssuePhase({
+          delegatedToPatchRelay: Number(row.delegated_to_patchrelay ?? 1) !== 0,
+          workflowOutcome: row.workflow_outcome === null ? undefined : String(row.workflow_outcome) as "completed" | "failed" | "escalated",
+          inputRequestKind: row.input_request_kind === null ? undefined : String(row.input_request_kind) as "paused_local_work" | "completion_check_question",
+          prNumber: row.pr_number === null ? undefined : Number(row.pr_number),
+          prState: row.pr_state === null ? undefined : String(row.pr_state),
+          prIsDraft: row.pr_is_draft === null ? undefined : Boolean(row.pr_is_draft),
+          prReviewState: row.pr_review_state === null ? undefined : String(row.pr_review_state),
+          prCheckStatus: row.pr_check_status === null ? undefined : String(row.pr_check_status),
+          lastGitHubFailureSource: row.last_github_failure_source === null ? undefined : String(row.last_github_failure_source) as "branch_ci" | "queue_eviction",
+          deployStartedAt: row.deploy_started_at === null ? undefined : String(row.deploy_started_at),
+          activeRunType: activeRunType as RunType | undefined,
+        }),
         ...(waitingReason ? { waitingReason } : {}),
         ...(activeRunType ? { activeRunType } : {}),
         ...(row.latest_run_type !== null ? { latestRunType: String(row.latest_run_type) } : {}),
@@ -716,7 +723,7 @@ export class CliDataAccess extends CliOperatorApiClient {
 
     return items.filter((item) => {
       if (options?.active && !item.activeRunType) return false;
-      if (options?.failed && !isIssueTerminalFailureProjection(item)) return false;
+      if (options?.failed && item.phase !== "failed" && item.phase !== "escalated") return false;
       return true;
     });
   }

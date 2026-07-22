@@ -1,6 +1,5 @@
 import type { IssueRecord, WorkflowObservationRecord } from "./db-types.ts";
 import { buildFailureContext } from "./idle-reconciliation-helpers.ts";
-import { isIssueAwaitingInputProjection } from "./issue-execution-state.ts";
 import { resolvePayloadRunType } from "./issue-session-events.ts";
 import { isCurrentHeadRequestedChanges } from "./reactive-workflow-intent.ts";
 import { tryParseRunContextValue, type RunContext } from "./run-context.ts";
@@ -289,8 +288,7 @@ export function deriveWorkflowContext(
   return {
     ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
     ...(issue.title ? { title: issue.title } : {}),
-    displayState: issue.factoryState,
-    awaitingInput: isIssueAwaitingInputProjection(issue),
+    ...(issue.inputRequestKind ? { inputRequestKind: issue.inputRequestKind } : {}),
     ...(issue.lastBlockingReviewHeadSha ? { lastBlockingReviewHeadSha: issue.lastBlockingReviewHeadSha } : {}),
     ...(issue.lastGitHubFailureSource ? { lastGitHubFailureSource: issue.lastGitHubFailureSource } : {}),
     ...(issue.lastGitHubFailureHeadSha ? { lastGitHubFailureHeadSha: issue.lastGitHubFailureHeadSha } : {}),

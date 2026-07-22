@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import pino from "pino";
 import test from "node:test";
+import { assertIssuePhase } from "./assert-issue-phase.ts";
 import { PatchRelayDatabase } from "../src/db.ts";
-import { FACTORY_STATES, resolveFactoryStateFromGitHub } from "../src/factory-state.ts";
 import type {
   GitHubCiSnapshotResolver,
   GitHubFailureContextResolver,
@@ -31,8 +31,8 @@ import { WorkflowTaskDispatcher } from "../src/workflow-task-dispatcher.ts";
 //     passes run against the polled PR snapshot GitHub would return after
 //     the event (faked `gh pr view` / `gh api`).
 //
-// The doctrine holds when both worlds converge on the factory-state-relevant
-// fields (factoryState, prState, prNumber, prReviewState, workflowTask runType) and
+// The doctrine holds when both worlds converge on the issue-phase-relevant
+// fields (terminal outcome, PR facts, workflow task run type) and
 // failure provenance follows `mayClearFailureProvenance` identically.
 // Genuinely asymmetric pairs assert the documented difference explicitly.
 //
@@ -234,17 +234,21 @@ async function runReconciliationPass(world: World): Promise<void> {
   await world.reconciler.reconcile();
 }
 
-// The factory-state-relevant fields the doctrine is asserted over.
+// The issue-phase-relevant fields the doctrine is asserted over.
 function captureConvergedFacts(world: World) {
   const issue = world.db.getIssue(PROJECT, ISSUE);
   assert.ok(issue, `${world.name}: issue row must exist`);
   const workflowTask = new RunTaskPlanner(world.db).resolveRunTask(issue);
   return {
-    factoryState: issue.factoryState,
+    delegatedToPatchRelay: issue.delegatedToPatchRelay,
+    workflowOutcome: issue.workflowOutcome,
+    inputRequestKind: issue.inputRequestKind,
     prState: issue.prState ?? null,
     prNumber: issue.prNumber ?? null,
+    prIsDraft: issue.prIsDraft,
     prReviewState: issue.prReviewState ?? null,
     prCheckStatus: issue.prCheckStatus ?? null,
+    lastGitHubFailureSource: issue.lastGitHubFailureSource,
     failureSource: issue.lastGitHubFailureSource ?? null,
     failureHeadSha: issue.lastGitHubFailureHeadSha ?? null,
     runnableTaskRunType: workflowTask?.runType ?? null,
@@ -395,7 +399,7 @@ test("lost review_approved: poll converges to awaiting_queue identically", { con
       prAuthorLogin: "patchrelay[bot]",
       prReviewState: "commented",
       prCheckStatus: "success",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
     });
 
@@ -403,14 +407,14 @@ test("lost review_approved: poll converges to awaiting_queue identically", { con
       eventType: "pull_request_review",
       rawBody: buildReviewPayload({ state: "approved", branch: "feat-approved", headSha: "sha-appr", prNumber: 10 }),
     });
-    assert.equal(pair.delivered.db.getIssue(PROJECT, ISSUE)?.factoryState, "awaiting_queue");
+    assertIssuePhase(pair.delivered.db.getIssue(PROJECT, ISSUE), "awaiting_queue");
 
     await runReconciliationPass(pair.delivered);
     await runReconciliationPass(pair.lost);
 
     const a = captureConvergedFacts(pair.delivered);
     const b = captureConvergedFacts(pair.lost);
-    assert.equal(b.factoryState, "awaiting_queue");
+    assertIssuePhase(b, "awaiting_queue");
     assert.deepEqual(b, a, "lost review_approved must re-derive the exact delivered state");
   } finally {
     pair.close();
@@ -449,7 +453,7 @@ test("lost review_changes_requested: poll converges to changes_requested with th
       prHeadSha: "sha-rcr",
       prAuthorLogin: "patchrelay[bot]",
       prCheckStatus: "success",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
     });
 
@@ -463,7 +467,7 @@ test("lost review_changes_requested: poll converges to changes_requested with th
 
     const a = captureConvergedFacts(pair.delivered);
     const b = captureConvergedFacts(pair.lost);
-    assert.equal(b.factoryState, "changes_requested");
+    assertIssuePhase(b, "changes_requested");
     assert.equal(b.runnableTaskRunType, "review_fix");
     assert.deepEqual(b, a, "lost review_changes_requested must re-derive the delivered state");
 
@@ -511,7 +515,7 @@ test("lost review_commented: poll records the same non-decisive review state wit
       prHeadSha: "sha-cmt",
       prAuthorLogin: "patchrelay[bot]",
       prCheckStatus: "success",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
     });
 
@@ -525,7 +529,7 @@ test("lost review_commented: poll records the same non-decisive review state wit
 
     const a = captureConvergedFacts(pair.delivered);
     const b = captureConvergedFacts(pair.lost);
-    assert.equal(b.factoryState, "pr_open", "a non-decisive review must not transition the issue");
+    assertIssuePhase(b, "pr_open", "a non-decisive review must not transition the issue");
     assert.equal(b.prReviewState, "commented");
     assert.deepEqual(b, a);
   } finally {
@@ -559,7 +563,7 @@ test("lost check_pending: poll records the same pending gate status", { concurre
       prHeadSha: "sha-pend",
       prAuthorLogin: "patchrelay[bot]",
       prCheckStatus: "success",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
     });
 
@@ -574,7 +578,7 @@ test("lost check_pending: poll records the same pending gate status", { concurre
     const a = captureConvergedFacts(pair.delivered);
     const b = captureConvergedFacts(pair.lost);
     assert.equal(b.prCheckStatus, "pending");
-    assert.equal(b.factoryState, "pr_open");
+    assertIssuePhase(b, "pr_open");
     assert.deepEqual(b, a);
   } finally {
     pair.close();
@@ -612,7 +616,7 @@ test("lost check_failed (branch_ci): poll records equivalent failure provenance 
       // would diverge cosmetically (poll enriches it, webhook leaves it).
       prReviewState: "commented",
       prCheckStatus: "pending",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       lastGitHubCiSnapshotHeadSha: "sha-red1",
       lastGitHubCiSnapshotGateCheckName: "verify",
@@ -631,7 +635,7 @@ test("lost check_failed (branch_ci): poll records equivalent failure provenance 
     await runReconciliationPass(pair.lost);
     const lostAfterFirstPass = pair.lost.db.getIssue(PROJECT, ISSUE);
     assert.equal(lostAfterFirstPass?.prCheckStatus, "failure", "pass 1 must ingest the settled red gate");
-    assert.equal(lostAfterFirstPass?.factoryState, "pr_open", "routing happens on the next pass");
+    assertIssuePhase(lostAfterFirstPass, "repairing_ci", "red CI facts immediately derive the repair phase");
 
     await runReconciliationPass(pair.delivered);
     await runReconciliationPass(pair.delivered);
@@ -639,7 +643,7 @@ test("lost check_failed (branch_ci): poll records equivalent failure provenance 
 
     const a = captureConvergedFacts(pair.delivered);
     const b = captureConvergedFacts(pair.lost);
-    assert.equal(b.factoryState, "repairing_ci");
+    assertIssuePhase(b, "repairing_ci");
     assert.equal(b.failureSource, "branch_ci");
     assert.equal(b.failureHeadSha, "sha-red1");
     assert.equal(b.runnableTaskRunType, "ci_repair");
@@ -701,7 +705,7 @@ test("lost check_failed (queue_eviction): queue health probe routes the same que
       prAuthorLogin: "patchrelay[bot]",
       prReviewState: "approved",
       prCheckStatus: "success",
-      factoryState: "awaiting_queue",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
     });
     // The queue health probe only fires once the issue has sat in the queue
@@ -741,8 +745,8 @@ test("lost check_failed (queue_eviction): queue health probe routes the same que
 
     // Both worlds now keep the same compatibility state because the poll-side
     // monitor records a durable queue_eviction fact before routing.
-    assert.equal(a.factoryState, "repairing_queue");
-    assert.equal(b.factoryState, "repairing_queue");
+    assertIssuePhase(a, "repairing_queue");
+    assertIssuePhase(b, "repairing_queue");
   } finally {
     pair.close();
     restoreGh();
@@ -777,7 +781,7 @@ test("lost check_passed: green gate on the failure head clears branch_ci provena
       prHeadSha: "sha-flaky",
       prAuthorLogin: "patchrelay[bot]",
       prCheckStatus: "failure",
-      factoryState: "escalated",
+      workflowOutcome: "escalated",
       delegatedToPatchRelay: true,
       lastGitHubFailureSource: "branch_ci",
       lastGitHubFailureHeadSha: "sha-flaky",
@@ -800,7 +804,7 @@ test("lost check_passed: green gate on the failure head clears branch_ci provena
 
     const a = captureConvergedFacts(pair.delivered);
     const b = captureConvergedFacts(pair.lost);
-    assert.equal(b.factoryState, "pr_open", "terminal recovery reopens the issue from the green truth");
+    assertIssuePhase(b, "pr_open", "terminal recovery reopens the issue from the green truth");
     assert.equal(b.failureSource, null, "green gate on the failure head must clear branch_ci provenance on the poll path too");
     assert.deepEqual(b, a);
   } finally {
@@ -838,7 +842,7 @@ test("lost check_passed: green BRANCH gate does NOT clear queue_eviction provena
       prAuthorLogin: "patchrelay[bot]",
       prReviewState: "approved",
       prCheckStatus: "failure",
-      factoryState: "escalated",
+      workflowOutcome: "escalated",
       delegatedToPatchRelay: true,
       lastGitHubFailureSource: "queue_eviction",
       lastGitHubFailureHeadSha: "sha-q1",
@@ -859,12 +863,12 @@ test("lost check_passed: green BRANCH gate does NOT clear queue_eviction provena
       "the delivered green branch gate must not clear queue provenance",
     );
 
-    // Pass 1: terminal recovery reopens to awaiting_queue, provenance kept.
+    // Pass 1: terminal recovery exposes the still-actionable queue repair.
     await runReconciliationPass(pair.delivered);
     await runReconciliationPass(pair.lost);
     for (const world of [pair.delivered, pair.lost]) {
       const issue = world.db.getIssue(PROJECT, ISSUE);
-      assert.equal(issue?.factoryState, "awaiting_queue", `${world.name}: pass 1 reopens from the green truth`);
+      assertIssuePhase(issue, "repairing_queue", `${world.name}: queue provenance immediately derives repair work`);
       assert.equal(issue?.lastGitHubFailureSource, "queue_eviction", `${world.name}: queue provenance must survive the green poll`);
     }
 
@@ -874,7 +878,7 @@ test("lost check_passed: green BRANCH gate does NOT clear queue_eviction provena
 
     const a = captureConvergedFacts(pair.delivered);
     const b = captureConvergedFacts(pair.lost);
-    assert.equal(b.factoryState, "repairing_queue");
+    assertIssuePhase(b, "repairing_queue");
     assert.equal(b.failureSource, "queue_eviction");
     assert.equal(b.runnableTaskRunType, "queue_repair");
     assert.deepEqual(b, a, "the preserved queue provenance must drive the same repair in both worlds");
@@ -909,7 +913,7 @@ test("lost pr_synchronize: poll with the advanced head clears provenance and res
       prHeadSha: "sha-old",
       prAuthorLogin: "patchrelay[bot]",
       prCheckStatus: "failure",
-      factoryState: "escalated",
+      workflowOutcome: "escalated",
       delegatedToPatchRelay: true,
       ciRepairAttempts: 2,
       lastGitHubFailureSource: "branch_ci",
@@ -930,11 +934,11 @@ test("lost pr_synchronize: poll with the advanced head clears provenance and res
     const b = captureConvergedFacts(pair.lost);
     // headIsCurrentTruth: the polled head superseded the failure head, so
     // provenance clears and the terminal issue reopens — identically.
-    assert.equal(b.factoryState, "pr_open");
+    assertIssuePhase(b, "pr_open");
     assert.equal(b.prCheckStatus, "pending");
     assert.equal(b.failureSource, null);
     assert.equal(pair.lost.db.getIssue(PROJECT, ISSUE)?.prHeadSha, "sha-new");
-    assert.deepEqual(b, a, "factory-state facts and provenance must converge");
+    assert.deepEqual(b, a, "issue-phase facts and provenance must converge");
 
     // Doctrine (plan §C1): head-advance evidence "clears provenance + resets
     // repair budgets equivalently". The webhook path resets the budgets on
@@ -980,7 +984,7 @@ test("lost pr_merged: poll converges to done and clears provenance identically",
       prAuthorLogin: "patchrelay[bot]",
       prReviewState: "approved",
       prCheckStatus: "success",
-      factoryState: "awaiting_queue",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       // A merge supersedes any recorded failure: both paths must clear it.
       lastGitHubFailureSource: "queue_eviction",
@@ -1002,7 +1006,7 @@ test("lost pr_merged: poll converges to done and clears provenance identically",
 
     const a = captureConvergedFacts(pair.delivered);
     const b = captureConvergedFacts(pair.lost);
-    assert.equal(b.factoryState, "done");
+    assertIssuePhase(b, "done");
     assert.equal(b.prState, "merged");
     assert.equal(b.failureSource, null, "a merged PR supersedes any recorded failure");
     assert.equal(pair.lost.db.getIssue(PROJECT, ISSUE)?.lastQueueIncidentJson, undefined);
@@ -1038,7 +1042,7 @@ test("lost pr_closed: poll converges to the redelegate disposition with the same
       prAuthorLogin: "patchrelay[bot]",
       prReviewState: "commented",
       prCheckStatus: "success",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       currentLinearState: "In Progress",
       currentLinearStateType: "started",
@@ -1057,7 +1061,7 @@ test("lost pr_closed: poll converges to the redelegate disposition with the same
     // Unfinished delegated work whose PR was closed is re-delegated for a
     // fresh implementation on both paths; the PR-shaped review/check
     // metadata is wiped by buildClosedPrCleanupFields on both.
-    assert.equal(b.factoryState, "delegated");
+    assertIssuePhase(b, "implementing");
     assert.equal(b.prState, "closed");
     assert.equal(b.prReviewState, null);
     assert.equal(b.runnableTaskRunType, "implementation");
@@ -1094,7 +1098,7 @@ test("lost pr_opened: documented asymmetry - the GitHub poll cannot discover a P
     seedBoth(pair, {
       issueKey: "USE-A12",
       branchName: "feat-opened",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
     });
 
@@ -1107,13 +1111,13 @@ test("lost pr_opened: documented asymmetry - the GitHub poll cannot discover a P
     await runReconciliationPass(pair.lost);
 
     const a = captureConvergedFacts(pair.delivered);
-    assert.equal(a.factoryState, "pr_open");
+    assertIssuePhase(a, "pr_open");
     assert.equal(a.prNumber, 21);
     assert.equal(a.prState, "open");
 
     const b = captureConvergedFacts(pair.lost);
     assert.equal(b.prNumber, null, "no webhook, no PR number - nothing for the poll to re-derive from");
-    assert.equal(b.factoryState, "implementing", "the lost world intentionally stays put; Linear-side reconciliation owns this recovery");
+    assertIssuePhase(b, "implementing", "the lost world intentionally stays put; Linear-side reconciliation owns this recovery");
   } finally {
     pair.close();
     restoreGh();
@@ -1128,11 +1132,6 @@ test("merge_group events are inert by design and every trigger event is accounte
   // have no transition rule: the merge queue is operated by the external
   // merge steward, whose signals reach PatchRelay as check_run events
   // (merge-steward/queue) — there is nothing for re-derivation to recover.
-  for (const state of FACTORY_STATES) {
-    assert.equal(resolveFactoryStateFromGitHub("merge_group_passed", state, {}), undefined);
-    assert.equal(resolveFactoryStateFromGitHub("merge_group_failed", state, {}), undefined);
-  }
-
   // Coverage guard: this suite must account for every GitHubTriggerEvent.
   // Adding a new trigger event makes the type-level assertion below fail
   // until the event gets a delivered/lost pair (or a documented-inert entry).

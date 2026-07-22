@@ -18,7 +18,7 @@ test("issue overview prefers freshly derived waiting reason over stale cached se
       issueKey: "USE-1",
       title: "Tune chat UI",
       delegatedToPatchRelay: true,
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 22,
       prState: "open",
       prHeadSha: "sha-new",

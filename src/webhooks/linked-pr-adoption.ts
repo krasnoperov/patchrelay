@@ -30,8 +30,7 @@ export async function resolveLinkedPrAdoption(
   // belong in the issue description or comments, not in attachments.
   if (references.length > 1) {
     return {
-      factoryState: "awaiting_input" as const,
-      issueUpdates: {},
+      issueUpdates: { inputRequestKind: "completion_check_question" },
     };
   }
 
@@ -45,10 +44,10 @@ async function resolveAttachedPr(
   const remote = await readRemotePrState(reference.repoFullName, reference.prNumber);
   if (!remote) {
     return {
-      factoryState: "awaiting_input" as const,
       issueUpdates: {
         prNumber: reference.prNumber,
         prUrl: reference.url,
+        inputRequestKind: "completion_check_question",
       },
     };
   }

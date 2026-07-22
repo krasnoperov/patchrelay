@@ -1,11 +1,9 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
-import type { FactoryState } from "./factory-state.ts";
 import type { AppConfig } from "./types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
-import { buildRepairWorkflowDedupeKey } from "./reactive-workflow-keys.ts";
 import { serializeRunContext, type RunContext } from "./run-context.ts";
 import { execCommand } from "./utils.ts";
 import type { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
@@ -24,10 +22,11 @@ const IN_REVIEW_STUCK_FEED_COOLDOWN_MS = 30 * 60 * 1000;
 export interface QueueHealthAdvancer {
   advanceIdleIssue(
     issue: IssueRecord,
-    newState: FactoryState,
     options?: {
       workflowIntent?: WorkflowRunIntent;
       clearFailureProvenance?: boolean;
+      workflowOutcome?: "completed" | "failed" | "escalated";
+      workflowOutcomeReason?: string;
     },
   ): void;
   workflowTaskDispatcher: WorkflowTaskDispatcher;
@@ -155,7 +154,11 @@ export class QueueHealthMonitor {
         update: { projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "merged" },
       });
       const merged = mergedCommit.outcome === "applied" ? mergedCommit.issue : issue;
-      this.advancer.advanceIdleIssue(merged, "done", { clearFailureProvenance: true });
+      this.advancer.advanceIdleIssue(merged, {
+        workflowOutcome: "completed",
+        workflowOutcomeReason: "merge_queue_observed_merged",
+        clearFailureProvenance: true,
+      });
       return;
     }
 
@@ -217,7 +220,7 @@ export class QueueHealthMonitor {
         },
       });
       const probed = probedCommit.outcome === "applied" ? probedCommit.issue : issue;
-      this.advancer.advanceIdleIssue(probed, "repairing_queue", {
+      this.advancer.advanceIdleIssue(probed, {
         workflowIntent: workflowRunIntent("queue_repair", workflowRunContext),
       });
       this.logger.info(

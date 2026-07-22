@@ -18,7 +18,6 @@ import {
   isQueueEvictionFailure,
   isStaleGateEvent,
   isSettledBranchFailure,
-  resolveGitHubFactoryStateForEvent,
 } from "./github-webhook-policy.ts";
 import {
   buildGitHubQueueFailureContext,
@@ -30,6 +29,7 @@ import {
   syncGitHubLinearSession,
 } from "./github-linear-session-sync.ts";
 import { buildQueueRepairContextFromEvent } from "./merge-queue-incident.ts";
+import { deriveIssuePhase } from "./issue-phase.ts";
 
 const WRITER = "github-webhook-state-projector";
 
@@ -90,98 +90,27 @@ export async function projectGitHubWebhookState(
   await updateGitHubCiSnapshot(deps, issue, event, project, ciSnapshotResolver);
   await updateGitHubFailureProvenance(deps, issue, event, project, failureContextResolver);
 
-  const queueEvictionCheck = isQueueEvictionFailure(issue, event, project);
+  const afterMetadata = deps.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+  const activeRun = afterMetadata.activeRunId
+    ? deps.db.runs.getRunById(afterMetadata.activeRunId)
+    : undefined;
+  maybeSupersedeActiveRun({ db: deps.db, logger: deps.logger, feed: deps.feed, issue: afterMetadata, event, activeRun });
 
-  if (!isMetadataOnlyCheckEvent(event) || queueEvictionCheck) {
-    const afterMetadata = deps.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
-    const activeRun = afterMetadata.activeRunId
-      ? deps.db.runs.getRunById(afterMetadata.activeRunId)
-      : undefined;
-    const newState = resolveGitHubFactoryStateForEvent(
-      afterMetadata,
+  if (!isMetadataOnlyCheckEvent(event) || isQueueEvictionFailure(issue, event, project)) {
+    void emitGitHubLinearActivity({
+      linearProvider: deps.linearProvider,
+      logger: deps.logger,
+      feed: deps.feed,
+      issue: afterMetadata,
+      phase: deriveIssuePhase({ ...afterMetadata, activeRunType: activeRun?.runType }),
       event,
-      project,
-      activeRun
-        ? {
-            ...(activeRun.runType ? { runType: activeRun.runType } : {}),
-            ...(activeRun.sourceHeadSha ? { sourceHeadSha: activeRun.sourceHeadSha } : {}),
-          }
-        : undefined,
-    );
-
-    if (newState && newState !== afterMetadata.factoryState) {
-      const transitionCommit = deps.db.issueSessions.commitIssueState({
-        writer: WRITER,
-        expectedVersion: afterMetadata.version,
-        update: {
-          projectId: issue.projectId,
-          linearIssueId: issue.linearIssueId,
-          factoryState: newState,
-        },
-        // Conflict: another writer landed since `afterMetadata` was read.
-        // Re-resolve the transition against the fresh row so we never
-        // regress a state someone else just advanced.
-        onConflict: (current) => {
-          const recomputed = resolveGitHubFactoryStateForEvent(
-            current,
-            event,
-            project,
-            activeRun
-              ? {
-                  ...(activeRun.runType ? { runType: activeRun.runType } : {}),
-                  ...(activeRun.sourceHeadSha ? { sourceHeadSha: activeRun.sourceHeadSha } : {}),
-                }
-              : undefined,
-          );
-          if (!recomputed || recomputed === current.factoryState) return undefined;
-          return {
-            projectId: issue.projectId,
-            linearIssueId: issue.linearIssueId,
-            factoryState: recomputed,
-          };
-        },
-      });
-      const appliedState = transitionCommit.outcome === "applied"
-        ? transitionCommit.issue.factoryState
-        : undefined;
-      if (appliedState) {
-        deps.logger.info(
-          { issueKey: issue.issueKey, from: afterMetadata.factoryState, to: appliedState, trigger: event.triggerEvent },
-          "Factory state transition from GitHub event",
-        );
-
-        // Plan §4.4: when the transition fired *because* an approval
-        // landed during a review_fix run on the same head (the
-        // mid-run-approval rule), the run's premise is gone. Mark it
-        // superseded and set the publication-suppression flag so the
-        // finalizer cannot push a cosmetic patch-id-equivalent commit.
-        maybeSupersedeActiveRun({
-          db: deps.db,
-          logger: deps.logger,
-          feed: deps.feed,
-          issue: afterMetadata,
-          newState: appliedState,
-          event,
-          activeRun,
-        });
-
-        const transitionedIssue = deps.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
-        void emitGitHubLinearActivity({
-          linearProvider: deps.linearProvider,
-          logger: deps.logger,
-          feed: deps.feed,
-          issue: transitionedIssue,
-          newState: appliedState,
-          event,
-        });
-        void syncGitHubLinearSession({
-          config: deps.config,
-          linearProvider: deps.linearProvider,
-          logger: deps.logger,
-          issue: transitionedIssue,
-        });
-      }
-    }
+    });
+    void syncGitHubLinearSession({
+      config: deps.config,
+      linearProvider: deps.linearProvider,
+      logger: deps.logger,
+      issue: afterMetadata,
+    });
   }
 
   const freshIssue = deps.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
@@ -228,7 +157,7 @@ export async function projectGitHubWebhookState(
     kind: "github",
     issueKey: freshIssue.issueKey,
     projectId: freshIssue.projectId,
-    stage: freshIssue.factoryState,
+    stage: deriveIssuePhase({ ...freshIssue, activeRunType: activeRun?.runType }),
     status: event.triggerEvent,
     summary: `GitHub: ${event.triggerEvent}${event.prNumber ? ` on PR #${event.prNumber}` : ""}`,
     detail: event.checkName ?? event.reviewBody?.slice(0, 200) ?? undefined,
@@ -268,13 +197,11 @@ function maybeSupersedeActiveRun(params: {
   logger: Logger;
   feed: OperatorEventFeed | undefined;
   issue: IssueRecord;
-  newState: string;
   event: NormalizedGitHubEvent;
   activeRun: { id: number; runType?: string | undefined; sourceHeadSha?: string | undefined } | undefined;
 }): void {
-  const { db, logger, feed, issue, newState, event, activeRun } = params;
+  const { db, logger, feed, issue, event, activeRun } = params;
   if (event.triggerEvent !== "review_approved") return;
-  if (newState !== "awaiting_queue") return;
   if (!activeRun) return;
   if (activeRun.runType !== "review_fix") return;
 
@@ -400,7 +327,7 @@ async function updateGitHubCiSnapshot(
       kind: "github",
       issueKey: issue.issueKey,
       projectId: issue.projectId,
-      stage: issue.factoryState,
+      stage: "ci_repair",
       status: "ci_snapshot_unavailable",
       summary: `Could not resolve settled ${getPrimaryGateCheckName(project)} snapshot; waiting before CI repair`,
     });

@@ -10,6 +10,7 @@ import { buildManualRetryAttemptReset, resolveRetryTarget } from "./manual-issue
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { ServiceRuntime } from "./service-runtime.ts";
 import type { AppConfig } from "./types.ts";
+import { deriveIssuePhase, type IssuePhase } from "./issue-phase.ts";
 
 const WRITER = "service-issue-actions";
 
@@ -42,7 +43,7 @@ export class ServiceIssueActions {
       kind: "comment",
       issueKey: issue.issueKey,
       projectId: issue.projectId,
-      stage: issue.factoryState,
+      stage: deriveIssuePhase(issue),
       status: "operator_prompt",
       summary: `Operator prompt (${source})`,
       detail: text.slice(0, 200),
@@ -90,7 +91,7 @@ export class ServiceIssueActions {
       update: {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
-        factoryState: "awaiting_input",
+        inputRequestKind: "paused_local_work",
       },
     });
 
@@ -117,7 +118,6 @@ export class ServiceIssueActions {
       prState: issue.prState,
       prReviewState: issue.prReviewState,
       prCheckStatus: issue.prCheckStatus,
-      factoryState: issue.factoryState,
       runnableTaskRunType: peekRunnableWorkflowTaskRunType(this.db, issue.projectId, issue.linearIssueId),
       lastRunType: issueSession?.lastRunType,
       lastGitHubFailureSource: issue.lastGitHubFailureSource,
@@ -129,7 +129,9 @@ export class ServiceIssueActions {
         update: {
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
-          factoryState: "done",
+          workflowOutcome: "completed",
+          workflowOutcomeReason: "pr_merged",
+          inputRequestKind: null,
         },
       });
       return { issueKey, runType: "none" };
@@ -141,7 +143,9 @@ export class ServiceIssueActions {
       update: {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
-        factoryState: retryTarget.factoryState,
+        workflowOutcome: null,
+        workflowOutcomeReason: null,
+        inputRequestKind: null,
         ...buildManualRetryAttemptReset(retryTarget.runType),
       },
     });
@@ -150,7 +154,7 @@ export class ServiceIssueActions {
       kind: "stage",
       issueKey: issue.issueKey,
       projectId: issue.projectId,
-      stage: retryTarget.factoryState,
+      stage: retryTarget.runType,
       status: "retry",
       summary: `Retry queued: ${retryTarget.runType}`,
     });
@@ -163,7 +167,7 @@ export class ServiceIssueActions {
   async closeIssue(
     issueKey: string,
     options?: { failed?: boolean; reason?: string },
-  ): Promise<{ issueKey: string; factoryState: "done" | "failed"; releasedRunId?: number } | { error: string } | undefined> {
+  ): Promise<{ issueKey: string; phase: Extract<IssuePhase, "done" | "failed">; releasedRunId?: number } | { error: string } | undefined> {
     const issue = this.db.issues.getIssueByKey(issueKey);
     if (!issue) return undefined;
 
@@ -202,7 +206,9 @@ export class ServiceIssueActions {
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           delegatedToPatchRelay: false,
-          factoryState: terminalState,
+          workflowOutcome: terminalState === "done" ? "completed" : "failed",
+          workflowOutcomeReason: options?.reason ?? "operator_closed",
+          inputRequestKind: null,
           activeRunId: null,
         },
       });
@@ -231,7 +237,7 @@ export class ServiceIssueActions {
 
     return {
       issueKey,
-      factoryState: terminalState,
+      phase: terminalState,
       ...(run ? { releasedRunId: run.id } : {}),
     };
   }

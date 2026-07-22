@@ -31,9 +31,9 @@ test("buildUpdateAssignments uses plain assignment for non-COALESCE fields", () 
   const { assignments } = buildUpdateAssignments({
     projectId: "p",
     linearIssueId: "i",
-    factoryState: "delegated",
+    workflowOutcome: null,
   });
-  assert.ok(assignments.includes("factory_state = @factoryState"));
+  assert.ok(assignments.includes("workflow_outcome = @workflowOutcome"));
   assert.equal(assignments.some((assignment) => assignment.includes("pending_run")), false);
 });
 
@@ -77,8 +77,8 @@ test("buildInsertBindings honors insertDefaults", () => {
   });
   // delegated_to_patchrelay defaults to 1
   assert.equal(values.delegatedToPatchRelay, 1);
-  // factory_state defaults to "delegated"
-  assert.equal(values.factoryState, "delegated");
+  // terminal outcome is absent until a terminal fact is observed
+  assert.equal(values.workflowOutcome, null);
   // ci_repair_attempts defaults to 0
   assert.equal(values.ciRepairAttempts, 0);
 });

@@ -5,6 +5,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import pino from "pino";
 import test from "node:test";
+import { assertIssuePhase } from "./assert-issue-phase.ts";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { PatchRelayService } from "../src/service.ts";
 import { reconcileWorkflowTasksForIssue } from "../src/workflow-task-reconciler.ts";
@@ -100,7 +101,7 @@ test("listTrackedIssues suppresses stale interrupted notes while a run is active
       issueKey: "USE-1",
       title: "Active queue repair",
       currentLinearState: "In Review",
-      factoryState: "repairing_queue",
+      workflowOutcome: undefined,
       prNumber: 1,
       prReviewState: "approved",
       prCheckStatus: "failure",
@@ -115,7 +116,7 @@ test("listTrackedIssues suppresses stale interrupted notes while a run is active
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       activeRunId: run.id,
-      factoryState: "repairing_queue",
+      workflowOutcome: undefined,
     });
     db.unsafeRawConnectionForTests().prepare(`
       UPDATE issue_sessions
@@ -161,7 +162,7 @@ test("listTrackedIssues treats a detached running latest run as active work", as
       linearIssueId: "issue-detached",
       issueKey: "USE-D",
       title: "Detached resumed implementation",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
       threadId: "thread-detached",
       activeRunId: null,
     });
@@ -219,7 +220,7 @@ test("listTrackedIssues suppresses stale zombie notes while a run is active", as
       issueKey: "USE-Z",
       title: "Active implementation after zombie recovery",
       currentLinearState: "In Progress",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
     const run = db.runs.createRun({
       issueId: issue.id,
@@ -231,7 +232,7 @@ test("listTrackedIssues suppresses stale zombie notes while a run is active", as
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       activeRunId: run.id,
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
     db.unsafeRawConnectionForTests().prepare(`
       UPDATE issue_sessions
@@ -277,14 +278,14 @@ test("listTrackedIssues ordering ignores lease heartbeats", async () => {
       linearIssueId: "issue-1",
       issueKey: "USE-1",
       title: "Older visible update",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
     });
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-2",
       issueKey: "USE-2",
       title: "Newer visible update",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
     });
 
     db.unsafeRawConnectionForTests().prepare(`
@@ -347,14 +348,14 @@ test("listTrackedIssues ordering follows visible session updates", async () => {
       linearIssueId: "issue-1",
       issueKey: "USE-1",
       title: "Will become newest",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
     });
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-2",
       issueKey: "USE-2",
       title: "Starts newest",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
     });
 
     db.unsafeRawConnectionForTests().prepare(`
@@ -371,7 +372,7 @@ test("listTrackedIssues ordering follows visible session updates", async () => {
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-1",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       activeRunId: 42,
     });
 
@@ -406,7 +407,7 @@ test("listTrackedIssues surfaces actionable stop guidance for awaiting_input iss
       issueKey: "USE-2",
       title: "Stopped implementation",
       currentLinearState: "In Progress",
-      factoryState: "awaiting_input",
+      inputRequestKind: "completion_check_question",
       agentSessionId: "session-2",
     });
     db.issueSessions.appendIssueSessionEvent({
@@ -445,7 +446,7 @@ test("service start recovers delegated blocked issues from paused local-work sta
       issueKey: "USE-3",
       title: "Blocked delegated issue",
       currentLinearState: "Backlog",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       agentSessionId: "session-3",
     });
 
@@ -501,7 +502,7 @@ test("service start recovers delegated blocked issues from paused local-work sta
 
     const tracked = service.listTrackedIssues().find((entry) => entry.issueKey === "USE-3");
     assert.ok(tracked);
-    assert.equal(tracked.factoryState, "delegated");
+    assertIssuePhase(tracked, "delegated");
     assert.equal(tracked.blockedByCount, 1);
     assert.deepEqual(tracked.blockedByKeys, ["USE-1"]);
     assert.equal(tracked.waitingReason, "Blocked by USE-1");
@@ -545,7 +546,7 @@ test("listTrackedIssues clears stale blocker text after blocker snapshot resolve
       issueKey: "USE-3",
       title: "Blocked delegated issue",
       delegatedToPatchRelay: true,
-      factoryState: "delegated",
+      workflowOutcome: undefined,
     });
 
     const blocked = service.listTrackedIssues().find((entry) => entry.issueKey === "USE-3");
@@ -598,7 +599,7 @@ test("listTrackedIssues keeps undelegated local work paused instead of ready or 
       title: "Paused local implementation",
       delegatedToPatchRelay: false,
       currentLinearState: "Backlog",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
 
     const tracked = service.listTrackedIssues().find((entry) => entry.issueKey === "USE-PAUSED");
@@ -633,7 +634,7 @@ test("service start preserves delegated completion-check questions in awaiting_i
       issueKey: "USE-3B",
       title: "Needs decision before continuing",
       currentLinearState: "Backlog",
-      factoryState: "awaiting_input",
+      inputRequestKind: "completion_check_question",
       agentSessionId: "session-3b",
     });
     const run = db.runs.createRun({
@@ -699,7 +700,7 @@ test("service start preserves delegated completion-check questions in awaiting_i
 
     const tracked = service.listTrackedIssues().find((entry) => entry.issueKey === "USE-3B");
     assert.ok(tracked);
-    assert.equal(tracked.factoryState, "awaiting_input");
+    assertIssuePhase(tracked, "awaiting_input");
     assert.equal(tracked.waitingReason, "Waiting on operator input");
     assert.equal(tracked.statusNote, "Should the workflow prefer the compact layout?");
     assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-3b"), undefined);
@@ -732,7 +733,7 @@ test("listTrackedIssues does not mark downstream waiting issues as ready just be
       issueKey: "USE-QUEUE",
       title: "Waiting downstream",
       currentLinearState: "In Review",
-      factoryState: "awaiting_queue",
+      workflowOutcome: undefined,
       prNumber: 22,
       prReviewState: "approved",
       prCheckStatus: "success",
@@ -770,7 +771,7 @@ test("listTrackedIssues does not mark awaiting-review issues as ready just becau
       issueKey: "USE-REVIEW",
       title: "Awaiting review",
       currentLinearState: "In Review",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 21,
       prState: "open",
       prReviewState: "review_required",
@@ -810,7 +811,7 @@ test("listTrackedIssues does not treat closed PRs on done issues as awaiting ext
       title: "Closed report PR",
       currentLinearState: "Done",
       currentLinearStateType: "completed",
-      factoryState: "done",
+      workflowOutcome: "completed",
       prNumber: 193,
       prState: "closed",
       prReviewState: "commented",
@@ -827,7 +828,7 @@ test("listTrackedIssues does not treat closed PRs on done issues as awaiting ext
   }
 });
 
-test("listTrackedIssues treats completed Linear state as terminal even before factoryState catches up", async () => {
+test("listTrackedIssues treats completed Linear state as terminal even before workflowOutcome catches up", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-list-linear-terminal-"));
   try {
     const config = createConfig(baseDir);
@@ -852,12 +853,12 @@ test("listTrackedIssues treats completed Linear state as terminal even before fa
       delegatedToPatchRelay: true,
       currentLinearState: "Done",
       currentLinearStateType: "completed",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
     });
 
     const tracked = service.listTrackedIssues().find((entry) => entry.issueKey === "USE-LINEAR-DONE");
     assert.ok(tracked);
-    assert.equal(tracked.factoryState, "delegated");
+    assertIssuePhase(tracked, "delegated");
     assert.equal(tracked.waitingReason, "PatchRelay work is complete");
     assert.equal(tracked.statusNote, undefined);
     assert.equal(tracked.readyForExecution, false);

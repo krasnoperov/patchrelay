@@ -4,7 +4,7 @@ import { deriveIssueStatusNote } from "../src/status-note.ts";
 
 test("deriveIssueStatusNote prefers failure context over the latest assistant summary for failed issues", () => {
   const note = deriveIssueStatusNote({
-    issue: { factoryState: "failed" },
+    issue: { workflowOutcome: "failed" },
     sessionSummary: "Last assistant summary that should not win.",
     latestRun: {
       id: 1,
@@ -26,7 +26,7 @@ test("deriveIssueStatusNote prefers failure context over the latest assistant su
 
 test("deriveIssueStatusNote still prefers explicit operator events for escalated issues", () => {
   const note = deriveIssueStatusNote({
-    issue: { factoryState: "escalated" },
+    issue: { workflowOutcome: "escalated" },
     latestEvent: {
       eventType: "stop_requested",
     } as never,
@@ -38,7 +38,7 @@ test("deriveIssueStatusNote still prefers explicit operator events for escalated
 
 test("deriveIssueStatusNote surfaces dirty worktree context for stopped runs", () => {
   const note = deriveIssueStatusNote({
-    issue: { factoryState: "awaiting_input" },
+    issue: { inputRequestKind: "completion_check_question" },
     latestEvent: {
       eventType: "stop_requested",
       eventJson: JSON.stringify({
@@ -56,7 +56,7 @@ test("deriveIssueStatusNote surfaces dirty worktree context for stopped runs", (
 
 test("deriveIssueStatusNote unwraps shell-wrapped commands in assistant summaries", () => {
   const note = deriveIssueStatusNote({
-    issue: { factoryState: "done" },
+    issue: { workflowOutcome: "completed" },
     latestRun: {
       id: 1,
       issueId: 1,
@@ -80,7 +80,7 @@ test("deriveIssueStatusNote unwraps shell-wrapped commands in assistant summarie
 
 test("deriveIssueStatusNote prefers outcome summaries over raw assistant output", () => {
   const note = deriveIssueStatusNote({
-    issue: { factoryState: "done" },
+    issue: { workflowOutcome: "completed" },
     latestRun: {
       id: 1,
       issueId: 1,
@@ -101,7 +101,7 @@ test("deriveIssueStatusNote prefers outcome summaries over raw assistant output"
 
 test("deriveIssueStatusNote prefers completion-check questions for awaiting-input issues", () => {
   const note = deriveIssueStatusNote({
-    issue: { factoryState: "awaiting_input" },
+    issue: { inputRequestKind: "completion_check_question" },
     latestRun: {
       id: 1,
       issueId: 1,
@@ -121,7 +121,13 @@ test("deriveIssueStatusNote prefers completion-check questions for awaiting-inpu
 
 test("deriveIssueStatusNote suppresses stale repair summaries after downstream handoff", () => {
   const note = deriveIssueStatusNote({
-    issue: { factoryState: "awaiting_queue" },
+    issue: {
+      delegatedToPatchRelay: true,
+      workflowOutcome: undefined,
+      prNumber: 42,
+      prState: "open",
+      prReviewState: "approved",
+    },
     sessionSummary: "same_head_review_handoff_blocked",
     latestRun: {
       id: 1,
@@ -141,7 +147,7 @@ test("deriveIssueStatusNote suppresses stale repair summaries after downstream h
 
 test("deriveIssueStatusNote suppresses stale repair failures after terminal completion", () => {
   const note = deriveIssueStatusNote({
-    issue: { factoryState: "done" },
+    issue: { workflowOutcome: "completed" },
     sessionSummary: "same_head_review_handoff_blocked",
     latestRun: {
       id: 1,

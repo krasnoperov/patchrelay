@@ -1,6 +1,7 @@
 import { readRemotePrState, type RemotePrState } from "./remote-pr-state.ts";
 import type { RunContext } from "./run-context.ts";
-import type { FactoryState, RunType } from "./factory-state.ts";
+import type { WorkflowOutcome } from "./issue-phase.ts";
+import type { RunType } from "./run-type.ts";
 import type { AppConfig } from "./types.ts";
 
 export function isRequestedChangesRunType(runType: RunType): boolean {
@@ -13,7 +14,7 @@ export function isRequestedChangesRunType(runType: RunType): boolean {
  * surface), everything else fails. Centralized so the mapping cannot diverge
  * between the launcher and the notification handler.
  */
-export function resolveFailureFactoryState(runType: RunType): FactoryState {
+export function resolveFailureOutcome(runType: RunType): WorkflowOutcome {
   return isRequestedChangesRunType(runType) ? "escalated" : "failed";
 }
 

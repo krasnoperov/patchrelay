@@ -28,7 +28,7 @@ function makeIssue(db: PatchRelayDatabase, overrides: Partial<{
   prCheckStatus: string;
   prHeadSha: string;
   prNumber: number;
-  factoryState: string;
+  workflowOutcome: string;
 }> = {}) {
   return db.upsertIssue({
     projectId: "proj",
@@ -36,7 +36,7 @@ function makeIssue(db: PatchRelayDatabase, overrides: Partial<{
     issueKey: "PRJ-1",
     branchName: "feat/x",
     delegatedToPatchRelay: true,
-    factoryState: "pr_open",
+    workflowOutcome: undefined,
     prNumber: 1,
     prState: "open",
     ...overrides,
@@ -97,7 +97,7 @@ test("recordEventAndDispatch dedupes both the event and the enqueue when called 
 
 test("recordEventAndDispatch does NOT enqueue while an active run is in flight", async () => {
   await withDb(async (db) => {
-    const issue = makeIssue(db, { prReviewState: "changes_requested", prHeadSha: "sha-1", factoryState: "implementing" });
+    const issue = makeIssue(db, { prReviewState: "changes_requested", prHeadSha: "sha-1", workflowOutcome: undefined });
     const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
@@ -280,7 +280,7 @@ test("dispatchIfWorkflowTaskPending resolves branch_upkeep from a workflow task 
 
 test("PR facts without a derived workflow task are not a dispatch source", async () => {
   await withDb(async (db) => {
-    makeIssue(db, { factoryState: "pr_open" });
+    makeIssue(db, { workflowOutcome: undefined });
 
     const telemetry = new MemoryPatchRelayTelemetry();
     const enqueueCalls: Array<[string, string]> = [];
@@ -303,7 +303,7 @@ test("PR facts without a derived workflow task are not a dispatch source", async
 
 test("session-event workflowTask is not a dispatch source without a runnable workflow task", async () => {
   await withDb(async (db) => {
-    makeIssue(db, { factoryState: "pr_open" });
+    makeIssue(db, { workflowOutcome: undefined });
     db.issueSessions.appendIssueSessionEventRespectingActiveLease("proj", "issue-1", {
       projectId: "proj",
       linearIssueId: "issue-1",
@@ -336,7 +336,7 @@ test("dispatchIfWorkflowTaskPending enqueues an already materialized runnable wo
       issueKey: "PRJ-1",
       branchName: "feat/x",
       delegatedToPatchRelay: true,
-      factoryState: "delegated",
+      workflowOutcome: undefined,
     });
     reconcileWorkflowTasksForIssue(db, issue);
 

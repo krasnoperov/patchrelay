@@ -1,7 +1,7 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
-import type { RunType } from "./factory-state.ts";
+import type { RunType } from "./run-type.ts";
 import type { AppConfig, LinearAgentActivityContent, LinearClientProvider } from "./types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import {
@@ -55,7 +55,11 @@ export class LinearSessionSync {
         ? {
             ...trackedIssue,
             delegatedToPatchRelay: syncedIssue.delegatedToPatchRelay,
+            workflowOutcome: syncedIssue.workflowOutcome,
+            inputRequestKind: syncedIssue.inputRequestKind,
+            currentLinearStateType: syncedIssue.currentLinearStateType,
             prNumber: syncedIssue.prNumber,
+            prState: syncedIssue.prState,
             prUrl: syncedIssue.prUrl,
           }
         : syncedIssue;

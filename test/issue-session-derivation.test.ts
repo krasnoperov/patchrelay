@@ -16,7 +16,6 @@ test("reactive intent classifies actionable GitHub facts without declaring readi
     {
       runType: "review_fix",
       workflowReason: "review_changes_requested",
-      compatibilityFactoryState: "changes_requested",
     },
   );
   assert.deepEqual(
@@ -28,7 +27,6 @@ test("reactive intent classifies actionable GitHub facts without declaring readi
     {
       runType: "ci_repair",
       workflowReason: "settled_red_ci",
-      compatibilityFactoryState: "repairing_ci",
     },
   );
   assert.deepEqual(
@@ -41,7 +39,6 @@ test("reactive intent classifies actionable GitHub facts without declaring readi
     {
       runType: "queue_repair",
       workflowReason: "merge_steward_incident",
-      compatibilityFactoryState: "repairing_queue",
     },
   );
 });

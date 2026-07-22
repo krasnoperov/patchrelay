@@ -3,6 +3,7 @@ import type { OperatorFeedEvent } from "../../operator-feed.ts";
 import { hasOpenPr } from "../../pr-state.ts";
 import { derivePrDisplayContext } from "../../pr-display-context.ts";
 import { isIssueDownstreamOwnedProjection } from "../../issue-execution-state.ts";
+import type { IssuePhase } from "../../issue-phase.ts";
 
 export type VisualizationNodeStatus = "current" | "visited" | "upcoming";
 
@@ -20,7 +21,7 @@ export interface ObservationLine {
 export interface PatchRelayObservationIssue {
   sessionState?: string | undefined;
   waitingReason?: string | undefined;
-  factoryState: string;
+  phase: IssuePhase;
   activeRunType?: string | undefined;
   prNumber?: number | undefined;
   prState?: string | undefined;
@@ -55,8 +56,8 @@ function labelForState(state: string): string {
   return STATE_LABELS[state] ?? state;
 }
 
-function collectVisitedStates(history: StateHistoryNode[], currentFactoryState: string): Set<string> {
-  const visited = new Set<string>([currentFactoryState]);
+function collectVisitedStates(history: StateHistoryNode[], currentIssuePhase: string): Set<string> {
+  const visited = new Set<string>([currentIssuePhase]);
   for (const node of history) {
     visited.add(node.state);
     for (const sideTrip of node.sideTrips) {
@@ -70,12 +71,12 @@ function collectVisitedStates(history: StateHistoryNode[], currentFactoryState: 
 function buildNodes(
   states: readonly string[],
   visited: Set<string>,
-  currentFactoryState: string,
+  currentIssuePhase: string,
 ): VisualizationNode[] {
   return states.map((state) => ({
     state,
     label: labelForState(state),
-    status: currentFactoryState === state
+    status: currentIssuePhase === state
       ? "current"
       : visited.has(state)
         ? "visited"
@@ -123,18 +124,18 @@ function describeObservationEvent(event: OperatorFeedEvent): ObservationLine {
   }
 }
 
-export function buildPatchRelayStateGraph(history: StateHistoryNode[], currentFactoryState: string): {
+export function buildPatchRelayStateGraph(history: StateHistoryNode[], currentIssuePhase: string): {
   main: VisualizationNode[];
   prLoops: VisualizationNode[];
   queueLoop: VisualizationNode[];
   exits: VisualizationNode[];
 } {
-  const visited = collectVisitedStates(history, currentFactoryState);
+  const visited = collectVisitedStates(history, currentIssuePhase);
   return {
-    main: buildNodes(MAIN_STATES, visited, currentFactoryState),
-    prLoops: buildNodes(PR_LOOP_STATES, visited, currentFactoryState),
-    queueLoop: buildNodes(QUEUE_LOOP_STATES, visited, currentFactoryState),
-    exits: buildNodes(EXIT_STATES, visited, currentFactoryState),
+    main: buildNodes(MAIN_STATES, visited, currentIssuePhase),
+    prLoops: buildNodes(PR_LOOP_STATES, visited, currentIssuePhase),
+    queueLoop: buildNodes(QUEUE_LOOP_STATES, visited, currentIssuePhase),
+    exits: buildNodes(EXIT_STATES, visited, currentIssuePhase),
   };
 }
 
@@ -176,7 +177,7 @@ export function buildPatchRelayQueueObservations(
       });
       break;
     default:
-      switch (issue.factoryState) {
+      switch (issue.phase) {
     case "awaiting_queue":
       observations.push({
         tone: "info",

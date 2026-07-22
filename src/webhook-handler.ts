@@ -1,7 +1,7 @@
 import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
-import type { RunType } from "./factory-state.ts";
+import type { RunType } from "./run-type.ts";
 import { peekRunnableWorkflowTaskRunType } from "./pending-workflow-task.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";

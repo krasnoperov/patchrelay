@@ -1,5 +1,5 @@
 import type { PatchRelayDatabase } from "./db.ts";
-import type { RunType } from "./factory-state.ts";
+import type { RunType } from "./run-type.ts";
 import type { LinearIssueProjectionService } from "./linear-issue-projection.ts";
 
 export type RunAdmissionResult =

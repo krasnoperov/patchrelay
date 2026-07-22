@@ -91,7 +91,7 @@ function createCleanGitDirectory(dir: string): void {
 function addIssue(db: PatchRelayDatabase, params: {
   issueKey: string;
   worktreePath: string;
-  factoryState: "done" | "failed" | "escalated" | "delegated";
+  workflowOutcome: "completed" | "failed" | "escalated";
   updatedAt: string;
   activeRunId?: number | undefined;
 }): void {
@@ -99,7 +99,7 @@ function addIssue(db: PatchRelayDatabase, params: {
     projectId: "proj",
     linearIssueId: params.issueKey.toLowerCase(),
     issueKey: params.issueKey,
-    factoryState: params.factoryState,
+    workflowOutcome: params.workflowOutcome,
     worktreePath: params.worktreePath,
     ...(params.activeRunId !== undefined ? { activeRunId: params.activeRunId } : {}),
   });
@@ -131,12 +131,12 @@ test("terminal worktree cleanup removes old clean managed worktrees only", async
     }
     writeFileSync(path.join(dirtyOld, "tracked.txt"), "dirty\n");
 
-    addIssue(db, { issueKey: "INV-1", worktreePath: cleanOld, factoryState: "done", updatedAt: old });
-    addIssue(db, { issueKey: "INV-2", worktreePath: dirtyOld, factoryState: "failed", updatedAt: old });
-    addIssue(db, { issueKey: "INV-3", worktreePath: activeOld, factoryState: "done", updatedAt: old, activeRunId: 42 });
-    addIssue(db, { issueKey: "INV-4", worktreePath: recentDone, factoryState: "done", updatedAt: recent });
-    addIssue(db, { issueKey: "INV-5", worktreePath: delegatedOld, factoryState: "delegated", updatedAt: old });
-    addIssue(db, { issueKey: "INV-6", worktreePath: outsideRoot, factoryState: "escalated", updatedAt: old });
+    addIssue(db, { issueKey: "INV-1", worktreePath: cleanOld, workflowOutcome: "completed", updatedAt: old });
+    addIssue(db, { issueKey: "INV-2", worktreePath: dirtyOld, workflowOutcome: "failed", updatedAt: old });
+    addIssue(db, { issueKey: "INV-3", worktreePath: activeOld, workflowOutcome: "completed", updatedAt: old, activeRunId: 42 });
+    addIssue(db, { issueKey: "INV-4", worktreePath: recentDone, workflowOutcome: "completed", updatedAt: recent });
+    addIssue(db, { issueKey: "INV-5", worktreePath: delegatedOld, workflowOutcome: undefined, updatedAt: old });
+    addIssue(db, { issueKey: "INV-6", worktreePath: outsideRoot, workflowOutcome: "escalated", updatedAt: old });
 
     const result = await runTerminalWorktreeCleanup({
       db,

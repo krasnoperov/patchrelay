@@ -20,6 +20,7 @@ import type {
   ReviewQuillAttemptOwnership,
   ServiceProbeResult,
 } from "./types.ts";
+import { deriveIssuePhase } from "../../issue-phase.ts";
 
 export interface GitHubIssueHealthResult {
   finding?: ClusterHealthCheck | undefined;
@@ -59,7 +60,7 @@ export async function evaluateGitHubIssueHealth(
         gateStatus: "unknown",
         owner: "unknown",
         orphaned: true,
-        factoryState: issue.factoryState,
+        phase: deriveIssuePhase(issue),
         message: `GitHub probe failed: ${probe.error}`,
       },
       finding: {

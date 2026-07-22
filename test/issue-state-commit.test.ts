@@ -22,7 +22,7 @@ function seedIssue(db: PatchRelayDatabase) {
     projectId: PROJECT,
     linearIssueId: ISSUE,
     issueKey: "USE-1",
-    factoryState: "pr_open",
+    workflowOutcome: undefined,
   });
 }
 
@@ -46,11 +46,11 @@ test("commitIssueState applies cleanly when the expected version matches", () =>
     const result = db.issueSessions.commitIssueState({
       writer: "test",
       expectedVersion: issue.version,
-      update: { projectId: PROJECT, linearIssueId: ISSUE, factoryState: "awaiting_queue" },
+      update: { projectId: PROJECT, linearIssueId: ISSUE, workflowOutcome: "failed", workflowOutcomeReason: "test_failure" },
     });
     assert.equal(result.outcome, "applied");
     assert.equal(result.outcome === "applied" && result.conflicted, false);
-    assert.equal(db.getIssue(PROJECT, ISSUE)?.factoryState, "awaiting_queue");
+    assert.equal(db.getIssue(PROJECT, ISSUE)?.workflowOutcome, "failed");
     assert.equal(telemetry.list("state.write_conflict").length, 0);
   } finally {
     cleanup();
@@ -62,20 +62,20 @@ test("interleaved writer triggers a conflict that is recomputed from the fresh r
   try {
     const issue = seedIssue(db);
     // Writer B lands between writer A's read and A's commit.
-    db.upsertIssue({ projectId: PROJECT, linearIssueId: ISSUE, factoryState: "done" });
+    db.upsertIssue({ projectId: PROJECT, linearIssueId: ISSUE, workflowOutcome: "completed" });
 
     const result = db.issueSessions.commitIssueState({
       writer: "writer-a",
       expectedVersion: issue.version,
-      update: { projectId: PROJECT, linearIssueId: ISSUE, factoryState: "repairing_ci" },
+      update: { projectId: PROJECT, linearIssueId: ISSUE, workflowOutcome: undefined },
       onConflict: (current) =>
-        current.factoryState === "done"
+        current.workflowOutcome === "completed"
           ? undefined
-          : { projectId: PROJECT, linearIssueId: ISSUE, factoryState: "repairing_ci" },
+          : { projectId: PROJECT, linearIssueId: ISSUE, workflowOutcome: undefined },
     });
 
     assert.equal(result.outcome, "conflict_skipped");
-    assert.equal(db.getIssue(PROJECT, ISSUE)?.factoryState, "done");
+    assert.equal(db.getIssue(PROJECT, ISSUE)?.workflowOutcome, "completed");
     const conflicts = telemetry.list("state.write_conflict");
     assert.equal(conflicts.length, 1);
     assert.equal(conflicts[0]?.writer, "writer-a");
@@ -170,16 +170,16 @@ test("commit under a stale lease is denied without writing", () => {
       writer: "stale-worker",
       lease: { projectId: PROJECT, linearIssueId: ISSUE, leaseId: "not-the-holder" },
       expectedVersion: issue.version,
-      update: { projectId: PROJECT, linearIssueId: ISSUE, factoryState: "failed" },
+      update: { projectId: PROJECT, linearIssueId: ISSUE, workflowOutcome: "failed" },
     });
     assert.equal(denied.outcome, "lease_denied");
-    assert.equal(db.getIssue(PROJECT, ISSUE)?.factoryState, "pr_open");
+    assert.equal(db.getIssue(PROJECT, ISSUE)?.workflowOutcome, undefined);
 
     const allowed = db.issueSessions.commitIssueState({
       writer: "holder-worker",
       lease: { projectId: PROJECT, linearIssueId: ISSUE, leaseId: "holder" },
       expectedVersion: issue.version,
-      update: { projectId: PROJECT, linearIssueId: ISSUE, factoryState: "awaiting_queue" },
+      update: { projectId: PROJECT, linearIssueId: ISSUE, workflowOutcome: undefined },
     });
     assert.equal(allowed.outcome, "applied");
   } finally {
@@ -193,7 +193,7 @@ test("commit against a missing issue with expectedVersion null inserts it", () =
     const result = db.issueSessions.commitIssueState({
       writer: "test",
       expectedVersion: null,
-      update: { projectId: PROJECT, linearIssueId: ISSUE, factoryState: "delegated" },
+      update: { projectId: PROJECT, linearIssueId: ISSUE, workflowOutcome: undefined },
     });
     assert.equal(result.outcome, "applied");
     assert.equal(telemetry.list("state.write_conflict").length, 0);

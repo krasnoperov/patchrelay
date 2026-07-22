@@ -4,8 +4,8 @@ import type { IssueRecord } from "./db-types.ts";
 import type { LinearClientProvider } from "./types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
-import { resolveClosedPrDisposition, resolveClosedPrFactoryState } from "./pr-state.ts";
-import { resolvePostMergeFactoryState } from "./post-merge-deploy.ts";
+import { resolveClosedPrDisposition } from "./pr-state.ts";
+import { isDeployTrackingEnabled } from "./post-merge-deploy.ts";
 import { resolvePreferredCompletedLinearState } from "./linear-workflow.ts";
 import { syncGitHubLinearSession } from "./github-linear-session-sync.ts";
 import type { AppConfig } from "./types.ts";
@@ -31,7 +31,7 @@ export async function handleGitHubTerminalPrEvent(params: {
   // `deploying` watch state instead of completing immediately. Linear
   // completion is deferred until the deploy succeeds (idle reconciler).
   const project = config.projects.find((candidate) => candidate.id === issue.projectId);
-  const postMergeState = resolvePostMergeFactoryState(project);
+  const trackDeploy = isDeployTrackingEnabled(project);
   db.issueSessions.appendIssueSessionEvent({
     projectId: issue.projectId,
     linearIssueId: issue.linearIssueId,
@@ -56,15 +56,20 @@ export async function handleGitHubTerminalPrEvent(params: {
   }
 
   const buildTerminalUpdate = (row: IssueRecord) => {
-    const terminalFactoryState = event.triggerEvent === "pr_merged"
-      ? postMergeState
-      : resolveClosedPrFactoryState(row);
+    const closedDisposition = event.triggerEvent === "pr_closed"
+      ? resolveClosedPrDisposition(row)
+      : undefined;
     return {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       activeRunId: null,
-      factoryState: terminalFactoryState,
-      ...(terminalFactoryState === "deploying" ? { deployStartedAt: new Date().toISOString() } : {}),
+      ...(event.triggerEvent === "pr_merged" && trackDeploy
+        ? { workflowOutcome: null, workflowOutcomeReason: null, deployStartedAt: new Date().toISOString() }
+        : event.triggerEvent === "pr_merged" || closedDisposition === "done"
+          ? { workflowOutcome: "completed" as const, workflowOutcomeReason: "github_pr_terminal" }
+          : closedDisposition === "redelegate"
+            ? { workflowOutcome: null, workflowOutcomeReason: null, inputRequestKind: null }
+            : {}),
     };
   };
   const activeLease = db.issueSessions.getActiveIssueSessionLease(issue.projectId, issue.linearIssueId);
@@ -87,12 +92,6 @@ export async function handleGitHubTerminalPrEvent(params: {
   }
   db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(issue.projectId, issue.linearIssueId);
   const updatedIssue = db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
-  if (event.triggerEvent === "pr_closed" && resolveClosedPrDisposition(issue) === "redelegate") {
-    workflowTaskDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
-      eventType: "delegated",
-      dedupeKey: `github_pr_closed:implementation:${issue.linearIssueId}`,
-    });
-  }
   if (event.triggerEvent === "pr_merged") {
     dispatchOrchestrationParentsForChildEvent({
       db,
@@ -103,7 +102,7 @@ export async function handleGitHubTerminalPrEvent(params: {
     // Only complete Linear now when there's no deploy to watch. While
     // `deploying`, the issue stays in the Deploying state and the idle
     // reconciler completes it once the deploy workflow succeeds.
-    if (postMergeState === "done") {
+    if (!trackDeploy) {
       await completeLinearIssueAfterMerge(params, updatedIssue);
     }
   }

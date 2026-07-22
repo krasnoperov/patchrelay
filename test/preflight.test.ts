@@ -9,7 +9,7 @@ import type { AppConfig } from "../src/types.ts";
 
 
 function writeWorkflowFiles(_config: AppConfig): void {
-  // No workflow files needed — factory state machine replaces workflow definitions
+  // No workflow files needed — workflow tasks are derived from durable facts.
 }
 
 function createConfig(baseDir: string): AppConfig {

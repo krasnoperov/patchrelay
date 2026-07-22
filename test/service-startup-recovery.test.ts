@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import pino from "pino";
 import test from "node:test";
+import { assertIssuePhase } from "./assert-issue-phase.ts";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { ServiceStartupRecovery } from "../src/service-startup-recovery.ts";
 import { IssueSessionLeaseService } from "../src/issue-session-lease-service.ts";
@@ -96,7 +97,7 @@ test("startup recovery repairs re-delegated paused local work even without an ag
       issueKey: "USE-REDO",
       title: "Resume paused implementation after missed re-delegation",
       delegatedToPatchRelay: false,
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
 
     const enqueued: Array<{ projectId: string; issueId: string }> = [];
@@ -137,7 +138,7 @@ test("startup recovery repairs re-delegated paused local work even without an ag
 
     const issue = db.getIssue("usertold", "issue-redelegated");
     assert.equal(issue?.delegatedToPatchRelay, true);
-    assert.equal(issue?.factoryState, "delegated");
+    assertIssuePhase(issue, "delegated");
     const task = db.workflowTasks.getTask("usertold", "issue-redelegated", "run:implementation");
     const authorityObservation = db.workflowObservations.listObservations("usertold", "issue-redelegated")
       .find((observation) => observation.type === "linear.delegated");
@@ -226,7 +227,7 @@ test("startup recovery discovers delegated Linear issues missing from the local 
     const issue = db.getIssue("usertold", "issue-missed");
     assert.equal(issue?.issueKey, "USE-MISSED");
     assert.equal(issue?.delegatedToPatchRelay, true);
-    assert.equal(issue?.factoryState, "delegated");
+    assertIssuePhase(issue, "delegated");
     const task = db.workflowTasks.getTask("usertold", "issue-missed", "run:implementation");
     assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-missed"), undefined);
     assert.equal(task?.runType, "implementation");
@@ -257,7 +258,7 @@ test("startup recovery re-queues delegated requested-changes work after a restar
       issueKey: "USE-REVIEW",
       title: "Resume requested-changes repair after restart",
       delegatedToPatchRelay: false,
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 33,
       prState: "open",
       prHeadSha: "sha-review",
@@ -304,7 +305,7 @@ test("startup recovery re-queues delegated requested-changes work after a restar
     const issue = db.getIssue("usertold", "issue-reactive-review");
     const task = db.workflowTasks.getTask("usertold", "issue-reactive-review", "run:review_fix");
     assert.equal(issue?.delegatedToPatchRelay, true);
-    assert.equal(issue?.factoryState, "changes_requested");
+    assertIssuePhase(issue, "changes_requested");
     assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-reactive-review"), undefined);
     assert.equal(task?.runType, "review_fix");
     assert.equal(task?.gateAction, "start");
@@ -327,7 +328,7 @@ test("startup recovery does not resync idle paused issues just because they stil
       issueKey: "USE-PAUSED",
       title: "Paused requested-changes issue",
       delegatedToPatchRelay: false,
-      factoryState: "changes_requested",
+      workflowOutcome: undefined,
       agentSessionId: "session-paused",
     });
 
@@ -370,7 +371,7 @@ test("startup recovery does not scan webhook history for idle issues without act
       issueKey: "USE-IDLE",
       title: "Idle issue without an agent session",
       delegatedToPatchRelay: true,
-      factoryState: "changes_requested",
+      workflowOutcome: undefined,
     });
 
     let webhookHistoryLookups = 0;
@@ -410,7 +411,7 @@ test("startup recovery still resyncs active runs with agent sessions", async () 
       issueKey: "USE-ACTIVE",
       title: "Actively running issue",
       delegatedToPatchRelay: true,
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       agentSessionId: "session-active",
     });
     const run = db.runs.createRun({
@@ -463,7 +464,7 @@ test("startup recovery reconciles PR facts into durable workflow tasks", () => {
       linearIssueId: "issue-drain",
       issueKey: "USE-DRAIN",
       delegatedToPatchRelay: true,
-      factoryState: "changes_requested",
+      workflowOutcome: undefined,
       prNumber: 900,
       prState: "open",
       prHeadSha: "sha-drain",
@@ -484,7 +485,7 @@ test("startup recovery reconciles PR facts into durable workflow tasks", () => {
     recovery.reconcileKnownWorkflowTasks();
 
     const drained = db.getIssue("usertold", "issue-drain");
-    assert.equal(drained?.factoryState, "changes_requested");
+    assertIssuePhase(drained, "changes_requested");
     const tasks = db.workflowTasks.listOpenRunnableTasks("usertold")
       .filter((task) => task.subjectId === "issue-drain" && task.taskId === "run:review_fix");
     assert.equal(tasks.length, 1);

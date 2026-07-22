@@ -16,7 +16,7 @@ export type ReconcilePullRequestFetchResult =
 
 /**
  * Snapshots a PR via `gh pr view --json`, used during idle reconciliation
- * to verify the local state machine against fresh GitHub truth before
+ * to verify local workflow facts against fresh GitHub truth before
  * dispatching repair runs.
  *
  * Caller is responsible for logging / acting on `ok: false`; this helper

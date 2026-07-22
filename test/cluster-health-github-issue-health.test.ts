@@ -35,7 +35,7 @@ function issue(overrides: Partial<IssueRecord> = {}): IssueRecord {
     delegatedToPatchRelay: true,
     issueClass: "implementation",
     currentLinearState: "In Merge Queue",
-    factoryState: "awaiting_queue",
+    workflowOutcome: undefined,
     prNumber: 1812,
     prState: "open",
     prReviewState: "approved",

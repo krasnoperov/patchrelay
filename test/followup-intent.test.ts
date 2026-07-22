@@ -69,7 +69,7 @@ test("low-confidence classifier control intents downgrade to unknown", async () 
   const classification = await classifier.classify("hold maybe?", {
     source: "agentPrompted",
     activeRunType: "implementation",
-    factoryState: "implementing",
+    workflowOutcome: undefined,
     delegatedToPatchRelay: true,
     explicitWorkflowIntent: true,
   });
@@ -83,7 +83,7 @@ test("buildFollowupIntentPrompt carries state facts without encoding keyword rou
   const prompt = buildFollowupIntentPrompt("Here is the extra constraint.", {
     source: "comment",
     activeRunType: "review_fix",
-    factoryState: "changes_requested",
+    workflowOutcome: undefined,
     directReply: false,
     delegatedToPatchRelay: true,
     prReviewState: "changes_requested",

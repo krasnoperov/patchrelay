@@ -3,7 +3,8 @@ import type { GitHubAppBotIdentity } from "./github-app-token.ts";
 import type { CodexAppServerClient, CodexNotification } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
-import type { FactoryState, RunType } from "./factory-state.ts";
+import type { WorkflowOutcome } from "./issue-phase.ts";
+import type { RunType } from "./run-type.ts";
 import { isRequestedChangesRunType } from "./reactive-pr-state.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { summarizeCurrentThread } from "./run-reporting.ts";
@@ -45,6 +46,7 @@ import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry, type RunSkipRea
 import { LinearIssueProjectionService } from "./linear-issue-projection.ts";
 import { RunAdmissionController, shouldConsumeWorkflowTaskOnAdmissionFailure } from "./run-admission-controller.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
+import { deriveIssuePhase } from "./issue-phase.ts";
 
 const WRITER = "run-orchestrator";
 
@@ -85,7 +87,7 @@ interface RunLeasePorts {
 }
 
 interface RunRecoveryPorts {
-  failRunAndClear: (run: RunRecord, message: string, nextState?: FactoryState) => void;
+  failRunAndClear: (run: RunRecord, message: string, outcome?: WorkflowOutcome) => void;
   restoreIdleWorktree: (issue: Pick<IssueRecord, "issueKey" | "worktreePath" | "branchName">) => Promise<void>;
 }
 
@@ -274,7 +276,7 @@ export class RunOrchestrator {
     );
     this.mergedLinearCompletionReconciler = new MergedLinearCompletionReconciler(db, linearProvider, logger);
     this.queueHealthMonitor = new QueueHealthMonitor(db, config, {
-      advanceIdleIssue: (issue, newState, options) => this.idleReconciler.advanceIdleIssue(issue, newState, options),
+      advanceIdleIssue: (issue, options) => this.idleReconciler.advanceIdleIssue(issue, options),
       workflowTaskDispatcher: this.workflowTaskDispatcher,
     }, logger, feed);
   }
@@ -369,7 +371,7 @@ export class RunOrchestrator {
         linearIssueId: entry.linearIssueId,
         ...(entry.issueKey ? { issueKey: entry.issueKey } : {}),
         ...(entry.title ? { title: entry.title } : {}),
-        factoryState: entry.factoryState,
+        phase: deriveIssuePhase(entry),
         ...(entry.currentLinearState ? { currentLinearState: entry.currentLinearState } : {}),
         delegatedToPatchRelay: entry.delegatedToPatchRelay,
         hasOpenPr: entry.prNumber !== undefined && entry.prState !== "closed" && entry.prState !== "merged",
@@ -531,7 +533,13 @@ export class RunOrchestrator {
       this.db.issueSessions.commitIssueState({
         writer: WRITER,
         lease: { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId },
-        update: { projectId: issue.projectId, linearIssueId: issue.linearIssueId, factoryState: "done" },
+        update: {
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          workflowOutcome: "completed",
+          workflowOutcomeReason: "pr_merged",
+          inputRequestKind: null,
+        },
       });
       this.leaseService.release(item.projectId, item.issueId);
       return;
@@ -928,13 +936,14 @@ export class RunOrchestrator {
   // advanceIdleIssue is now on IdleIssueReconciler — delegate for internal callers
   private advanceIdleIssue(
     issue: IssueRecord,
-    newState: FactoryState,
     options?: {
       workflowIntent?: WorkflowRunIntent;
       clearFailureProvenance?: boolean;
+      workflowOutcome?: "completed" | "failed" | "escalated";
+      workflowOutcomeReason?: string;
     },
   ): void {
-    this.idleReconciler.advanceIdleIssue(issue, newState, options);
+    this.idleReconciler.advanceIdleIssue(issue, options);
   }
 
   // Settle a dangling active slot: an issue still pointing at an
@@ -1006,11 +1015,11 @@ export class RunOrchestrator {
     });
   }
 
-  private failRunAndClear(run: RunRecord, message: string, nextState: FactoryState = "failed"): void {
+  private failRunAndClear(run: RunRecord, message: string, outcome: WorkflowOutcome = "failed"): void {
     this.runFailurePolicy.failRunAndClear({
       run,
       message,
-      nextState,
+      outcome,
     });
   }
 

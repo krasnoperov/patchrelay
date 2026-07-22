@@ -1,6 +1,6 @@
 import type { PatchRelayDatabase } from "../db.ts";
 import type { IssueRecord } from "../db-types.ts";
-import type { RunType } from "../factory-state.ts";
+import type { RunType } from "../run-type.ts";
 import type { OperatorEventFeed } from "../operator-feed.ts";
 import { dispatchOrchestrationParentsForChildEvent } from "../orchestration-parent-dispatch.ts";
 import { triggerEventAllowed } from "../project-resolution.ts";
@@ -19,7 +19,7 @@ import { appendBranchUpkeepObservation } from "../branch-upkeep-signal.ts";
 import { planIssueWebhookWorkflow } from "./issue-webhook-workflow-planner.ts";
 import type { WorkflowTaskDispatcher } from "../workflow-task-dispatcher.ts";
 import { dirtyWorktreeEventPayload, inspectGitWorktreeStatus } from "../git-worktree-status.ts";
-import { isIssueAwaitingInputProjection } from "../issue-execution-state.ts";
+import { deriveIssuePhase } from "../issue-phase.ts";
 
 const WRITER = "desired-stage-recorder";
 
@@ -165,7 +165,7 @@ export class DesiredStageRecorder {
     const wasResolved = isResolvedLinearState(existingIssue?.currentLinearStateType, existingIssue?.currentLinearState);
     const isResolved = isResolvedLinearState(issue.currentLinearStateType, issue.currentLinearState);
 
-    if (workflowPlan.undelegation.factoryState) {
+    if (workflowPlan.undelegation.paused) {
       if (activeRun && releaseReason) {
         this.db.runs.revokeRunLease(activeRun.id, { reason: releaseReason });
       }
@@ -190,13 +190,11 @@ export class DesiredStageRecorder {
         kind: "stage",
         issueKey: issue.issueKey,
         projectId: params.project.id,
-        stage: issue.factoryState,
+        stage: deriveIssuePhase(issue),
         status: "un_delegated",
         summary: releaseWorktreeStatus?.dirty && releaseWorktreeStatus.summary
           ? `Issue un-delegated from PatchRelay with dirty worktree: ${releaseWorktreeStatus.summary}`
-          : isIssueAwaitingInputProjection(issue)
-          ? "Issue un-delegated from PatchRelay"
-          : `Issue un-delegated from PatchRelay; ${issue.factoryState} is now paused`,
+          : "Issue un-delegated from PatchRelay; automation is now paused",
       });
     } else if (workflowPlan.blockerPausedImplementation) {
       if (activeRun?.threadId && activeRun.turnId) {
@@ -209,7 +207,7 @@ export class DesiredStageRecorder {
         kind: "stage",
         issueKey: issue.issueKey,
         projectId: params.project.id,
-        stage: issue.factoryState,
+        stage: deriveIssuePhase(issue),
         status: "blocked",
         summary: `Implementation paused because ${issue.issueKey ?? normalizedIssue.id} is now blocked`,
       });
@@ -243,7 +241,7 @@ export class DesiredStageRecorder {
         kind: "stage",
         issueKey: issue.issueKey,
         projectId: params.project.id,
-        stage: issue.factoryState,
+        stage: deriveIssuePhase(issue),
         status: "settling_children",
         summary: "Waiting briefly for child issues to settle before orchestration starts",
       });
@@ -253,12 +251,12 @@ export class DesiredStageRecorder {
       dispatchOrchestrationParentsForChildEvent({
         db: this.db,
         child: {
+          ...issue,
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           parentLinearIssueId: previousParentIssueId,
           ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
           ...(issue.title ? { title: issue.title } : {}),
-          factoryState: issue.factoryState,
           ...(issue.currentLinearState ? { currentLinearState: issue.currentLinearState } : {}),
           ...(issue.prNumber !== undefined ? { prNumber: issue.prNumber } : {}),
           ...(issue.prState ? { prState: issue.prState } : {}),

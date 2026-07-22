@@ -1,5 +1,5 @@
 import type { Logger } from "pino";
-import type { RunType } from "./factory-state.ts";
+import type { RunType } from "./run-type.ts";
 import type { IssueSessionEventType } from "./issue-session-events.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 
@@ -132,7 +132,7 @@ export type PatchRelayTelemetryEvent =
   })
   | (PatchRelayTelemetryIds & {
     // S4 cutover instrument: emitted when the new PR-fact-based session_state /
-    // waiting_reason derivation disagrees with the legacy factory-state-keyed
+    // waiting_reason derivation disagrees with the stored session projection
     // one. Must stay silent for known shapes; gates S8/S9. Fire-and-forget.
     type: "state.projection_divergence";
     field: "session_state" | "waiting_reason";

@@ -2,6 +2,7 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
 import { classifyIssue } from "./issue-class.ts";
 import type { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
+import { deriveIssuePhase } from "./issue-phase.ts";
 import type { RunContext } from "./run-context.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
@@ -100,7 +101,7 @@ export function queueSettledOrchestrationIssue(params: {
 
 export function dispatchOrchestrationParentsForChildEvent(params: {
   db: PatchRelayDatabase;
-  child: Pick<IssueRecord, "projectId" | "linearIssueId" | "parentLinearIssueId" | "issueKey" | "title" | "factoryState" | "currentLinearState" | "prNumber" | "prState">;
+  child: IssueRecord;
   eventType: "child_changed" | "child_delivered" | "child_regressed";
   changeKind?: "attached" | "detached" | "duplicate" | "canceled" | "updated" | undefined;
   workflowTaskDispatcher: WorkflowTaskDispatcher;
@@ -130,13 +131,13 @@ export function dispatchOrchestrationParentsForChildEvent(params: {
       childIssueId: params.child.linearIssueId,
       ...(params.child.issueKey ? { childIssueKey: params.child.issueKey } : {}),
       ...(params.child.title ? { childTitle: params.child.title } : {}),
-      factoryState: params.child.factoryState,
+      phase: deriveIssuePhase(params.child),
       ...(params.child.currentLinearState ? { currentLinearState: params.child.currentLinearState } : {}),
       ...(params.child.prNumber !== undefined ? { prNumber: params.child.prNumber } : {}),
       ...(params.child.prState ? { prState: params.child.prState } : {}),
       ...(params.changeKind ? { changeKind: params.changeKind } : {}),
     } satisfies RunContext;
-    const childDedupeKey = `${params.eventType}:${parent.linearIssueId}:${params.child.linearIssueId}:${params.child.factoryState}:${params.changeKind ?? params.child.prState ?? "no-pr"}`;
+    const childDedupeKey = `${params.eventType}:${parent.linearIssueId}:${params.child.linearIssueId}:${deriveIssuePhase(params.child)}:${params.changeKind ?? params.child.prState ?? "no-pr"}`;
 
     // Append the durable orchestration child-update observation. The reconcile
     // inside parentHasRunnableWorkflowTask can materialize a

@@ -1,11 +1,15 @@
-import type { FactoryState } from "./factory-state.ts";
 import { deriveIssueTerminalOutcome } from "./issue-execution-state.ts";
+import type { InputRequestKind, IssuePhase, WorkflowOutcome } from "./issue-phase.ts";
 
 export interface PrDisplayIssueLike {
   prNumber?: number | undefined;
   prState?: string | undefined;
-  factoryState?: FactoryState | string | undefined;
+  workflowOutcome?: WorkflowOutcome | undefined;
+  inputRequestKind?: InputRequestKind | undefined;
+  currentLinearState?: string | undefined;
+  currentLinearStateType?: string | undefined;
   delegatedToPatchRelay?: boolean | undefined;
+  phase?: IssuePhase | undefined;
 }
 
 export type PrDisplayContext =
@@ -26,7 +30,12 @@ export function derivePrDisplayContext(issue: PrDisplayIssueLike): PrDisplayCont
   }
 
   if (issue.prState === "closed") {
-    if (deriveIssueTerminalOutcome(issue) !== undefined) {
+    if (
+      issue.phase === "done"
+      || issue.phase === "failed"
+      || issue.phase === "escalated"
+      || deriveIssueTerminalOutcome(issue) !== undefined
+    ) {
       return { kind: "closed_historical_pr", prNumber: issue.prNumber };
     }
     if (issue.delegatedToPatchRelay === false) {

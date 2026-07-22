@@ -1,6 +1,7 @@
 import type { IssueRecord } from "./db-types.ts";
 import type { CompletionCheckResult } from "./completion-check-types.ts";
-import type { FactoryState, RunType } from "./factory-state.ts";
+import { deriveIssuePhase, type IssuePhase } from "./issue-phase.ts";
+import type { RunType } from "./run-type.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
 import type { LinearAgentActivityContent } from "./linear-types.ts";
 import { formatRunTypeLabel } from "./agent-session-plan.ts";
@@ -20,7 +21,7 @@ function trimSummary(summary: string | undefined, maxLength = 300): string | und
   return value.length <= maxLength ? value : `${value.slice(0, maxLength).trimEnd()}...`;
 }
 
-function describeNextState(state: FactoryState | undefined, prNumber?: number): string | undefined {
+function describeNextState(state: IssuePhase | undefined, prNumber?: number): string | undefined {
   const prLabel = prNumber ? `PR #${prNumber}` : "the pull request";
   switch (state) {
     case "pr_open":
@@ -87,7 +88,19 @@ export function buildPromptDeliveryFailedActivity(runType: RunType, reason?: str
 }
 
 export function buildFollowupStatusActivity(params: {
-  issue: Pick<IssueRecord, "issueKey" | "factoryState" | "prNumber">;
+  issue: Pick<IssueRecord,
+    | "issueKey"
+    | "prNumber"
+    | "delegatedToPatchRelay"
+    | "workflowOutcome"
+    | "inputRequestKind"
+    | "prState"
+    | "prIsDraft"
+    | "prReviewState"
+    | "prCheckStatus"
+    | "lastGitHubFailureSource"
+    | "deployStartedAt"
+  >;
   statusNote?: string | undefined;
   activeRunType?: RunType | undefined;
   runnableTaskRunType?: RunType | undefined;
@@ -101,7 +114,11 @@ export function buildFollowupStatusActivity(params: {
   const statusNote = params.statusNote ? ` ${params.statusNote}` : "";
   return {
     type: params.activityType ?? "response",
-    body: `PatchRelay status: ${subject} is ${formatFactoryState(params.issue.factoryState)}.${prNote}${runNote}${statusNote}`.trim(),
+    body: `PatchRelay status: ${subject} is ${formatIssuePhase(deriveIssuePhase({
+      ...params.issue,
+      activeRunType: params.activeRunType,
+      runnableTaskRunType: params.runnableTaskRunType,
+    }))}.${prNote}${runNote}${statusNote}`.trim(),
   };
 }
 
@@ -147,14 +164,14 @@ export function buildReviewRoundStartedActivity(params: {
   };
 }
 
-function formatFactoryState(state: FactoryState): string {
+function formatIssuePhase(state: IssuePhase): string {
   return state.replaceAll("_", " ");
 }
 
 export function buildRunCompletedActivity(params: {
   runType: RunType;
   completionSummary?: string;
-  postRunState?: FactoryState;
+  postRunState?: IssuePhase;
   prNumber?: number;
   prUrl?: string;
   reviewRound?: number;
@@ -297,7 +314,7 @@ export function buildStopConfirmationActivity(): LinearAgentActivityContent {
 }
 
 export function buildGitHubStateActivity(
-  newState: FactoryState,
+  newState: IssuePhase,
   event: NormalizedGitHubEvent,
 ): LinearAgentActivityContent | undefined {
   switch (newState) {
@@ -345,12 +362,17 @@ export function buildMergePrepEscalationActivity(attempts: number): LinearAgentA
 }
 
 export function summarizeIssueStateForLinear(
-  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prState" | "prReviewState" | "prCheckStatus" | "delegatedToPatchRelay"> & {
+  issue: Pick<IssueRecord,
+    | "prNumber" | "prState" | "prIsDraft" | "prReviewState" | "prCheckStatus" | "delegatedToPatchRelay"
+    | "workflowOutcome" | "inputRequestKind" | "lastGitHubFailureSource" | "deployStartedAt"
+    | "currentLinearState" | "currentLinearStateType"
+  > & {
     sessionState?: string | undefined;
     waitingReason?: string | undefined;
   },
 ): string | undefined {
   const prContext = derivePrDisplayContext(issue);
+  const phase = deriveIssuePhase(issue);
   switch (issue.sessionState) {
     case "waiting_input":
       return issue.waitingReason ?? (issue.prNumber && !isClosedPrState(issue.prState) ? `PR #${issue.prNumber} is waiting for input.` : "Waiting for input.");
@@ -370,7 +392,7 @@ export function summarizeIssueStateForLinear(
       return issue.waitingReason ?? (issue.prNumber && !isClosedPrState(issue.prState) ? `PR #${issue.prNumber} needs help to recover.` : "Needs help to recover.");
   }
 
-  switch (issue.factoryState) {
+  switch (phase) {
     case "delegated":
       if (prContext.kind === "closed_replacement_pending") {
         return `Queued to replace closed PR #${prContext.prNumber}.`;
@@ -413,6 +435,17 @@ export function summarizeIssueStateForLinear(
         return `PR #${issue.prNumber} is approved and awaiting merge while PatchRelay is paused.`;
       }
       return issue.prNumber ? `PR #${issue.prNumber} is approved and awaiting merge.` : "Approved and awaiting merge.";
+    case "paused":
+      if (issue.prNumber && issue.prReviewState === "approved") {
+        return `PR #${issue.prNumber} is approved and awaiting merge while PatchRelay is paused.`;
+      }
+      if (issue.prNumber && issue.prReviewState === "changes_requested") {
+        return `PR #${issue.prNumber} has requested changes while PatchRelay is paused.`;
+      }
+      if (issue.prNumber) {
+        return `PR #${issue.prNumber} is awaiting review while PatchRelay is paused.`;
+      }
+      return "PatchRelay is queued to start work, but automation is paused.";
     case "done":
       if (issue.prNumber && issue.prState === "merged") return `PR #${issue.prNumber} has merged.`;
       if (issue.prNumber && isClosedPrState(issue.prState)) return `Completed without merging PR #${issue.prNumber}.`;

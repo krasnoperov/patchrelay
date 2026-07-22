@@ -39,7 +39,7 @@ function seedIssue(db: PatchRelayDatabase, linearIssueId: string, issueKey: stri
     projectId: "usertold",
     linearIssueId,
     issueKey,
-    factoryState: "delegated",
+    workflowOutcome: undefined,
   });
 }
 
@@ -55,7 +55,7 @@ function seedActiveRun(db: PatchRelayDatabase, issue: IssueRecord): { issue: Iss
     projectId: issue.projectId,
     linearIssueId: issue.linearIssueId,
     activeRunId: run.id,
-    factoryState: "implementing",
+    workflowOutcome: undefined,
   });
   return { issue: updated, run: db.runs.getRunById(run.id)! };
 }

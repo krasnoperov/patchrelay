@@ -2,7 +2,7 @@ import type { Logger } from "pino";
 import { extractCompletionCheck } from "./completion-check.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, TrackedIssueRecord } from "./db-types.ts";
-import type { RunType } from "./factory-state.ts";
+import type { RunType } from "./run-type.ts";
 import { isClosedPrState } from "./pr-state.ts";
 import { derivePrDisplayContext } from "./pr-display-context.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
@@ -12,13 +12,10 @@ import {
   isIssueAwaitingInputProjection,
   isIssueCiRepairProjection,
   isIssueDoneProjection,
-  isIssueDownstreamOwnedProjection,
-  isIssueDelegatedProjection,
-  isIssueImplementingProjection,
-  isIssueRequestedChangesProjection,
   isIssueTerminalFailureProjection,
 } from "./issue-execution-state.ts";
 import type { LinearClientProvider } from "./types.ts";
+import { deriveIssuePhase, type IssuePhase } from "./issue-phase.ts";
 
 const WRITER = "linear-status-comment-sync";
 
@@ -78,7 +75,10 @@ export async function syncVisibleStatusComment(params: {
 }
 
 export function shouldSyncVisibleIssueComment(
-  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prUrl" | "prState" | "delegatedToPatchRelay"> & {
+  issue: Pick<IssueRecord,
+    | "prNumber" | "prUrl" | "prState" | "delegatedToPatchRelay" | "workflowOutcome" | "inputRequestKind"
+    | "currentLinearState" | "currentLinearStateType"
+  > & {
     sessionState?: string | undefined;
   },
   hasAgentSession: boolean,
@@ -143,7 +143,8 @@ function renderStatusComment(
     currentLinearStateType: issue.currentLinearStateType,
     ...(activeRunType ? { activeRunType } : {}),
     ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
-    factoryState: issue.factoryState,
+    workflowOutcome: issue.workflowOutcome,
+    inputRequestKind: issue.inputRequestKind,
     ...(runnableTaskRunType ? { runnableTaskRunType } : {}),
     orchestrationSettleUntil: issue.orchestrationSettleUntil,
     ...(issue.prNumber !== undefined ? { prNumber: issue.prNumber } : {}),
@@ -153,6 +154,8 @@ function renderStatusComment(
     prCheckStatus: issue.prCheckStatus,
     lastBlockingReviewHeadSha: issue.lastBlockingReviewHeadSha,
     latestFailureCheckName: issue.lastGitHubFailureCheckName,
+    lastGitHubFailureSource: issue.lastGitHubFailureSource,
+    deployStartedAt: issue.deployStartedAt,
   });
 
   const lines = [
@@ -162,12 +165,13 @@ function renderStatusComment(
       trackedIssue
         ? {
             ...trackedIssue,
+            phase: trackedIssue.phase,
             delegatedToPatchRelay: issue.delegatedToPatchRelay,
             prNumber: issue.prNumber,
             prReviewState: issue.prReviewState,
             prCheckStatus: issue.prCheckStatus,
           }
-        : issue,
+        : { ...issue, phase: deriveIssuePhase({ ...issue, activeRunType, runnableTaskRunType }) },
       activeRunType,
     ),
   ];
@@ -225,7 +229,15 @@ function renderCollapsedStatusComment(): string {
 }
 
 function statusHeadline(
-  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prState" | "delegatedToPatchRelay" | "prReviewState" | "prCheckStatus"> & {
+  issue: {
+    phase: IssuePhase;
+    prNumber?: number | undefined;
+    prState?: string | undefined;
+    delegatedToPatchRelay: boolean;
+    prReviewState?: string | undefined;
+    prCheckStatus?: string | undefined;
+    workflowOutcome?: "completed" | "failed" | "escalated" | undefined;
+    inputRequestKind?: "paused_local_work" | "completion_check_question" | undefined;
     sessionState?: string | undefined;
     waitingReason?: string | undefined;
   },
@@ -253,26 +265,26 @@ function statusHeadline(
     if (prContext.kind === "closed_pr_paused") {
       return `Closed PR #${prContext.prNumber} is waiting for redelegation before replacement`;
     }
-    if (isIssueDownstreamOwnedProjection(issue)) {
+    if (issue.phase === "awaiting_queue") {
       return `PR #${issue.prNumber} is awaiting downstream merge while PatchRelay is paused`;
     }
-    if (isIssueRequestedChangesProjection(issue)) {
+    if (issue.phase === "changes_requested") {
       return `PR #${issue.prNumber} has requested changes while PatchRelay is paused`;
     }
-    if (isIssueCiRepairProjection(issue)) {
+    if (issue.phase === "repairing_ci") {
       return `PR #${issue.prNumber} has failing CI while PatchRelay is paused`;
     }
     return `PR #${issue.prNumber} is awaiting review while PatchRelay is paused`;
   }
   if (!issue.delegatedToPatchRelay) {
-    if (isIssueImplementingProjection(issue)) {
+    if (issue.phase === "implementing") {
       return "Implementation is paused because the issue is undelegated";
     }
-    if (isIssueDelegatedProjection(issue)) {
+    if (issue.phase === "delegated") {
       return "Queued to start work while PatchRelay is paused";
     }
   }
-  switch (issue.factoryState) {
+  switch (issue.phase) {
     case "delegated":
       if (prContext.kind === "closed_replacement_pending") {
         return `Queued to replace closed PR #${prContext.prNumber}`;
@@ -305,8 +317,8 @@ function statusHeadline(
       if (issue.prNumber !== undefined && issue.prState === "merged") return `Completed with merged PR #${issue.prNumber}`;
       if (issue.prNumber !== undefined && isClosedPrState(issue.prState)) return `Completed without merging PR #${issue.prNumber}`;
       return issue.prNumber !== undefined ? `Completed with PR #${issue.prNumber}` : "Completed";
-    default:
-      return humanize(issue.factoryState);
+    case "paused":
+      return "PatchRelay automation is paused";
   }
 }
 

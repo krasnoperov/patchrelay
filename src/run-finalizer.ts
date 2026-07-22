@@ -2,7 +2,7 @@ import type { Logger } from "pino";
 import type { CompletionCheckExecution } from "./completion-check.ts";
 import type { CodexThreadSummary } from "./types.ts";
 import type { IssueRecord, IssueSessionEventRecord, RunRecord, WorkflowTaskRecord } from "./db-types.ts";
-import type { FactoryState } from "./factory-state.ts";
+import { deriveIssuePhase, type IssuePhase, type WorkflowOutcome } from "./issue-phase.ts";
 import { parseIssueSessionEventOrWarn } from "./issue-session-events.ts";
 import type { RunContext } from "./run-context.ts";
 import { assertNever } from "./utils.ts";
@@ -17,7 +17,7 @@ import type { buildCompletionCheckActivity } from "./linear-session-reporting.ts
 import { buildRunCompletedActivity, buildRunFailureActivity } from "./linear-session-reporting.ts";
 import { handleNoPrCompletionCheck } from "./no-pr-completion-check.ts";
 import type { RunCompletionPolicy } from "./run-completion-policy.ts";
-import { resolvePostRunFactoryState } from "./run-completion-policy.ts";
+import { resolvePostRunFactUpdate } from "./run-completion-policy.ts";
 import { computeChangeIdentityFromWorktree } from "./change-identity.ts";
 import type { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
 import { inspectGitWorktreeStatus, isRepairRunType, type GitWorktreeStatus } from "./git-worktree-status.ts";
@@ -81,7 +81,7 @@ export class RunFinalizer {
     private readonly withHeldLease: WithHeldIssueSessionLease,
     private readonly releaseLease: ReleaseIssueSessionLease,
     private readonly appendRunIntentEventWithLease: AppendRunIntentEventWithLease,
-    private readonly failRunAndClear: (run: RunRecord, message: string, nextState?: FactoryState) => void,
+    private readonly failRunAndClear: (run: RunRecord, message: string, outcome?: WorkflowOutcome) => void,
     private readonly completionPolicy: RunCompletionPolicy,
     private readonly completionCheck: {
       run(params: {
@@ -127,7 +127,7 @@ export class RunFinalizer {
   private resolveRunOutcomeFacts(params: {
     run: Pick<RunRecord, "id" | "projectId" | "linearIssueId" | "runType" | "sourceHeadSha">;
     issue: Pick<IssueRecord, "prNumber">;
-    postRunState?: FactoryState | undefined;
+    postRunState?: IssuePhase | undefined;
     latestAssistantSummary?: string | undefined;
   }): RunOutcomeFacts {
     const session = this.db.issueSessions.getIssueSession(params.run.projectId, params.run.linearIssueId);
@@ -259,7 +259,7 @@ export class RunFinalizer {
   private buildOutcomeSummary(params: {
     run: Pick<RunRecord, "id" | "runType" | "projectId" | "linearIssueId">;
     issue: Pick<IssueRecord, "prNumber">;
-    postRunState?: FactoryState | undefined;
+    postRunState?: IssuePhase | undefined;
     latestAssistantSummary?: string | undefined;
   }): string {
     return buildRunOutcomeSummary({
@@ -499,8 +499,8 @@ export class RunFinalizer {
     if (params.run.runType !== "ci_repair" && params.run.runType !== "queue_repair") {
       return false;
     }
-    const nextState = resolvePostRunFactoryState(params.issue, params.run, { outcome: "recovered" });
-    if (!nextState || nextState === "failed" || nextState === "escalated" || nextState === "done") {
+    const factUpdate = resolvePostRunFactUpdate(params.issue, params.run, { outcome: "recovered" });
+    if (!factUpdate || factUpdate.workflowOutcome) {
       return false;
     }
     const context = this.buildSameHeadRepairRetryContext(params.run, params.issue, params.message);
@@ -511,7 +511,7 @@ export class RunFinalizer {
         finish: { status: "failed", failureReason: params.message },
         lease,
         buildIssueUpdate: () => ({
-          factoryState: nextState,
+          ...factUpdate,
           lastAttemptedFailureHeadSha: null,
           lastAttemptedFailureSignature: null,
           lastAttemptedFailureAt: null,
@@ -563,7 +563,9 @@ export class RunFinalizer {
         projectId: params.run.projectId,
         linearIssueId: params.run.linearIssueId,
         activeRunId: null,
-        factoryState: "delegated" as FactoryState,
+        workflowOutcome: null,
+        workflowOutcomeReason: null,
+        inputRequestKind: null,
         ...(params.run.runType === "ci_repair" && record.ciRepairAttempts > 0
           ? { ciRepairAttempts: record.ciRepairAttempts - 1 }
           : {}),
@@ -682,8 +684,8 @@ export class RunFinalizer {
         message: verifiedRepairError,
       });
       if (!requeued) {
-        const holdState = resolvePostRunFactoryState(freshIssue, run, { outcome: "recovered" }) ?? "failed";
-        this.failRunAndClear(run, verifiedRepairError, holdState);
+        const recoveredFacts = resolvePostRunFactUpdate(freshIssue, run, { outcome: "recovered" });
+        this.failRunAndClear(run, verifiedRepairError, recoveredFacts?.workflowOutcome ?? undefined);
       }
       this.syncFailureOutcome({
         run,
@@ -757,7 +759,14 @@ export class RunFinalizer {
     // any git error returns undefined and we leave the cache as-is.
     this.maybeUpdateLastPublishedIdentity(run, refreshedIssue);
     const postRunFollowUp = await this.completionPolicy.resolvePostRunFollowUp(run, refreshedIssue);
-    const postRunState = postRunFollowUp?.factoryState ?? resolvePostRunFactoryState(refreshedIssue, run);
+    const initialFactUpdate = resolvePostRunFactUpdate(refreshedIssue, run);
+    const postRunState = deriveIssuePhase({
+      ...refreshedIssue,
+      workflowOutcome: initialFactUpdate?.workflowOutcome ?? refreshedIssue.workflowOutcome,
+      inputRequestKind: initialFactUpdate?.inputRequestKind === null
+        ? undefined
+        : refreshedIssue.inputRequestKind,
+    });
     const outcomeSummary = this.buildOutcomeSummary({
       run,
       issue: refreshedIssue,
@@ -772,15 +781,15 @@ export class RunFinalizer {
     // publish). settleRun also owns the slot clear (plan §B1): it refuses to
     // touch a slot that no longer points at this run.
     const buildCompletionUpdate = (record: IssueRecord) => {
-      const state = postRunFollowUp?.factoryState ?? resolvePostRunFactoryState(record, run);
+      const factUpdate = resolvePostRunFactUpdate(record, run);
       return {
-        ...(state ? { factoryState: state } : {}),
+        ...factUpdate,
         // A successful completion ends any capacity-failure streak, so the next
         // capacity outage restarts the escalating backoff from the short step.
         ...(record.capacityBackoffAttempts > 0 ? { capacityBackoffAttempts: 0 } : {}),
-        ...(postRunFollowUp ? {} : (state === "awaiting_queue" || state === "done"
-          ? { ...CLEARED_FAILURE_PROVENANCE }
-          : {})),
+        ...(!postRunFollowUp
+          && (record.prReviewState === "approved" || factUpdate?.workflowOutcome === "completed")
+          && { ...CLEARED_FAILURE_PROVENANCE }),
       };
     };
     const completed = this.withHeldLease(run.projectId, run.linearIssueId, (lease) => {
@@ -819,7 +828,7 @@ export class RunFinalizer {
         kind: "stage",
         issueKey: issue.issueKey,
         projectId: run.projectId,
-        stage: postRunFollowUp.factoryState,
+        stage: postRunFollowUp.workflowIntent.runType,
         status: "follow_up_queued",
         summary: postRunFollowUp.summary,
       });
@@ -845,7 +854,7 @@ export class RunFinalizer {
     const linearActivity = buildRunCompletedActivity({
       runType: run.runType,
       completionSummary,
-      postRunState: updatedIssue.factoryState,
+      postRunState: deriveIssuePhase(updatedIssue),
       ...(updatedIssue.prNumber !== undefined ? { prNumber: updatedIssue.prNumber } : {}),
       ...(updatedIssue.prUrl ? { prUrl: updatedIssue.prUrl } : {}),
       ...(run.runType === "review_fix" ? { reviewRound: Math.max(1, updatedIssue.reviewFixAttempts) } : {}),

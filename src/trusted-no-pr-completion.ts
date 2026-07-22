@@ -2,7 +2,7 @@ import type { IssueRecord, RunRecord } from "./db-types.ts";
 import { isIssueDoneProjection } from "./issue-execution-state.ts";
 
 export function hasTrustedNoPrCompletion(
-  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prUrl">,
+  issue: Pick<IssueRecord, "workflowOutcome" | "prNumber" | "prUrl">,
   latestRun: Pick<RunRecord, "status" | "completionCheckOutcome"> | undefined,
 ): boolean {
   return isIssueDoneProjection(issue)

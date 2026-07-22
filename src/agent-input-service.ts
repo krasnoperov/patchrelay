@@ -3,7 +3,7 @@ import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
 import type { FollowupIntentClassification, FollowupIntentClassifier } from "./followup-intent.ts";
-import type { RunType } from "./factory-state.ts";
+import type { RunType } from "./run-type.ts";
 import {
   buildFollowupStatusActivity,
   buildNonActionableFollowupActivity,
@@ -22,6 +22,7 @@ import {
 } from "./issue-session-events.ts";
 import { dirtyWorktreeEventPayload, inspectGitWorktreeStatus } from "./git-worktree-status.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
+import { deriveIssuePhase } from "./issue-phase.ts";
 import { isIssueDoneProjection } from "./issue-execution-state.ts";
 import { HUMAN_INPUT_OBSERVATION, SIGNAL_CONSUMED_OBSERVATION } from "./workflow-model.ts";
 import { createHash } from "node:crypto";
@@ -138,7 +139,7 @@ export class AgentInputService {
     return await this.followupClassifier.classify(body, {
       source: source === "linear_agent_session" ? "agentPrompted" : "comment",
       ...(activeRun?.runType ? { activeRunType: activeRun.runType } : {}),
-      factoryState: issue.factoryState,
+      phase: deriveIssuePhase({ ...issue, activeRunType: activeRun?.runType }),
       directReply,
       delegatedToPatchRelay: issue.delegatedToPatchRelay,
       prReviewState: issue.prReviewState,
@@ -346,7 +347,7 @@ export class AgentInputService {
   }
 
   private recordInputSessionEventAndDispatch(
-    issue: Pick<IssueRecord, "projectId" | "linearIssueId" | "factoryState" | "prNumber" | "prUrl" | "prState" | "prHeadSha" | "prReviewState">,
+    issue: Pick<IssueRecord, "projectId" | "linearIssueId" | "prNumber" | "prUrl" | "prState" | "prHeadSha" | "prReviewState">,
     body: string,
     source: AgentInputSource,
     author: string | undefined,
@@ -387,7 +388,9 @@ export class AgentInputService {
       update: {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
-        factoryState: "delegated",
+        workflowOutcome: null,
+        workflowOutcomeReason: null,
+        inputRequestKind: null,
         branchName: `${project.branchPrefix}/${issueRef}-replacement-${suffix}`,
         prNumber: null,
         prUrl: null,
@@ -434,7 +437,7 @@ export class AgentInputService {
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           activeRunId: null,
-          factoryState: "awaiting_input",
+          inputRequestKind: "paused_local_work",
         },
       });
       if (commit.outcome === "applied" && run.threadId && run.turnId) {

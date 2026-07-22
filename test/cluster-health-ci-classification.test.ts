@@ -85,10 +85,10 @@ test("deriveCiOwner returns patchrelay whenever an active run is attached", () =
   );
 });
 
-test("deriveCiOwner returns patchrelay for failed gate CI while repairing_ci", () => {
+test("deriveCiOwner reports missing dispatch for failed gate CI awaiting follow-up", () => {
   assert.equal(
     deriveCiOwner(baseOwnerParams({ gateCheckStatus: "failure", executionState: followupState("ci_repair") })),
-    "patchrelay",
+    "unknown",
   );
 });
 
@@ -153,25 +153,25 @@ test("deriveCiOwner returns unknown when an approved PR has merge conflicts and 
   );
 });
 
-test("deriveCiOwner returns downstream when a queue conflict has a repair owner", () => {
+test("deriveCiOwner reports missing dispatch when queue repair is only owed", () => {
   assert.equal(
     deriveCiOwner(baseOwnerParams({
       reviewDecision: "APPROVED",
       mergeConflictDetected: true,
       executionState: followupState("queue_repair"),
     })),
-    "downstream",
+    "unknown",
   );
 });
 
-test("deriveCiOwner returns patchrelay when changes_requested run is active on a dirty PR", () => {
+test("deriveCiOwner reports missing dispatch when requested-changes repair is only owed", () => {
   assert.equal(
     deriveCiOwner(baseOwnerParams({
       reviewDecision: "CHANGES_REQUESTED",
       mergeConflictDetected: true,
       executionState: followupState("review_fix"),
     })),
-    "patchrelay",
+    "unknown",
   );
 });
 

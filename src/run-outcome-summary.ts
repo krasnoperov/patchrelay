@@ -1,9 +1,10 @@
-import type { FactoryState, RunType } from "./factory-state.ts";
+import type { IssuePhase } from "./issue-phase.ts";
+import type { RunType } from "./run-type.ts";
 import { sanitizeOperatorFacingText } from "./presentation-text.ts";
 
 export interface RunOutcomeFacts {
   workflowReason?: string | undefined;
-  postRunState?: FactoryState | undefined;
+  postRunState?: IssuePhase | undefined;
   prNumber?: number | undefined;
   reviewerName?: string | undefined;
   reviewSummary?: string | undefined;

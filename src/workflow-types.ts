@@ -1,4 +1,4 @@
-export type { FactoryState, RunType } from "./factory-state.ts";
+export type { RunType } from "./run-type.ts";
 
 export type TriggerEvent =
   | "issueCreated"

@@ -1,6 +1,6 @@
 import type { IssueRecord, RunLaunchPhase, RunRecord, RunStatus, ThreadEventRecord } from "../db-types.ts";
 import type { CompletionCheckResult } from "../completion-check-types.ts";
-import type { RunType } from "../factory-state.ts";
+import type { RunType } from "../run-type.ts";
 import type { IssueSessionProjectionInvalidator, IssueSessionProjectionOptions } from "../issue-session-projection-invalidator.ts";
 import { extractLatestAssistantSummary } from "../issue-session-events.ts";
 import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "../telemetry.ts";

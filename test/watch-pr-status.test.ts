@@ -12,7 +12,7 @@ import type { WatchIssue } from "../src/cli/watch/watch-state.ts";
 function makeIssue(overrides?: Partial<WatchIssue>): WatchIssue {
   return {
     projectId: "test-project",
-    factoryState: "changes_requested",
+    workflowOutcome: undefined,
     blockedByCount: 0,
     blockedByKeys: [],
     readyForExecution: false,
@@ -67,14 +67,14 @@ test("completed green checks allow rereview once all checks settle", () => {
 test("review-required and downstream PR states still count as display blockers", () => {
   const reviewRequired = makeIssue({
     prNumber: 34,
-    factoryState: "pr_open",
+    workflowOutcome: undefined,
     readyForExecution: true,
     prReviewState: "review_required",
     prCheckStatus: "success",
   });
   const downstream = makeIssue({
     prNumber: 36,
-    factoryState: "awaiting_queue",
+    workflowOutcome: undefined,
     readyForExecution: true,
     prReviewState: "approved",
     prCheckStatus: "success",

@@ -4,11 +4,11 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueSessionRecord } from "./db-types.ts";
 import { peekRunnableWorkflowTaskRunType } from "./pending-workflow-task.ts";
 import { parseGitHubFailureContext } from "./github-failure-context.ts";
-import { getLegacyIssueOverview } from "./legacy-issue-overview.ts";
 import type { StageReport, RunRecord, TrackedIssueRecord } from "./types.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
 import { deriveIssueExecutionState, isIssueExecutionReadyForExecution } from "./issue-execution-state.ts";
+import { deriveIssuePhase } from "./issue-phase.ts";
 
 export interface RunStatusProvider {
   getActiveRunStatus(issueKey: string): Promise<{
@@ -82,15 +82,47 @@ export class IssueOverviewQuery {
   async getIssueOverview(issueKey: string): Promise<IssueOverviewResult | undefined> {
     const session = this.db.issueSessions.getIssueSessionByKey(issueKey);
     if (!session) {
-      return await getLegacyIssueOverview({
-        db: this.db,
-        issueKey,
-        runStatusProvider: this.runStatusProvider,
-        buildRuns: (projectId, linearIssueId) => this.buildRuns(projectId, linearIssueId),
-        readLiveThread: (run) => this.readLiveThread(run),
-      });
+      return await this.getIssueOverviewWithoutSession(issueKey);
     }
     return await this.getSessionIssueOverview(issueKey, session);
+  }
+
+  private async getIssueOverviewWithoutSession(issueKey: string): Promise<IssueOverviewResult | undefined> {
+    const record = this.db.issues.getIssueByKey(issueKey);
+    if (!record) return undefined;
+    const issue = this.db.issueToTrackedIssue(record);
+    const activeStatus = await this.runStatusProvider.getActiveRunStatus(issueKey);
+    const activeRun = activeStatus?.run
+      ?? (record.activeRunId !== undefined ? this.db.runs.getRunById(record.activeRunId) : undefined);
+    const latestRun = this.db.runs.getLatestRunForIssue(record.projectId, record.linearIssueId);
+    const runs = this.buildRuns(record.projectId, record.linearIssueId);
+    const liveThread = await this.readLiveThread(activeRun);
+    return {
+      issue,
+      ...(activeRun ? { activeRun } : {}),
+      ...(latestRun ? { latestRun } : {}),
+      ...(liveThread ? { liveThread } : {}),
+      ...(runs.length > 0 ? { runs } : {}),
+      issueContext: {
+        ...(record.description ? { description: record.description } : {}),
+        ...(record.currentLinearState ? { currentLinearState: record.currentLinearState } : {}),
+        ...(record.url ? { issueUrl: record.url } : {}),
+        ...(record.worktreePath ? { worktreePath: record.worktreePath } : {}),
+        ...(record.branchName ? { branchName: record.branchName } : {}),
+        ...(record.prUrl ? { prUrl: record.prUrl } : {}),
+        ...(record.priority != null ? { priority: record.priority } : {}),
+        ...(record.estimate != null ? { estimate: record.estimate } : {}),
+        ciRepairAttempts: record.ciRepairAttempts,
+        queueRepairAttempts: record.queueRepairAttempts,
+        reviewFixAttempts: record.reviewFixAttempts,
+        ...(issue.latestFailureSource ? { latestFailureSource: issue.latestFailureSource } : {}),
+        ...(issue.latestFailureHeadSha ? { latestFailureHeadSha: issue.latestFailureHeadSha } : {}),
+        ...(issue.latestFailureCheckName ? { latestFailureCheckName: issue.latestFailureCheckName } : {}),
+        ...(issue.latestFailureStepName ? { latestFailureStepName: issue.latestFailureStepName } : {}),
+        ...(issue.latestFailureSummary ? { latestFailureSummary: issue.latestFailureSummary } : {}),
+        runCount: runs.length,
+      },
+    };
   }
 
   buildRuns(projectId: string, linearIssueId: string): IssueOverviewRun[] {
@@ -158,7 +190,8 @@ export class IssueOverviewQuery {
       currentLinearStateType: issueRecord?.currentLinearStateType,
       ...(activeRun ? { activeRunType: activeRun.runType } : {}),
       blockedByKeys,
-      factoryState: issueRecord?.factoryState ?? "delegated",
+      workflowOutcome: issueRecord?.workflowOutcome,
+      inputRequestKind: issueRecord?.inputRequestKind,
       ...(runnableTaskRunType ? { runnableTaskRunType: runnableTaskRunType } : {}),
       orchestrationSettleUntil: issueRecord?.orchestrationSettleUntil,
       prNumber: session.prNumber,
@@ -168,6 +201,8 @@ export class IssueOverviewQuery {
       prCheckStatus: issueRecord?.prCheckStatus,
       lastBlockingReviewHeadSha: issueRecord?.lastBlockingReviewHeadSha,
       latestFailureCheckName: issueRecord?.lastGitHubFailureCheckName,
+      lastGitHubFailureSource: issueRecord?.lastGitHubFailureSource,
+      deployStartedAt: issueRecord?.deployStartedAt,
     });
     const waitingReason = derivedWaitingReason ?? session.waitingReason;
     const issue: TrackedIssueRecord = {
@@ -180,7 +215,11 @@ export class IssueOverviewQuery {
       ...(issueRecord?.url ? { issueUrl: issueRecord.url } : {}),
       ...(issueRecord?.currentLinearState ? { currentLinearState: issueRecord.currentLinearState } : {}),
       sessionState: session.sessionState,
-      factoryState: issueRecord?.factoryState ?? "delegated",
+      phase: issueRecord ? deriveIssuePhase({
+        ...issueRecord,
+        activeRunType: activeRun?.runType,
+        runnableTaskRunType,
+      }) : "delegated",
       ...(session.prNumber !== undefined ? { prNumber: session.prNumber } : {}),
       ...(issueRecord?.prState ? { prState: issueRecord.prState } : {}),
       ...(issueRecord?.prReviewState ? { prReviewState: issueRecord.prReviewState } : {}),
@@ -188,7 +227,8 @@ export class IssueOverviewQuery {
       blockedByCount: unresolvedBlockedBy.length,
       blockedByKeys,
       readyForExecution: isIssueExecutionReadyForExecution(deriveIssueExecutionState({
-        factoryState: issueRecord?.factoryState ?? "delegated",
+        workflowOutcome: issueRecord?.workflowOutcome,
+        inputRequestKind: issueRecord?.inputRequestKind,
         currentLinearState: issueRecord?.currentLinearState,
         currentLinearStateType: issueRecord?.currentLinearStateType,
         delegatedToPatchRelay: issueRecord?.delegatedToPatchRelay,
@@ -204,6 +244,8 @@ export class IssueOverviewQuery {
         ...(issueRecord?.prCheckStatus ? { prCheckStatus: issueRecord.prCheckStatus } : {}),
         ...(issueRecord?.lastBlockingReviewHeadSha ? { lastBlockingReviewHeadSha: issueRecord.lastBlockingReviewHeadSha } : {}),
         ...(issueRecord?.lastGitHubFailureCheckName ? { latestFailureCheckName: issueRecord.lastGitHubFailureCheckName } : {}),
+        ...(issueRecord?.lastGitHubFailureSource ? { lastGitHubFailureSource: issueRecord.lastGitHubFailureSource } : {}),
+        ...(issueRecord?.deployStartedAt ? { deployStartedAt: issueRecord.deployStartedAt } : {}),
       })),
       ...(issueRecord?.lastGitHubFailureSource ? { latestFailureSource: issueRecord.lastGitHubFailureSource } : {}),
       ...(issueRecord?.lastGitHubFailureHeadSha ? { latestFailureHeadSha: issueRecord.lastGitHubFailureHeadSha } : {}),

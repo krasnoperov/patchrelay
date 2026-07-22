@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { assertIssuePhase } from "./assert-issue-phase.ts";
 import { getBuildInfo } from "../src/build-info.ts";
 import pino from "pino";
 import { runCli } from "../src/cli/index.ts";
@@ -385,7 +386,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     branchName: "use/USE-54-playback-first-evidence-workspace",
     worktreePath: path.join(config.projects[0].worktreeRoot, "USE-54"),
     threadId: "thread-54",
-    factoryState: "failed",
+    workflowOutcome: "failed",
   });
   const completedRun = db.runs.createRun({
     issueId: issue1.id,
@@ -436,7 +437,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     issueKey: "USE-55",
     title: "Queued review issue",
     currentLinearState: "Review",
-    factoryState: "delegated",
+    workflowOutcome: undefined,
   });
 
   // Issue 3: USE-56 — running development stage with an active run
@@ -448,7 +449,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     currentLinearState: "Start",
     branchName: "use/USE-56-running-stage",
     worktreePath: path.join(config.projects[0].worktreeRoot, "USE-56"),
-    factoryState: "implementing",
+    workflowOutcome: undefined,
   });
   const runningRun = db.runs.createRun({
     issueId: issue3.id,
@@ -736,7 +737,7 @@ test("cli list and retry cover operator control flows", async () => {
       issueKey: "USE-57",
       title: "Merged despite an earlier failed run",
       currentLinearState: "Done",
-      factoryState: "done",
+      workflowOutcome: "completed",
     });
     const doneRun = db.runs.createRun({
       issueId: doneIssue.id,
@@ -767,8 +768,7 @@ test("cli list and retry cover operator control flows", async () => {
     assert.match(retryOut.read(), /Queued stage: implementation/);
 
     const updated = db.getTrackedIssue("usertold", "issue-2");
-    assert.equal(updated?.factoryState, "delegated");
-    const updatedIssue = db.getIssue("usertold", "issue-2");
+    assertIssuePhase(updated, "delegated");
     const updatedTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-2");
     assert.equal(updatedTask?.runType, "implementation");
 
@@ -778,7 +778,7 @@ test("cli list and retry cover operator control flows", async () => {
       issueKey: "USE-58",
       title: "Queue-evicted issue",
       currentLinearState: "In Review",
-      factoryState: "failed",
+      workflowOutcome: "failed",
       prNumber: 58,
       prState: "open",
       prReviewState: "approved",
@@ -800,7 +800,7 @@ test("cli list and retry cover operator control flows", async () => {
     assert.match(queueRetryOut.read(), /Queued stage: queue_repair/);
 
     const queueRepairIssue = db.getIssue("usertold", "issue-queue-repair");
-    assert.equal(queueRepairIssue?.factoryState, "repairing_queue");
+    assertIssuePhase(queueRepairIssue, "repairing_queue");
     const queueRepairTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-queue-repair");
     assert.equal(queueRepairTask?.runType, "queue_repair");
 
@@ -810,7 +810,7 @@ test("cli list and retry cover operator control flows", async () => {
       issueKey: "USE-59",
       title: "Review changes requested",
       currentLinearState: "In Review",
-      factoryState: "changes_requested",
+      workflowOutcome: undefined,
       prNumber: 59,
       prState: "open",
       prReviewState: "changes_requested",
@@ -829,7 +829,7 @@ test("cli list and retry cover operator control flows", async () => {
     assert.match(reviewRetryOut.read(), /Queued stage: review_fix/);
 
     const reviewFixIssue = db.getIssue("usertold", "issue-review-fix");
-    assert.equal(reviewFixIssue?.factoryState, "changes_requested");
+    assertIssuePhase(reviewFixIssue, "changes_requested");
     assert.equal(reviewFixIssue?.reviewFixAttempts, 0);
     const reviewFixTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-review-fix");
     assert.equal(reviewFixTask?.runType, "review_fix");
@@ -1097,7 +1097,7 @@ test("cli retry blocks when the issue still has an active run", () => {
       branchName: "use/USE-55-ledger-active",
       worktreePath: path.join(config.projects[0].worktreeRoot, "USE-55-ledger-active"),
       activeRunId: run.id,
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
 
     assert.throws(() => data!.retry("USE-55"), /already has an active run/);
@@ -1122,7 +1122,7 @@ test("cli close force-terminates a stuck issue and releases its active run", asy
       linearIssueId: "issue-close-cli",
       issueKey: "USE-CLOSE-CLI",
       title: "CLI close",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
     const run = db.runs.createRun({
       issueId: issue.id,
@@ -1150,7 +1150,7 @@ test("cli close force-terminates a stuck issue and releases its active run", asy
     assert.match(closeOut.read(), /Closed as: done/);
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId);
     const updatedRun = db.runs.getRunById(run.id);
-    assert.equal(updatedIssue?.factoryState, "done");
+    assertIssuePhase(updatedIssue, "done");
     assert.equal(updatedIssue?.activeRunId, undefined);
     assert.equal(updatedRun?.status, "released");
     assert.match(updatedRun?.failureReason ?? "", /fixed externally/);
@@ -1178,7 +1178,7 @@ test("cli resolves workspace, run context, and live summary from the unified iss
       currentLinearState: "Implementing",
       branchName: "use/USE-57-ledger-backed-running-issue",
       worktreePath: path.join(config.projects[0].worktreeRoot, "USE-57"),
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
 
     // First run: completed stale review
@@ -1271,7 +1271,7 @@ test("cli inspect suppresses stale failed repair after downstream handoff", asyn
       issueKey: "USE-59",
       title: "Hide stale repair",
       currentLinearState: "Done",
-      factoryState: "done",
+      workflowOutcome: "completed",
       prNumber: 59,
       prState: "merged",
       prReviewState: "approved",
@@ -1292,7 +1292,7 @@ test("cli inspect suppresses stale failed repair after downstream handoff", asyn
     data = new CliDataAccess(config, { db });
     const inspect = await data.inspect("USE-59");
 
-    assert.equal(inspect?.issue?.factoryState, "done");
+    assertIssuePhase(inspect?.issue, "done");
     assert.equal(inspect?.latestRun, undefined);
     assert.equal(inspect?.latestReport, undefined);
     assert.equal(inspect?.statusNote, undefined);
@@ -1340,7 +1340,7 @@ test("cli live falls back to the latest detached running run", async () => {
       linearIssueId: "issue-detached-live",
       issueKey: "USE-58",
       title: "Detached resumed run",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
       threadId: "thread-58",
       activeRunId: null,
     });

@@ -1,11 +1,9 @@
 import type { UpsertIssueParams } from "./db/issue-store.ts";
-import type { FactoryState, RunType } from "./factory-state.ts";
-import { isIssueDownstreamOwnedProjection } from "./issue-execution-state.ts";
+import type { RunType } from "./run-type.ts";
 import { hasOpenPr } from "./pr-state.ts";
 
 export interface ResolvedManualAction {
   runType: RunType | "none";
-  factoryState: FactoryState | "done";
 }
 
 export function resolveRetryTarget(params: {
@@ -13,43 +11,41 @@ export function resolveRetryTarget(params: {
   prState: string | undefined;
   prReviewState: string | undefined;
   prCheckStatus: string | undefined;
-  factoryState: FactoryState | undefined;
   runnableTaskRunType: RunType | undefined;
   lastRunType: RunType | undefined;
   lastGitHubFailureSource: string | undefined;
 }): ResolvedManualAction {
   if (params.prState === "merged") {
-    return { runType: "none", factoryState: "done" };
+    return { runType: "none" };
   }
 
   if (hasOpenPr(params.prNumber, params.prState) && params.lastGitHubFailureSource === "queue_eviction") {
-    return { runType: "queue_repair", factoryState: "repairing_queue" };
+    return { runType: "queue_repair" };
   }
   if (
     hasOpenPr(params.prNumber, params.prState)
     && params.prReviewState === "approved"
-    && (isIssueDownstreamOwnedProjection(params) || params.lastRunType === "queue_repair")
+    && params.lastRunType === "queue_repair"
   ) {
-    return { runType: "queue_repair", factoryState: "repairing_queue" };
+    return { runType: "queue_repair" };
   }
   if (
     hasOpenPr(params.prNumber, params.prState)
     && (params.prCheckStatus === "failed" || params.prCheckStatus === "failure" || params.lastGitHubFailureSource === "branch_ci")
   ) {
-    return { runType: "ci_repair", factoryState: "repairing_ci" };
+    return { runType: "ci_repair" };
   }
   if (hasOpenPr(params.prNumber, params.prState) && params.prReviewState === "changes_requested") {
     return {
       runType: params.runnableTaskRunType === "branch_upkeep" || params.lastRunType === "branch_upkeep"
         ? "branch_upkeep"
         : "review_fix",
-      factoryState: "changes_requested",
     };
   }
   if (hasOpenPr(params.prNumber, params.prState)) {
-    return { runType: "implementation", factoryState: "implementing" };
+    return { runType: "implementation" };
   }
-  return { runType: "implementation", factoryState: "delegated" };
+  return { runType: "implementation" };
 }
 
 export function buildManualRetryAttemptReset(runType: RunType): Partial<Pick<UpsertIssueParams, "ciRepairAttempts" | "queueRepairAttempts" | "reviewFixAttempts">> {

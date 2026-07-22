@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import pino from "pino";
 import test from "node:test";
+import { assertIssuePhase } from "./assert-issue-phase.ts";
 import { PatchRelayDatabase } from "../src/db.ts";
 import type { GitHubCiSnapshotResolver, GitHubFailureContextResolver } from "../src/github-failure-context.ts";
 import { GitHubWebhookHandler } from "../src/github-webhook-handler.ts";
@@ -412,7 +413,7 @@ test("review approval updates GitHub state but does not queue new PatchRelay wor
       branchName: "feat-approval",
       prNumber: 10,
       prState: "open",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
     });
 
     await handler.processGitHubWebhookEvent({
@@ -498,7 +499,7 @@ test("merged PatchRelay PR moves the Linear issue to a completed state", async (
       prState: "open",
       prHeadSha: "merge-sha-1",
       prAuthorLogin: "patchrelay[bot]",
-      factoryState: "awaiting_queue",
+      workflowOutcome: undefined,
       currentLinearState: "In Review",
       currentLinearStateType: "started",
     });
@@ -517,7 +518,7 @@ test("merged PatchRelay PR moves the Linear issue to a completed state", async (
     });
 
     const issue = db.getIssue("usertold", "issue-merge-linear");
-    assert.equal(issue?.factoryState, "done");
+    assertIssuePhase(issue, "done");
     assert.equal(issue?.currentLinearState, "Done");
     assert.equal(issue?.currentLinearStateType, "completed");
     assert.deepEqual(setIssueStateCalls, ["Done"]);
@@ -596,7 +597,7 @@ test("closed non-merged PR on a completed issue preserves done state and clears 
       lastBlockingReviewHeadSha: "closed-done-sha-1",
       ciSummaryJson: JSON.stringify({ total: 1, completed: 1, passed: 1, failed: 0, pending: 0, overall: "success" }),
       ciLastUpdatedAt: "2026-04-10T09:00:00.000Z",
-      factoryState: "done",
+      workflowOutcome: "completed",
       currentLinearState: "Done",
       currentLinearStateType: "completed",
     });
@@ -614,7 +615,7 @@ test("closed non-merged PR on a completed issue preserves done state and clears 
     });
 
     const issue = db.getIssue("usertold", "issue-closed-done");
-    assert.equal(issue?.factoryState, "done");
+    assertIssuePhase(issue, "done");
     assert.equal(issue?.currentLinearState, "Done");
     assert.equal(issue?.currentLinearStateType, "completed");
     assert.equal(issue?.prState, "closed");
@@ -647,7 +648,7 @@ test("closed non-merged PR on unfinished work re-delegates implementation immedi
       lastBlockingReviewHeadSha: "closed-redelegate-sha-1",
       ciSummaryJson: JSON.stringify({ total: 1, completed: 1, passed: 1, failed: 0, pending: 0, overall: "success" }),
       ciLastUpdatedAt: "2026-04-10T09:05:00.000Z",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       currentLinearState: "Implementing",
       currentLinearStateType: "started",
     });
@@ -665,8 +666,8 @@ test("closed non-merged PR on unfinished work re-delegates implementation immedi
     });
 
     const issue = db.getIssue("usertold", "issue-closed-redelegate");
-    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-closed-redelegate");
-    assert.equal(issue?.factoryState, "delegated");
+    const workflowTask = resolveRuntimeTask(db, "usertold", "issue-closed-redelegate");
+    assertIssuePhase(issue, "delegated");
     assert.equal(issue?.prState, "closed");
     assert.equal(issue?.prReviewState, undefined);
     assert.equal(issue?.prCheckStatus, undefined);
@@ -691,7 +692,7 @@ test("green gate-check completion does not queue new PatchRelay work", async () 
       branchName: "feat-green",
       prNumber: 11,
       prState: "open",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
     });
 
     await handler.processGitHubWebhookEvent({
@@ -723,7 +724,7 @@ test("non-gate successful checks do not mark PR checks green early", async () =>
       branchName: "feat-non-gate-green",
       prNumber: 112,
       prState: "open",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prCheckStatus: "pending",
     });
 
@@ -758,7 +759,7 @@ test("in-progress gate checks on the current head reset stored green status back
       prNumber: 113,
       prState: "open",
       prHeadSha: "sha-pending-gate",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prCheckStatus: "success",
       lastGitHubCiSnapshotHeadSha: "sha-pending-gate",
       lastGitHubCiSnapshotGateCheckName: "Tests",
@@ -797,7 +798,7 @@ test("pull request label events are inert for PatchRelay queue scheduling", asyn
       branchName: "feat-queue-label",
       prNumber: 111,
       prState: "open",
-      factoryState: "awaiting_queue",
+      workflowOutcome: undefined,
       prReviewState: "approved",
       prCheckStatus: "success",
     });
@@ -812,7 +813,6 @@ test("pull request label events are inert for PatchRelay queue scheduling", asyn
       }),
     });
 
-    const issue = db.getIssue("usertold", "issue-queue-label");
     assert.deepEqual(enqueueCalls, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -860,7 +860,7 @@ test("requested changes on a delegated external PR queue review_fix", async () =
       prNumber: 12,
       prState: "open",
       prAuthorLogin: "human-dev",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
     });
 
     await handler.processGitHubWebhookEvent({
@@ -918,7 +918,7 @@ test("requested changes on a PatchRelay-owned PR queue review_fix", async () => 
       prNumber: 13,
       prState: "open",
       prAuthorLogin: "patchrelay[bot]",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
     });
 
     await handler.processGitHubWebhookEvent({
@@ -983,7 +983,7 @@ test("requested changes during an active run are persisted for replay without im
       prNumber: 131,
       prState: "open",
       prAuthorLogin: "patchrelay[bot]",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
     });
     const run = db.runs.createRun({
       issueId: issue.id,
@@ -1008,7 +1008,7 @@ test("requested changes during an active run are persisted for replay without im
     });
 
     const updatedIssue = db.getIssue("usertold", "issue-active-review");
-    assert.equal(updatedIssue?.factoryState, "implementing");
+    assertIssuePhase(updatedIssue, "implementing");
     assert.equal(updatedIssue?.prReviewState, "changes_requested");
     assert.equal(updatedIssue?.activeRunId, run.id);
     assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-active-review"), undefined);
@@ -1049,7 +1049,7 @@ test("a follow-up requested-changes review on an idle issue still re-enqueues ev
       prNumber: 141,
       prState: "open",
       prAuthorLogin: "patchrelay[bot]",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
     });
 
     await handler.processGitHubWebhookEvent({
@@ -1117,7 +1117,7 @@ test("push after requested changes does not auto request re-review", async () =>
       prNumber: 26,
       prState: "open",
       prAuthorLogin: "patchrelay[bot]",
-      factoryState: "changes_requested",
+      workflowOutcome: undefined,
       prReviewState: "changes_requested",
       prCheckStatus: "success",
     });
@@ -1173,7 +1173,7 @@ test("undelegated issue tracks requested-changes state without queuing repair wo
       prNumber: 44,
       prState: "open",
       prAuthorLogin: "patchrelay[bot]",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
     });
 
     await handler.processGitHubWebhookEvent({
@@ -1189,7 +1189,7 @@ test("undelegated issue tracks requested-changes state without queuing repair wo
     const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-undelegated-review");
     const issue = db.getIssue("usertold", "issue-undelegated-review");
     assert.equal(workflowTask, undefined);
-    assert.equal(issue?.factoryState, "changes_requested");
+    assertIssuePhase(issue, "paused");
     assert.equal(issue?.delegatedToPatchRelay, false);
     assert.deepEqual(enqueueCalls, []);
   } finally {
@@ -1207,7 +1207,7 @@ test("undelegated issue links an external PR by issue key and tracks it without 
       issueKey: "USE-60",
       delegatedToPatchRelay: false,
       branchName: "use/60-old-branch",
-      factoryState: "awaiting_input",
+      inputRequestKind: "completion_check_question",
     });
 
     await handler.processGitHubWebhookEvent({
@@ -1228,7 +1228,7 @@ test("undelegated issue links an external PR by issue key and tracks it without 
     assert.equal(issue?.prState, "open");
     assert.equal(issue?.prAuthorLogin, "human-dev");
     assert.equal(issue?.branchName, "handoff/use-60-fix");
-    assert.equal(issue?.factoryState, "pr_open");
+    assertIssuePhase(issue, "awaiting_input");
     assert.equal(issue?.delegatedToPatchRelay, false);
     assert.equal(workflowTask, undefined);
     assert.deepEqual(enqueueCalls, []);
@@ -1259,7 +1259,7 @@ test("late PatchRelay PR from a released implementation run is auto-closed inste
       issueKey: "USE-62",
       delegatedToPatchRelay: true,
       branchName: "use/62-setup",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
     });
     db.runs.finishRun(
       db.runs.createRun({
@@ -1336,7 +1336,7 @@ test("delegated issue can repair failing CI on an externally linked PR", async (
       issueKey: "USE-61",
       delegatedToPatchRelay: false,
       branchName: "use/61-old-branch",
-      factoryState: "awaiting_input",
+      inputRequestKind: "completion_check_question",
     });
 
     await handler.processGitHubWebhookEvent({
@@ -1354,7 +1354,7 @@ test("delegated issue can repair failing CI on an externally linked PR", async (
       projectId: "usertold",
       linearIssueId: "issue-external-ci-repair",
       delegatedToPatchRelay: true,
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
     });
 
     await handler.processGitHubWebhookEvent({
@@ -1392,7 +1392,7 @@ test("GitHub PR comments on idle PatchRelay-owned PRs queue follow-up session wo
       prNumber: 14,
       prState: "open",
       prAuthorLogin: "patchrelay[bot]",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
     });
 
     await handler.processGitHubWebhookEvent({
@@ -1425,7 +1425,7 @@ test("merged PatchRelay-owned PRs release active runs and do not queue new work"
       prNumber: 15,
       prState: "open",
       prAuthorLogin: "patchrelay[bot]",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       threadId: "thread-merged",
     });
     const run = db.runs.createRun({
@@ -1454,7 +1454,7 @@ test("merged PatchRelay-owned PRs release active runs and do not queue new work"
 
     const updatedIssue = db.getIssue("usertold", "issue-merged-active");
     const updatedRun = db.runs.getRunById(run.id);
-    assert.equal(updatedIssue?.factoryState, "done");
+    assertIssuePhase(updatedIssue, "done");
     assert.equal(updatedIssue?.activeRunId, undefined);
     assert.equal(updatedRun?.status, "released");
     assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-merged-active"), undefined);

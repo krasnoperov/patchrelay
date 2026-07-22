@@ -2,7 +2,7 @@ import type { Logger } from "pino";
 import type { CompletionCheckExecution } from "./completion-check.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
-import type { FactoryState } from "./factory-state.ts";
+import type { WorkflowOutcome } from "./issue-phase.ts";
 import { CLEARED_FAILURE_PROVENANCE } from "./failure-provenance.ts";
 import type { WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import { buildCompletionCheckActivity } from "./linear-session-reporting.ts";
@@ -81,7 +81,7 @@ export async function handleNoPrCompletionCheck(params: {
   completedTurnId?: string | undefined;
   failureReason?: string | undefined;
   publishedOutcomeError: string;
-  failRunAndClear: (run: RunRecord, message: string, nextState?: FactoryState) => void;
+  failRunAndClear: (run: RunRecord, message: string, outcome?: WorkflowOutcome) => void;
   emitActivity: (
     issue: IssueRecord,
     activity: ReturnType<typeof buildCompletionCheckActivity>,
@@ -169,7 +169,9 @@ export async function handleNoPrCompletionCheck(params: {
         projectId: params.run.projectId,
         linearIssueId: params.run.linearIssueId,
         activeRunId: null,
-        factoryState: "delegated",
+        workflowOutcome: null,
+        workflowOutcomeReason: null,
+        inputRequestKind: null,
       })) {
         return false;
       }
@@ -210,7 +212,7 @@ export async function handleNoPrCompletionCheck(params: {
         projectId: params.run.projectId,
         linearIssueId: params.run.linearIssueId,
         activeRunId: null,
-        factoryState: "awaiting_input",
+        inputRequestKind: "completion_check_question",
       })) {
         return false;
       }
@@ -243,7 +245,9 @@ export async function handleNoPrCompletionCheck(params: {
           projectId: params.run.projectId,
           linearIssueId: params.run.linearIssueId,
           activeRunId: null,
-          factoryState: "delegated",
+          workflowOutcome: null,
+          workflowOutcomeReason: null,
+          inputRequestKind: null,
         })) {
           return false;
         }
@@ -291,7 +295,10 @@ export async function handleNoPrCompletionCheck(params: {
         projectId: params.run.projectId,
         linearIssueId: params.run.linearIssueId,
         activeRunId: null,
-        factoryState: params.issue.issueClass === "orchestration" && orchestrationOpenChildren > 0 ? "delegated" : "done",
+        ...(params.issue.issueClass === "orchestration" && orchestrationOpenChildren > 0
+          ? { workflowOutcome: null, workflowOutcomeReason: null }
+          : { workflowOutcome: "completed" as const, workflowOutcomeReason: "no_pr_completion_verified" }),
+        inputRequestKind: null,
         orchestrationSettleUntil: null,
         ...CLEARED_FAILURE_PROVENANCE,
       })) {
@@ -336,7 +343,8 @@ export async function handleNoPrCompletionCheck(params: {
       projectId: params.run.projectId,
       linearIssueId: params.run.linearIssueId,
       activeRunId: null,
-      factoryState: "failed",
+      workflowOutcome: "failed",
+      workflowOutcomeReason: "no_pr_completion_check_failed",
     })) {
       return false;
     }

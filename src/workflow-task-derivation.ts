@@ -89,7 +89,7 @@ export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks"
     return tasks;
   }
 
-  if (issue.awaitingInput) {
+  if (issue.inputRequestKind && !structuralRepairSignalled) {
     return [{
       id: "wait:input",
       type: "wait",
@@ -201,7 +201,7 @@ export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks"
   }
 
   const hasUsablePrArtifact = hasPrArtifact && (prState === undefined || prState === "open");
-  if ((!hasUsablePrArtifact || prIsDraft) && issue.displayState === "delegated") {
+  if (!hasUsablePrArtifact || prIsDraft) {
     tasks.push({
       id: "run:implementation",
       type: "run",
@@ -215,12 +215,6 @@ export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks"
         ...issue.delegationContext,
         blockerCount: snapshot.blockerCount,
       },
-    });
-  } else if (!hasUsablePrArtifact) {
-    tasks.push({
-      id: `wait:${issue.displayState}`,
-      type: "wait",
-      reason: `Workflow is waiting in ${issue.displayState}`,
     });
   }
 

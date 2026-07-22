@@ -2,7 +2,7 @@ import { resolveAwaitingInputReason, type AwaitingInputReason } from "../awaitin
 import { computeOrchestrationSettleUntil as computeDefaultOrchestrationSettleUntil } from "../orchestration-parent-dispatch.ts";
 import { classifyIssue } from "../issue-class.ts";
 import type { IssueMetadata, IssueRecord } from "../types.ts";
-import type { RunType } from "../factory-state.ts";
+import type { RunType } from "../run-type.ts";
 import type { TriggerEvent } from "../workflow-types.ts";
 import type { WorkflowRunIntent } from "../workflow-intent.ts";
 import type { resolveLinkedPrAdoption } from "./linked-pr-adoption.ts";
@@ -43,7 +43,6 @@ export interface IssueWebhookWorkflowPlan {
   blockerPausedImplementation: boolean;
   undelegation: ReturnType<typeof decideUnDelegation>;
   startupResume: {
-    factoryState?: IssueRecord["factoryState"] | undefined;
     workflowIntent?: WorkflowRunIntent | undefined;
     source: "linked_pr_adoption" | "re_delegated";
   };
@@ -57,7 +56,6 @@ export interface IssueWebhookWorkflowPlan {
 function resolveStartupResume(input: IssueWebhookWorkflowPlannerInput): IssueWebhookWorkflowPlan["startupResume"] {
   if (input.linkedPrAdoption) {
     return {
-      factoryState: input.linkedPrAdoption.factoryState,
       workflowIntent: input.linkedPrAdoption.workflowIntent,
       source: "linked_pr_adoption",
     };
@@ -71,7 +69,6 @@ function resolveStartupResume(input: IssueWebhookWorkflowPlannerInput): IssueWeb
     ...resolveReDelegationResume({
       delegated: input.delegated,
       previouslyDelegated: input.existingIssue?.delegatedToPatchRelay,
-      currentState: input.existingIssue?.factoryState,
       awaitingInputReason,
       unresolvedBlockers: input.unresolvedBlockers,
       prNumber: input.existingIssue?.prNumber,
@@ -104,7 +101,7 @@ export function planIssueWebhookWorkflow(input: IssueWebhookWorkflowPlannerInput
       hasActiveRun: input.hasActiveRun,
       hasRunnableWorkflowTask: input.hasRunnableWorkflowTask,
       terminal,
-      currentState: input.existingIssue?.factoryState,
+      inputRequestKind: input.existingIssue?.inputRequestKind,
     });
 
   const classification = classifyIssue({
@@ -141,7 +138,7 @@ export function planIssueWebhookWorkflow(input: IssueWebhookWorkflowPlannerInput
   const undelegation = decideUnDelegation({
     triggerEvent: input.triggerEvent,
     delegated: input.delegated,
-    currentState: input.existingIssue?.factoryState,
+    terminal,
     hasPr: input.existingIssue?.prNumber !== undefined && input.existingIssue?.prState !== "merged",
   });
   const startupResume = resolveStartupResume(input);
@@ -152,17 +149,15 @@ export function planIssueWebhookWorkflow(input: IssueWebhookWorkflowPlannerInput
     triggerEvent: input.triggerEvent,
     delegated: input.delegated,
   });
-  const terminalRunRelease = effectiveRunRelease.release && terminal;
   const resolvedIssueUpdate = resolveIssueUpdatePlan({
     existingIssue: Boolean(input.existingIssue),
+    existingInputRequestKind: input.existingIssue?.inputRequestKind,
     delegated: input.delegated,
     incomingAgentSessionId: input.incomingAgentSessionId,
     startupResume,
     desiredStage,
-    terminalRunRelease,
     blockerPausedImplementation,
     undelegation,
-    clearPending,
     effectiveRunRelease,
     shouldEnterOrchestrationSettle,
     agentSessionId,

@@ -1,4 +1,3 @@
-import { TERMINAL_STATES, type FactoryState } from "../factory-state.ts";
 import type { PatchRelayDatabase } from "../db.ts";
 import type { IssueMetadata, RunType } from "../types.ts";
 import { deriveReactiveWorkflowIntent } from "../reactive-workflow-intent.ts";
@@ -14,18 +13,15 @@ export function decideRunIntent(p: {
   hasActiveRun: boolean;
   hasRunnableWorkflowTask: boolean;
   terminal: boolean;
-  currentState?: FactoryState | undefined;
+  inputRequestKind?: AwaitingInputReason | undefined;
 }): RunType | undefined {
-  const taskEligibleState =
-    p.currentState === undefined
-    || p.currentState === "delegated"
-    || p.currentState === "awaiting_input";
   const delegatedStartupRecovery =
     p.delegated
-    && p.currentState === "awaiting_input"
+    && p.inputRequestKind !== undefined
     && p.triggerEvent === "issueCreated";
   if (p.delegated && (p.triggerAllowed || delegatedStartupRecovery) && p.unresolvedBlockers === 0
-      && !p.hasActiveRun && !p.hasRunnableWorkflowTask && !p.terminal && taskEligibleState) {
+      && !p.hasActiveRun && !p.hasRunnableWorkflowTask && !p.terminal
+      && (p.inputRequestKind === undefined || delegatedStartupRecovery)) {
     return "implementation";
   }
   return undefined;
@@ -46,19 +42,17 @@ export function decideActiveRunRelease(p: {
 export function decideUnDelegation(p: {
   triggerEvent: string;
   delegated: boolean;
-  currentState?: FactoryState | undefined;
+  terminal: boolean;
   hasPr: boolean;
-}): { factoryState?: FactoryState | undefined; clearPending: boolean } {
-  if (p.delegated) return { clearPending: false };
-  if (!p.currentState) return { clearPending: false };
-  if (TERMINAL_STATES.has(p.currentState)) return { clearPending: false };
-  return { factoryState: p.currentState, clearPending: true };
+}): { paused: boolean; clearPending: boolean } {
+  if (p.delegated) return { paused: false, clearPending: false };
+  if (p.terminal) return { paused: false, clearPending: false };
+  return { paused: true, clearPending: true };
 }
 
 export function resolveReDelegationResume(p: {
   delegated: boolean;
   previouslyDelegated?: boolean | undefined;
-  currentState?: FactoryState | undefined;
   awaitingInputReason?: AwaitingInputReason | undefined;
   unresolvedBlockers?: number | undefined;
   prNumber?: number | undefined;
@@ -69,20 +63,17 @@ export function resolveReDelegationResume(p: {
   prCheckStatus?: string | undefined;
   lastBlockingReviewHeadSha?: string | undefined;
   latestFailureSource?: string | undefined;
-}): { factoryState?: FactoryState | undefined; workflowIntent?: WorkflowRunIntent | undefined } {
+}): { workflowIntent?: WorkflowRunIntent | undefined } {
   if (!p.delegated || p.previouslyDelegated !== false) {
     return {};
   }
 
   if (p.prState === "merged") {
-    return { factoryState: "done" };
+    return {};
   }
 
   if (p.prNumber !== undefined && (p.prState === undefined || p.prState === "open") && p.prIsDraft) {
-    return {
-      factoryState: "delegated",
-      ...((p.unresolvedBlockers ?? 0) === 0 ? { workflowIntent: workflowRunIntent("implementation") } : {}),
-    };
+    return (p.unresolvedBlockers ?? 0) === 0 ? { workflowIntent: workflowRunIntent("implementation") } : {};
   }
 
   const reactiveIntent = deriveReactiveWorkflowIntent({
@@ -97,30 +88,22 @@ export function resolveReDelegationResume(p: {
     latestFailureSource: p.latestFailureSource,
   });
   if (reactiveIntent) {
-    return {
-      factoryState: reactiveIntent.compatibilityFactoryState,
-      workflowIntent: workflowRunIntent(reactiveIntent.runType),
-    };
+    return { workflowIntent: workflowRunIntent(reactiveIntent.runType) };
   }
 
   if (p.prNumber !== undefined && (p.prState === undefined || p.prState === "open")) {
     if (p.prReviewState === "approved") {
-      return { factoryState: "awaiting_queue" };
+      return {};
     }
-    return { factoryState: "pr_open" };
+    return {};
   }
 
-  if (p.currentState === "awaiting_input" && p.awaitingInputReason === "completion_check_question") {
-    return {
-      factoryState: "awaiting_input",
-    };
+  if (p.awaitingInputReason === "completion_check_question") {
+    return {};
   }
 
-  if (p.currentState === "awaiting_input" || p.currentState === "delegated" || p.currentState === "implementing") {
-    return {
-      factoryState: "delegated",
-      ...((p.unresolvedBlockers ?? 0) === 0 ? { workflowIntent: workflowRunIntent("implementation") } : {}),
-    };
+  if (p.prNumber === undefined) {
+    return (p.unresolvedBlockers ?? 0) === 0 ? { workflowIntent: workflowRunIntent("implementation") } : {};
   }
 
   return {};

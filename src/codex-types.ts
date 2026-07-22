@@ -1,4 +1,4 @@
-import type { RunType } from "./factory-state.ts";
+import type { RunType } from "./run-type.ts";
 
 export interface RunLaunchPlan {
   branchName: string;

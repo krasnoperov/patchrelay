@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   interpretDeployRuns,
-  resolvePostMergeFactoryState,
   isDeployTrackingEnabled,
   type DeployRunSummary,
 } from "../src/post-merge-deploy.ts";
@@ -24,12 +23,10 @@ const before = (mins: number) => new Date(Date.parse(SINCE) - mins * 60_000).toI
 const run = (status: string, conclusion: string | null, createdAt: string): DeployRunSummary =>
   ({ status, conclusion, createdAt });
 
-test("resolvePostMergeFactoryState: deploying only when a deploy workflow is configured", () => {
-  assert.equal(resolvePostMergeFactoryState(project("Deploy")), "deploying");
-  assert.equal(resolvePostMergeFactoryState(project()), "done");
-  assert.equal(resolvePostMergeFactoryState(undefined), "done");
+test("deploy tracking is enabled only when a deploy workflow is configured", () => {
   assert.equal(isDeployTrackingEnabled(project("Deploy")), true);
   assert.equal(isDeployTrackingEnabled(project()), false);
+  assert.equal(isDeployTrackingEnabled(undefined), false);
 });
 
 test("interpretDeployRuns: a completed successful deploy after merge → succeeded", () => {

@@ -20,7 +20,7 @@ test("syncActiveWorkflowState routes awaiting_input issues to a human-needed Lin
       projectId: "usertold",
       linearIssueId: "issue-human",
       issueKey: "USE-HUMAN",
-      factoryState: "awaiting_input",
+      inputRequestKind: "completion_check_question",
       currentLinearState: "In Progress",
     });
 
@@ -59,7 +59,7 @@ test("syncActiveWorkflowState routes approved (pre-merge) issues to In Merge Que
       projectId: "usertold",
       linearIssueId: "issue-queue",
       issueKey: "USE-QUEUE",
-      factoryState: "awaiting_queue",
+      workflowOutcome: undefined,
       prNumber: 7,
       prReviewState: "approved",
       prCheckStatus: "success",
@@ -104,9 +104,9 @@ test("syncActiveWorkflowState routes a merged (post-merge) PR to Deploying", asy
       projectId: "usertold",
       linearIssueId: "issue-deploying",
       issueKey: "USE-DEPLOYING",
-      // PR3 introduces a non-terminal post-merge factory state; until
+      // Post-merge deploy tracking introduces a non-terminal window; until
       // then the merged PR is detected purely from prState.
-      factoryState: "awaiting_queue",
+      workflowOutcome: undefined,
       prNumber: 8,
       prReviewState: "approved",
       prState: "merged",
@@ -151,7 +151,7 @@ test("syncActiveWorkflowState routes changes-requested work to Implementing", as
       projectId: "usertold",
       linearIssueId: "issue-changes",
       issueKey: "USE-CHANGES",
-      factoryState: "changes_requested",
+      workflowOutcome: undefined,
       prNumber: 9,
       prReviewState: "changes_requested",
       prState: "open",
@@ -197,7 +197,7 @@ test("syncActiveWorkflowState does NOT flap to Implementing while a run is activ
       projectId: "usertold",
       linearIssueId: "issue-flap",
       issueKey: "USE-FLAP",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 11,
       prState: "open",
       currentLinearState: "Reviewing",
@@ -248,7 +248,7 @@ test("syncActiveWorkflowState routes pending review-quill verdicts to the prefer
       projectId: "usertold",
       linearIssueId: "issue-reviewing",
       issueKey: "USE-REVIEWING",
-      factoryState: "pr_open",
+      workflowOutcome: undefined,
       prNumber: 42,
       lastGitHubCiSnapshotJson: JSON.stringify({
         gateCheckStatus: "pending",
@@ -292,7 +292,7 @@ test("syncActiveWorkflowState completes trusted no-PR done issues in Linear", as
       projectId: "usertold",
       linearIssueId: "issue-no-pr-done",
       issueKey: "USE-DONE",
-      factoryState: "done",
+      workflowOutcome: "completed",
       currentLinearState: "In Progress",
       currentLinearStateType: "started",
     });
@@ -345,7 +345,7 @@ test("syncActiveWorkflowState moves undelegated no-PR work back to the queued Li
       projectId: "usertold",
       linearIssueId: "issue-paused",
       issueKey: "USE-PAUSED",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: false,
       currentLinearState: "In Progress",
       currentLinearStateType: "started",
@@ -392,7 +392,7 @@ test("syncActiveWorkflowState moves blocked delegated no-PR work back to the que
       projectId: "usertold",
       linearIssueId: "issue-blocked",
       issueKey: "USE-BLOCKED",
-      factoryState: "delegated",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
       currentLinearState: "In Progress",
       currentLinearStateType: "started",

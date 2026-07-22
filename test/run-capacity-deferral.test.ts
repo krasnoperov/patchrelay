@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import pino from "pino";
 import test from "node:test";
+import { assertIssuePhase } from "./assert-issue-phase.ts";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { RunOrchestrator } from "../src/run-orchestrator.ts";
 import type { CodexTurnSummary } from "../src/codex-types.ts";
@@ -166,7 +167,7 @@ test("capacity-failed ci_repair refunds the attempt, holds the repair state, and
       lastAttemptedFailureHeadSha: "sha-201",
       lastAttemptedFailureSignature: "branch_ci::sha-201::ci",
       lastAttemptedFailureAt: "2026-06-10T00:00:00.000Z",
-      factoryState: "repairing_ci",
+      workflowOutcome: undefined,
       // The launch already incremented this from 1 to 2; the capacity
       // deferral must refund it so the outage consumes no budget.
       ciRepairAttempts: 2,
@@ -186,9 +187,9 @@ test("capacity-failed ci_repair refunds the attempt, holds the repair state, and
     assert.equal(updatedRun.status, "failed");
     assert.equal(updatedRun.failureReason, `${FAILED_TURN_PREFIX}: ${USAGE_LIMIT_MESSAGE}`);
     assert.equal(updatedIssue.ciRepairAttempts, 1);
-    assert.equal(updatedIssue.factoryState, "repairing_ci");
-    assert.notEqual(updatedIssue.factoryState, "failed");
-    assert.notEqual(updatedIssue.factoryState, "escalated");
+    assertIssuePhase(updatedIssue, "repairing_ci");
+    assert.notEqual(updatedIssue.workflowOutcome, "failed");
+    assert.notEqual(updatedIssue.workflowOutcome, "escalated");
     assert.equal(updatedIssue.activeRunId, undefined);
     assert.equal(updatedIssue.zombieRecoveryAttempts, 0);
     assert.equal(updatedIssue.lastAttemptedFailureSignature, undefined);
@@ -215,7 +216,7 @@ test("capacity-failed implementation materializes and dispatches a runnable work
       linearIssueId: "issue-cap-impl",
       issueKey: "USE-205",
       branchName: "feat-cap-impl",
-      factoryState: "implementing",
+      workflowOutcome: undefined,
       delegatedToPatchRelay: true,
     });
     const run = createActiveRun(db, {
@@ -228,7 +229,7 @@ test("capacity-failed implementation materializes and dispatches a runnable work
     await reconcileRun(orchestrator, run);
 
     const updatedIssue = db.getIssue("usertold", "issue-cap-impl")!;
-    assert.equal(updatedIssue.factoryState, "delegated");
+    assertIssuePhase(updatedIssue, "delegated");
     assert.equal(updatedIssue.activeRunId, undefined);
     assert.ok(updatedIssue.capacityBackoffUntil);
     assert.equal(peekRunnableWorkflowTaskRunType(db, "usertold", "issue-cap-impl"), "implementation");
@@ -262,7 +263,7 @@ test("capacity-failed queue_repair refunds the attempt, holds the repair state, 
       lastAttemptedFailureHeadSha: "sha-202",
       lastAttemptedFailureSignature: "queue_eviction::sha-202::queue",
       lastAttemptedFailureAt: "2026-06-10T00:00:00.000Z",
-      factoryState: "repairing_queue",
+      workflowOutcome: undefined,
       queueRepairAttempts: 3,
       delegatedToPatchRelay: true,
     });
@@ -280,7 +281,7 @@ test("capacity-failed queue_repair refunds the attempt, holds the repair state, 
     assert.equal(updatedRun.status, "failed");
     assert.equal(updatedRun.failureReason, `${FAILED_TURN_PREFIX}: Rate limit exceeded`);
     assert.equal(updatedIssue.queueRepairAttempts, 2);
-    assert.equal(updatedIssue.factoryState, "repairing_queue");
+    assertIssuePhase(updatedIssue, "repairing_queue");
     assert.equal(updatedIssue.activeRunId, undefined);
     assert.equal(updatedIssue.lastAttemptedFailureSignature, undefined);
     assert.ok(updatedIssue.capacityBackoffUntil);
@@ -307,7 +308,7 @@ test("non-capacity failed turns still consume the budget and fail the issue exac
       prNumber: 203,
       prState: "open",
       prCheckStatus: "failed",
-      factoryState: "repairing_ci",
+      workflowOutcome: undefined,
       ciRepairAttempts: 2,
       delegatedToPatchRelay: true,
     });
@@ -343,7 +344,7 @@ test("non-capacity failed turns still consume the budget and fail the issue exac
     // The attempt consumed at launch stays consumed and the issue escalates
     // to its terminal failure state, exactly as before.
     assert.equal(updatedIssue.ciRepairAttempts, 2);
-    assert.equal(updatedIssue.factoryState, "failed");
+    assertIssuePhase(updatedIssue, "failed");
     assert.equal(updatedIssue.activeRunId, undefined);
     assert.equal(updatedIssue.capacityBackoffUntil, undefined);
   } finally {
@@ -368,7 +369,7 @@ test("capacity-failed turn via the notification path defers with the parsed retr
       prState: "open",
       prCheckStatus: "failed",
       lastGitHubFailureSource: "branch_ci",
-      factoryState: "repairing_ci",
+      workflowOutcome: undefined,
       ciRepairAttempts: 1,
       delegatedToPatchRelay: true,
     });
@@ -397,7 +398,7 @@ test("capacity-failed turn via the notification path defers with the parsed retr
     assert.equal(updatedRun.status, "failed");
     assert.equal(updatedRun.failureReason, `${FAILED_TURN_PREFIX}: ${USAGE_LIMIT_MESSAGE}`);
     assert.equal(updatedIssue.ciRepairAttempts, 0);
-    assert.equal(updatedIssue.factoryState, "repairing_ci");
+    assertIssuePhase(updatedIssue, "repairing_ci");
     assert.equal(updatedIssue.activeRunId, undefined);
     assert.ok(updatedIssue.capacityBackoffUntil);
     // "3:23 AM" parses to an absolute next occurrence (plus jitter), so the

@@ -1,5 +1,5 @@
 import type { IssueRecord } from "./db-types.ts";
-import type { RunType } from "./factory-state.ts";
+import type { RunType } from "./run-type.ts";
 import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry, type ProjectionInvalidationReason } from "./telemetry.ts";
 
 export interface IssueSessionProjectionOptions {

@@ -128,7 +128,7 @@ function collectCandidates(db: PatchRelayDatabase, selfBranch: string): Sequence
       headSha: issue.prHeadSha,
       ...(issue.prReviewState ? { reviewState: issue.prReviewState } : {}),
       ...(issue.prCheckStatus ? { checkStatus: issue.prCheckStatus } : {}),
-      factoryState: issue.factoryState,
+      queueSignalled: issue.lastQueueSignalAt !== undefined,
       ...(queueAgeMs !== undefined ? { queueAgeMs } : {}),
     });
   }
