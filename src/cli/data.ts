@@ -1,9 +1,4 @@
 import { existsSync } from "node:fs";
-import pino from "pino";
-import { CodexAppServerClient } from "../codex-app-server.ts";
-import { type CodexSessionSourceRecord, resolveCodexSessionSource } from "../codex-session-source.ts";
-import { extractCompletionCheck } from "../completion-check.ts";
-import { getThreadTurns } from "../codex-thread-utils.ts";
 import { PatchRelayDatabase } from "../db.ts";
 import type { OperatorClosedEventPayload } from "../issue-session-events.ts";
 import { buildManualRetryAttemptReset, resolveRetryTarget } from "../manual-issue-actions.ts";
@@ -13,22 +8,14 @@ import { peekRunnableWorkflowTaskRunType } from "../pending-workflow-task.ts";
 import type { WorkflowSnapshot } from "../workflow-model.ts";
 import {
   deriveIssueExecutionStateFromRecords,
-  isIssueDownstreamOwnedProjection,
   type IssueExecutionState,
 } from "../issue-execution-state.ts";
 import { WorktreeManager } from "../worktree-manager.ts";
-import { parseDelegationObservedPayload, parseRunReleasedAuthorityPayload } from "../delegation-audit.ts";
 import { CliOperatorApiClient } from "./operator-client.ts";
 import type { RunType } from "../run-type.ts";
-import { resolveEffectiveActiveRun } from "../effective-active-run.ts";
-import { derivePatchRelayWaitingReason } from "../waiting-reason.ts";
-import { deriveIssuePhase, type IssuePhase } from "../issue-phase.ts";
 import type {
   AppConfig,
-  CodexThreadItem,
-  CodexThreadSummary,
   IssueRecord,
-  StageReport,
   RunRecord,
   TrackedIssueRecord,
   WorkflowObservationRecord,
@@ -40,34 +27,6 @@ export type {
   ConnectStateResult,
   InstallationListResult,
 } from "./operator-client.ts";
-
-interface LiveSummary {
-  threadId: string;
-  threadStatus: string;
-  latestTurnId?: string;
-  latestTurnStatus?: string;
-  latestAssistantMessage?: string;
-  latestTimestampSeen?: string;
-}
-
-export interface InspectResult {
-  issue: TrackedIssueRecord | undefined;
-  activeRun?: RunRecord | undefined;
-  latestRun?: RunRecord | undefined;
-  latestReport?: StageReport | undefined;
-  latestSummary?: Record<string, unknown> | undefined;
-  prNumber?: number | undefined;
-  prState?: string | undefined;
-  prReviewState?: string | undefined;
-  sessionState?: string | undefined;
-  waitingReason?: string | undefined;
-  statusNote?: string | undefined;
-  completionCheckOutcome?: string | undefined;
-  completionCheckSummary?: string | undefined;
-  completionCheckQuestion?: string | undefined;
-  completionCheckWhy?: string | undefined;
-  completionCheckRecommendedReply?: string | undefined;
-}
 
 export interface WorktreeResult {
   issue: TrackedIssueRecord;
@@ -91,18 +50,6 @@ export interface PromptResult {
   issueKey: string;
   delivered: boolean;
   queued?: boolean;
-}
-
-export interface IssueAuditItem {
-  createdAt: string;
-  eventType: string;
-  summary: string;
-  details?: Record<string, unknown> | undefined;
-}
-
-export interface IssueAuditResult {
-  issue: TrackedIssueRecord;
-  events: IssueAuditItem[];
 }
 
 export interface IssueTraceObservation extends Omit<WorkflowObservationRecord, "payloadJson"> {
@@ -129,55 +76,6 @@ export interface CloseResult {
   releasedRunId?: number;
 }
 
-export interface IssueSessionHistoryItem {
-  sessionSource?: CodexSessionSourceRecord;
-  runId: number;
-  runType: string;
-  status: string;
-  threadId?: string;
-  turnId?: string;
-  parentThreadId?: string;
-  summary?: string;
-  failureReason?: string;
-  eventCount: number;
-  eventCountAvailable: boolean;
-  startedAt: string;
-  endedAt?: string;
-  isCurrentThread: boolean;
-}
-
-export interface IssueSessionHistoryResult {
-  issue: TrackedIssueRecord;
-  worktreePath?: string;
-  currentThreadId?: string;
-  sessions: IssueSessionHistoryItem[];
-}
-
-export interface IssueTranscriptSourceResult {
-  issue: TrackedIssueRecord;
-  runId?: number;
-  runType?: string;
-  runStatus?: string;
-  threadId?: string;
-  turnId?: string;
-  worktreePath?: string;
-  sessionSource?: CodexSessionSourceRecord;
-}
-
-export interface ListResultItem {
-  issueKey?: string;
-  title?: string;
-  projectId: string;
-  currentLinearState?: string;
-  sessionState?: string;
-  phase: IssuePhase;
-  activeRunType?: string;
-  latestRunType?: string;
-  latestRunStatus?: string;
-  waitingReason?: string;
-  updatedAt: string;
-}
-
 function safeJsonParse(value: string | undefined): Record<string, unknown> | undefined {
   if (!value) return undefined;
   try {
@@ -188,172 +86,23 @@ function safeJsonParse(value: string | undefined): Record<string, unknown> | und
   }
 }
 
-function normalizeStageReport(reportJson: string | undefined, runStatus: string | undefined): StageReport | undefined {
-  if (!reportJson) return undefined;
-  try {
-    const parsed = JSON.parse(reportJson) as StageReport;
-    return { ...parsed, status: runStatus ?? parsed.status };
-  } catch {
-    return undefined;
-  }
-}
-
-function summarizeThread(thread: CodexThreadSummary, latestTimestampSeen?: string): LiveSummary {
-  const turns = getThreadTurns(thread);
-  const latestTurn = turns.at(-1);
-  const latestAssistantMessage = latestTurn?.items
-    .filter((item): item is Extract<CodexThreadItem, { type: "agentMessage" }> => item.type === "agentMessage")
-    .at(-1)?.text;
-
-  return {
-    threadId: thread.id,
-    threadStatus: thread.status,
-    ...(latestTurn ? { latestTurnId: latestTurn.id, latestTurnStatus: latestTurn.status } : {}),
-    ...(latestAssistantMessage ? { latestAssistantMessage } : {}),
-    ...(latestTimestampSeen ? { latestTimestampSeen } : {}),
-  };
-}
-
-function latestEventTimestamp(db: PatchRelayDatabase, runId: number): string | undefined {
-  const events = db.runs.listThreadEvents(runId);
-  return events.at(-1)?.createdAt;
-}
-
-function parseObjectJson(value: string | undefined): Record<string, unknown> | undefined {
-  if (!value) return undefined;
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function summarizeRun(run: RunRecord): string | undefined {
-  const completionCheck = extractCompletionCheck(run);
-  if (completionCheck) {
-    return completionCheck.outcome === "needs_input"
-      ? completionCheck.question ?? completionCheck.summary
-      : completionCheck.summary;
-  }
-
-  const summary = parseObjectJson(run.summaryJson);
-  if (typeof summary?.outcomeSummary === "string" && summary.outcomeSummary.trim()) {
-    return summary.outcomeSummary.trim();
-  }
-  if (typeof summary?.publicationRecapSummary === "string" && summary.publicationRecapSummary.trim()) {
-    return summary.publicationRecapSummary.trim();
-  }
-  if (typeof summary?.latestAssistantMessage === "string" && summary.latestAssistantMessage.trim()) {
-    return summary.latestAssistantMessage.trim();
-  }
-
-  const report = parseObjectJson(run.reportJson);
-  const assistantMessages = report?.assistantMessages;
-  if (Array.isArray(assistantMessages)) {
-    for (let index = assistantMessages.length - 1; index >= 0; index -= 1) {
-      const value = assistantMessages[index];
-      if (typeof value === "string" && value.trim()) {
-        return value.trim();
-      }
-    }
-  }
-
-  return run.failureReason?.trim() || undefined;
-}
-
 // Display phase is derived at the presentation boundary.
-
-export type LiveResult = Awaited<ReturnType<CliDataAccess["live"]>> extends infer T ? Exclude<T, undefined> : never;
 
 export class CliDataAccess extends CliOperatorApiClient {
   readonly db: PatchRelayDatabase;
-  private codex: CodexAppServerClient | undefined;
-  private codexStarted = false;
 
   constructor(
     readonly config: AppConfig,
-    options?: { db?: PatchRelayDatabase; codex?: CodexAppServerClient },
+    options?: { db?: PatchRelayDatabase },
   ) {
     super(config);
     this.db = options?.db ?? new PatchRelayDatabase(config.database.path, config.database.wal);
     if (!options?.db) {
       this.db.assertSchemaReady();
     }
-    this.codex = options?.codex;
   }
 
-  close(): void {
-    if (!this.codexStarted) return;
-    void this.codex?.stop();
-    this.codexStarted = false;
-  }
-
-  async inspect(issueKey: string): Promise<InspectResult | undefined> {
-    const issue = this.db.getTrackedIssueByKey(issueKey);
-    if (!issue) return undefined;
-
-    const dbIssue = this.db.issues.getIssueByKey(issueKey)!;
-    const latestRun = this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
-    const activeRun = resolveEffectiveActiveRun({
-      activeRun: dbIssue.activeRunId ? this.db.runs.getRunById(dbIssue.activeRunId) : undefined,
-      latestRun,
-    });
-    const latestReport = normalizeStageReport(latestRun?.reportJson, latestRun?.status);
-    const latestSummary = safeJsonParse(latestRun?.summaryJson);
-    const completionCheck = latestRun ? extractCompletionCheck(latestRun) : undefined;
-    const downstreamHandoff = isIssueDownstreamOwnedProjection(issue);
-    const latestRunNoLongerCurrent =
-      downstreamHandoff
-      && (latestRun?.status === "failed" || latestRun?.status === "superseded");
-
-    const statusNote =
-      (completionCheck?.outcome === "needs_input" ? completionCheck.question : completionCheck?.summary) ??
-      (!latestRunNoLongerCurrent ? latestReport?.assistantMessages.at(-1) : undefined) ??
-      (!latestRunNoLongerCurrent && typeof latestSummary?.latestAssistantMessage === "string" ? latestSummary.latestAssistantMessage : undefined) ??
-      (latestRun?.status === "failed" && !downstreamHandoff ? "Latest run failed." : undefined) ??
-      undefined;
-
-    return {
-      issue,
-      ...(activeRun ? { activeRun } : {}),
-      ...(!activeRun && latestRun && !latestRunNoLongerCurrent ? { latestRun } : {}),
-      ...(latestReport && !latestRunNoLongerCurrent ? { latestReport } : {}),
-      ...(latestSummary && !latestRunNoLongerCurrent ? { latestSummary } : {}),
-      ...(dbIssue.prNumber ? { prNumber: dbIssue.prNumber } : {}),
-      ...(dbIssue.prState ? { prState: dbIssue.prState } : {}),
-      ...(dbIssue.prReviewState ? { prReviewState: dbIssue.prReviewState } : {}),
-      ...(((dbIssue as { sessionState?: string }).sessionState) ? { sessionState: (dbIssue as { sessionState?: string }).sessionState } : {}),
-      ...(((dbIssue as { waitingReason?: string }).waitingReason) ? { waitingReason: (dbIssue as { waitingReason?: string }).waitingReason } : {}),
-      ...(statusNote ? { statusNote } : {}),
-      ...(completionCheck?.outcome ? { completionCheckOutcome: completionCheck.outcome } : {}),
-      ...(completionCheck?.summary ? { completionCheckSummary: completionCheck.summary } : {}),
-      ...(completionCheck?.question ? { completionCheckQuestion: completionCheck.question } : {}),
-      ...(completionCheck?.why ? { completionCheckWhy: completionCheck.why } : {}),
-      ...(completionCheck?.recommendedReply ? { completionCheckRecommendedReply: completionCheck.recommendedReply } : {}),
-    };
-  }
-
-  async live(issueKey: string): Promise<
-    | { issue: TrackedIssueRecord; run: RunRecord; live?: LiveSummary }
-    | undefined
-  > {
-    const issue = this.db.getTrackedIssueByKey(issueKey);
-    if (!issue) return undefined;
-
-    const dbIssue = this.db.issues.getIssueByKey(issueKey)!;
-    const run = resolveEffectiveActiveRun({
-      activeRun: dbIssue.activeRunId ? this.db.runs.getRunById(dbIssue.activeRunId) : undefined,
-      latestRun: this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId),
-    });
-    if (!run) return undefined;
-
-    const live =
-      run.threadId &&
-      (await this.readLiveSummary(run.threadId, latestEventTimestamp(this.db, run.id)).catch(() => undefined));
-
-    return { issue, run, ...(live ? { live } : {}) };
-  }
+  close(): void {}
 
   worktree(issueKey: string): WorktreeResult | undefined {
     const issue = this.db.getTrackedIssueByKey(issueKey);
@@ -379,7 +128,7 @@ export class CliDataAccess extends CliOperatorApiClient {
 
   async resolveOpen(
     issueKey: string,
-    options?: { ensureWorktree?: boolean; createThreadIfMissing?: boolean },
+    options?: { ensureWorktree?: boolean },
   ): Promise<OpenResult | undefined> {
     const worktree = this.worktree(issueKey);
     if (!worktree) return undefined;
@@ -390,26 +139,14 @@ export class CliDataAccess extends CliOperatorApiClient {
 
     const dbIssue = this.db.issues.getIssueByKey(issueKey)!;
     const existingThreadId = dbIssue.threadId;
-    if (existingThreadId && (await this.canReadThread(existingThreadId))) {
+    if (existingThreadId) {
       return { ...worktree, resumeThreadId: existingThreadId };
     }
-
-    if (!options?.createThreadIfMissing) {
-      return { ...worktree, needsNewSession: true };
-    }
-
-    const codex = await this.getCodex();
-    const thread = await codex.startThread({ cwd: worktree.worktreePath });
-    this.db.issues.upsertIssue({
-      projectId: worktree.issue.projectId,
-      linearIssueId: worktree.issue.linearIssueId,
-      threadId: thread.id,
-    });
-    return { ...worktree, resumeThreadId: thread.id };
+    return { ...worktree, needsNewSession: true };
   }
 
   async prepareOpen(issueKey: string): Promise<OpenResult | undefined> {
-    return await this.resolveOpen(issueKey, { ensureWorktree: true, createThreadIfMissing: true });
+    return await this.resolveOpen(issueKey, { ensureWorktree: true });
   }
 
   retry(issueKey: string, options?: { runType?: string; reason?: string }): RetryResult | undefined {
@@ -495,55 +232,6 @@ export class CliDataAccess extends CliOperatorApiClient {
     };
   }
 
-  audit(issueKey: string): IssueAuditResult | undefined {
-    const issue = this.db.getTrackedIssueByKey(issueKey);
-    if (!issue) return undefined;
-
-    const events = this.db.issueSessions
-      .listIssueSessionEvents(issue.projectId, issue.linearIssueId)
-      .flatMap((event): IssueAuditItem[] => {
-        const delegationObserved = parseDelegationObservedPayload(event);
-        if (delegationObserved) {
-          return [{
-            createdAt: event.createdAt,
-            eventType: event.eventType,
-            summary: [
-              delegationObserved.source,
-              `observed=${delegationObserved.observedDelegatedToPatchRelay ? "delegated" : "undelegated"}`,
-              `applied=${delegationObserved.appliedDelegatedToPatchRelay ? "delegated" : "undelegated"}`,
-              `hydration=${delegationObserved.hydration}`,
-              delegationObserved.reason ? `reason=${delegationObserved.reason}` : undefined,
-            ].filter(Boolean).join(" "),
-            details: delegationObserved as unknown as Record<string, unknown>,
-          }];
-        }
-
-        const authorityRelease = parseRunReleasedAuthorityPayload(event);
-        if (authorityRelease) {
-          return [{
-            createdAt: event.createdAt,
-            eventType: event.eventType,
-            summary: `released run #${authorityRelease.runId} (${authorityRelease.runType}) via ${authorityRelease.source}: ${authorityRelease.reason}`,
-            details: authorityRelease as unknown as Record<string, unknown>,
-          }];
-        }
-
-        if (event.eventType === "delegated" || event.eventType === "undelegated") {
-          return [{
-            createdAt: event.createdAt,
-            eventType: event.eventType,
-            summary: event.eventType === "delegated"
-              ? "PatchRelay accepted delegation"
-              : "PatchRelay recorded undelegation",
-          }];
-        }
-
-        return [];
-      });
-
-    return { issue, events };
-  }
-
   trace(issueKey: string): IssueTraceResult | undefined {
     const issue = this.db.getTrackedIssueByKey(issueKey);
     if (!issue) return undefined;
@@ -605,137 +293,12 @@ export class CliDataAccess extends CliOperatorApiClient {
     return { issue, snapshot, executionState, activeRun: activeRun ?? null, tasks, observations };
   }
 
-  transcriptSource(issueKey: string, runId?: number): IssueTranscriptSourceResult | undefined {
-    const issue = this.db.getTrackedIssueByKey(issueKey);
-    if (!issue) return undefined;
-
-    const dbIssue = this.db.issues.getIssueByKey(issueKey)!;
-    const runs = this.db.runs.listRunsForIssue(issue.projectId, issue.linearIssueId);
-    const selectedRun = runId !== undefined
-      ? runs.find((run) => run.id === runId)
-      : runs.slice().reverse().find((run) => run.threadId);
-    const threadId = selectedRun?.threadId ?? dbIssue.threadId;
-
-    return {
-      issue,
-      ...(selectedRun ? { runId: selectedRun.id, runType: selectedRun.runType, runStatus: selectedRun.status } : {}),
-      ...(threadId ? { threadId } : {}),
-      ...(selectedRun?.turnId ? { turnId: selectedRun.turnId } : {}),
-      ...(dbIssue.worktreePath ? { worktreePath: dbIssue.worktreePath } : {}),
-      ...(threadId ? { sessionSource: resolveCodexSessionSource(threadId) } : {}),
-    };
-  }
-
-  sessions(issueKey: string): IssueSessionHistoryResult | undefined {
-    const issue = this.db.getTrackedIssueByKey(issueKey);
-    if (!issue) return undefined;
-
-    const dbIssue = this.db.issues.getIssueByKey(issueKey)!;
-    const runs = this.db.runs.listRunsForIssue(issue.projectId, issue.linearIssueId);
-    const sessions = runs
-      .slice()
-      .reverse()
-      .map((run) => {
-        const summary = summarizeRun(run);
-        const eventCount = this.db.runs.listThreadEvents(run.id).length;
-        const sessionSource = run.threadId ? resolveCodexSessionSource(run.threadId) : undefined;
-        return {
-          runId: run.id,
-          runType: run.runType,
-          status: run.status,
-          ...(run.threadId ? { threadId: run.threadId } : {}),
-          ...(run.turnId ? { turnId: run.turnId } : {}),
-          ...(run.parentThreadId ? { parentThreadId: run.parentThreadId } : {}),
-          ...(summary ? { summary } : {}),
-          ...(run.failureReason ? { failureReason: run.failureReason } : {}),
-          ...(sessionSource ? { sessionSource } : {}),
-          eventCount,
-          eventCountAvailable: this.config.runner.codex.persistExtendedHistory || eventCount > 0,
-          startedAt: run.startedAt,
-          ...(run.endedAt ? { endedAt: run.endedAt } : {}),
-          isCurrentThread: run.threadId !== undefined && run.threadId === dbIssue.threadId,
-        };
-      });
-
-    return {
-      issue,
-      ...(dbIssue.worktreePath ? { worktreePath: dbIssue.worktreePath } : {}),
-      ...(dbIssue.threadId ? { currentThreadId: dbIssue.threadId } : {}),
-      sessions,
-    };
-  }
-
   private appendRetryWorkflowEvent(issue: IssueRecord, runType: RunType): void {
     this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       ...buildOperatorRetryEvent(issue, runType),
     });
-  }
-
-  list(options?: { active?: boolean; failed?: boolean; project?: string }): ListResultItem[] {
-    const rows = this.db.issues.listIssueSummaryRows(options?.project);
-
-    const items: ListResultItem[] = rows.map((row) => {
-      const detachedActiveRun = row.active_run_type === null
-        && (row.latest_run_status === "queued" || row.latest_run_status === "running");
-      const activeRunType = row.active_run_type !== null
-        ? String(row.active_run_type)
-        : detachedActiveRun && row.latest_run_type !== null
-          ? String(row.latest_run_type)
-          : undefined;
-      const waitingReason = detachedActiveRun
-        ? derivePatchRelayWaitingReason({
-          activeRunId: 1,
-          workflowOutcome: row.workflow_outcome === null ? undefined : String(row.workflow_outcome) as "completed" | "failed" | "escalated",
-          ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
-          ...(row.current_linear_state_type !== null ? { currentLinearStateType: String(row.current_linear_state_type) } : {}),
-        })
-        : row.waiting_reason !== null
-          ? String(row.waiting_reason)
-          : undefined;
-      return {
-        ...(row.issue_key !== null ? { issueKey: String(row.issue_key) } : {}),
-        ...(row.title !== null ? { title: String(row.title) } : {}),
-        projectId: String(row.project_id),
-        ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
-        ...(row.session_state !== null ? { sessionState: detachedActiveRun ? "running" : String(row.session_state) } : {}),
-        phase: deriveIssuePhase({
-          delegatedToPatchRelay: Number(row.delegated_to_patchrelay ?? 1) !== 0,
-          workflowOutcome: row.workflow_outcome === null ? undefined : String(row.workflow_outcome) as "completed" | "failed" | "escalated",
-          inputRequestKind: row.input_request_kind === null ? undefined : String(row.input_request_kind) as "paused_local_work" | "completion_check_question",
-          prNumber: row.pr_number === null ? undefined : Number(row.pr_number),
-          prState: row.pr_state === null ? undefined : String(row.pr_state),
-          prIsDraft: row.pr_is_draft === null ? undefined : Boolean(row.pr_is_draft),
-          prReviewState: row.pr_review_state === null ? undefined : String(row.pr_review_state),
-          prCheckStatus: row.pr_check_status === null ? undefined : String(row.pr_check_status),
-          lastGitHubFailureSource: row.last_github_failure_source === null ? undefined : String(row.last_github_failure_source) as "branch_ci" | "queue_eviction",
-          deployStartedAt: row.deploy_started_at === null ? undefined : String(row.deploy_started_at),
-          activeRunType: activeRunType as RunType | undefined,
-        }),
-        ...(waitingReason ? { waitingReason } : {}),
-        ...(activeRunType ? { activeRunType } : {}),
-        ...(row.latest_run_type !== null ? { latestRunType: String(row.latest_run_type) } : {}),
-        ...(row.latest_run_status !== null ? { latestRunStatus: String(row.latest_run_status) } : {}),
-        updatedAt: String(row.updated_at),
-      };
-    });
-
-    return items.filter((item) => {
-      if (options?.active && !item.activeRunType) return false;
-      if (options?.failed && item.phase !== "failed" && item.phase !== "escalated") return false;
-      return true;
-    });
-  }
-
-  private async canReadThread(threadId: string): Promise<boolean> {
-    try {
-      const codex = await this.getCodex();
-      await codex.readThread(threadId, false);
-      return true;
-    } catch {
-      return false;
-    }
   }
 
   private async ensureOpenWorktree(worktree: WorktreeResult): Promise<void> {
@@ -751,20 +314,4 @@ export class CliDataAccess extends CliOperatorApiClient {
     );
   }
 
-  private async readLiveSummary(threadId: string, latestTimestampSeen?: string): Promise<LiveSummary> {
-    const codex = await this.getCodex();
-    const thread = await codex.readThread(threadId, true);
-    return summarizeThread(thread, latestTimestampSeen);
-  }
-
-  private async getCodex(): Promise<CodexAppServerClient> {
-    if (!this.codex) {
-      this.codex = new CodexAppServerClient(this.config.runner.codex, pino({ enabled: false }));
-    }
-    if (!this.codexStarted) {
-      await this.codex.start();
-      this.codexStarted = true;
-    }
-    return this.codex;
-  }
 }

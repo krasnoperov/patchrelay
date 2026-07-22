@@ -11,7 +11,7 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { ReleaseIssueSessionLease, WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import type { LinearSessionSync } from "./linear-session-sync.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
-import { buildStageReport, countEventMethods } from "./run-reporting.ts";
+import { buildStageReport } from "./run-reporting.ts";
 import type { AppendRunIntentEventWithLease } from "./run-task-planner.ts";
 import type { buildCompletionCheckActivity } from "./linear-session-reporting.ts";
 import { buildRunCompletedActivity, buildRunFailureActivity } from "./linear-session-reporting.ts";
@@ -45,10 +45,12 @@ function parseObjectJson(raw: string | undefined): Record<string, unknown> | und
 
 function buildRunSummaryJson(report: StageReport, outcomeSummary?: string): string {
   return JSON.stringify({
-    latestAssistantMessage: report.assistantMessages.at(-1) ?? null,
+    latestAssistantMessage: report.latestAssistantMessage ?? null,
+    latestPlan: report.latestPlan ?? null,
+    commandCount: report.commandCount,
+    fileChangeCount: report.fileChangeCount,
+    toolCallCount: report.toolCallCount,
     outcomeSummary: outcomeSummary ?? null,
-    // Backward compatibility for older CLI/status readers.
-    publicationRecapSummary: outcomeSummary ?? null,
   });
 }
 
@@ -86,7 +88,7 @@ export class RunFinalizer {
     private readonly completionCheck: {
       run(params: {
         issue: Pick<IssueRecord, "issueKey" | "linearIssueId" | "title" | "description" | "worktreePath">;
-        run: Pick<RunRecord, "id" | "threadId" | "runType" | "failureReason" | "summaryJson" | "reportJson">;
+        run: Pick<RunRecord, "id" | "threadId" | "runType" | "failureReason" | "summaryJson">;
         noPrSummary: string;
         onStarted?: ((start: { threadId: string; turnId: string }) => void | Promise<void>) | undefined;
       }): Promise<CompletionCheckExecution>;
@@ -106,14 +108,12 @@ export class RunFinalizer {
     threadId: string;
     turnId?: string;
     summaryJson: string;
-    reportJson: string;
   } {
     return {
       status: "completed",
       threadId: params.threadId,
       ...(params.completedTurnId ? { turnId: params.completedTurnId } : {}),
       summaryJson: buildRunSummaryJson(params.report, params.outcomeSummary),
-      reportJson: JSON.stringify(params.report),
     };
   }
 
@@ -655,7 +655,6 @@ export class RunFinalizer {
       { ...run, status: "completed" },
       trackedIssue,
       thread,
-      countEventMethods(this.db.runs.listThreadEvents(run.id)),
     );
 
     const dirtyRepairWorktree = this.inspectDirtyRepairWorktree(run, freshIssue);
@@ -771,7 +770,7 @@ export class RunFinalizer {
       run,
       issue: refreshedIssue,
       postRunState,
-      latestAssistantSummary: report.assistantMessages.at(-1),
+      latestAssistantSummary: report.latestAssistantMessage,
     });
 
     // `refreshedIssue` was read before several async policy checks; a webhook
@@ -890,7 +889,6 @@ export class RunFinalizer {
       { ...params.run, status: "failed" },
       trackedIssue,
       params.thread,
-      countEventMethods(this.db.runs.listThreadEvents(params.run.id)),
     );
 
     await handleNoPrCompletionCheck({

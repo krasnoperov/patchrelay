@@ -389,13 +389,14 @@ PatchRelay uses SQLite. Current tables:
 - `issue_session_events` — session-history/event inbox; runnable work is derived through workflow observations/tasks, not directly from these rows
 - `issue_session_leases` — executor lease truth (`lease_id`, `worker_id`, `leased_until`)
 - `issue_session_threads` — resumable thread pointer and generation/compaction state
-- `runs` — one record per Codex run (`implementation`, `review_fix`, `ci_repair`, `queue_repair`)
+- `runs` — one record per Codex run, including compact latest activity, outcome, and aggregate counts
 - `webhook_events` — deduplication and audit log for incoming webhooks (see below)
-- `run_thread_events` — per-run transcript of Codex thread events (when extended history is enabled)
 - `linear_installations` — OAuth credentials and installation metadata
 - `operator_feed_events` — event log for the operator CLI
 
 GitHub remains the source of truth for PR readiness, review, and merge state — PatchRelay stores derived state to correlate Linear issues with local workspaces and runs, not to duplicate GitHub.
+
+Codex remains the source of truth for its thread transcript. PatchRelay reads the live thread through the daemon-owned app-server and stores only a bounded operator projection: latest understandable activity/message/plan, aggregate command/file/tool counts, and the final outcome. It does not persist raw Codex notifications, reasoning, command output, or a second transcript in SQLite.
 
 ### Recovery doctrine: re-derivation, not replay
 

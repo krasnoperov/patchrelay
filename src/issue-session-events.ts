@@ -511,38 +511,23 @@ export function isActionableIssueSessionEventType(eventType: IssueSessionEventTy
 }
 
 export function extractLatestAssistantSummary(
-  run: Pick<RunRecord, "summaryJson" | "reportJson" | "failureReason"> | undefined,
+  run: Pick<RunRecord, "summaryJson" | "failureReason"> | undefined,
 ): string | undefined {
   if (!run) return undefined;
   if (run.summaryJson) {
     try {
       const parsed = JSON.parse(run.summaryJson) as {
         outcomeSummary?: unknown;
-        publicationRecapSummary?: unknown;
         latestAssistantMessage?: unknown;
       };
       if (typeof parsed.outcomeSummary === "string" && parsed.outcomeSummary.trim()) {
         return sanitizeOperatorFacingText(parsed.outcomeSummary);
-      }
-      if (typeof parsed.publicationRecapSummary === "string" && parsed.publicationRecapSummary.trim()) {
-        return sanitizeOperatorFacingText(parsed.publicationRecapSummary);
       }
       if (typeof parsed.latestAssistantMessage === "string" && parsed.latestAssistantMessage.trim()) {
         return sanitizeOperatorFacingText(parsed.latestAssistantMessage);
       }
     } catch {
       // ignore malformed summary json
-    }
-  }
-  if (run.reportJson) {
-    try {
-      const parsed = JSON.parse(run.reportJson) as { assistantMessages?: unknown };
-      if (Array.isArray(parsed.assistantMessages)) {
-        const latest = parsed.assistantMessages.findLast((value) => typeof value === "string" && value.trim());
-        if (typeof latest === "string") return sanitizeOperatorFacingText(latest);
-      }
-    } catch {
-      // ignore malformed report json
     }
   }
   return sanitizeOperatorFacingText(run.failureReason);

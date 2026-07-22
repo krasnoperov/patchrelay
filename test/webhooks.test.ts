@@ -476,7 +476,6 @@ test("resolveProject matches by issue key prefix and team", () => {
         args: ["app-server"],
         approvalPolicy: "never",
         sandboxMode: "danger-full-access",
-        persistExtendedHistory: true,
       },
     },
     projects: [

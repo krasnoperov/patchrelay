@@ -79,7 +79,6 @@ function createConfig(baseDir: string): AppConfig {
         args: ["app-server"],
         approvalPolicy: "never",
         sandboxMode: "danger-full-access",
-        persistExtendedHistory: false,
       },
     },
     projects: [

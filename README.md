@@ -60,7 +60,7 @@ patchrelay linear sync                                 # cache teams/projects
 patchrelay repo link krasnoperov/usertold \
     --workspace usertold --team USE                    # link a GitHub repo
 patchrelay doctor                                      # validate
-patchrelay service status
+patchrelay status
 patchrelay dashboard
 ```
 

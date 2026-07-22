@@ -5,7 +5,8 @@ import { assertKnownFlags, hasHelpFlag, parseArgs, resolveCommand } from "./args
 import {
   handleIssueCommand,
 } from "./commands/issues.ts";
-import { handleClusterCommand } from "./commands/cluster.ts";
+import { handleStatusCommand } from "./commands/status.ts";
+import { handleLogsCommand } from "./commands/logs.ts";
 import { handleLinearCommand } from "./commands/linear.ts";
 import { handleSequenceCheckCommand } from "./commands/sequence-check.ts";
 import { handleRepoCommand } from "./commands/repo.ts";
@@ -29,7 +30,7 @@ function getCommandConfigProfile(command: string): ConfigLoadProfile {
     case "linear":
     case "dashboard":
       return "operator_cli";
-    case "cluster":
+    case "status":
     case "repo":
     case "issue":
     case "maintenance":
@@ -49,36 +50,19 @@ function validateFlags(command: string, commandArgs: string[], parsed: ReturnTyp
     case "serve":
       assertKnownFlags(parsed, command, []);
       return;
+    case "status":
+      assertKnownFlags(parsed, command, ["follow", "trace", "json"]);
+      return;
+    case "logs":
+      assertKnownFlags(parsed, command, ["follow", "lines", "json"]);
+      return;
     case "issue": {
       switch (commandArgs[0]) {
-        case "show":
-          assertKnownFlags(parsed, "issue", ["json"]);
-          return;
-        case "list":
-          assertKnownFlags(parsed, "issue", ["active", "failed", "repo", "json"]);
-          return;
-        case "watch":
-          assertKnownFlags(parsed, "issue", ["json"]);
-          return;
-        case "report":
-          assertKnownFlags(parsed, "issue", ["run-type", "run", "json"]);
-          return;
-        case "events":
-          assertKnownFlags(parsed, "issue", ["run", "method", "follow", "json"]);
-          return;
         case "path":
           assertKnownFlags(parsed, "issue", ["cd", "json"]);
           return;
         case "open":
           assertKnownFlags(parsed, "issue", ["print", "json"]);
-          return;
-        case "audit":
-        case "trace":
-        case "sessions":
-          assertKnownFlags(parsed, "issue", ["json"]);
-          return;
-        case "transcript-source":
-          assertKnownFlags(parsed, "issue", ["run", "json"]);
           return;
         case "prompt":
           assertKnownFlags(parsed, "issue", ["json"]);
@@ -95,9 +79,6 @@ function validateFlags(command: string, commandArgs: string[], parsed: ReturnTyp
       }
     }
     case "doctor":
-      assertKnownFlags(parsed, command, ["json"]);
-      return;
-    case "cluster":
       assertKnownFlags(parsed, command, ["json"]);
       return;
     case "maintenance":
@@ -159,16 +140,8 @@ function validateFlags(command: string, commandArgs: string[], parsed: ReturnTyp
         assertKnownFlags(parsed, "service", ["json"]);
         return;
       }
-      if (commandArgs[0] === "status") {
-        assertKnownFlags(parsed, "service", ["json"]);
-        return;
-      }
       if (commandArgs[0] === "codex-status") {
         assertKnownFlags(parsed, "service", ["json"]);
-        return;
-      }
-      if (commandArgs[0] === "logs") {
-        assertKnownFlags(parsed, "service", ["lines", "json"]);
         return;
       }
       assertKnownFlags(parsed, "service", []);
@@ -210,7 +183,7 @@ export async function runCli(
   const json = parsed.flags.get("json") === true;
   if (command === "help") {
     const topic = commandArgs[0];
-    if (topic === "linear" || topic === "repo" || topic === "issue" || topic === "service" || topic === "cluster" || topic === "maintenance") {
+    if (topic === "linear" || topic === "repo" || topic === "issue" || topic === "service" || topic === "maintenance") {
       writeOutput(stdout, `${helpTextFor(topic)}\n`);
       return 0;
     }
@@ -232,7 +205,7 @@ export async function runCli(
         ? "linear"
         : command === "repo"
           ? "repo"
-        : command === "issue" || command === "service" || command === "cluster" || command === "maintenance"
+        : command === "issue" || command === "service" || command === "maintenance"
           ? command
           : "root";
     writeOutput(
@@ -330,11 +303,6 @@ export async function runCli(
     }
   }
 
-  if (command === "cluster" && commandArgs[0]) {
-    writeUsageError(stderr, new CliUsageError(`Unknown cluster command: ${commandArgs[0]}`, "cluster"));
-    return 1;
-  }
-
   const config =
     options?.config ??
     loadConfig(undefined, {
@@ -377,20 +345,39 @@ export async function runCli(
       });
     }
 
-    if (command === "cluster") {
+    if (command === "status") {
       const issueData = await ensureIssueDataAccess(data, config);
       if (!data) {
         data = issueData;
         ownsData = true;
       }
-      return await handleClusterCommand({
-        commandArgs,
-        parsed,
+      if (commandArgs.length > 1) {
+        throw new CliUsageError("Usage: patchrelay status [issueKey] [--follow] [--trace] [--json]");
+      }
+      return await handleStatusCommand({
+        ...(commandArgs[0] ? { issueKey: commandArgs[0] } : {}),
+        follow: parsed.flags.get("follow") === true,
+        trace: parsed.flags.get("trace") === true,
         json,
         stdout,
         data: issueData,
         config,
         runCommand,
+      });
+    }
+
+    if (command === "logs") {
+      if (commandArgs.length > 1) {
+        throw new CliUsageError("Usage: patchrelay logs [issueKey] [--follow] [--lines <count>] [--json]");
+      }
+      return await handleLogsCommand({
+        ...(commandArgs[0] ? { issueKey: commandArgs[0] } : {}),
+        follow: parsed.flags.get("follow") === true,
+        lines: parsed.flags.get("lines"),
+        json,
+        stdout,
+        runCommand,
+        runInteractive,
       });
     }
 
@@ -466,5 +453,5 @@ async function ensureIssueDataAccess(
 }
 
 function isIssueDataAccess(data: RunCliOptions["data"]): data is CliDataAccess {
-  return !!data && typeof data === "object" && "inspect" in data && typeof data.inspect === "function";
+  return !!data && typeof data === "object" && "db" in data;
 }

@@ -14,7 +14,6 @@ export interface RunStatusProvider {
   getActiveRunStatus(issueKey: string): Promise<{
     issue: TrackedIssueRecord;
     run: RunRecord;
-    liveThread?: unknown;
   } | undefined>;
 }
 
@@ -26,12 +25,6 @@ export interface IssueOverviewRun {
   endedAt?: string | undefined;
   threadId?: string | undefined;
   report?: StageReport | undefined;
-  events?: Array<{
-    id: number;
-    method: string;
-    createdAt: string;
-    parsedEvent?: Record<string, unknown> | undefined;
-  }> | undefined;
 }
 
 export interface IssueOverviewResult {
@@ -40,6 +33,7 @@ export interface IssueOverviewResult {
   activeRun?: RunRecord | undefined;
   latestRun?: RunRecord | undefined;
   liveThread?: CodexThreadSummary | undefined;
+  liveThreadError?: string | undefined;
   runs?: IssueOverviewRun[] | undefined;
   issueContext?: {
     description?: string;
@@ -62,11 +56,19 @@ export interface IssueOverviewResult {
   } | undefined;
 }
 
-export function parseStageReport(reportJson: string | undefined, runStatus: string): StageReport | undefined {
-  if (!reportJson) return undefined;
+export function parseStageReport(summaryJson: string | undefined, runStatus: string, runType = "unknown"): StageReport | undefined {
+  if (!summaryJson) return undefined;
   try {
-    const parsed = JSON.parse(reportJson) as StageReport;
-    return { ...parsed, status: runStatus };
+    const parsed = JSON.parse(summaryJson) as Record<string, unknown>;
+    return {
+      runType,
+      status: runStatus,
+      ...(typeof parsed.latestAssistantMessage === "string" ? { latestAssistantMessage: parsed.latestAssistantMessage } : {}),
+      ...(typeof parsed.latestPlan === "string" ? { latestPlan: parsed.latestPlan } : {}),
+      commandCount: typeof parsed.commandCount === "number" ? parsed.commandCount : 0,
+      fileChangeCount: typeof parsed.fileChangeCount === "number" ? parsed.fileChangeCount : 0,
+      toolCallCount: typeof parsed.toolCallCount === "number" ? parsed.toolCallCount : 0,
+    };
   } catch {
     return undefined;
   }
@@ -96,12 +98,13 @@ export class IssueOverviewQuery {
       ?? (record.activeRunId !== undefined ? this.db.runs.getRunById(record.activeRunId) : undefined);
     const latestRun = this.db.runs.getLatestRunForIssue(record.projectId, record.linearIssueId);
     const runs = this.buildRuns(record.projectId, record.linearIssueId);
-    const liveThread = await this.readLiveThread(activeRun);
+    const live = await this.readLiveThread(activeRun);
     return {
       issue,
       ...(activeRun ? { activeRun } : {}),
       ...(latestRun ? { latestRun } : {}),
-      ...(liveThread ? { liveThread } : {}),
+      ...(live.thread ? { liveThread: live.thread } : {}),
+      ...(live.error ? { liveThreadError: live.error } : {}),
       ...(runs.length > 0 ? { runs } : {}),
       issueContext: {
         ...(record.description ? { description: record.description } : {}),
@@ -134,30 +137,8 @@ export class IssueOverviewQuery {
       ...(run.endedAt ? { endedAt: run.endedAt } : {}),
       ...(run.threadId ? { threadId: run.threadId } : {}),
       ...(() => {
-        const report = parseStageReport(run.reportJson, run.status);
+        const report = parseStageReport(run.summaryJson, run.status, run.runType);
         return report ? { report } : {};
-      })(),
-      ...(() => {
-        const events = this.db.runs.listThreadEvents(run.id).flatMap((event) => {
-          try {
-            const parsed = JSON.parse(event.eventJson) as unknown;
-            return [{
-              id: event.id,
-              method: event.method,
-              createdAt: event.createdAt,
-              ...(parsed && typeof parsed === "object" && !Array.isArray(parsed)
-                ? { parsedEvent: parsed as Record<string, unknown> }
-                : {}),
-            }];
-          } catch {
-            return [{
-              id: event.id,
-              method: event.method,
-              createdAt: event.createdAt,
-            }];
-          }
-        });
-        return events.length > 0 ? { events } : {};
       })(),
     }));
   }
@@ -180,7 +161,7 @@ export class IssueOverviewQuery {
     const latestEvent = this.db.issueSessions.listIssueSessionEvents(session.projectId, session.linearIssueId, { limit: 1 }).at(-1);
     const runs = this.buildRuns(session.projectId, session.linearIssueId);
     const runCount = runs.length;
-    const liveThread = await this.readLiveThread(activeRun);
+    const live = await this.readLiveThread(activeRun);
     const failureContext = parseGitHubFailureContext(issueRecord?.lastGitHubFailureContextJson);
     const runnableTaskRunType = peekRunnableWorkflowTaskRunType(this.db, session.projectId, session.linearIssueId);
 
@@ -275,7 +256,8 @@ export class IssueOverviewQuery {
       session,
       ...(activeRun ? { activeRun } : {}),
       ...(latestRun ? { latestRun } : {}),
-      ...(liveThread ? { liveThread } : {}),
+      ...(live.thread ? { liveThread: live.thread } : {}),
+      ...(live.error ? { liveThreadError: live.error } : {}),
       ...(runs.length > 0 ? { runs } : {}),
       issueContext: {
         ...(issueRecord?.description ? { description: issueRecord.description } : {}),
@@ -299,8 +281,12 @@ export class IssueOverviewQuery {
     };
   }
 
-  private async readLiveThread(run?: RunRecord | undefined): Promise<CodexThreadSummary | undefined> {
-    if (!run?.threadId) return undefined;
-    return await this.codex.readThread(run.threadId, true).catch(() => undefined);
+  private async readLiveThread(run?: RunRecord | undefined): Promise<{ thread?: CodexThreadSummary; error?: string }> {
+    if (!run?.threadId) return {};
+    try {
+      return { thread: await this.codex.readThread(run.threadId, true) };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
   }
 }

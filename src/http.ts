@@ -318,6 +318,15 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
       return reply.send({ ok: true, ...result });
     });
 
+    app.get("/api/issues/:issueKey/status", async (request, reply) => {
+      const issueKey = (request.params as { issueKey: string }).issueKey;
+      const result = await service.getOperatorIssueStatus(issueKey);
+      if (!result) {
+        return reply.code(404).send({ ok: false, reason: "issue_not_found" });
+      }
+      return reply.send({ ok: true, ...result });
+    });
+
     app.get("/api/issues/:issueKey/feed", async (request, reply) => {
       const issueKey = (request.params as { issueKey: string }).issueKey;
       const afterId = getPositiveIntegerQueryParam(request, "afterId");
@@ -330,15 +339,6 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
         return reply.code(404).send({ ok: false, reason: "issue_not_found" });
       }
       return reply.send({ ok: true, events: result.events });
-    });
-
-    app.get("/api/issues/:issueKey/live", async (request, reply) => {
-      const issueKey = (request.params as { issueKey: string }).issueKey;
-      const result = await service.getActiveRunStatus(issueKey);
-      if (!result) {
-        return reply.code(404).send({ ok: false, reason: "active_run_not_found" });
-      }
-      return reply.send({ ok: true, ...result });
     });
 
     app.get("/api/issues/:issueKey/session-url", async (request, reply) => {
@@ -617,20 +617,12 @@ function renderAgentSessionStatusPage(params: {
       toolCallCount?: number;
     } | undefined;
     latestReportSummary?: {
-      assistantMessageCount?: number;
       commandCount?: number;
       fileChangeCount?: number;
       toolCallCount?: number;
       latestAssistantMessage?: string | null;
     } | undefined;
-    runs: Array<{
-      run?: { id?: number; runType?: string; status?: string; startedAt?: string; endedAt?: string } | undefined;
-      report?: {
-        assistantMessages?: string[];
-        commands?: unknown[];
-        fileChanges?: unknown[];
-      } | undefined;
-    }>;
+    runs: Array<{ run?: { id?: number; runType?: string; status?: string; startedAt?: string; endedAt?: string } | undefined }>;
     generatedAt: string;
   };
 }): string {

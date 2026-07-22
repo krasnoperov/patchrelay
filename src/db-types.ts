@@ -179,8 +179,10 @@ export interface RunRecord {
   completionCheckRecommendedReply?: string | undefined;
   completionCheckedAt?: string | undefined;
   summaryJson?: string | undefined;
-  reportJson?: string | undefined;
   failureReason?: string | undefined;
+  lastCodexActivityAt?: string | undefined;
+  lastCodexActivityKind?: string | undefined;
+  lastCodexActivitySummary?: string | undefined;
   // Plan §4.4: hard publication-suppression flag. Even if the Codex
   // turn races ahead and produces output before its lease is
   // released, the run-finalizer reads this flag and refuses to
@@ -253,16 +255,6 @@ export interface TrackedIssueRecord {
   activeRunId?: number | undefined;
   activeAgentSessionId?: string | undefined;
   updatedAt: string;
-}
-
-export interface ThreadEventRecord {
-  id: number;
-  runId: number;
-  threadId: string;
-  turnId?: string | undefined;
-  method: string;
-  eventJson: string;
-  createdAt: string;
 }
 
 export type WorkflowObservationSource = "linear" | "github" | "git" | "runner" | "operator" | "executor";

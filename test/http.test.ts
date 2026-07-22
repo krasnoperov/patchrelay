@@ -55,7 +55,6 @@ function createConfig(baseDir: string): AppConfig {
         args: ["app-server"],
         approvalPolicy: "never",
         sandboxMode: "danger-full-access",
-        persistExtendedHistory: true,
         serviceName: "patchrelay-test",
       },
     },
@@ -226,12 +225,14 @@ test("http routes handle webhook validation and issue/live lookups", async () =>
           ].filter((event) => options?.afterId === undefined || event.id > options.afterId);
           return { events: events.slice(0, options?.limit ?? events.length) };
         },
-        getActiveRunStatus: async (issueKey: string) =>
+        getOperatorIssueStatus: async (issueKey: string) =>
           issueKey === "USE-42"
             ? {
                 issue: { issueKey: "USE-42" },
-                run: { id: 8, runType: "review", status: "running" },
+                activeRun: { id: 8, runType: "review_fix", status: "running", startedAt: "2026-03-13T12:00:00.000Z" },
                 liveThread: { threadId: "thread-1", threadStatus: "running" },
+                runs: [],
+                generatedAt: "2026-03-13T12:01:00.000Z",
               }
             : undefined,
         listTrackedIssues: () => [
@@ -408,30 +409,20 @@ test("http routes handle webhook validation and issue/live lookups", async () =>
       ],
     });
 
-    const live = await app.inject({
+    const status = await app.inject({
       method: "GET",
-      url: "/api/issues/USE-42/live",
-      headers: {
-        authorization: "Bearer operator-token",
-      },
+      url: "/api/issues/USE-42/status",
+      headers: { authorization: "Bearer operator-token" },
     });
-    assert.equal(live.statusCode, 200);
-    assert.deepEqual(live.json(), {
-      ok: true,
-      issue: { issueKey: "USE-42" },
-      run: { id: 8, runType: "review", status: "running" },
-      liveThread: { threadId: "thread-1", threadStatus: "running" },
-    });
+    assert.equal(status.statusCode, 200);
+    assert.equal(status.json().activeRun.runType, "review_fix");
 
-    const missingLive = await app.inject({
+    const missingStatus = await app.inject({
       method: "GET",
-      url: "/api/issues/USE-404/live",
-      headers: {
-        authorization: "Bearer operator-token",
-      },
+      url: "/api/issues/USE-404/status",
+      headers: { authorization: "Bearer operator-token" },
     });
-    assert.equal(missingLive.statusCode, 404);
-    assert.deepEqual(missingLive.json(), { ok: false, reason: "active_run_not_found" });
+    assert.equal(missingStatus.statusCode, 404);
 
     const workspaces = await app.inject({
       method: "GET",
@@ -525,11 +516,6 @@ test("public agent session status page validates token and exposes operator sess
               liveThread: { threadId: "thread-1", threadStatus: "running" },
               runs: [{
                 run: { id: 1, runType: "implementation", status: "running", startedAt: "2026-03-17T12:00:00.000Z" },
-                report: {
-                  assistantMessages: ["Opened the PR and waiting on merge automation."],
-                  commands: [],
-                  fileChanges: [],
-                },
               }],
               generatedAt: "2026-03-17T12:10:00.000Z",
             },

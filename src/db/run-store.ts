@@ -1,4 +1,4 @@
-import type { IssueRecord, RunLaunchPhase, RunRecord, RunStatus, ThreadEventRecord } from "../db-types.ts";
+import type { IssueRecord, RunLaunchPhase, RunRecord, RunStatus } from "../db-types.ts";
 import type { CompletionCheckResult } from "../completion-check-types.ts";
 import type { RunType } from "../run-type.ts";
 import type { IssueSessionProjectionInvalidator, IssueSessionProjectionOptions } from "../issue-session-projection-invalidator.ts";
@@ -182,6 +182,16 @@ export class RunStore {
     this.connection.prepare("UPDATE runs SET turn_id = ? WHERE id = ?").run(turnId, runId);
   }
 
+  recordCodexActivity(runId: number, params: { kind: string; summary?: string; observedAt?: string }): void {
+    this.connection.prepare(`
+      UPDATE runs SET
+        last_codex_activity_at = ?,
+        last_codex_activity_kind = ?,
+        last_codex_activity_summary = ?
+      WHERE id = ? AND status = 'running'
+    `).run(params.observedAt ?? isoNow(), params.kind, params.summary ?? null, runId);
+  }
+
   updateLaunchPhase(runId: number, launchPhase: RunLaunchPhase): void {
     this.connection.prepare(`
       UPDATE runs
@@ -198,7 +208,6 @@ export class RunStore {
     turnId?: string;
     failureReason?: string;
     summaryJson?: string;
-    reportJson?: string;
   }): void {
     const now = isoNow();
     this.connection.prepare(`
@@ -208,7 +217,6 @@ export class RunStore {
         turn_id = COALESCE(?, turn_id),
         failure_reason = COALESCE(?, failure_reason),
         summary_json = COALESCE(?, summary_json),
-        report_json = COALESCE(?, report_json),
         ended_at = ?
       WHERE id = ?
     `).run(
@@ -217,7 +225,6 @@ export class RunStore {
       params.turnId ?? null,
       params.failureReason ?? null,
       params.summaryJson ?? null,
-      params.reportJson ?? null,
       now,
       runId,
     );
@@ -355,31 +362,4 @@ export class RunStore {
     }
   }
 
-  saveThreadEvent(params: {
-    runId: number;
-    threadId: string;
-    turnId?: string;
-    method: string;
-    eventJson: string;
-  }): void {
-    this.connection.prepare(`
-      INSERT INTO run_thread_events (run_id, thread_id, turn_id, method, event_json, created_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(params.runId, params.threadId, params.turnId ?? null, params.method, params.eventJson, isoNow());
-  }
-
-  listThreadEvents(runId: number): ThreadEventRecord[] {
-    const rows = this.connection
-      .prepare("SELECT * FROM run_thread_events WHERE run_id = ? ORDER BY id")
-      .all(runId) as Array<Record<string, unknown>>;
-    return rows.map((row) => ({
-      id: Number(row.id),
-      runId: Number(row.run_id),
-      threadId: String(row.thread_id),
-      ...(row.turn_id !== null ? { turnId: String(row.turn_id) } : {}),
-      method: String(row.method),
-      eventJson: String(row.event_json),
-      createdAt: String(row.created_at),
-    }));
-  }
 }

@@ -15,7 +15,7 @@ test("deriveIssueStatusNote prefers failure context over the latest assistant su
       status: "completed",
       startedAt: "2026-04-07T22:30:00.000Z",
       summaryJson: JSON.stringify({
-        assistantMessages: ["Aligned the route copy and reran checks."],
+        latestAssistantMessage: "Aligned the route copy and reran checks.",
       }),
     } as never,
     failureSummary: "CI repair budget exhausted (3 attempts)",

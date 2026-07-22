@@ -1273,10 +1273,7 @@ test("run finalizer builds Linear-visible completion text without an extra recap
       parsedSummary.outcomeSummary,
       "Publishing summary tightened.",
     );
-    assert.equal(
-      parsedSummary.publicationRecapSummary,
-      "Publishing summary tightened.",
-    );
+    assert.equal(parsedSummary.publicationRecapSummary, undefined);
     assert.equal(
       activities.at(-1)?.body,
       [

@@ -54,7 +54,6 @@ function createConfig(baseDir: string): AppConfig {
         args: ["app-server"],
         approvalPolicy: "never",
         sandboxMode: "danger-full-access",
-        persistExtendedHistory: false,
       },
     },
     projects: [
@@ -300,9 +299,7 @@ test("syncSession prefers the intervention reason over the last assistant summar
     db.runs.finishRun(run.id, {
       status: "completed",
       summaryJson: JSON.stringify({
-        assistantMessages: [
-          "Aligned the remaining route copy so `/`, `/game`, and `/app` now tell the same story.",
-        ],
+        latestAssistantMessage: "Aligned the remaining route copy so `/`, `/game`, and `/app` now tell the same story.",
       }),
       failureReason: "CI repair budget exhausted (3 attempts)",
     });
@@ -588,7 +585,6 @@ test("syncSession renders completion-check input details for awaiting-input issu
     db.runs.finishRun(run.id, {
       status: "completed",
       summaryJson: JSON.stringify({ latestAssistantMessage: "Approval is needed before continuing." }),
-      reportJson: JSON.stringify({ assistantMessages: ["Approval is needed before continuing."] }),
     });
     db.runs.saveCompletionCheck(run.id, {
       outcome: "needs_input",

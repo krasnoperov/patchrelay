@@ -68,7 +68,7 @@ export async function handleNoPrCompletionCheck(params: {
   completionCheck: {
     run(args: {
       issue: Pick<IssueRecord, "issueKey" | "linearIssueId" | "title" | "description" | "worktreePath">;
-      run: Pick<RunRecord, "id" | "threadId" | "runType" | "failureReason" | "summaryJson" | "reportJson">;
+      run: Pick<RunRecord, "id" | "threadId" | "runType" | "failureReason" | "summaryJson">;
       noPrSummary: string;
       onStarted?: ((start: { threadId: string; turnId: string }) => void | Promise<void>) | undefined;
     }): Promise<CompletionCheckExecution>;
@@ -383,15 +383,19 @@ function buildRunUpdate(params: {
   threadId: string;
   turnId?: string;
   summaryJson: string;
-  reportJson: string;
   failureReason?: string;
 } {
   return {
     status: params.status,
     threadId: params.threadId,
     ...(params.completedTurnId ? { turnId: params.completedTurnId } : {}),
-    summaryJson: JSON.stringify({ latestAssistantMessage: params.report.assistantMessages.at(-1) ?? null }),
-    reportJson: JSON.stringify(params.report),
+    summaryJson: JSON.stringify({
+      latestAssistantMessage: params.report.latestAssistantMessage ?? null,
+      latestPlan: params.report.latestPlan ?? null,
+      commandCount: params.report.commandCount,
+      fileChangeCount: params.report.fileChangeCount,
+      toolCallCount: params.report.toolCallCount,
+    }),
     ...(params.failureReason ? { failureReason: params.failureReason } : {}),
   };
 }

@@ -38,17 +38,11 @@ test("getPublicAgentSessionStatus returns summarized run history for session-bac
     });
     db.runs.finishRun(run.id, {
       status: "completed",
-      reportJson: JSON.stringify({
-        runType: "implementation",
-        status: "completed",
-        prompt: "Implement the flow",
-        assistantMessages: ["Implemented the public status payload."],
-        plans: [],
-        reasoning: [],
-        commands: [{ command: "npm test", cwd: "/repo", status: "completed", exitCode: 0, durationMs: 100 }],
-        fileChanges: [{ path: "src/app.ts" }],
-        toolCalls: [{ type: "dynamic", name: "web.search", status: "completed", durationMs: 12 }],
-        eventCounts: {},
+      summaryJson: JSON.stringify({
+        latestAssistantMessage: "Implemented the public status payload.",
+        commandCount: 1,
+        fileChangeCount: 1,
+        toolCallCount: 1,
       }),
     });
 
@@ -68,7 +62,6 @@ test("getPublicAgentSessionStatus returns summarized run history for session-bac
     assert.equal(status?.runs.length, 1);
     assert.equal(status?.runs[0]?.run.runType, "implementation");
     assert.deepEqual(status?.latestReportSummary, {
-      assistantMessageCount: 1,
       commandCount: 1,
       fileChangeCount: 1,
       toolCallCount: 1,

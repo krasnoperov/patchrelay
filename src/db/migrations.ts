@@ -66,8 +66,10 @@ CREATE TABLE IF NOT EXISTS runs (
   completion_check_recommended_reply TEXT,
   completion_checked_at TEXT,
   summary_json TEXT,
-  report_json TEXT,
   failure_reason TEXT,
+  last_codex_activity_at TEXT,
+  last_codex_activity_kind TEXT,
+  last_codex_activity_summary TEXT,
   should_not_publish INTEGER NOT NULL DEFAULT 0,
   started_at TEXT NOT NULL,
   ended_at TEXT
@@ -142,16 +144,6 @@ CREATE TABLE IF NOT EXISTS webhook_events (
   project_id TEXT,
   payload_json TEXT,
   processing_status TEXT NOT NULL DEFAULT 'pending'
-);
-
-CREATE TABLE IF NOT EXISTS run_thread_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  run_id INTEGER NOT NULL,
-  thread_id TEXT NOT NULL,
-  turn_id TEXT,
-  method TEXT NOT NULL,
-  event_json TEXT NOT NULL,
-  created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS linear_installations (
@@ -307,7 +299,6 @@ CREATE INDEX IF NOT EXISTS idx_issue_session_leases_until ON issue_session_lease
 CREATE INDEX IF NOT EXISTS idx_issue_session_events_issue ON issue_session_events(project_id, linear_issue_id, id);
 CREATE INDEX IF NOT EXISTS idx_issue_session_events_pending ON issue_session_events(processed_at, project_id, linear_issue_id, id);
 CREATE INDEX IF NOT EXISTS idx_webhook_events_retention ON webhook_events(processing_status, received_at, id);
-CREATE INDEX IF NOT EXISTS idx_run_thread_events_run ON run_thread_events(run_id, id);
 CREATE INDEX IF NOT EXISTS idx_operator_feed_events_issue ON operator_feed_events(issue_key, id);
 CREATE INDEX IF NOT EXISTS idx_operator_feed_events_project ON operator_feed_events(project_id, id);
 CREATE INDEX IF NOT EXISTS idx_repository_links_installation ON repository_links(installation_id, github_repo);
@@ -450,6 +441,10 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   // finalizer prefers this over the reconstructed `run:<runType>` string so an
   // inbox task (run:input / run:orchestration_followup) closes by its real id.
   addColumnIfMissing(connection, "runs", "task_id", "TEXT");
+  addColumnIfMissing(connection, "runs", "last_codex_activity_at", "TEXT");
+  addColumnIfMissing(connection, "runs", "last_codex_activity_kind", "TEXT");
+  addColumnIfMissing(connection, "runs", "last_codex_activity_summary", "TEXT");
+  removeRetiredRunHistory(connection);
   addColumnIfMissing(connection, "workflow_tasks", "authority_epoch", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(connection, "workflow_tasks", "gate_action", "TEXT NOT NULL DEFAULT 'wait'");
   addColumnIfMissing(connection, "workflow_tasks", "gate_reason", "TEXT");
@@ -532,6 +527,17 @@ function addColumnIfMissing(connection: DatabaseConnection, table: string, colum
   const cols = connection.prepare(`PRAGMA table_info(${table})`).all() as Array<Record<string, unknown>>;
   if (cols.some((c) => c.name === column)) return;
   connection.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+function removeRetiredRunHistory(connection: DatabaseConnection): void {
+  // Codex owns the transcript. PatchRelay keeps only compact run projections;
+  // retaining raw notifications or a second post-run transcript creates two
+  // competing histories and can expose data the operator did not ask us to
+  // duplicate.
+  connection.prepare("DROP TABLE IF EXISTS run_thread_events").run();
+  if (columnExists(connection, "runs", "report_json")) {
+    connection.prepare("ALTER TABLE runs DROP COLUMN report_json").run();
+  }
 }
 
 function columnExists(connection: DatabaseConnection, table: string, column: string): boolean {

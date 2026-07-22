@@ -49,7 +49,7 @@ export class CompletionCheckService {
 
   async run(params: {
     issue: Pick<IssueRecord, "issueKey" | "linearIssueId" | "title" | "description" | "worktreePath">;
-    run: Pick<RunRecord, "id" | "threadId" | "runType" | "failureReason" | "summaryJson" | "reportJson">;
+    run: Pick<RunRecord, "id" | "threadId" | "runType" | "failureReason" | "summaryJson">;
     noPrSummary: string;
     onStarted?: ((start: { threadId: string; turnId: string }) => void | Promise<void>) | undefined;
   }): Promise<CompletionCheckExecution> {
@@ -114,7 +114,7 @@ export class CompletionCheckService {
 
 function buildCompletionCheckPrompt(params: {
   issue: Pick<IssueRecord, "issueKey" | "linearIssueId" | "title" | "description">;
-  run: Pick<RunRecord, "runType" | "failureReason" | "summaryJson" | "reportJson">;
+  run: Pick<RunRecord, "runType" | "failureReason" | "summaryJson">;
   noPrSummary: string;
 }): string {
   const latestSummary = extractLatestAssistantSummary(params.run);

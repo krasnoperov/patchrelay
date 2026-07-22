@@ -623,6 +623,10 @@ export class PatchRelayService {
     return await this.queryService.getIssueOverview(issueKey);
   }
 
+  async getOperatorIssueStatus(issueKey: string) {
+    return await this.queryService.getPublicAgentSessionStatus(issueKey);
+  }
+
   listIssueFeedEvents(
     issueKey: string,
     options?: { afterId?: number; limit?: number },
@@ -641,10 +645,6 @@ export class PatchRelayService {
         limit: Math.min(options?.limit ?? 100, 100),
       }),
     };
-  }
-
-  async getActiveRunStatus(issueKey: string) {
-    return await this.orchestrator.getActiveRunStatus(issueKey);
   }
 
   createPublicAgentSessionStatusLink(

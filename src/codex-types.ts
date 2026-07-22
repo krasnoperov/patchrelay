@@ -65,23 +65,9 @@ export interface StageReport {
   threadId?: string | undefined;
   parentThreadId?: string | undefined;
   turnId?: string | undefined;
-  prompt: string;
-  assistantMessages: string[];
-  plans: string[];
-  reasoning: string[];
-  commands: Array<{
-    command: string;
-    cwd: string;
-    status: string;
-    exitCode?: number | null;
-    durationMs?: number | null;
-  }>;
-  fileChanges: Array<Record<string, unknown>>;
-  toolCalls: Array<{
-    type: string;
-    name: string;
-    status: string;
-    durationMs?: number | null;
-  }>;
-  eventCounts: Record<string, number>;
+  latestAssistantMessage?: string | undefined;
+  latestPlan?: string | undefined;
+  commandCount: number;
+  fileChangeCount: number;
+  toolCallCount: number;
 }

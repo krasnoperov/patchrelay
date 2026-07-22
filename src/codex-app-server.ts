@@ -252,9 +252,6 @@ export class CodexAppServerClient extends EventEmitter {
       baseInstructions: this.config.baseInstructions ?? null,
       developerInstructions: this.config.developerInstructions ?? null,
     };
-    if (this.config.persistExtendedHistory) {
-      this.logger.warn("persistExtendedHistory is requested but not enabled in the active app-server capability handshake; ignoring");
-    }
     const response = (await this.sendRequest("thread/resume", params)) as { thread: Record<string, unknown> };
     return this.mapThread(response.thread);
   }
@@ -271,9 +268,6 @@ export class CodexAppServerClient extends EventEmitter {
       baseInstructions: overrides && "baseInstructions" in overrides ? overrides.baseInstructions ?? null : this.config.baseInstructions ?? null,
       developerInstructions: overrides && "developerInstructions" in overrides ? overrides.developerInstructions ?? null : this.config.developerInstructions ?? null,
     };
-    if (this.config.persistExtendedHistory) {
-      this.logger.warn("persistExtendedHistory is requested but not enabled in the active app-server capability handshake; ignoring");
-    }
     const response = (await this.sendRequest("thread/fork", params)) as { thread: Record<string, unknown> };
     return this.mapThread(response.thread);
   }
