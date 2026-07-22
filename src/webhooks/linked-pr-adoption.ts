@@ -1,7 +1,6 @@
 import { resolveLinkedPullRequests, type LinkedPrReference } from "../linear-linked-pr-reconciliation.ts";
 import { readRemotePrState } from "../remote-pr-state.ts";
 import { deriveLinkedPrAdoptionOutcome, type LinkedPrAdoptionOutcome } from "../delegation-linked-pr.ts";
-import { attachmentDeclaresDelivery, pullRequestOwnsIssue } from "../pull-request-issue-ownership.ts";
 import type { IssueMetadata, IssueRecord, ProjectConfig } from "../types.ts";
 
 export interface LinkedPrAdoptionInput {
@@ -26,38 +25,20 @@ export async function resolveLinkedPrAdoption(
   const references = resolveLinkedPullRequests(input.issue.attachments, input.project.github?.repoFullName);
   if (references.length === 0) return undefined;
 
-  const declaredDelivery = references.filter((reference) =>
-    attachmentDeclaresDelivery(reference.attachment, input.issue.identifier)
-  );
-  if (declaredDelivery.length > 1) {
+  // Operator contract: attaching a same-repository GitHub PR to a delegated
+  // Linear issue means "PatchRelay owns this PR". PRs that are merely evidence
+  // belong in the issue description or comments, not in attachments.
+  if (references.length > 1) {
     return {
       factoryState: "awaiting_input" as const,
       issueUpdates: {},
     };
   }
 
-  if (declaredDelivery.length === 1) {
-    return resolveDeclaredDelivery(input, declaredDelivery[0]!);
-  }
-
-  const inspected = await Promise.all(references.map(async (reference) => ({
-    reference,
-    remote: await readRemotePrState(reference.repoFullName, reference.prNumber),
-  })));
-  const owned = inspected.filter(({ remote }) => remote && pullRequestOwnsIssue(remote, input.issue.identifier));
-  if (owned.length > 1) {
-    return {
-      factoryState: "awaiting_input" as const,
-      issueUpdates: {},
-    };
-  }
-  if (owned.length === 0) return undefined;
-
-  const match = owned[0]!;
-  return deriveLinkedPrAdoptionOutcome(input.project, match.reference.prNumber, match.remote!);
+  return resolveAttachedPr(input, references[0]!);
 }
 
-async function resolveDeclaredDelivery(
+async function resolveAttachedPr(
   input: LinkedPrAdoptionInput,
   reference: LinkedPrReference,
 ): Promise<LinkedPrAdoptionOutcome> {

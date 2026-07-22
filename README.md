@@ -84,6 +84,12 @@ Full install, ingress, and GitHub/Linear app setup: [self-hosting.md](./docs/sel
 5. `review-quill` reviews ready PRs; `merge-steward` admits approved, green PRs and delivers them by speculative integration.
 6. An operator can take over inside the same worktree at any time.
 
+### PR ownership in Linear
+
+Use one visible rule: **a same-repository GitHub PR attached to a delegated Linear issue is the PR PatchRelay owns**. Attach a broken external PR when you want PatchRelay to adopt and repair it. PatchRelay also attaches every PR it creates.
+
+PRs mentioned only as history, regression evidence, or related context belong in the issue description or comments as ordinary links; do not add them as issue attachments. If a delegated issue has more than one PR attachment, PatchRelay stops for clarification instead of guessing.
+
 Architecture and failure taxonomy: [architecture.md](./docs/architecture.md). Downstream delivery: [merge-queue.md](./docs/merge-queue.md).
 
 ## Downstream services
