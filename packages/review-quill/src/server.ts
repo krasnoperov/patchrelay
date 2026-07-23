@@ -17,7 +17,12 @@ import type { ReviewQuillRuntimeStatus } from "./types.ts";
 import { normalizeWebhook, shouldReconcileWebhook, verifySignature } from "./webhook-handler.ts";
 
 const WEBHOOK_RETENTION_DAYS = 7;
+const WEBHOOK_ABANDON_AFTER_MINUTES = 15;
 const WEBHOOK_RETENTION_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+function isLoopbackAddress(address: string): boolean {
+  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+}
 
 export interface ReviewQuillHealth {
   ok: boolean;
@@ -112,14 +117,21 @@ export async function startServer(configPath = process.env.REVIEW_QUILL_CONFIG ?
   logger.info({ ghConfigDir, botLogin: appSlug ? `${appSlug}[bot]` : undefined }, "Review agent git/gh will authenticate as the GitHub App");
 
   const store = new SqliteStore(config.database.path);
-  const pruneProcessedWebhooks = (): void => {
+  const maintainWebhookReceipts = (): void => {
+    const abandonedWebhooks = store.abandonStaleUnprocessedWebhooks(WEBHOOK_ABANDON_AFTER_MINUTES);
+    if (abandonedWebhooks > 0) {
+      logger.warn({
+        abandonedWebhooks,
+        staleAfterMinutes: WEBHOOK_ABANDON_AFTER_MINUTES,
+      }, "Abandoned stale webhook receipts after an interrupted handler");
+    }
     const prunedWebhooks = store.pruneProcessedWebhooks(WEBHOOK_RETENTION_DAYS);
     if (prunedWebhooks > 0) {
       logger.info({ prunedWebhooks, retentionDays: WEBHOOK_RETENTION_DAYS }, "Pruned processed webhook records");
     }
   };
-  pruneProcessedWebhooks();
-  const webhookRetentionTimer = setInterval(pruneProcessedWebhooks, WEBHOOK_RETENTION_INTERVAL_MS);
+  maintainWebhookReceipts();
+  const webhookRetentionTimer = setInterval(maintainWebhookReceipts, WEBHOOK_RETENTION_INTERVAL_MS);
   webhookRetentionTimer.unref?.();
   const github = new GitHubClient({
     currentTokenForRepo: (repoFullName?: string) => tokenManager.currentTokenForRepo(repoFullName),
@@ -153,6 +165,22 @@ export async function startServer(configPath = process.env.REVIEW_QUILL_CONFIG ?
 
   app.get("/status", codexStatusRoute);
   app.get("/admin/codex/status", codexStatusRoute);
+  app.get("/admin/codex/threads/:threadId", async (request, reply) => {
+    if (!isLoopbackAddress(request.ip)) {
+      return reply.status(403).send({ ok: false, error: "local_operator_only" });
+    }
+    const threadId = (request.params as { threadId: string }).threadId.trim();
+    if (!threadId) {
+      return reply.status(400).send({ ok: false, error: "invalid_thread_id" });
+    }
+    try {
+      return await runner.readThread(threadId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn({ threadId, error: message }, "Could not read Codex thread for local operator");
+      return reply.status(404).send({ ok: false, error: "thread_not_found", message });
+    }
+  });
 
   app.get("/attempts", async () => ({
     attempts: service.listAttempts(),

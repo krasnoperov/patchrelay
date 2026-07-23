@@ -3,7 +3,7 @@ import { accessSync, constants, existsSync, readFileSync, statSync } from "node:
 import path from "node:path";
 import { loadConfig } from "./config.ts";
 import { getReviewQuillPathLayout } from "./runtime-paths.ts";
-import type { ReviewQuillRepositoryConfig } from "./types.ts";
+import type { CodexThreadSummary, ReviewQuillRepositoryConfig } from "./types.ts";
 
 export interface CommandResult {
   exitCode: number;
@@ -262,6 +262,10 @@ export async function fetchServiceCodexStatus(): Promise<{
   error?: string;
 }> {
   return await requestLocalJson("/status");
+}
+
+export async function fetchServiceCodexThread(threadId: string): Promise<CodexThreadSummary> {
+  return await requestLocalJson(`/admin/codex/threads/${encodeURIComponent(threadId)}`);
 }
 
 export async function fetchWatchSnapshot(): Promise<{

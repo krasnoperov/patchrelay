@@ -102,7 +102,7 @@ test("ReviewRunner forks once, sends the bounded follow-up prompt, and keeps a c
   config.codex.forkPriorReviewThread = true;
   const forkCalls: unknown[] = [];
   const starts: StartTurnOptions[] = [];
-  const snapshots: Array<{ id: string; lastTurnId?: string }> = [];
+  const progress: Array<{ threadId: string; turnId: string }> = [];
   const promptLogs: Array<Record<string, unknown>> = [];
   const fakeCodex = {
     start: async () => {},
@@ -144,7 +144,7 @@ test("ReviewRunner forks once, sends the bounded follow-up prompt, and keeps a c
       patches: [{ patch: "PATCH BODY SENTINEL" }],
     },
   } as never, {
-    onThreadSnapshot: (thread) => snapshots.push({ id: thread.id, lastTurnId: thread.turns.at(-1)?.id }),
+    onThreadProgress: (value) => progress.push(value),
   }, {
     sourceAttemptId: 17,
     threadId: "source-thread",
@@ -159,8 +159,10 @@ test("ReviewRunner forks once, sends the bounded follow-up prompt, and keeps a c
   assert.deepEqual(starts.map((entry) => entry.threadId), ["forked-thread", "forked-thread"]);
   assert.equal(result.threadId, "forked-thread");
   assert.equal(result.turnId, "fork-turn-2");
-  assert.ok(snapshots.every((snapshot) => snapshot.id === "forked-thread"));
-  assert.equal(snapshots.at(-1)?.lastTurnId, "fork-turn-2");
+  assert.deepEqual(progress, [
+    { threadId: "forked-thread", turnId: "fork-turn-1" },
+    { threadId: "forked-thread", turnId: "fork-turn-2" },
+  ]);
   assert.deepEqual(promptLogs[0], {
     threadStartMode: "forked",
     promptMode: "follow_up",
@@ -497,7 +499,7 @@ test("ReviewRunner omits outputSchema when the rollout flag is disabled", async 
 test("ReviewRunner keeps waiting when a Codex thread read times out", async () => {
   let readCalls = 0;
   const sleeps: number[] = [];
-  const snapshots: Array<{ id: string; turns: Array<{ status: string }> }> = [];
+  const progress: Array<{ threadId: string; turnId: string }> = [];
   const fakeCodex = {
     start: async () => {},
     stop: async () => {},
@@ -543,14 +545,14 @@ test("ReviewRunner keeps waiting when a Codex thread read times out", async () =
   const result = await runner.review({
     prompt: "Review this PR.",
     workspace: { worktreePath: "/tmp/review-quill-test" },
-  } as never, { onThreadSnapshot: (thread) => snapshots.push(thread) });
+  } as never, { onThreadProgress: (value) => progress.push(value) });
 
   assert.equal(result.threadId, "thread-1");
   assert.equal(result.turnId, "turn-1");
   assert.equal(result.verdict.verdict, "approve");
   assert.equal(readCalls, 2);
   assert.deepEqual(sleeps, [1_500]);
-  assert.deepEqual(snapshots.map((thread) => thread.turns.at(-1)?.status), ["running", "completed"]);
+  assert.deepEqual(progress, [{ threadId: "thread-1", turnId: "turn-1" }]);
 });
 
 test("ReviewRunner buffers an early matching completion and ignores unrelated or duplicate notifications", async () => {
@@ -713,7 +715,7 @@ test("ReviewRunner retries Codex thread start when rollout jsonl is empty", asyn
   assert.deepEqual(sleeps, [750]);
 });
 
-test("ReviewRunner continues when thread snapshot persistence fails", async () => {
+test("ReviewRunner continues when bounded thread progress recording fails", async () => {
   const warnings: string[] = [];
   const fakeCodex = {
     start: async () => {},
@@ -752,19 +754,18 @@ test("ReviewRunner continues when thread snapshot persistence fails", async () =
     prompt: "Review this PR.",
     workspace: { worktreePath: "/tmp/review-quill-test" },
   } as never, {
-    onThreadSnapshot: () => { throw new Error("database is read-only"); },
+    onThreadProgress: () => { throw new Error("database is read-only"); },
   });
 
   assert.equal(result.verdict.verdict, "approve");
   assert.deepEqual(warnings, [
     "Failed to record Codex thread progress; continuing review",
-    "Failed to record Codex thread progress; continuing review",
   ]);
 });
 
-test("ReviewRunner checkpoints a started turn and only changed in-progress snapshots", async () => {
+test("ReviewRunner records bounded progress once when a turn starts", async () => {
   let readCalls = 0;
-  const snapshots: Array<{ id: string; turns: Array<{ id: string; status: string; items: unknown[] }> }> = [];
+  const progress: Array<{ threadId: string; turnId: string }> = [];
   const inProgressThread = {
     id: "thread-progress",
     turns: [{
@@ -811,22 +812,11 @@ test("ReviewRunner checkpoints a started turn and only changed in-progress snaps
   const result = await runner.review({
     prompt: "Review this PR.",
     workspace: { worktreePath: "/tmp/review-quill-test" },
-  } as never, { onThreadSnapshot: (thread) => snapshots.push(thread) });
+  } as never, { onThreadProgress: (value) => progress.push(value) });
 
   assert.equal(result.verdict.verdict, "approve");
   assert.equal(readCalls, 3);
-  assert.deepEqual(
-    snapshots.map((thread) => ({
-      threadId: thread.id,
-      turnId: thread.turns.at(-1)?.id,
-      status: thread.turns.at(-1)?.status,
-    })),
-    [
-      { threadId: "thread-progress", turnId: "turn-progress", status: "running" },
-      { threadId: "thread-progress", turnId: "turn-progress", status: "inProgress" },
-      { threadId: "thread-progress", turnId: "turn-progress", status: "completed" },
-    ],
-  );
+  assert.deepEqual(progress, [{ threadId: "thread-progress", turnId: "turn-progress" }]);
 });
 
 test("ReviewRunner retries Codex turn start when rollout jsonl is empty", async () => {
@@ -889,7 +879,7 @@ test("ReviewRunner interrupts a running Codex turn when the review signal aborts
   let readCalls = 0;
   let interruptCalls = 0;
   const sleeps: number[] = [];
-  const snapshots: Array<{ id: string; turns: Array<{ status: string }> }> = [];
+  const progress: Array<{ threadId: string; turnId: string }> = [];
   const fakeCodex = {
     start: async () => {},
     stop: async () => {},
@@ -929,7 +919,7 @@ test("ReviewRunner interrupts a running Codex turn when the review signal aborts
     () => runner.review({
       prompt: "Review this PR.",
       workspace: { worktreePath: "/tmp/review-quill-test" },
-    } as never, { signal: controller.signal, onThreadSnapshot: (thread) => snapshots.push(thread) }),
+    } as never, { signal: controller.signal, onThreadProgress: (value) => progress.push(value) }),
     (error: unknown) => {
       assert.ok(error instanceof ReviewRunInterruptedError);
       assert.equal(error.threadId, "thread-1");
@@ -942,7 +932,7 @@ test("ReviewRunner interrupts a running Codex turn when the review signal aborts
   assert.equal(interruptCalls, 1);
   assert.equal(readCalls, 1);
   assert.deepEqual(sleeps, []);
-  assert.deepEqual(snapshots.map((thread) => thread.turns.at(-1)?.status), ["running", "interrupted"]);
+  assert.deepEqual(progress, [{ threadId: "thread-1", turnId: "turn-1" }]);
 });
 
 test("ReviewRunner interrupts once when cancellation arrives before startTurn responds and removes its listener", async () => {
@@ -985,7 +975,7 @@ test("ReviewRunner interrupts once when cancellation arrives before startTurn re
 
 test("ReviewRunner fails fast when the Codex app-server reports a failed turn", async () => {
   const sleeps: number[] = [];
-  const snapshots: Array<{ id: string; turns: Array<{ status: string }> }> = [];
+  const progress: Array<{ threadId: string; turnId: string }> = [];
   const fakeCodex = {
     start: async () => {},
     stop: async () => {},
@@ -1020,11 +1010,11 @@ test("ReviewRunner fails fast when the Codex app-server reports a failed turn", 
     () => runner.review({
       prompt: "Review this PR.",
       workspace: { worktreePath: "/tmp/review-quill-test" },
-    } as never, { onThreadSnapshot: (thread) => snapshots.push(thread) }),
+    } as never, { onThreadProgress: (value) => progress.push(value) }),
     /Review turn ended with status failed/,
   );
   assert.deepEqual(sleeps, []);
-  assert.deepEqual(snapshots.map((thread) => thread.turns.at(-1)?.status), ["running", "failed"]);
+  assert.deepEqual(progress, [{ threadId: "thread-failed", turnId: "turn-failed" }]);
 });
 
 test("ReviewRunner does not retry non-materialization app-server start failures", async () => {

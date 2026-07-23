@@ -494,6 +494,8 @@ test("attempts marks stale active runs and prints the stale reason", async () =>
 
 test("transcript reads the full Codex thread live for one PR review attempt", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "review-quill-cli-transcript-"));
+  const port = 18790;
+  let server: ReturnType<typeof createServer> | undefined;
   try {
     const configDir = path.join(baseDir, "config");
     mkdirSync(configDir, { recursive: true });
@@ -501,7 +503,7 @@ test("transcript reads the full Codex thread live for one PR review attempt", as
     const dbPath = path.join(baseDir, "review-quill.sqlite");
 
     writeFileSync(configPath, `${JSON.stringify({
-      server: { bind: "127.0.0.1", port: 8788, publicBaseUrl: "https://review-quill.example.com" },
+      server: { bind: "127.0.0.1", port, publicBaseUrl: "https://review-quill.example.com" },
       database: { path: dbPath, wal: true },
       codex: {
         bin: "codex",
@@ -554,6 +556,17 @@ test("transcript reads the full Codex thread live for one PR review attempt", as
           },
         ],
       };
+    server = createServer((request, response) => {
+      if (request.url === "/admin/codex/threads/thread-review-42") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify(liveThread));
+        return;
+      }
+      response.writeHead(404).end();
+    });
+    await new Promise<void>((resolve, reject) => {
+      server?.listen(port, "127.0.0.1", (error?: Error) => error ? reject(error) : resolve());
+    });
 
     await withEnv(
       {
@@ -567,7 +580,6 @@ test("transcript reads the full Codex thread live for one PR review attempt", as
         const code = await runCli(["transcript", "mafia", "42"], {
           stdout: stdout.stream,
           stderr: stderr.stream,
-          readCodexThread: async () => liveThread,
         });
 
         assert.equal(code, 0);
@@ -575,7 +587,7 @@ test("transcript reads the full Codex thread live for one PR review attempt", as
         assert.match(rendered, /Repo: krasnoperov\/mafia/);
         assert.match(rendered, /Attempt: #\d+/);
         assert.match(rendered, /Thread: thread-review-42/);
-        assert.match(rendered, /Transcript source: live Codex app-server/);
+        assert.match(rendered, /Transcript source: Review Quill daemon \(live Codex app-server\)/);
         assert.match(rendered, /Visible thread items are shown below/);
         assert.match(rendered, /Turn 1: turn-review-42 \[completed\]/);
         assert.match(rendered, /assistant \(assistant-1\):/);
@@ -584,6 +596,9 @@ test("transcript reads the full Codex thread live for one PR review attempt", as
       },
     );
   } finally {
+    if (server) {
+      await new Promise<void>((resolve) => server?.close(() => resolve()));
+    }
     rmSync(baseDir, { recursive: true, force: true });
   }
 });

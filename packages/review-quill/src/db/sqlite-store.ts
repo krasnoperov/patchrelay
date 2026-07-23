@@ -127,6 +127,18 @@ export class SqliteStore {
     return Number(result.changes);
   }
 
+  abandonStaleUnprocessedWebhooks(staleAfterMinutes = 15, now = new Date()): number {
+    const cutoff = new Date(now.getTime() - staleAfterMinutes * 60 * 1000).toISOString();
+    const result = this.db.prepare(`
+      UPDATE webhook_events
+      SET processed_at = ?,
+          ignored_reason = 'abandoned_after_restart'
+      WHERE processed_at IS NULL
+        AND received_at < ?
+    `).run(now.toISOString(), cutoff);
+    return Number(result.changes);
+  }
+
   getAttempt(repoFullName: string, prNumber: number, headSha: string): ReviewAttemptRecord | undefined {
     const row = this.db.prepare(`
       SELECT ${ATTEMPT_COLUMNS}

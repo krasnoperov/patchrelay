@@ -1,11 +1,8 @@
-import pino from "pino";
 import { decorateAttempt } from "../attempt-state.ts";
-import { resolveCodexSessionSource } from "../codex-session-source.ts";
 import { loadConfig } from "../config.ts";
-import { CodexAppServerClient } from "../codex-app-server.ts";
 import { SqliteStore } from "../db/sqlite-store.ts";
 import { getDefaultConfigPath } from "../runtime-paths.ts";
-import { loadRepoConfigById } from "../cli-system.ts";
+import { fetchServiceCodexThread, loadRepoConfigById } from "../cli-system.ts";
 import type { CodexThreadSummary, ReviewAttemptRecord } from "../types.ts";
 import type { Output } from "./shared.ts";
 import { formatJson, writeOutput } from "./shared.ts";
@@ -18,7 +15,6 @@ function formatTranscriptText(params: {
   prNumber: number;
   attempt: ReviewAttemptRecord;
   thread: CodexThreadSummary;
-  sessionSource?: { exists: boolean; path?: string; startedAt?: string; cwd?: string; originator?: string; error?: string } | undefined;
   notice?: string;
 }): string {
   const formatUserMessage = (item: Record<string, unknown>): string | undefined => {
@@ -54,12 +50,8 @@ function formatTranscriptText(params: {
     `Status: ${params.attempt.status}${params.attempt.conclusion ? ` (${params.attempt.conclusion})` : ""}`,
     `Head SHA: ${params.attempt.headSha}`,
     `Thread: ${params.thread.id}`,
-    "Transcript source: live Codex app-server",
+    "Transcript source: Review Quill daemon (live Codex app-server)",
     params.attempt.turnId ? `Recorded turn: ${params.attempt.turnId}` : undefined,
-    params.sessionSource ? `Session source: ${params.sessionSource.exists ? params.sessionSource.path : params.sessionSource.error ?? "not found"}` : undefined,
-    params.sessionSource?.startedAt ? `Started: ${params.sessionSource.startedAt}` : undefined,
-    params.sessionSource?.originator ? `Originator: ${params.sessionSource.originator}` : undefined,
-    params.sessionSource?.cwd ? `Working directory: ${params.sessionSource.cwd}` : undefined,
     params.attempt.staleReason ? `Stale: ${params.attempt.staleReason}` : undefined,
     params.notice,
     "Visible thread items are shown below. Hidden model reasoning is not exposed by the app-server.",
@@ -148,27 +140,14 @@ export async function handleTranscript(
     }
     const threadId = attempt.threadId;
 
-    const thread = readCodexThread
-      ? await readCodexThread(threadId)
-      : await (async () => {
-          const client = new CodexAppServerClient(config.codex, pino({ level: "silent" }));
-          await client.start();
-          try {
-            return await client.readThread(threadId);
-          } finally {
-            await client.stop();
-          }
-        })();
-
-    const sessionSource = attempt.threadId ? resolveCodexSessionSource(attempt.threadId) : undefined;
+    const thread = await (readCodexThread ?? fetchServiceCodexThread)(threadId);
     const payload = {
       repoId: repo.repoId,
       repoFullName: repo.repoFullName,
       prNumber,
       attempt,
-      ...(sessionSource ? { sessionSource } : {}),
       thread,
-      transcriptSource: "app-server",
+      transcriptSource: "daemon",
     };
 
     if (parsed.flags.get("json") === true) {
@@ -181,7 +160,6 @@ export async function handleTranscript(
       prNumber,
       attempt,
       thread,
-      ...(sessionSource ? { sessionSource } : {}),
       ...(selection.notice ? { notice: selection.notice } : {}),
     }));
     return 0;

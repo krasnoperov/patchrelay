@@ -772,10 +772,10 @@ export class ReviewQuillService {
         try {
           result = await this.runner.review(prepared.context, {
             ...(signal ? { signal } : {}),
-            onThreadSnapshot: (transcript) => {
+            onThreadProgress: ({ threadId, turnId }) => {
               this.store.updateAttempt(attempt.id, {
-                threadId: transcript.id,
-                turnId: transcript.turns.at(-1)?.id ?? null,
+                threadId,
+                turnId,
               });
             },
           }, prepared.priorThread);
