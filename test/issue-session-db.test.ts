@@ -142,7 +142,56 @@ test("migrations drop retired session lifecycle columns without losing operation
       "worker-legacy",
       "2026-07-23T01:00:00.000Z",
     );
+    connection.prepare(`
+      INSERT INTO issue_sessions (
+        project_id, linear_issue_id, issue_key, repo_id, summary_text,
+        created_at, display_updated_at, updated_at, session_state, waiting_reason,
+        last_wake_reason, active_thread_id, thread_generation,
+        lease_id, worker_id, leased_until
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "usertold",
+      "issue-2",
+      "USE-2",
+      "usertold",
+      "Mixed-version operator summary",
+      "2026-07-23T00:00:00.000Z",
+      "2026-07-23T00:00:00.000Z",
+      "2026-07-23T00:00:00.000Z",
+      "running",
+      null,
+      "run:implementation",
+      "thread-stale",
+      2,
+      "lease-stale",
+      "worker-stale",
+      "2020-01-01T00:00:00.000Z",
+    );
+    connection.prepare(`
+      INSERT INTO issue_session_threads (
+        project_id, linear_issue_id, active_thread_id, thread_generation, updated_at
+      ) VALUES (?, ?, ?, ?, ?)
+    `).run(
+      "usertold",
+      "issue-2",
+      "thread-current",
+      9,
+      "2026-07-23T00:30:00.000Z",
+    );
+    connection.prepare(`
+      INSERT INTO issue_session_leases (
+        project_id, linear_issue_id, lease_id, worker_id, leased_until, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      "usertold",
+      "issue-2",
+      "lease-current",
+      "worker-current",
+      "2027-01-01T00:00:00.000Z",
+      "2026-07-23T00:30:00.000Z",
+    );
 
+    runPatchRelayMigrations(connection);
     runPatchRelayMigrations(connection);
 
     const columns = connection.prepare("PRAGMA table_info(issue_sessions)").all() as Array<Record<string, unknown>>;
@@ -181,6 +230,21 @@ test("migrations drop retired session lifecycle columns without losing operation
     assert.equal(lease.lease_id, "lease-legacy");
     assert.equal(lease.worker_id, "worker-legacy");
     assert.equal(lease.leased_until, "2026-07-23T01:00:00.000Z");
+    const currentThread = connection.prepare(`
+      SELECT active_thread_id, thread_generation
+      FROM issue_session_threads
+      WHERE project_id = ? AND linear_issue_id = ?
+    `).get("usertold", "issue-2") as Record<string, unknown>;
+    assert.equal(currentThread.active_thread_id, "thread-current");
+    assert.equal(currentThread.thread_generation, 9);
+    const currentLease = connection.prepare(`
+      SELECT lease_id, worker_id, leased_until
+      FROM issue_session_leases
+      WHERE project_id = ? AND linear_issue_id = ?
+    `).get("usertold", "issue-2") as Record<string, unknown>;
+    assert.equal(currentLease.lease_id, "lease-current");
+    assert.equal(currentLease.worker_id, "worker-current");
+    assert.equal(currentLease.leased_until, "2027-01-01T00:00:00.000Z");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

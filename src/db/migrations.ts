@@ -537,11 +537,7 @@ function backfillRetiredIssueSessionLeaseColumns(connection: DatabaseConnection)
     FROM issue_sessions
     WHERE lease_id IS NOT NULL
       AND leased_until IS NOT NULL
-    ON CONFLICT(project_id, linear_issue_id) DO UPDATE SET
-      lease_id = excluded.lease_id,
-      worker_id = excluded.worker_id,
-      leased_until = excluded.leased_until,
-      updated_at = excluded.updated_at
+    ON CONFLICT(project_id, linear_issue_id) DO NOTHING
   `).run();
 }
 
@@ -569,10 +565,7 @@ function backfillRetiredIssueSessionThreadColumns(connection: DatabaseConnection
     FROM issue_sessions
     WHERE active_thread_id IS NOT NULL
        OR COALESCE(thread_generation, 0) > 0
-    ON CONFLICT(project_id, linear_issue_id) DO UPDATE SET
-      active_thread_id = excluded.active_thread_id,
-      thread_generation = excluded.thread_generation,
-      updated_at = excluded.updated_at
+    ON CONFLICT(project_id, linear_issue_id) DO NOTHING
   `).run();
 }
 
