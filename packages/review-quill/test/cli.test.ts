@@ -558,8 +558,10 @@ test("transcript reads the full Codex thread live for one PR review attempt", as
       };
     server = createServer((request, response) => {
       if (request.url === "/admin/codex/threads/thread-review-42") {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify(liveThread));
+        setTimeout(() => {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify(liveThread));
+        }, 2_100);
         return;
       }
       response.writeHead(404).end();
