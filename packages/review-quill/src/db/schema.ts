@@ -20,7 +20,6 @@ CREATE TABLE IF NOT EXISTS review_attempts (
   prompt_fingerprint TEXT,
   thread_id TEXT,
   turn_id TEXT,
-  transcript_json TEXT,
   external_check_run_id INTEGER,
   patch_id TEXT,
   integration_tree_id TEXT,
@@ -38,6 +37,9 @@ CREATE TABLE IF NOT EXISTS review_attempts (
 
 CREATE INDEX IF NOT EXISTS idx_review_attempts_repo_pr
   ON review_attempts(repo_full_name, pr_number, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_webhook_events_retention
+  ON webhook_events(processed_at, received_at);
 `;
 // idx_review_attempts_patch and idx_review_attempts_patch_tree are
 // created in SqliteStore *after* addColumnIfMissing populates the

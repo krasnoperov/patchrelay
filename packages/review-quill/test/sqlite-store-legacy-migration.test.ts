@@ -38,6 +38,7 @@ test("SqliteStore opens a legacy database that pre-dates the carry-forward colum
         summary TEXT,
         thread_id TEXT,
         turn_id TEXT,
+        transcript_json TEXT,
         external_check_run_id INTEGER,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
@@ -60,9 +61,36 @@ test("SqliteStore opens a legacy database that pre-dates the carry-forward colum
     assert.ok(names.has("integration_tree_id"), "integration_tree_id column should be added on open");
     assert.ok(names.has("review_surface_mode"), "review_surface_mode column should be added on open");
     assert.ok(names.has("prompt_fingerprint"), "prompt_fingerprint column should be added on open");
-    assert.ok(names.has("transcript_json"), "transcript_json column should be added on open");
+    assert.ok(!names.has("transcript_json"), "transcript_json column should be removed on open");
     verify.close();
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
+});
+
+test("SqliteStore prunes only processed webhooks outside retention", () => {
+  const store = new SqliteStore(":memory:");
+  const connection = (store as unknown as { db: DatabaseSync }).db;
+  connection.prepare(`
+    INSERT INTO webhook_events (
+      delivery_id, event_type, received_at, processed_at
+    ) VALUES (?, 'pull_request', ?, ?)
+  `).run("old-processed", "2026-07-01T00:00:00.000Z", "2026-07-01T00:00:01.000Z");
+  connection.prepare(`
+    INSERT INTO webhook_events (
+      delivery_id, event_type, received_at, processed_at
+    ) VALUES (?, 'pull_request', ?, ?)
+  `).run("recent-processed", "2026-07-22T00:00:00.000Z", "2026-07-22T00:00:01.000Z");
+  connection.prepare(`
+    INSERT INTO webhook_events (
+      delivery_id, event_type, received_at, processed_at
+    ) VALUES (?, 'pull_request', ?, NULL)
+  `).run("old-pending", "2026-07-01T00:00:00.000Z");
+
+  assert.equal(store.pruneProcessedWebhooks(7, new Date("2026-07-23T00:00:00.000Z")), 1);
+  assert.deepEqual(
+    store.listWebhooks(10).map((event) => event.deliveryId).sort(),
+    ["old-pending", "recent-processed"],
+  );
+  store.close();
 });

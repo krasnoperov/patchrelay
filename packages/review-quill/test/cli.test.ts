@@ -492,7 +492,7 @@ test("attempts marks stale active runs and prints the stale reason", async () =>
   }
 });
 
-test("transcript shows the full stored Codex thread for one PR review attempt", async () => {
+test("transcript reads the full Codex thread live for one PR review attempt", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "review-quill-cli-transcript-"));
   try {
     const configDir = path.join(baseDir, "config");
@@ -537,7 +537,11 @@ test("transcript shows the full stored Codex thread for one PR review attempt", 
       summary: "Looks good.",
       threadId: "thread-review-42",
       turnId: "turn-review-42",
-      transcript: {
+      completedAt: "2026-04-07T10:15:00.000Z",
+    });
+    store.close();
+
+    const liveThread = {
         id: "thread-review-42",
         turns: [
           {
@@ -549,10 +553,7 @@ test("transcript shows the full stored Codex thread for one PR review attempt", 
             ],
           },
         ],
-      },
-      completedAt: "2026-04-07T10:15:00.000Z",
-    });
-    store.close();
+      };
 
     await withEnv(
       {
@@ -566,7 +567,7 @@ test("transcript shows the full stored Codex thread for one PR review attempt", 
         const code = await runCli(["transcript", "mafia", "42"], {
           stdout: stdout.stream,
           stderr: stderr.stream,
-          readCodexThread: async () => { throw new Error("live app-server should not be read when a snapshot is stored"); },
+          readCodexThread: async () => liveThread,
         });
 
         assert.equal(code, 0);
@@ -574,7 +575,7 @@ test("transcript shows the full stored Codex thread for one PR review attempt", 
         assert.match(rendered, /Repo: krasnoperov\/mafia/);
         assert.match(rendered, /Attempt: #\d+/);
         assert.match(rendered, /Thread: thread-review-42/);
-        assert.match(rendered, /Transcript source: stored attempt snapshot/);
+        assert.match(rendered, /Transcript source: live Codex app-server/);
         assert.match(rendered, /Visible thread items are shown below/);
         assert.match(rendered, /Turn 1: turn-review-42 \[completed\]/);
         assert.match(rendered, /assistant \(assistant-1\):/);

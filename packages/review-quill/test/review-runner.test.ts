@@ -757,8 +757,8 @@ test("ReviewRunner continues when thread snapshot persistence fails", async () =
 
   assert.equal(result.verdict.verdict, "approve");
   assert.deepEqual(warnings, [
-    "Failed to persist Codex thread snapshot; continuing review",
-    "Failed to persist Codex thread snapshot; continuing review",
+    "Failed to record Codex thread progress; continuing review",
+    "Failed to record Codex thread progress; continuing review",
   ]);
 });
 

@@ -5,12 +5,9 @@ import type {
   ReviewAttemptRecord,
   ReviewAttemptStatus,
   ReviewSurfaceMode,
-  CodexThreadSummary,
   WebhookEventRecord,
 } from "../types.ts";
 
-// Keep large transcript snapshots out of normal attempt reads. Operators load
-// one explicitly through getAttemptTranscript when they ask for a transcript.
 const ATTEMPT_COLUMNS = `
   id, repo_full_name, pr_number, head_sha, status, conclusion, summary,
   pr_title, prompt_fingerprint, thread_id, turn_id, external_check_run_id,
@@ -18,17 +15,6 @@ const ATTEMPT_COLUMNS = `
   prior_attempt_id, review_body, review_event, publication_mode,
   created_at, updated_at, completed_at
 `;
-
-function parseTranscript(value: unknown): CodexThreadSummary | undefined {
-  if (typeof value !== "string" || !value) return undefined;
-  try {
-    const parsed = JSON.parse(value) as Partial<CodexThreadSummary>;
-    if (typeof parsed.id !== "string" || !Array.isArray(parsed.turns)) return undefined;
-    return parsed as CodexThreadSummary;
-  } catch {
-    return undefined;
-  }
-}
 
 function mapAttempt(row: Record<string, unknown>): ReviewAttemptRecord {
   return {
@@ -79,7 +65,7 @@ export class SqliteStore {
     this.db.exec(SCHEMA_SQL);
     this.addColumnIfMissing("review_attempts", "pr_title", "TEXT");
     this.addColumnIfMissing("review_attempts", "prompt_fingerprint", "TEXT");
-    this.addColumnIfMissing("review_attempts", "transcript_json", "TEXT");
+    this.dropColumnIfPresent("review_attempts", "transcript_json");
     // Carry-forward identity columns. Existing rows backfill NULL and behave
     // as cache misses; new approved rows populate them so future heads can
     // re-emit the verdict without re-running the reviewer.
@@ -99,6 +85,12 @@ export class SqliteStore {
     const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<Record<string, unknown>>;
     if (rows.some((row) => String(row.name) === column)) return;
     this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
+
+  private dropColumnIfPresent(table: string, column: string): void {
+    const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<Record<string, unknown>>;
+    if (!rows.some((row) => String(row.name) === column)) return;
+    this.db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
   }
 
   close(): void {
@@ -125,6 +117,16 @@ export class SqliteStore {
     `).run(isoNow(), ignoredReason ?? null, deliveryId);
   }
 
+  pruneProcessedWebhooks(retentionDays = 7, now = new Date()): number {
+    const cutoff = new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+    const result = this.db.prepare(`
+      DELETE FROM webhook_events
+      WHERE processed_at IS NOT NULL
+        AND received_at < ?
+    `).run(cutoff);
+    return Number(result.changes);
+  }
+
   getAttempt(repoFullName: string, prNumber: number, headSha: string): ReviewAttemptRecord | undefined {
     const row = this.db.prepare(`
       SELECT ${ATTEMPT_COLUMNS}
@@ -139,29 +141,19 @@ export class SqliteStore {
     return row ? mapAttempt(row) : undefined;
   }
 
-  getAttemptTranscript(id: number): CodexThreadSummary | undefined {
-    const row = this.db.prepare("SELECT transcript_json FROM review_attempts WHERE id = ?").get(id) as Record<string, unknown> | undefined;
-    return parseTranscript(row?.transcript_json);
-  }
-
-  getLatestDifferentHeadAttemptWithTranscript(
+  getLatestDifferentHeadAttempt(
     repoFullName: string,
     prNumber: number,
     headSha: string,
-  ): { attempt: ReviewAttemptRecord; transcript?: CodexThreadSummary } | undefined {
+  ): ReviewAttemptRecord | undefined {
     const row = this.db.prepare(`
-      SELECT ${ATTEMPT_COLUMNS}, transcript_json
+      SELECT ${ATTEMPT_COLUMNS}
       FROM review_attempts
       WHERE repo_full_name = ? AND pr_number = ? AND head_sha <> ?
       ORDER BY id DESC
       LIMIT 1
     `).get(repoFullName, prNumber, headSha) as Record<string, unknown> | undefined;
-    if (!row) return undefined;
-    const transcript = parseTranscript(row.transcript_json);
-    return {
-      attempt: mapAttempt(row),
-      ...(transcript ? { transcript } : {}),
-    };
+    return row ? mapAttempt(row) : undefined;
   }
 
   // Carry-forward lookup for head-mode review surface. Finds an approved
@@ -313,7 +305,6 @@ export class SqliteStore {
     summary?: string;
     threadId?: string | null;
     turnId?: string | null;
-    transcript?: CodexThreadSummary | null;
     externalCheckRunId?: number | null;
     completedAt?: string | null;
     promptFingerprint?: string | null;
@@ -347,10 +338,6 @@ export class SqliteStore {
     if (params.turnId !== undefined) {
       sets.push("turn_id = @turnId");
       values.turnId = params.turnId;
-    }
-    if (params.transcript !== undefined) {
-      sets.push("transcript_json = @transcriptJson");
-      values.transcriptJson = params.transcript === null ? null : JSON.stringify(params.transcript);
     }
     if (params.externalCheckRunId !== undefined) {
       sets.push("external_check_run_id = @externalCheckRunId");

@@ -129,7 +129,9 @@ Diff context is intentionally filtered:
 
 Review execution concurrency defaults to 4. The cap is configurable with `reconciliation.maxConcurrentReviews`; keep it conservative on hosts where many reviews share one Codex app-server and the same per-repo git cache.
 
-Review threads start fresh by default. `codex.forkPriorReviewThread: true` enables a conservative optimization for a newer head: Review Quill may fork only the immediately preceding decisive attempt when its stored transcript ends at the recorded completed turn and its review surface, base SHA, and prompt fingerprint still match. A successful fork receives a bounded follow-up prompt with the current inventory and inspects the current checkout instead of receiving patch bodies again. Fresh starts and Codex's explicit missing-rollout fallback keep the full prompt; other protocol, authentication, model, sandbox, transport, or timeout failures remain visible as errors. Set the option back to `false` to roll back immediately to always-fresh review threads.
+Review threads start fresh by default. `codex.forkPriorReviewThread: true` enables a conservative optimization for a newer head: Review Quill may fork only the immediately preceding decisive attempt when its live Codex thread ends at the recorded completed turn and its review surface, base SHA, and prompt fingerprint still match. A successful fork receives a bounded follow-up prompt with the current inventory and inspects the current checkout instead of receiving patch bodies again. Fresh starts and Codex's explicit missing-rollout fallback keep the full prompt; other protocol, authentication, model, sandbox, transport, or timeout failures remain visible as errors. Set the option back to `false` to roll back immediately to always-fresh review threads.
+
+Codex remains the source of truth for the full review transcript. SQLite stores thread/turn identifiers, verdicts, bounded summaries, timings, and publication outcomes; it does not store a second transcript. The transcript command reads Codex live. Processed webhook delivery records are pruned after seven days.
 
 ## Carry-forward
 

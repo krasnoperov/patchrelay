@@ -27,7 +27,7 @@ The default Codex sandbox mode is `danger-full-access` because many systemd host
 
 Review Quill requests native structured verdict output by default. Set `codex.outputSchema` to `false` for a reversible compatibility rollback with older Codex app-server versions.
 
-Review threads start fresh by default. Set `codex.forkPriorReviewThread` to `true` to let a newer PR head fork the immediately preceding completed review thread when its review surface, base, prompt fingerprint, and stored terminal transcript all match. A successful fork receives a bounded follow-up prompt and inspects the current checkout instead of receiving patch bodies again; fresh starts and fork fallbacks keep the full prompt. Set the option back to `false` for an immediate rollback to always-fresh review threads.
+Review threads start fresh by default. Set `codex.forkPriorReviewThread` to `true` to let a newer PR head fork the immediately preceding completed review thread when its review surface, base, prompt fingerprint, and live terminal Codex thread all match. A successful fork receives a bounded follow-up prompt and inspects the current checkout instead of receiving patch bodies again; fresh starts and fork fallbacks keep the full prompt. Set the option back to `false` for an immediate rollback to always-fresh review threads.
 
 By default, a PR becomes eligible for review as soon as its branch head updates. Set `waitForGreenChecks: true` per-repo to gate on configured checks first.
 
@@ -72,6 +72,8 @@ review-quill transcript --pr <num>              # visible Codex thread for the l
 review-quill diff --repo <id>                   # debug: what the reviewer would see
 review-quill service logs --lines 100
 ```
+
+Codex owns the full review transcript. Review Quill stores only thread/turn identifiers and bounded attempt outcomes in SQLite; `review-quill transcript` reads the thread live from Codex. Processed webhook delivery records are retained for seven days.
 
 `pr status`, `attempts`, `transcript`, and `transcript-source` auto-resolve `--repo` and `--pr` from the current git checkout. `pr status` supports `--wait --timeout <s> --poll <s>` for blocking until a review attempt terminates. Exit codes:
 

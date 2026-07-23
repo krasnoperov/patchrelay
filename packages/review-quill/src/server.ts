@@ -16,6 +16,9 @@ import { ReviewQuillService } from "./service.ts";
 import type { ReviewQuillRuntimeStatus } from "./types.ts";
 import { normalizeWebhook, shouldReconcileWebhook, verifySignature } from "./webhook-handler.ts";
 
+const WEBHOOK_RETENTION_DAYS = 7;
+const WEBHOOK_RETENTION_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
 export interface ReviewQuillHealth {
   ok: boolean;
   status: "ok" | "degraded" | "failed";
@@ -109,6 +112,15 @@ export async function startServer(configPath = process.env.REVIEW_QUILL_CONFIG ?
   logger.info({ ghConfigDir, botLogin: appSlug ? `${appSlug}[bot]` : undefined }, "Review agent git/gh will authenticate as the GitHub App");
 
   const store = new SqliteStore(config.database.path);
+  const pruneProcessedWebhooks = (): void => {
+    const prunedWebhooks = store.pruneProcessedWebhooks(WEBHOOK_RETENTION_DAYS);
+    if (prunedWebhooks > 0) {
+      logger.info({ prunedWebhooks, retentionDays: WEBHOOK_RETENTION_DAYS }, "Pruned processed webhook records");
+    }
+  };
+  pruneProcessedWebhooks();
+  const webhookRetentionTimer = setInterval(pruneProcessedWebhooks, WEBHOOK_RETENTION_INTERVAL_MS);
+  webhookRetentionTimer.unref?.();
   const github = new GitHubClient({
     currentTokenForRepo: (repoFullName?: string) => tokenManager.currentTokenForRepo(repoFullName),
     refreshTokenForRepo: (repoFullName, reason) => tokenManager.refreshTokenForRepo(repoFullName, reason),
@@ -228,6 +240,7 @@ export async function startServer(configPath = process.env.REVIEW_QUILL_CONFIG ?
     service: "review-quill",
     logger,
     cleanup: async () => {
+      clearInterval(webhookRetentionTimer);
       await service.stop();
       tokenManager.stop();
       store.close();

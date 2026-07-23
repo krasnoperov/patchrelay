@@ -597,13 +597,31 @@ export class ReviewQuillService {
     const promptFingerprint = buildPromptFingerprint(pr);
     let priorThreadCandidate: PriorReviewThreadCandidate | undefined;
     if (this.config.codex.forkPriorReviewThread) {
-      const latest = this.store.getLatestDifferentHeadAttemptWithTranscript(repo.repoFullName, pr.number, pr.headSha);
+      const latestAttempt = this.store.getLatestDifferentHeadAttempt(repo.repoFullName, pr.number, pr.headSha);
+      let latestTranscript;
+      if (latestAttempt?.threadId) {
+        try {
+          latestTranscript = await this.runner.readThread(latestAttempt.threadId);
+        } catch (error) {
+          this.logger.debug({
+            repo: repo.repoFullName,
+            prNumber: pr.number,
+            sourceAttemptId: latestAttempt.id,
+            error: error instanceof Error ? error.message : String(error),
+          }, "Prior review thread is unavailable from Codex");
+        }
+      }
       const selection = selectPriorReviewThread({
         enabled: true,
         ...(identity ? { identity } : {}),
         currentHeadSha: pr.headSha,
         promptFingerprint,
-        ...(latest ? { latest } : {}),
+        ...(latestAttempt ? {
+          latest: {
+            attempt: latestAttempt,
+            ...(latestTranscript ? { transcript: latestTranscript } : {}),
+          },
+        } : {}),
       });
       if (selection.kind === "selected") {
         priorThreadCandidate = selection.candidate;
@@ -758,7 +776,6 @@ export class ReviewQuillService {
               this.store.updateAttempt(attempt.id, {
                 threadId: transcript.id,
                 turnId: transcript.turns.at(-1)?.id ?? null,
-                transcript,
               });
             },
           }, prepared.priorThread);

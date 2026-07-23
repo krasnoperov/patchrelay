@@ -333,6 +333,10 @@ export class ReviewRunner {
     await this.codex.stop();
   }
 
+  async readThread(threadId: string): Promise<CodexThreadSummary> {
+    return await this.codex.readThread(threadId);
+  }
+
   async review(
     context: ReviewContext,
     options: ReviewRunOptions = {},
@@ -742,7 +746,7 @@ export class ReviewRunner {
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn({ threadId: thread.id, error: message }, "Failed to persist Codex thread snapshot; continuing review");
+      this.logger.warn({ threadId: thread.id, error: message }, "Failed to record Codex thread progress; continuing review");
       return false;
     }
   }

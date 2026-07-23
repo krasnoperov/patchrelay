@@ -18,7 +18,6 @@ function formatTranscriptText(params: {
   prNumber: number;
   attempt: ReviewAttemptRecord;
   thread: CodexThreadSummary;
-  transcriptSource?: "attempt" | "app-server";
   sessionSource?: { exists: boolean; path?: string; startedAt?: string; cwd?: string; originator?: string; error?: string } | undefined;
   notice?: string;
 }): string {
@@ -55,7 +54,7 @@ function formatTranscriptText(params: {
     `Status: ${params.attempt.status}${params.attempt.conclusion ? ` (${params.attempt.conclusion})` : ""}`,
     `Head SHA: ${params.attempt.headSha}`,
     `Thread: ${params.thread.id}`,
-    params.transcriptSource ? `Transcript source: ${params.transcriptSource === "attempt" ? "stored attempt snapshot" : "live Codex app-server"}` : undefined,
+    "Transcript source: live Codex app-server",
     params.attempt.turnId ? `Recorded turn: ${params.attempt.turnId}` : undefined,
     params.sessionSource ? `Session source: ${params.sessionSource.exists ? params.sessionSource.path : params.sessionSource.error ?? "not found"}` : undefined,
     params.sessionSource?.startedAt ? `Started: ${params.sessionSource.startedAt}` : undefined,
@@ -149,8 +148,7 @@ export async function handleTranscript(
     }
     const threadId = attempt.threadId;
 
-    const storedTranscript = store.getAttemptTranscript(attempt.id);
-    const thread = storedTranscript ?? (readCodexThread
+    const thread = readCodexThread
       ? await readCodexThread(threadId)
       : await (async () => {
           const client = new CodexAppServerClient(config.codex, pino({ level: "silent" }));
@@ -160,9 +158,9 @@ export async function handleTranscript(
           } finally {
             await client.stop();
           }
-        })());
+        })();
 
-    const sessionSource = !storedTranscript && attempt.threadId ? resolveCodexSessionSource(attempt.threadId) : undefined;
+    const sessionSource = attempt.threadId ? resolveCodexSessionSource(attempt.threadId) : undefined;
     const payload = {
       repoId: repo.repoId,
       repoFullName: repo.repoFullName,
@@ -170,7 +168,7 @@ export async function handleTranscript(
       attempt,
       ...(sessionSource ? { sessionSource } : {}),
       thread,
-      transcriptSource: storedTranscript ? "attempt" : "app-server",
+      transcriptSource: "app-server",
     };
 
     if (parsed.flags.get("json") === true) {
@@ -183,7 +181,6 @@ export async function handleTranscript(
       prNumber,
       attempt,
       thread,
-      transcriptSource: storedTranscript ? "attempt" : "app-server",
       ...(sessionSource ? { sessionSource } : {}),
       ...(selection.notice ? { notice: selection.notice } : {}),
     }));
