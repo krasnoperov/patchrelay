@@ -87,17 +87,12 @@ CREATE TABLE IF NOT EXISTS issue_sessions (
   pr_head_sha TEXT,
   pr_author_login TEXT,
   summary_text TEXT,
-  active_thread_id TEXT,
-  thread_generation INTEGER NOT NULL DEFAULT 0,
   active_run_id INTEGER,
   last_run_type TEXT,
   last_workflow_reason TEXT,
   ci_repair_attempts INTEGER NOT NULL DEFAULT 0,
   queue_repair_attempts INTEGER NOT NULL DEFAULT 0,
   review_fix_attempts INTEGER NOT NULL DEFAULT 0,
-  lease_id TEXT,
-  worker_id TEXT,
-  leased_until TEXT,
   created_at TEXT NOT NULL,
   display_updated_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -372,53 +367,8 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
     SET display_updated_at = COALESCE(display_updated_at, updated_at, created_at)
     WHERE display_updated_at IS NULL
   `).run();
-  connection.prepare(`
-    INSERT INTO issue_session_leases (
-      project_id,
-      linear_issue_id,
-      lease_id,
-      worker_id,
-      leased_until,
-      updated_at
-    )
-    SELECT
-      project_id,
-      linear_issue_id,
-      lease_id,
-      COALESCE(worker_id, 'unknown'),
-      leased_until,
-      COALESCE(updated_at, created_at)
-    FROM issue_sessions
-    WHERE lease_id IS NOT NULL
-      AND leased_until IS NOT NULL
-    ON CONFLICT(project_id, linear_issue_id) DO UPDATE SET
-      lease_id = excluded.lease_id,
-      worker_id = excluded.worker_id,
-      leased_until = excluded.leased_until,
-      updated_at = excluded.updated_at
-  `).run();
-  connection.prepare(`
-    INSERT INTO issue_session_threads (
-      project_id,
-      linear_issue_id,
-      active_thread_id,
-      thread_generation,
-      updated_at
-    )
-    SELECT
-      project_id,
-      linear_issue_id,
-      active_thread_id,
-      COALESCE(thread_generation, 0),
-      COALESCE(updated_at, created_at)
-    FROM issue_sessions
-    WHERE active_thread_id IS NOT NULL
-       OR COALESCE(thread_generation, 0) > 0
-    ON CONFLICT(project_id, linear_issue_id) DO UPDATE SET
-      active_thread_id = excluded.active_thread_id,
-      thread_generation = excluded.thread_generation,
-      updated_at = excluded.updated_at
-  `).run();
+  backfillRetiredIssueSessionLeaseColumns(connection);
+  backfillRetiredIssueSessionThreadColumns(connection);
   addColumnIfMissing(connection, "runs", "source_head_sha", "TEXT");
   addColumnIfMissing(connection, "runs", "launch_phase", "TEXT");
   addColumnIfMissing(connection, "runs", "completion_check_thread_id", "TEXT");
@@ -443,7 +393,7 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   addColumnIfMissing(connection, "runs", "last_codex_activity_kind", "TEXT");
   addColumnIfMissing(connection, "runs", "last_codex_activity_summary", "TEXT");
   removeRetiredRunHistory(connection);
-  removeRetiredIssueSessionDisplayState(connection);
+  removeRetiredIssueSessionCompatibilityColumns(connection);
   addColumnIfMissing(connection, "workflow_tasks", "authority_epoch", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(connection, "workflow_tasks", "gate_action", "TEXT NOT NULL DEFAULT 'wait'");
   addColumnIfMissing(connection, "workflow_tasks", "gate_reason", "TEXT");
@@ -539,15 +489,91 @@ function removeRetiredRunHistory(connection: DatabaseConnection): void {
   }
 }
 
-function removeRetiredIssueSessionDisplayState(connection: DatabaseConnection): void {
+function removeRetiredIssueSessionCompatibilityColumns(connection: DatabaseConnection): void {
   // WorkflowSnapshot/tasks/runs are authoritative. Session rows retain only
   // operational pointers and bounded operator summaries; phase and waiting
-  // reason are derived at the presentation boundary.
-  for (const column of ["session_state", "waiting_reason"]) {
+  // reason are derived at the presentation boundary. Lease and thread truth
+  // live in their dedicated tables after the guarded legacy backfill above.
+  for (const column of [
+    "session_state",
+    "waiting_reason",
+    "last_wake_reason",
+    "active_thread_id",
+    "thread_generation",
+    "lease_id",
+    "worker_id",
+    "leased_until",
+  ]) {
     if (columnExists(connection, "issue_sessions", column)) {
       connection.prepare(`ALTER TABLE issue_sessions DROP COLUMN ${column}`).run();
     }
   }
+}
+
+function backfillRetiredIssueSessionLeaseColumns(connection: DatabaseConnection): void {
+  if (
+    !columnExists(connection, "issue_sessions", "lease_id")
+    || !columnExists(connection, "issue_sessions", "worker_id")
+    || !columnExists(connection, "issue_sessions", "leased_until")
+  ) {
+    return;
+  }
+  connection.prepare(`
+    INSERT INTO issue_session_leases (
+      project_id,
+      linear_issue_id,
+      lease_id,
+      worker_id,
+      leased_until,
+      updated_at
+    )
+    SELECT
+      project_id,
+      linear_issue_id,
+      lease_id,
+      COALESCE(worker_id, 'unknown'),
+      leased_until,
+      COALESCE(updated_at, created_at)
+    FROM issue_sessions
+    WHERE lease_id IS NOT NULL
+      AND leased_until IS NOT NULL
+    ON CONFLICT(project_id, linear_issue_id) DO UPDATE SET
+      lease_id = excluded.lease_id,
+      worker_id = excluded.worker_id,
+      leased_until = excluded.leased_until,
+      updated_at = excluded.updated_at
+  `).run();
+}
+
+function backfillRetiredIssueSessionThreadColumns(connection: DatabaseConnection): void {
+  if (
+    !columnExists(connection, "issue_sessions", "active_thread_id")
+    || !columnExists(connection, "issue_sessions", "thread_generation")
+  ) {
+    return;
+  }
+  connection.prepare(`
+    INSERT INTO issue_session_threads (
+      project_id,
+      linear_issue_id,
+      active_thread_id,
+      thread_generation,
+      updated_at
+    )
+    SELECT
+      project_id,
+      linear_issue_id,
+      active_thread_id,
+      COALESCE(thread_generation, 0),
+      COALESCE(updated_at, created_at)
+    FROM issue_sessions
+    WHERE active_thread_id IS NOT NULL
+       OR COALESCE(thread_generation, 0) > 0
+    ON CONFLICT(project_id, linear_issue_id) DO UPDATE SET
+      active_thread_id = excluded.active_thread_id,
+      thread_generation = excluded.thread_generation,
+      updated_at = excluded.updated_at
+  `).run();
 }
 
 function columnExists(connection: DatabaseConnection, table: string, column: string): boolean {

@@ -65,8 +65,20 @@ test("migrations create issue_sessions and upgrade legacy issue schema", () => {
     const sessionColumns = connection.prepare("PRAGMA table_info(issue_sessions)").all() as Array<Record<string, unknown>>;
     assert.ok(!sessionColumns.some((column) => column.name === "session_state"));
     assert.ok(!sessionColumns.some((column) => column.name === "waiting_reason"));
-    assert.ok(sessionColumns.some((column) => column.name === "lease_id"));
-    assert.ok(sessionColumns.some((column) => column.name === "thread_generation"));
+    for (const retiredColumn of [
+      "active_thread_id",
+      "thread_generation",
+      "lease_id",
+      "worker_id",
+      "leased_until",
+      "last_wake_reason",
+    ]) {
+      assert.ok(!sessionColumns.some((column) => column.name === retiredColumn));
+    }
+    const leaseColumns = connection.prepare("PRAGMA table_info(issue_session_leases)").all() as Array<Record<string, unknown>>;
+    assert.ok(leaseColumns.some((column) => column.name === "lease_id"));
+    const threadColumns = connection.prepare("PRAGMA table_info(issue_session_threads)").all() as Array<Record<string, unknown>>;
+    assert.ok(threadColumns.some((column) => column.name === "thread_generation"));
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -99,11 +111,19 @@ test("migrations drop retired session lifecycle columns without losing operation
     runPatchRelayMigrations(connection);
     connection.exec("ALTER TABLE issue_sessions ADD COLUMN session_state TEXT NOT NULL DEFAULT 'idle'");
     connection.exec("ALTER TABLE issue_sessions ADD COLUMN waiting_reason TEXT");
+    connection.exec("ALTER TABLE issue_sessions ADD COLUMN last_wake_reason TEXT");
+    connection.exec("ALTER TABLE issue_sessions ADD COLUMN active_thread_id TEXT");
+    connection.exec("ALTER TABLE issue_sessions ADD COLUMN thread_generation INTEGER NOT NULL DEFAULT 0");
+    connection.exec("ALTER TABLE issue_sessions ADD COLUMN lease_id TEXT");
+    connection.exec("ALTER TABLE issue_sessions ADD COLUMN worker_id TEXT");
+    connection.exec("ALTER TABLE issue_sessions ADD COLUMN leased_until TEXT");
     connection.prepare(`
       INSERT INTO issue_sessions (
         project_id, linear_issue_id, issue_key, repo_id, summary_text,
-        created_at, display_updated_at, updated_at, session_state, waiting_reason
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        created_at, display_updated_at, updated_at, session_state, waiting_reason,
+        last_wake_reason, active_thread_id, thread_generation,
+        lease_id, worker_id, leased_until
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       "usertold",
       "issue-1",
@@ -115,20 +135,52 @@ test("migrations drop retired session lifecycle columns without losing operation
       "2026-07-23T00:00:00.000Z",
       "waiting_input",
       "Stale compatibility text",
+      "run:review_fix",
+      "thread-legacy",
+      4,
+      "lease-legacy",
+      "worker-legacy",
+      "2026-07-23T01:00:00.000Z",
     );
 
     runPatchRelayMigrations(connection);
 
     const columns = connection.prepare("PRAGMA table_info(issue_sessions)").all() as Array<Record<string, unknown>>;
-    assert.equal(columns.some((column) => column.name === "session_state"), false);
-    assert.equal(columns.some((column) => column.name === "waiting_reason"), false);
+    for (const retiredColumn of [
+      "session_state",
+      "waiting_reason",
+      "last_wake_reason",
+      "active_thread_id",
+      "thread_generation",
+      "lease_id",
+      "worker_id",
+      "leased_until",
+    ]) {
+      assert.equal(columns.some((column) => column.name === retiredColumn), false);
+    }
     const row = connection.prepare(`
-      SELECT issue_key, summary_text
+      SELECT issue_key, summary_text, last_workflow_reason
       FROM issue_sessions
       WHERE project_id = ? AND linear_issue_id = ?
     `).get("usertold", "issue-1") as Record<string, unknown>;
     assert.equal(row.issue_key, "USE-1");
     assert.equal(row.summary_text, "Compact operator summary");
+    assert.equal(row.last_workflow_reason, "run:review_fix");
+    const thread = connection.prepare(`
+      SELECT active_thread_id, thread_generation
+      FROM issue_session_threads
+      WHERE project_id = ? AND linear_issue_id = ?
+    `).get("usertold", "issue-1") as Record<string, unknown>;
+    assert.equal(thread.active_thread_id, "thread-legacy");
+    assert.equal(thread.thread_generation, 4);
+    const lease = connection.prepare(`
+      SELECT lease_id, worker_id, leased_until
+      FROM issue_session_leases
+      WHERE project_id = ? AND linear_issue_id = ?
+    `).get("usertold", "issue-1") as Record<string, unknown>;
+    assert.equal(lease.lease_id, "lease-legacy");
+    assert.equal(lease.worker_id, "worker-legacy");
+    assert.equal(lease.leased_until, "2026-07-23T01:00:00.000Z");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
