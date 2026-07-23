@@ -355,20 +355,11 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   // verify that requested-changes work actually published a new head.
   addColumnIfMissing(connection, "issue_sessions", "display_updated_at", "TEXT");
   addColumnIfMissing(connection, "issue_sessions", "last_workflow_reason", "TEXT");
-  if (columnExists(connection, "issue_sessions", "last_wake_reason")) {
-    connection.prepare(`
-      UPDATE issue_sessions
-      SET last_workflow_reason = COALESCE(last_workflow_reason, last_wake_reason)
-      WHERE last_workflow_reason IS NULL
-    `).run();
-  }
   connection.prepare(`
     UPDATE issue_sessions
     SET display_updated_at = COALESCE(display_updated_at, updated_at, created_at)
     WHERE display_updated_at IS NULL
   `).run();
-  backfillRetiredIssueSessionLeaseColumns(connection);
-  backfillRetiredIssueSessionThreadColumns(connection);
   addColumnIfMissing(connection, "runs", "source_head_sha", "TEXT");
   addColumnIfMissing(connection, "runs", "launch_phase", "TEXT");
   addColumnIfMissing(connection, "runs", "completion_check_thread_id", "TEXT");
@@ -493,7 +484,7 @@ function removeRetiredIssueSessionCompatibilityColumns(connection: DatabaseConne
   // WorkflowSnapshot/tasks/runs are authoritative. Session rows retain only
   // operational pointers and bounded operator summaries; phase and waiting
   // reason are derived at the presentation boundary. Lease and thread truth
-  // live in their dedicated tables after the guarded legacy backfill above.
+  // live exclusively in their dedicated tables.
   for (const column of [
     "session_state",
     "waiting_reason",
@@ -508,65 +499,6 @@ function removeRetiredIssueSessionCompatibilityColumns(connection: DatabaseConne
       connection.prepare(`ALTER TABLE issue_sessions DROP COLUMN ${column}`).run();
     }
   }
-}
-
-function backfillRetiredIssueSessionLeaseColumns(connection: DatabaseConnection): void {
-  if (
-    !columnExists(connection, "issue_sessions", "lease_id")
-    || !columnExists(connection, "issue_sessions", "worker_id")
-    || !columnExists(connection, "issue_sessions", "leased_until")
-  ) {
-    return;
-  }
-  connection.prepare(`
-    INSERT INTO issue_session_leases (
-      project_id,
-      linear_issue_id,
-      lease_id,
-      worker_id,
-      leased_until,
-      updated_at
-    )
-    SELECT
-      project_id,
-      linear_issue_id,
-      lease_id,
-      COALESCE(worker_id, 'unknown'),
-      leased_until,
-      COALESCE(updated_at, created_at)
-    FROM issue_sessions
-    WHERE lease_id IS NOT NULL
-      AND leased_until IS NOT NULL
-    ON CONFLICT(project_id, linear_issue_id) DO NOTHING
-  `).run();
-}
-
-function backfillRetiredIssueSessionThreadColumns(connection: DatabaseConnection): void {
-  if (
-    !columnExists(connection, "issue_sessions", "active_thread_id")
-    || !columnExists(connection, "issue_sessions", "thread_generation")
-  ) {
-    return;
-  }
-  connection.prepare(`
-    INSERT INTO issue_session_threads (
-      project_id,
-      linear_issue_id,
-      active_thread_id,
-      thread_generation,
-      updated_at
-    )
-    SELECT
-      project_id,
-      linear_issue_id,
-      active_thread_id,
-      COALESCE(thread_generation, 0),
-      COALESCE(updated_at, created_at)
-    FROM issue_sessions
-    WHERE active_thread_id IS NOT NULL
-       OR COALESCE(thread_generation, 0) > 0
-    ON CONFLICT(project_id, linear_issue_id) DO NOTHING
-  `).run();
 }
 
 function columnExists(connection: DatabaseConnection, table: string, column: string): boolean {

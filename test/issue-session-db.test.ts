@@ -104,7 +104,7 @@ test("migrations delete PatchRelay's retired Codex transcript copies", () => {
   }
 });
 
-test("migrations drop retired session lifecycle columns without losing operational metadata", () => {
+test("migrations discard retired session columns and preserve authoritative rows", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-lifecycle-migration-"));
   try {
     const connection = new SqliteConnection(path.join(baseDir, "legacy.sqlite"));
@@ -214,22 +214,19 @@ test("migrations drop retired session lifecycle columns without losing operation
     `).get("usertold", "issue-1") as Record<string, unknown>;
     assert.equal(row.issue_key, "USE-1");
     assert.equal(row.summary_text, "Compact operator summary");
-    assert.equal(row.last_workflow_reason, "run:review_fix");
-    const thread = connection.prepare(`
-      SELECT active_thread_id, thread_generation
+    assert.equal(row.last_workflow_reason, null);
+    const retiredThreadCopy = connection.prepare(`
+      SELECT active_thread_id
       FROM issue_session_threads
       WHERE project_id = ? AND linear_issue_id = ?
-    `).get("usertold", "issue-1") as Record<string, unknown>;
-    assert.equal(thread.active_thread_id, "thread-legacy");
-    assert.equal(thread.thread_generation, 4);
-    const lease = connection.prepare(`
-      SELECT lease_id, worker_id, leased_until
+    `).get("usertold", "issue-1");
+    assert.equal(retiredThreadCopy, undefined);
+    const retiredLeaseCopy = connection.prepare(`
+      SELECT lease_id
       FROM issue_session_leases
       WHERE project_id = ? AND linear_issue_id = ?
-    `).get("usertold", "issue-1") as Record<string, unknown>;
-    assert.equal(lease.lease_id, "lease-legacy");
-    assert.equal(lease.worker_id, "worker-legacy");
-    assert.equal(lease.leased_until, "2026-07-23T01:00:00.000Z");
+    `).get("usertold", "issue-1");
+    assert.equal(retiredLeaseCopy, undefined);
     const currentThread = connection.prepare(`
       SELECT active_thread_id, thread_generation
       FROM issue_session_threads
