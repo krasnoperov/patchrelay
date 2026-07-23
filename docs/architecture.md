@@ -69,7 +69,8 @@ flowchart TB
 The codebase uses focused top-level modules with small subdirectories where a responsibility has grown enough to need internal structure:
 
 - `issue-phase.ts` — presentation-only phase derived from durable facts and current run/task context
-- `issue-session-events.ts`, `issue-session-projector.ts`, `issue-session-state.ts` — session event parsing and session read-model projection
+- `issue-session-events.ts`, `issue-session-projector.ts` — session event parsing
+  plus operational session metadata and bounded summary projection
 - `reactive-workflow-intent.ts` — PR-derived follow-up intent used to create durable workflow signals/tasks
 - `workflow-model.ts`, `workflow-observation-context.ts`, `workflow-snapshot.ts`, `workflow-task-derivation.ts`, `workflow-gates.ts` — the durable workflow model: observations plus issue facts become a snapshot, open workflow tasks, and gate decisions
 - `workflow-task-reconciler.ts` — materializes open workflow tasks from the current snapshot
@@ -152,7 +153,9 @@ PatchRelay keeps ownership simple:
 - workflow truth comes from observations plus current issue facts projected into a workflow snapshot
 - runnable PatchRelay work comes only from open `workflow_tasks` with `task_type = 'run'` and `gate_action = 'start'`
 - run ownership comes from `runs` plus the active issue slot
-- human-facing state comes from projections (`issue_sessions`, tracked issue rows, Linear status), not a second lifecycle model
+- human-facing state is derived from the same issue facts, workflow task, and run
+  snapshot used by the runtime; it is never read back from a stored lifecycle
+  projection
 - automation authority comes from current Linear delegation to PatchRelay
 
 PatchRelay persists one explicit authority bit:
@@ -385,7 +388,8 @@ PatchRelay uses SQLite. Current tables:
 - `issues` — one record per tracked issue: external facts, explicit outcome/input facts, run pointers, and repair counters
 - `workflow_observations` — append-only workflow facts and inbox signals
 - `workflow_tasks` — derived open/closed tasks; open runnable run tasks are the executor admission source
-- `issue_sessions` — session/read-model projection: visible state, waiting reason, summaries, and display fields
+- `issue_sessions` — operational session correlation plus bounded summaries; it
+  does not store lifecycle state or waiting reasons
 - `issue_session_events` — session-history/event inbox; runnable work is derived through workflow observations/tasks, not directly from these rows
 - `issue_session_leases` — executor lease truth (`lease_id`, `worker_id`, `leased_until`)
 - `issue_session_threads` — resumable thread pointer and generation/compaction state

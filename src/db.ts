@@ -26,7 +26,7 @@ import { runPatchRelayMigrations } from "./db/migrations.ts";
 import { assertPatchRelaySchemaReady } from "./db/schema-guard.ts";
 import { SqliteConnection, type DatabaseConnection } from "./db/shared.ts";
 import { ImmediateIssueSessionProjectionInvalidator } from "./issue-session-projection-invalidator.ts";
-import { projectIssueSessionReadModel } from "./issue-session-projector.ts";
+import { projectIssueSessionMetadata } from "./issue-session-projector.ts";
 import { noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
 import { TrackedIssueQuery } from "./tracked-issue-query.ts";
 import { peekRunnableWorkflowTaskRunType } from "./pending-workflow-task.ts";
@@ -70,16 +70,11 @@ export class PatchRelayDatabase {
     this.issueSessionProjection = new ImmediateIssueSessionProjectionInvalidator({
       getIssue: (projectId, linearIssueId) => this.issues.getIssue(projectId, linearIssueId),
       listDependents: (projectId, blockerLinearIssueId) => this.issues.listDependents(projectId, blockerLinearIssueId),
-      countUnresolvedBlockers: (projectId, linearIssueId) => this.issues.countUnresolvedBlockers(projectId, linearIssueId),
-      getIssueSessionWaitingReason: (projectId, linearIssueId) => this.issueSessions.getIssueSession(projectId, linearIssueId)?.waitingReason,
-      projectIssue: (issue, options) => projectIssueSessionReadModel({
+      projectIssue: (issue, options) => projectIssueSessionMetadata({
         connection: this.connection,
-        issues: this.issues,
         issueSessions: this.issueSessions,
         runs: this.runs,
-        workflowTasks: this.workflowTasks,
         issue,
-        telemetry: this.telemetryProxy,
         ...(options ? { options } : {}),
       }),
       telemetry: this.telemetryProxy,
@@ -340,8 +335,6 @@ function mapIssueSessionRow(row: Record<string, unknown>): IssueSessionRecord {
     ...(row.pr_number !== null && row.pr_number !== undefined ? { prNumber: Number(row.pr_number) } : {}),
     ...(row.pr_head_sha !== null && row.pr_head_sha !== undefined ? { prHeadSha: String(row.pr_head_sha) } : {}),
     ...(row.pr_author_login !== null && row.pr_author_login !== undefined ? { prAuthorLogin: String(row.pr_author_login) } : {}),
-    sessionState: String(row.session_state) as IssueSessionRecord["sessionState"],
-    ...(row.waiting_reason !== null && row.waiting_reason !== undefined ? { waitingReason: String(row.waiting_reason) } : {}),
     ...(row.summary_text !== null && row.summary_text !== undefined ? { summaryText: String(row.summary_text) } : {}),
     ...(row.projected_active_thread_id !== null && row.projected_active_thread_id !== undefined ? { activeThreadId: String(row.projected_active_thread_id) } : {}),
     threadGeneration: Number(row.projected_thread_generation ?? 0),

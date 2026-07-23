@@ -63,7 +63,8 @@ test("migrations create issue_sessions and upgrade legacy issue schema", () => {
     assert.ok(!issueColumns.some((column) => column.name === legacyContextColumn));
 
     const sessionColumns = connection.prepare("PRAGMA table_info(issue_sessions)").all() as Array<Record<string, unknown>>;
-    assert.ok(sessionColumns.some((column) => column.name === "session_state"));
+    assert.ok(!sessionColumns.some((column) => column.name === "session_state"));
+    assert.ok(!sessionColumns.some((column) => column.name === "waiting_reason"));
     assert.ok(sessionColumns.some((column) => column.name === "lease_id"));
     assert.ok(sessionColumns.some((column) => column.name === "thread_generation"));
   } finally {
@@ -91,7 +92,49 @@ test("migrations delete PatchRelay's retired Codex transcript copies", () => {
   }
 });
 
-test("issue upserts and run completion dual-write into issue_sessions", () => {
+test("migrations drop retired session lifecycle columns without losing operational metadata", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-lifecycle-migration-"));
+  try {
+    const connection = new SqliteConnection(path.join(baseDir, "legacy.sqlite"));
+    runPatchRelayMigrations(connection);
+    connection.exec("ALTER TABLE issue_sessions ADD COLUMN session_state TEXT NOT NULL DEFAULT 'idle'");
+    connection.exec("ALTER TABLE issue_sessions ADD COLUMN waiting_reason TEXT");
+    connection.prepare(`
+      INSERT INTO issue_sessions (
+        project_id, linear_issue_id, issue_key, repo_id, summary_text,
+        created_at, display_updated_at, updated_at, session_state, waiting_reason
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "usertold",
+      "issue-1",
+      "USE-1",
+      "usertold",
+      "Compact operator summary",
+      "2026-07-23T00:00:00.000Z",
+      "2026-07-23T00:00:00.000Z",
+      "2026-07-23T00:00:00.000Z",
+      "waiting_input",
+      "Stale compatibility text",
+    );
+
+    runPatchRelayMigrations(connection);
+
+    const columns = connection.prepare("PRAGMA table_info(issue_sessions)").all() as Array<Record<string, unknown>>;
+    assert.equal(columns.some((column) => column.name === "session_state"), false);
+    assert.equal(columns.some((column) => column.name === "waiting_reason"), false);
+    const row = connection.prepare(`
+      SELECT issue_key, summary_text
+      FROM issue_sessions
+      WHERE project_id = ? AND linear_issue_id = ?
+    `).get("usertold", "issue-1") as Record<string, unknown>;
+    assert.equal(row.issue_key, "USE-1");
+    assert.equal(row.summary_text, "Compact operator summary");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("issue sessions retain operational pointers and summaries without lifecycle state", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-dual-write-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
@@ -122,8 +165,6 @@ test("issue upserts and run completion dual-write into issue_sessions", () => {
       workflowOutcome: undefined,
     });
     const queuedSession = db.issueSessions.getIssueSession("usertold", "issue-1");
-    assert.equal(queuedSession?.sessionState, "idle");
-    assert.equal(queuedSession?.waitingReason, "Ready to run implementation");
     assert.equal(queuedSession?.threadGeneration, 1);
 
     const run = db.runs.createRun({
@@ -143,7 +184,6 @@ test("issue upserts and run completion dual-write into issue_sessions", () => {
     db.runs.updateRunThread(run.id, { threadId: "thread-2", turnId: "turn-1" });
     assert.equal(db.runs.getRunById(run.id)?.launchPhase, "running");
     const runningSession = db.issueSessions.getIssueSession("usertold", "issue-1");
-    assert.equal(runningSession?.sessionState, "running");
     assert.equal(runningSession?.activeRunId, run.id);
 
     db.runs.finishRun(run.id, {
@@ -160,7 +200,6 @@ test("issue upserts and run completion dual-write into issue_sessions", () => {
       prAuthorLogin: "patchrelay[bot]",
     });
     const completedSession = db.issueSessions.getIssueSession("usertold", "issue-1");
-    assert.equal(completedSession?.sessionState, "idle");
     assert.equal(completedSession?.summaryText, "Implementation finished cleanly.");
     assert.equal(completedSession?.lastRunType, "implementation");
     assert.equal(completedSession?.prAuthorLogin, "patchrelay[bot]");

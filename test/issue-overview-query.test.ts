@@ -6,7 +6,7 @@ import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { IssueOverviewQuery } from "../src/issue-overview-query.ts";
 
-test("issue overview prefers freshly derived waiting reason over stale cached session waiting text", async () => {
+test("issue overview derives waiting reason without a stored session lifecycle", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-issue-overview-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
@@ -27,15 +27,11 @@ test("issue overview prefers freshly derived waiting reason over stale cached se
       lastBlockingReviewHeadSha: "sha-old",
     });
 
-    db.unsafeRawConnectionForTests().prepare(`
-      UPDATE issue_sessions
-      SET waiting_reason = ?
-      WHERE project_id = ? AND linear_issue_id = ?
-    `).run(
-      "PatchRelay automation is paused because the issue is undelegated",
-      "usertold",
-      "issue-1",
-    );
+    const sessionColumns = db.unsafeRawConnectionForTests()
+      .prepare("PRAGMA table_info(issue_sessions)")
+      .all() as Array<Record<string, unknown>>;
+    assert.equal(sessionColumns.some((column) => column.name === "waiting_reason"), false);
+    assert.equal(sessionColumns.some((column) => column.name === "session_state"), false);
 
     const query = new IssueOverviewQuery(
       db,

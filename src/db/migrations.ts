@@ -86,8 +86,6 @@ CREATE TABLE IF NOT EXISTS issue_sessions (
   pr_number INTEGER,
   pr_head_sha TEXT,
   pr_author_login TEXT,
-  session_state TEXT NOT NULL DEFAULT 'idle',
-  waiting_reason TEXT,
   summary_text TEXT,
   active_thread_id TEXT,
   thread_generation INTEGER NOT NULL DEFAULT 0,
@@ -445,6 +443,7 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   addColumnIfMissing(connection, "runs", "last_codex_activity_kind", "TEXT");
   addColumnIfMissing(connection, "runs", "last_codex_activity_summary", "TEXT");
   removeRetiredRunHistory(connection);
+  removeRetiredIssueSessionDisplayState(connection);
   addColumnIfMissing(connection, "workflow_tasks", "authority_epoch", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(connection, "workflow_tasks", "gate_action", "TEXT NOT NULL DEFAULT 'wait'");
   addColumnIfMissing(connection, "workflow_tasks", "gate_reason", "TEXT");
@@ -537,6 +536,17 @@ function removeRetiredRunHistory(connection: DatabaseConnection): void {
   connection.prepare("DROP TABLE IF EXISTS run_thread_events").run();
   if (columnExists(connection, "runs", "report_json")) {
     connection.prepare("ALTER TABLE runs DROP COLUMN report_json").run();
+  }
+}
+
+function removeRetiredIssueSessionDisplayState(connection: DatabaseConnection): void {
+  // WorkflowSnapshot/tasks/runs are authoritative. Session rows retain only
+  // operational pointers and bounded operator summaries; phase and waiting
+  // reason are derived at the presentation boundary.
+  for (const column of ["session_state", "waiting_reason"]) {
+    if (columnExists(connection, "issue_sessions", column)) {
+      connection.prepare(`ALTER TABLE issue_sessions DROP COLUMN ${column}`).run();
+    }
   }
 }
 

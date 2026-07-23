@@ -62,7 +62,7 @@ export function issueTokenFor(issue: WatchIssue): IssueToken {
   if (issue.phase === "escalated") {
     return { glyph: GLYPH.attention, color: COLOR.attention, kind: "attention", phrase: "escalated" };
   }
-  if (issue.phase === "awaiting_input" || issue.sessionState === "waiting_input") {
+  if (issue.phase === "awaiting_input") {
     return { glyph: GLYPH.attention, color: COLOR.attention, kind: "attention", phrase: "needs human" };
   }
   if (issue.phase === "delegated") {

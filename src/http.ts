@@ -590,7 +590,6 @@ function renderAgentSessionStatusPage(params: {
       title?: string;
       issueUrl?: string;
       currentLinearState?: string;
-      sessionState?: string;
       phase?: string;
       prNumber?: number;
       prUrl?: string;
@@ -640,7 +639,6 @@ function renderAgentSessionStatusPage(params: {
   const commandCount = params.sessionStatus.liveThread?.commandCount ?? params.sessionStatus.latestReportSummary?.commandCount ?? 0;
   const fileChangeCount = params.sessionStatus.liveThread?.fileChangeCount ?? params.sessionStatus.latestReportSummary?.fileChangeCount ?? 0;
   const toolCallCount = params.sessionStatus.liveThread?.toolCallCount ?? params.sessionStatus.latestReportSummary?.toolCallCount ?? 0;
-  const sessionState = params.sessionStatus.issue.sessionState ?? "unknown";
   const phase = params.sessionStatus.issue.phase ?? "unknown";
   const linearState = params.sessionStatus.issue.currentLinearState ?? "unknown";
   const prState = params.sessionStatus.issue.prState ?? "unknown";
@@ -724,7 +722,6 @@ function renderAgentSessionStatusPage(params: {
       ${issueUrl ? `<p><a href="${escapeHtml(issueUrl)}" target="_blank" rel="noopener noreferrer">Open issue in Linear</a></p>` : ""}
       ${prUrl ? `<p><a href="${escapeHtml(prUrl)}" target="_blank" rel="noopener noreferrer">Open pull request ${escapeHtml(prLabel ?? "")}</a></p>` : ""}
       <div class="chips">
-        <span class="chip"><strong>Session:</strong> <code>${escapeHtml(sessionState)}</code></span>
         <span class="chip"><strong>Waiting reason:</strong> <code>${escapeHtml(waitingReason)}</code></span>
         <span class="chip"><strong>Derived phase:</strong> <code>${escapeHtml(phase)}</code></span>
         <span class="chip"><strong>Linear:</strong> <code>${escapeHtml(linearState)}</code></span>

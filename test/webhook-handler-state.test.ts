@@ -958,7 +958,6 @@ test("issue becoming blocked during implementation releases the active run and p
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-blocked-active");
     const finishedRun = db.runs.getRunById(run.id);
-    const session = db.issueSessions.getIssueSession("krasnoperov/mafia", "issue-maf-blocked-active");
     const tracked = new TrackedIssueListQuery(db).listTrackedIssues().find((entry) => entry.issueKey === "MAF-42");
     assertIssuePhase(issue, "delegated");
     assert.equal(issue?.activeRunId, undefined);
@@ -966,7 +965,6 @@ test("issue becoming blocked during implementation releases the active run and p
     assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-blocked-active"), 1);
     assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-blocked-active"), undefined);
     assert.deepEqual(enqueued, []);
-    assert.equal(session?.waitingReason, "Blocked by MAF-10");
     assert.equal(tracked?.waitingReason, "Blocked by MAF-10");
     assert.equal(finishedRun?.status, "released");
     assert.equal(finishedRun?.failureReason, "Issue became blocked during implementation");

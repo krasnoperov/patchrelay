@@ -13,12 +13,10 @@ function fakeIssue(overrides: Partial<IssueRecord> = {}): IssueRecord {
     title: "Wire up a feature",
     issueUrl: "https://linear.app/example/issue/EX-1",
     currentLinearState: "In Progress",
-    sessionState: "active",
     workflowOutcome: undefined,
     blockedByCount: 0,
     blockedByKeys: [],
     readyForExecution: true,
-    waitingReason: null,
     updatedAt: new Date().toISOString(),
     ...overrides,
   } as IssueRecord;

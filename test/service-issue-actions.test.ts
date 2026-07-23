@@ -204,9 +204,9 @@ test("retryIssue preserves branch upkeep retries for requested-changes issues", 
     });
     db.unsafeRawConnectionForTests().prepare(`
       UPDATE issue_sessions
-      SET session_state = ?, last_run_type = ?
+      SET last_run_type = ?
       WHERE project_id = ? AND linear_issue_id = ?
-    `).run("failed", "branch_upkeep", issue.projectId, issue.linearIssueId);
+    `).run("branch_upkeep", issue.projectId, issue.linearIssueId);
 
     const result = service.retryIssue("USE-2");
 

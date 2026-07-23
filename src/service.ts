@@ -502,7 +502,6 @@ export class PatchRelayService {
     title?: string;
     statusNote?: string;
     projectId: string;
-    sessionState?: string;
     phase: string;
     blockedByCount: number;
     blockedByKeys: string[];

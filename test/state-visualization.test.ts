@@ -97,10 +97,9 @@ test("patchrelay queue observations report handoff and external queue failure", 
   assert.match(observations[2]?.text ?? "", /Tracked PR: #88/);
 });
 
-test("patchrelay queue observations prefer session state and waiting reason", () => {
+test("patchrelay queue observations use the derived phase and waiting reason", () => {
   const issue = makeIssue({
     phase: "awaiting_input",
-    sessionState: "waiting_input",
     waitingReason: "Waiting for the next instruction.",
   });
 

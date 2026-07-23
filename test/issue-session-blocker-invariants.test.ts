@@ -102,7 +102,7 @@ function upsertBlockedImplementationIssue(db: PatchRelayDatabase, params?: {
   });
 }
 
-test("blocked idle issue has one blocked truth across session, list, overview, and dispatch", async () => {
+test("blocked idle issue has one derived truth across list, overview, and dispatch", async () => {
   await withDb(async (db, telemetry) => {
     const enqueued: Array<{ projectId: string; issueId: string }> = [];
     upsertBlockedImplementationIssue(db);
@@ -115,7 +115,6 @@ test("blocked idle issue has one blocked truth across session, list, overview, a
     assert.deepEqual(db.listIssuesReadyForExecution(), []);
     assert.equal(dispatcher.dispatchIfWorkflowTaskPending("usertold", "issue-child"), undefined);
     assert.deepEqual(enqueued, []);
-    assert.equal(db.issueSessions.getIssueSession("usertold", "issue-child")?.waitingReason, "Blocked by USE-1");
     assert.equal(listEntry?.blockedByCount, 1);
     assert.deepEqual(listEntry?.blockedByKeys, ["USE-1"]);
     assert.equal(listEntry?.waitingReason, "Blocked by USE-1");
@@ -133,7 +132,7 @@ test("blocked idle issue has one blocked truth across session, list, overview, a
   });
 });
 
-test("unblock while idle enqueues implementation and clears stale blocked read-model text", async () => {
+test("unblock while idle enqueues implementation and clears the derived blocked reason", async () => {
   await withDb(async (db, telemetry) => {
     const enqueued: Array<{ projectId: string; issueId: string }> = [];
     const dispatcher = makeDispatcher(db, enqueued, telemetry);
@@ -159,7 +158,6 @@ test("unblock while idle enqueues implementation and clears stale blocked read-m
     assert.equal(workflowTask?.gateAction, "start");
     assert.deepEqual(db.listIssuesReadyForExecution(), [{ projectId: "usertold", linearIssueId: "issue-child" }]);
     assert.deepEqual(enqueued, [{ projectId: "usertold", issueId: "issue-child" }]);
-    assert.notEqual(db.issueSessions.getIssueSession("usertold", "issue-child")?.waitingReason, "Blocked by USE-1");
     assert.equal(listEntry?.blockedByCount, 0);
     assert.deepEqual(listEntry?.blockedByKeys, []);
     assert.equal(listEntry?.readyForExecution, true);
@@ -174,11 +172,6 @@ test("unblock while idle enqueues implementation and clears stale blocked read-m
       event.linearIssueId === "issue-child"
       && event.blockerLinearIssueId === "issue-blocker"
       && event.dispatchedRunType === "implementation"
-    )));
-    assert.ok(eventsOf(telemetry, "health.invariant").some((event) => (
-      event.invariant === "stale_blocked_read_model"
-      && event.status === "repaired"
-      && event.linearIssueId === "issue-child"
     )));
     assert.equal(eventsOf(telemetry, "dispatch.dispatched").filter((event) => event.linearIssueId === "issue-child").length, 1);
   });
@@ -228,7 +221,6 @@ test("external blocker completion releases dependents without a blocker issue ro
     assert.equal(workflowTask?.runType, "implementation");
     assert.equal(workflowTask?.gateAction, "start");
     assert.deepEqual(enqueued, [{ projectId: "usertold", issueId: "issue-child" }]);
-    assert.notEqual(db.issueSessions.getIssueSession("usertold", "issue-child")?.waitingReason, "Blocked by USE-1");
     assert.equal(listEntry?.readyForExecution, true);
     assert.notEqual(listEntry?.waitingReason, "Blocked by USE-1");
     assert.ok(eventsOf(telemetry, "projection.invalidated").some((event) => (

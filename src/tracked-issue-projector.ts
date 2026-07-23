@@ -10,7 +10,7 @@ import { parseGitHubFailureContext } from "./github-failure-context.ts";
 import { deriveIssueExecutionStateFromRecords, isIssueExecutionReadyForExecution } from "./issue-execution-state.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
-import { hasDetachedActiveLatestRun, resolveEffectiveActiveRun } from "./effective-active-run.ts";
+import { resolveEffectiveActiveRun } from "./effective-active-run.ts";
 import type { RunType } from "./run-type.ts";
 import { deriveIssuePhase } from "./issue-phase.ts";
 
@@ -34,10 +34,6 @@ export function buildTrackedIssueRecord(params: {
   const blockedByKeys = unresolvedBlockedBy.map((entry) => entry.blockerIssueKey ?? entry.blockerLinearIssueId);
   const effectiveActiveRun = resolveEffectiveActiveRun({
     activeRun: params.issue.activeRunId !== undefined && params.latestRun?.id === params.issue.activeRunId ? params.latestRun : undefined,
-    latestRun: params.latestRun,
-  });
-  const detachedActiveRun = hasDetachedActiveLatestRun({
-    activeRunId: params.issue.activeRunId,
     latestRun: params.latestRun,
   });
   const waitingReason = derivePatchRelayWaitingReason({
@@ -86,7 +82,6 @@ export function buildTrackedIssueRecord(params: {
     ...(params.issue.url ? { issueUrl: params.issue.url } : {}),
     ...(statusNote ? { statusNote } : {}),
     ...(params.issue.currentLinearState ? { currentLinearState: params.issue.currentLinearState } : {}),
-    ...(params.session?.sessionState ? { sessionState: params.session.sessionState } : {}),
     phase: deriveIssuePhase({
       ...params.issue,
       activeRunType: effectiveActiveRun?.runType,
@@ -113,7 +108,6 @@ export function buildTrackedIssueRecord(params: {
     ...(completionCheckActive ? { completionCheckActive } : {}),
     ...(effectiveActiveRun ? { activeRunId: effectiveActiveRun.id } : {}),
     ...(params.issue.agentSessionId ? { activeAgentSessionId: params.issue.agentSessionId } : {}),
-    ...(detachedActiveRun && params.session?.sessionState ? { sessionState: "running" } : {}),
     updatedAt: params.issue.updatedAt,
   };
 }

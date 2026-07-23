@@ -48,28 +48,12 @@ export function evaluateTerminalIssueHealth(issue: IssueRecord): ClusterHealthCh
 }
 
 export function evaluateLocalIssueHealth(snapshot: IssueSnapshot): ClusterHealthCheck | undefined {
-  const { issue, session, missingTrackedBlockers, blockedBy, ageMs, executionState } = snapshot;
+  const { issue, missingTrackedBlockers, blockedBy, ageMs, executionState } = snapshot;
   if (missingTrackedBlockers.length > 0) {
     return {
       status: "fail",
       scope: "issue:blockers",
       message: `Blocked by unmanaged issue${missingTrackedBlockers.length === 1 ? "" : "s"} ${missingTrackedBlockers.map((dep) => dep.blockerIssueKey ?? dep.blockerLinearIssueId).join(", ")}`,
-    };
-  }
-
-  if (issue.activeRunId !== undefined && session?.sessionState !== "running") {
-    return {
-      status: "fail",
-      scope: "issue:run-state",
-      message: `Issue has active run #${issue.activeRunId} but session state is ${session?.sessionState ?? "missing"}`,
-    };
-  }
-
-  if (issue.activeRunId === undefined && session?.sessionState === "running") {
-    return {
-      status: "fail",
-      scope: "issue:run-state",
-      message: "Issue session is marked running but no active run is attached",
     };
   }
 

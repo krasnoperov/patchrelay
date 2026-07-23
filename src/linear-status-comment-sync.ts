@@ -78,18 +78,16 @@ export function shouldSyncVisibleIssueComment(
   issue: Pick<IssueRecord,
     | "prNumber" | "prUrl" | "prState" | "delegatedToPatchRelay" | "workflowOutcome" | "inputRequestKind"
     | "currentLinearState" | "currentLinearStateType"
-  > & {
-    sessionState?: string | undefined;
-  },
+  >,
   hasAgentSession: boolean,
 ): boolean {
   if (!hasAgentSession) {
     return true;
   }
-  if (issue.sessionState === "waiting_input" || isIssueAwaitingInputProjection(issue)) {
+  if (isIssueAwaitingInputProjection(issue)) {
     return true;
   }
-  if (issue.sessionState === "failed" || isIssueTerminalFailureProjection(issue)) {
+  if (isIssueTerminalFailureProjection(issue)) {
     return true;
   }
   if (isIssueDoneProjection(issue)) {
@@ -181,8 +179,8 @@ function renderStatusComment(
     lines.push("", `Waiting: ${waitingReason}`);
   }
   if (statusNote && statusNote !== waitingReason) {
-    const label = trackedIssue?.sessionState === "waiting_input" || isIssueAwaitingInputProjection(issue) ? "Input needed"
-      : trackedIssue?.sessionState === "failed" || isIssueTerminalFailureProjection(issue) ? "Action needed"
+    const label = isIssueAwaitingInputProjection(issue) ? "Input needed"
+      : isIssueTerminalFailureProjection(issue) ? "Action needed"
       : "Note";
     lines.push("", `${label}: ${statusNote}`);
   }
@@ -238,28 +236,12 @@ function statusHeadline(
     prCheckStatus?: string | undefined;
     workflowOutcome?: "completed" | "failed" | "escalated" | undefined;
     inputRequestKind?: "paused_local_work" | "completion_check_question" | undefined;
-    sessionState?: string | undefined;
-    waitingReason?: string | undefined;
   },
   activeRunType?: string,
 ): string {
   const prContext = derivePrDisplayContext(issue);
   if (activeRunType) {
     return `Running ${humanize(activeRunType)}`;
-  }
-  switch (issue.sessionState) {
-    case "waiting_input":
-      return issue.waitingReason ?? "Waiting for more input";
-    case "running":
-      return issue.prNumber !== undefined ? `PR #${issue.prNumber} is actively running` : "Actively running";
-    case "done":
-      if (issue.prNumber !== undefined && issue.prState === "merged") return `Completed with merged PR #${issue.prNumber}`;
-      if (issue.prNumber !== undefined && isClosedPrState(issue.prState)) return `Completed without merging PR #${issue.prNumber}`;
-      return issue.prNumber !== undefined ? `Completed with PR #${issue.prNumber}` : "Completed";
-    case "failed":
-      return "Needs operator intervention";
-    default:
-      break;
   }
   if (!issue.delegatedToPatchRelay && issue.prNumber !== undefined) {
     if (prContext.kind === "closed_pr_paused") {

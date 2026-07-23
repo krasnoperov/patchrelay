@@ -26,7 +26,6 @@ export interface WatchIssue {
   statusNote?: string | undefined;
   projectId: string;
   delegatedToPatchRelay: boolean;
-  sessionState?: string | undefined;
   phase: IssuePhase;
   blockedByCount: number;
   blockedByKeys: string[];
@@ -188,10 +187,6 @@ export const initialWatchState: WatchState = {
 
 const TERMINAL_ISSUE_PHASES = new Set(["done", "failed"]);
 
-function effectiveSessionState(issue: WatchIssue): string | undefined {
-  return issue.sessionState ?? (TERMINAL_ISSUE_PHASES.has(issue.phase) ? issue.phase : undefined);
-}
-
 export function filterIssues(issues: WatchIssue[], filter: WatchFilter): WatchIssue[] {
   switch (filter) {
     case "all":
@@ -199,10 +194,7 @@ export function filterIssues(issues: WatchIssue[], filter: WatchFilter): WatchIs
     case "active":
       return issues.filter((i) => i.activeRunType !== undefined);
     case "non-done":
-      return issues.filter((i) => {
-        const sessionState = effectiveSessionState(i);
-        return sessionState !== "done" && sessionState !== "failed" && !TERMINAL_ISSUE_PHASES.has(i.phase);
-      });
+      return issues.filter((i) => !TERMINAL_ISSUE_PHASES.has(i.phase));
   }
 }
 
@@ -222,9 +214,8 @@ export function computeAggregates(issues: WatchIssue[]): IssueAggregates {
   let done = 0;
   let failed = 0;
   for (const issue of issues) {
-    const sessionState = effectiveSessionState(issue);
-    const isDone = sessionState === "done" || isIssueDoneProjection(issue);
-    const isFailed = sessionState === "failed" || isIssueTerminalFailureProjection(issue);
+    const isDone = isIssueDoneProjection(issue);
+    const isFailed = isIssueTerminalFailureProjection(issue);
     if (issue.activeRunType) active++;
     if (!issue.activeRunType && issue.blockedByCount > 0) blocked++;
     if (!issue.activeRunType && issue.prNumber === undefined && issue.readyForExecution && !isDone && !isFailed) ready++;

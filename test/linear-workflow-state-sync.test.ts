@@ -356,7 +356,6 @@ test("syncActiveWorkflowState moves undelegated no-PR work back to the queued Li
       db,
       issue,
       trackedIssue: {
-        sessionState: "idle",
         blockedByCount: 0,
         readyForExecution: false,
       } as never,

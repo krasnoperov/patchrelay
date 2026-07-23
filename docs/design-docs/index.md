@@ -14,7 +14,6 @@ Read order:
 
 Known coupling (observation, no fix proposed):
 
-- [issue-session-projector-coupling.md](./issue-session-projector-coupling.md)
 
 Use this directory for:
 

@@ -557,7 +557,7 @@ test("public agent session status page validates token and exposes operator sess
     });
     assert.equal(page.statusCode, 200);
     assert.match(page.body, /Implement API endpoint/);
-    assert.match(page.body, /Session:/);
+    assert.doesNotMatch(page.body, /Session:/);
     assert.match(page.body, /Waiting reason:/);
     assert.match(page.body, /Derived phase:/);
     assert.match(page.body, /Waiting reason/);
