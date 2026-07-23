@@ -1,4 +1,4 @@
-import type { CheckResult, PostMergeStatus, QueueBlockState, QueueEntryStatus, QueueEventRecord, QueueEventSummary, QueueRuntimeStatus } from "../types.ts";
+import type { CheckResult, PostMergeStatus, QueueEntryStatus, QueueEventRecord, QueueEventSummary, QueueRuntimeStatus } from "../types.ts";
 import { formatDurationMs } from "../runtime-format.ts";
 
 const QUEUE_SYMBOLS = {
@@ -8,28 +8,6 @@ const QUEUE_SYMBOLS = {
   checkPending: "\u25cf",
   checkUnknown: "\u25cb",
 };
-
-export function isPendingMainVerification(block: QueueBlockState | null | undefined): boolean {
-  return Boolean(
-    block
-      && block.failingChecks.length === 0
-      && block.pendingChecks.length > 0
-      && block.missingRequiredChecks.length === 0,
-  );
-}
-
-export function queueBlockMatchesEntry(
-  block: QueueBlockState | null | undefined,
-  entry: { id: string; prNumber: number } | null | undefined,
-): block is QueueBlockState {
-  if (!block || !entry) {
-    return false;
-  }
-  if (block.entryId) {
-    return block.entryId === entry.id;
-  }
-  return block.headPrNumber === entry.prNumber;
-}
 
 export function shortSha(value: string | null | undefined): string {
   if (!value) {
@@ -373,35 +351,4 @@ export function ciStatusIcon(entry: {
     default:
       return { icon: QUEUE_SYMBOLS.checkUnknown, color: "gray" };
   }
-}
-
-export function summarizeQueueBlock(block: QueueBlockState | null | undefined): string | null {
-  if (!block) return null;
-  const missing = block.missingRequiredChecks.length > 0
-    ? `operator fix needed on ${block.baseBranch}: missing required ${block.missingRequiredChecks.join(", ")}`
-    : null;
-  const failing = block.failingChecks.length > 0 ? `failing ${summarizeCheckNames(block.failingChecks)}` : null;
-  const pending = block.pendingChecks.length > 0 ? `${summarizeCheckNames(block.pendingChecks)} pending` : null;
-  if (missing && failing && pending) {
-    return `${missing}; ${failing}; ${pending}`;
-  }
-  if (missing && failing) {
-    return `${missing}; ${failing}`;
-  }
-  if (missing && pending) {
-    return `${missing}; ${pending}`;
-  }
-  if (missing) {
-    return missing;
-  }
-  if (failing && pending) {
-    return `waiting for ${block.baseBranch}: ${failing}; ${pending}`;
-  }
-  if (failing) {
-    return `waiting for ${block.baseBranch} recovery: ${failing}`;
-  }
-  if (pending) {
-    return `waiting for ${block.baseBranch} verification: ${pending}`;
-  }
-  return `waiting for ${block.baseBranch} checks`;
 }

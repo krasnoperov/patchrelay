@@ -1,7 +1,7 @@
 import type { QueueEntry, QueueEntryStatus, QueueWatchSnapshot } from "../types.ts";
 import type { RepoRuntimeState } from "../admin-types.ts";
 import { TERMINAL_STATUSES } from "../types.ts";
-import { mergeWaitState, queueBlockMatchesEntry } from "./format.ts";
+import { mergeWaitState } from "./format.ts";
 
 export interface DashboardRepoConfig {
   repoId: string;
@@ -133,13 +133,10 @@ function entryKind(entry: QueueEntry): DashboardTokenKind {
   }
 }
 
-function entryPhrase(entry: QueueEntry, opts: { isHead: boolean; queueBlocked: boolean }): string {
-  if (opts.isHead && opts.queueBlocked) {
-    return "main broken";
-  }
+function entryPhrase(entry: QueueEntry, isHead: boolean): string {
   switch (entry.status) {
     case "queued":
-      return opts.isHead ? "queued" : "behind head";
+      return isHead ? "queued" : "behind head";
     case "preparing_head":
       return entry.lastFailedBaseSha ? "has conflicts" : "preparing";
     case "validating":
@@ -188,11 +185,6 @@ function tokenSortOrder(kind: DashboardTokenKind): number {
   }
 }
 
-function overrideKind(kind: DashboardTokenKind, override: "main_broken" | null): DashboardTokenKind {
-  if (override === "main_broken") return "error";
-  return kind;
-}
-
 function repoEntriesFromSnapshot(
   snapshot: QueueWatchSnapshot,
   cutoff: number,
@@ -202,7 +194,6 @@ function repoEntriesFromSnapshot(
   const head = latest
     .filter((entry) => isActive(entry.status))
     .sort((a, b) => a.position - b.position)[0] ?? null;
-  const queueBlocked = queueBlockMatchesEntry(snapshot.queueBlock, head);
 
   // Resolve speculative stacking: an entry's spec can be built on top of
   // another entry's spec (specBasedOn -> that entry's id). Map ids to PR
@@ -218,11 +209,10 @@ function repoEntriesFromSnapshot(
     if (!active && timestamp(entry.updatedAt) < cutoff) continue;
     if (entry.status === "dequeued") continue;
     const isHead = head !== null && entry.id === head.id;
-    const rawKind = entryKind(entry);
-    const kind = overrideKind(rawKind, isHead && queueBlocked ? "main_broken" : null);
+    const kind = entryKind(entry);
     const glyph = GLYPH[kind];
     const color = COLOR[kind];
-    const phrase = entryPhrase(entry, { isHead, queueBlocked });
+    const phrase = entryPhrase(entry, isHead);
     const parent = entry.specBasedOn ? idToEntry.get(entry.specBasedOn) ?? null : null;
     const stackedOnPr = parent && isActive(parent.status) ? parent.prNumber : null;
     // decidedAt is the terminal-transition time (never bumped by post-merge

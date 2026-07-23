@@ -279,7 +279,6 @@ test("latestEventForPr scans chronological events from newest to oldest", () => 
       lastTickOutcome: "succeeded",
       lastTickError: null,
     },
-    queueBlock: null,
     entries: [makeEntry("merged")],
     recentEvents: [
       {
