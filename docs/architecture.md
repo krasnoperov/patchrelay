@@ -69,7 +69,8 @@ flowchart TB
 The codebase uses focused top-level modules with small subdirectories where a responsibility has grown enough to need internal structure:
 
 - `issue-phase.ts` — presentation-only phase derived from durable facts and current run/task context
-- `issue-session-events.ts`, `issue-session-projector.ts`, `issue-session-state.ts` — session event parsing and session read-model projection
+- `issue-session-events.ts`, `issue-session-projector.ts` — session event parsing
+  plus operational session metadata and bounded summary projection
 - `reactive-workflow-intent.ts` — PR-derived follow-up intent used to create durable workflow signals/tasks
 - `workflow-model.ts`, `workflow-observation-context.ts`, `workflow-snapshot.ts`, `workflow-task-derivation.ts`, `workflow-gates.ts` — the durable workflow model: observations plus issue facts become a snapshot, open workflow tasks, and gate decisions
 - `workflow-task-reconciler.ts` — materializes open workflow tasks from the current snapshot
