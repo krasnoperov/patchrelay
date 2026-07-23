@@ -60,7 +60,6 @@ async function readQueueSnapshot(config: StewardConfig, eventLimit: number): Pro
             lastTickOutcome: "idle",
             lastTickError: null,
           },
-          queueBlock: null,
           entries,
           recentEvents: store.listRecentEvents(config.repoId, { limit: eventLimit }),
         },
@@ -99,16 +98,6 @@ export function formatQueueStatusText(source: "service" | "database", snapshot: 
       ? [
         "Last tick: failed",
         ...(firstLine(snapshot.runtime.lastTickError) ? [`Last error: ${firstLine(snapshot.runtime.lastTickError)}`] : []),
-      ]
-      : []),
-    ...(snapshot.queueBlock
-      ? [
-        `Queue blocked: ${snapshot.queueBlock.reason} on ${snapshot.queueBlock.baseBranch}${snapshot.queueBlock.baseSha ? ` @ ${snapshot.queueBlock.baseSha.slice(0, 8)}` : ""}`,
-        `Missing required: ${snapshot.queueBlock.missingRequiredChecks.length > 0 ? snapshot.queueBlock.missingRequiredChecks.join(", ") : "(none)"}`,
-        `Base failures: ${snapshot.queueBlock.failingChecks.length > 0 ? snapshot.queueBlock.failingChecks.map((check) => check.name).join(", ") : "(none)"}`,
-        ...(snapshot.queueBlock.pendingChecks.length > 0
-          ? [`Base pending: ${snapshot.queueBlock.pendingChecks.map((check) => check.name).join(", ")}`]
-          : []),
       ]
       : []),
     "",

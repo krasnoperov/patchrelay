@@ -1,7 +1,7 @@
 import type { Logger } from "pino";
 import type { GitOperations, CIRunner, GitHubPRApi, EvictionReporter, SpeculativeBranchBuilder } from "./interfaces.ts";
 import type { QueueStore } from "./store.ts";
-import type { QueueBlockState, QueueReconcileResult, QueueRuntimeStatus, ReconcileEvent, ReconcileEventSummary } from "./types.ts";
+import type { QueueReconcileResult, QueueRuntimeStatus, ReconcileEvent, ReconcileEventSummary } from "./types.ts";
 import type { StewardConfig } from "./config.ts";
 import type { GitHubPolicyCache } from "./github-policy.ts";
 import { reconcile } from "./reconciler.ts";
@@ -15,8 +15,6 @@ export class MergeStewardRuntime {
   private lastTickOutcome: QueueRuntimeStatus["lastTickOutcome"] = "idle";
   private lastTickError: string | null = null;
   private lastReconcileEvent: ReconcileEventSummary | null = null;
-  // The queue never blocks on main CI, so this stays null; kept for status-shape stability.
-  private currentQueueBlock: QueueBlockState | null = null;
 
   constructor(
     private readonly config: StewardConfig,
@@ -72,10 +70,6 @@ export class MergeStewardRuntime {
       staleTick: tickAgeMs !== null && tickAgeMs >= staleTickThresholdMs,
       lastReconcileEvent: this.lastReconcileEvent,
     };
-  }
-
-  getCurrentQueueBlock(): QueueBlockState | null {
-    return this.currentQueueBlock;
   }
 
   getGitHubPolicy() {
@@ -161,12 +155,9 @@ export class MergeStewardRuntime {
           this.logger[level]({ ...event }, `Queue: ${event.action} PR #${event.prNumber}`);
         },
       });
-      // The queue never blocks on main CI — main health is information-only.
-      this.currentQueueBlock = null;
       this.lastTickOutcome = "succeeded";
     } catch (error) {
       this.lastTickOutcome = "failed";
-      this.currentQueueBlock = null;
       this.lastTickError = error instanceof Error
         ? `${error.message}${error.stack ? `\n${error.stack}` : ""}`
         : String(error);

@@ -36,7 +36,6 @@ export class MergeStewardWatchQueries {
       githubPolicy: this.runtime.getGitHubPolicy(),
       summary: buildQueueSummary(entries),
       runtime: this.runtime.getRuntimeStatus(),
-      queueBlock: this.runtime.getCurrentQueueBlock(),
       entries,
       recentEvents: this.store.listRecentEvents(this.config.repoId, { limit: options?.eventLimit ?? 40 }),
     };

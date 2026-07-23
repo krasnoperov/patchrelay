@@ -199,18 +199,6 @@ export interface QueueStatusSummary {
   headPrNumber: number | null;
 }
 
-export interface QueueBlockState {
-  reason: "main_broken";
-  entryId: string;
-  headPrNumber: number | null;
-  baseBranch: string;
-  baseSha: string | null;
-  observedAt: string;
-  failingChecks: CheckResult[];
-  pendingChecks: CheckResult[];
-  missingRequiredChecks: string[];
-}
-
 export interface GitHubPolicyState {
   requiredChecks: string[];
   requireAllChecksOnEmptyRequiredSet: boolean;
@@ -226,7 +214,6 @@ export interface QueueWatchSnapshot {
   githubPolicy: GitHubPolicyState;
   summary: QueueStatusSummary;
   runtime: QueueRuntimeStatus;
-  queueBlock: QueueBlockState | null;
   entries: QueueEntry[];
   recentEvents: QueueEventSummary[];
 }

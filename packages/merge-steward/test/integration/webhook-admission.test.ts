@@ -522,7 +522,6 @@ describe("webhook admission integration", () => {
     assert.strictEqual(watch1.summary.total, 1);
     assert.strictEqual(watch1.summary.active, 1);
     assert.strictEqual(watch1.summary.headPrNumber, 7);
-    assert.strictEqual((watch1 as { queueBlock?: unknown }).queueBlock ?? null, null);
     assert.deepStrictEqual(watch1.recentEvents.map((event) => [event.prNumber, event.toStatus]), [[7, "queued"]]);
 
     const reconcile1 = await (await fetch(`${address}/repos/test-repo/queue/reconcile`, { method: "POST" })).json() as { ok: boolean; started: boolean };
@@ -558,7 +557,7 @@ describe("webhook admission integration", () => {
     assert.strictEqual(detail.incidents.length, 0);
   });
 
-  it("never reports a main-broken queue block — main CI is ignored by the queue", async () => {
+  it("advances on spec CI even when main CI is red", async () => {
     const store = new MemoryStore();
     const githubSim = new GitHubSim();
     const logger = pino({ level: "silent" });
@@ -618,13 +617,11 @@ describe("webhook admission integration", () => {
 
     const watch = await (await fetch(`${address}/repos/test-repo/queue/watch`)).json() as {
       summary: { headPrNumber: number | null };
-      queueBlock: unknown | null;
+      entries: Array<{ prNumber: number; status: string }>;
     };
 
     assert.strictEqual(watch.summary.headPrNumber, 8);
-    // The queue is never paused by a red main: no queue block is surfaced, and the
-    // entry advances on its own spec CI (pending here) rather than being held on main.
-    assert.strictEqual(watch.queueBlock, null);
+    assert.strictEqual(watch.entries.find((entry) => entry.prNumber === 8)?.status, "validating");
   });
 
   it("entry detail returns the most recent events when eventLimit is applied", async () => {

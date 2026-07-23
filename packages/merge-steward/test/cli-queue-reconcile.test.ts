@@ -88,7 +88,6 @@ function makeSnapshot(overrides: Partial<QueueWatchSnapshot> = {}): QueueWatchSn
       lastTickOutcome: "idle",
       lastTickError: null,
     },
-    queueBlock: null,
     entries: [{
       id: "entry-1",
       repoId: "app",
@@ -304,17 +303,6 @@ test("queue status text output surfaces failed tick errors ahead of stale queue 
       lastTickOutcome: "failed",
       lastTickError: "Command failed: git push\nExit code: 1\nstderr: remote rejected",
     },
-    queueBlock: {
-      reason: "main_broken",
-      entryId: "entry-1",
-      headPrNumber: 14,
-      baseBranch: "main",
-      baseSha: "edc495b599b6d795f5c65657f656615d9d243c8a",
-      observedAt: "2026-04-06T16:26:30.217Z",
-      failingChecks: [],
-      pendingChecks: [{ name: "verify", conclusion: "pending", url: "https://example.test/run" }],
-      missingRequiredChecks: [],
-    },
     entries: [{
       id: "entry-1",
       repoId: "app",
@@ -344,7 +332,6 @@ test("queue status text output surfaces failed tick errors ahead of stale queue 
   const text = formatQueueStatusText("service", snapshot);
   assert.match(text, /Last tick: failed/);
   assert.match(text, /Last error: Command failed: git push/);
-  assert.match(text, /Queue blocked: main_broken on main @ edc495b5/);
 });
 
 test("queue status text output explains an active reconcile tick", () => {

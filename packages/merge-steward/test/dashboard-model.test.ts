@@ -47,7 +47,7 @@ function makeEntry(overrides: Partial<QueueEntry> & { prNumber: number; position
   };
 }
 
-function makeSnapshot(entries: QueueEntry[], queueBlock: QueueWatchSnapshot["queueBlock"] = null): QueueWatchSnapshot {
+function makeSnapshot(entries: QueueEntry[]): QueueWatchSnapshot {
   return {
     repoId: "repo-a",
     repoFullName: "owner/repo-a",
@@ -66,7 +66,6 @@ function makeSnapshot(entries: QueueEntry[], queueBlock: QueueWatchSnapshot["que
       lastTickOutcome: "succeeded",
       lastTickError: null,
     },
-    queueBlock,
     entries,
     recentEvents: [],
   };
@@ -176,62 +175,6 @@ test("decided PRs older than the time window are dropped", () => {
     model.repos[0]?.tokens.map((t) => t.prNumber),
     [21],
   );
-});
-
-test("queue block re-labels the head PR as main broken with red glyph", () => {
-  const snapshot = makeSnapshot(
-    [
-      makeEntry({ prNumber: 30, position: 1, status: "merging" }),
-      makeEntry({ prNumber: 31, position: 2, status: "queued" }),
-    ],
-    {
-      reason: "main_broken",
-      entryId: "qe-30-1",
-      headPrNumber: 30,
-      baseSha: "base",
-      baseBranch: "main",
-      observedAt: new Date().toISOString(),
-      failingChecks: [{ name: "ci", conclusion: "failure" }],
-      pendingChecks: [],
-      missingRequiredChecks: [],
-    },
-  );
-  const model = buildDashboard([makeRepo(snapshot)], { now: NOW });
-  const head = model.repos[0]?.entries.find((entry) => entry.prNumber === 30);
-  assert.equal(head?.kind, "error");
-  assert.equal(head?.glyph, "\u26a0");
-  assert.equal(head?.phrase, "main broken");
-});
-
-test("stale queue block does not relabel a conflicting head as main broken", () => {
-  const snapshot = makeSnapshot(
-    [
-      makeEntry({
-        id: "entry-current",
-        prNumber: 31,
-        position: 2,
-        status: "preparing_head",
-        lastFailedBaseSha: "base-after-conflict",
-      }),
-    ],
-    {
-      reason: "main_broken",
-      entryId: "entry-old",
-      headPrNumber: 30,
-      baseBranch: "main",
-      baseSha: "base-before-conflict",
-      observedAt: new Date().toISOString(),
-      failingChecks: [{ name: "Tests", conclusion: "failure" }],
-      pendingChecks: [],
-      missingRequiredChecks: [],
-    },
-  );
-
-  const model = buildDashboard([makeRepo(snapshot)], { now: NOW });
-  const head = model.repos[0]?.entries.find((entry) => entry.prNumber === 31);
-  assert.equal(head?.kind, "running");
-  assert.equal(head?.glyph, "\u25cf");
-  assert.equal(head?.phrase, "has conflicts");
 });
 
 test("merged PR with failed post-merge CI becomes a red declined token", () => {
