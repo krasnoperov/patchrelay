@@ -9,10 +9,9 @@ import { deriveIssuePhase, type IssuePhase } from "./issue-phase.ts";
 
 function shouldSuppressStatusNote(params: {
   activeRunType?: string | null | undefined;
-  sessionState?: string | null | undefined;
   statusNote?: string | undefined;
 }): boolean {
-  if (!params.activeRunType && params.sessionState !== "running") return false;
+  if (!params.activeRunType) return false;
   const note = params.statusNote?.trim().toLowerCase();
   if (!note) return true;
   return note === "codex turn was interrupted"
@@ -90,7 +89,6 @@ export class TrackedIssueListQuery {
     statusNote?: string;
     projectId: string;
     delegatedToPatchRelay: boolean;
-    sessionState?: string;
     phase: IssuePhase;
     blockedByCount: number;
     blockedByKeys: string[];
@@ -181,9 +179,6 @@ export class TrackedIssueListQuery {
       });
       const readyForExecution = isIssueExecutionReadyForExecution(executionState);
       const failureSummary = summarizeGitHubFailureContext(failureContext);
-      const sessionWaitingReason = typeof row.waiting_reason === "string" && row.waiting_reason.trim().length > 0
-        ? row.waiting_reason
-        : undefined;
       const sessionSummary = typeof row.summary_text === "string" && row.summary_text.trim().length > 0
         ? row.summary_text
         : undefined;
@@ -197,11 +192,7 @@ export class TrackedIssueListQuery {
         ...(row.last_blocking_review_head_sha !== null ? { lastBlockingReviewHeadSha: String(row.last_blocking_review_head_sha) } : {}),
         ...(row.last_github_failure_check_name !== null ? { latestFailureCheckName: String(row.last_github_failure_check_name) } : {}),
       });
-      // The derivation (issue-execution-state.ts via waiting-reason.ts) is the
-      // single source; the stored session projection is only a fallback for
-      // rows whose live facts derive no reason. A detached active run means
-      // the projection is stale, so it is not consulted at all.
-      const waitingReason = derivedWaitingReason ?? (detachedActiveRun ? undefined : sessionWaitingReason);
+      const waitingReason = derivedWaitingReason;
       const latestRun = row.latest_run_type !== null && row.latest_run_status !== null
         ? {
             id: 0,
@@ -234,7 +225,6 @@ export class TrackedIssueListQuery {
         ?? (waitingReason === "PatchRelay work is complete" ? undefined : waitingReason);
       const statusNoteForReturn = shouldSuppressStatusNote({
         activeRunType: effectiveActiveRunType,
-        sessionState: detachedActiveRun ? "running" : row.session_state as string | null | undefined,
         statusNote: statusNoteCandidate,
       })
         ? undefined
@@ -260,7 +250,6 @@ export class TrackedIssueListQuery {
         ...(statusNoteForReturn ? { statusNote: statusNoteForReturn } : {}),
         projectId: String(row.project_id),
         delegatedToPatchRelay: row.delegated_to_patchrelay === null ? true : Number(row.delegated_to_patchrelay) !== 0,
-        ...(row.session_state !== null ? { sessionState: detachedActiveRun ? "running" : String(row.session_state) } : {}),
         phase: deriveIssuePhase({
           ...issueFacts,
           activeRunType: effectiveActiveRunType as never,

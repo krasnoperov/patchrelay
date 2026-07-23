@@ -366,32 +366,10 @@ export function summarizeIssueStateForLinear(
     | "prNumber" | "prState" | "prIsDraft" | "prReviewState" | "prCheckStatus" | "delegatedToPatchRelay"
     | "workflowOutcome" | "inputRequestKind" | "lastGitHubFailureSource" | "deployStartedAt"
     | "currentLinearState" | "currentLinearStateType"
-  > & {
-    sessionState?: string | undefined;
-    waitingReason?: string | undefined;
-  },
+  >,
 ): string | undefined {
   const prContext = derivePrDisplayContext(issue);
   const phase = deriveIssuePhase(issue);
-  switch (issue.sessionState) {
-    case "waiting_input":
-      return issue.waitingReason ?? (issue.prNumber && !isClosedPrState(issue.prState) ? `PR #${issue.prNumber} is waiting for input.` : "Waiting for input.");
-    case "running":
-      return issue.waitingReason ?? (issue.prNumber && !isClosedPrState(issue.prState) ? `PR #${issue.prNumber} is actively running.` : "Actively running.");
-    case "idle":
-      if (!issue.delegatedToPatchRelay) {
-        break;
-      }
-      return issue.waitingReason ?? (issue.prNumber ? `PR #${issue.prNumber} is idle.` : "Idle.");
-      
-    case "done":
-      if (issue.prNumber && issue.prState === "merged") return `PR #${issue.prNumber} has merged.`;
-      if (issue.prNumber && isClosedPrState(issue.prState)) return `Completed without merging PR #${issue.prNumber}.`;
-      return issue.prNumber ? `Completed with PR #${issue.prNumber}.` : "Completed.";
-    case "failed":
-      return issue.waitingReason ?? (issue.prNumber && !isClosedPrState(issue.prState) ? `PR #${issue.prNumber} needs help to recover.` : "Needs help to recover.");
-  }
-
   switch (phase) {
     case "delegated":
       if (prContext.kind === "closed_replacement_pending") {

@@ -702,8 +702,6 @@ export class IssueStore {
           i.last_github_failure_source,
           i.deploy_started_at,
           i.updated_at,
-          s.session_state,
-          s.waiting_reason,
           active_run.run_type AS active_run_type,
           latest_run.run_type AS latest_run_type,
           latest_run.status AS latest_run_status

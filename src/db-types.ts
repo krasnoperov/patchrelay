@@ -2,7 +2,6 @@ import type { InputRequestKind, WorkflowOutcome } from "./issue-phase.ts";
 import type { IssuePhase } from "./issue-phase.ts";
 import type { RunType } from "./run-type.ts";
 import type { IssueClass, IssueClassSource } from "./issue-class.ts";
-import type { IssueSessionState } from "./issue-session-state.ts";
 import type { CompletionCheckOutcome } from "./completion-check-types.ts";
 
 // Plan §4.4: `superseded` — the run was cancelled mid-flight because
@@ -136,8 +135,6 @@ export interface IssueSessionRecord {
   prNumber?: number | undefined;
   prHeadSha?: string | undefined;
   prAuthorLogin?: string | undefined;
-  sessionState: IssueSessionState;
-  waitingReason?: string | undefined;
   summaryText?: string | undefined;
   activeThreadId?: string | undefined;
   threadGeneration: number;
@@ -236,7 +233,6 @@ export interface TrackedIssueRecord {
   issueUrl?: string | undefined;
   statusNote?: string | undefined;
   currentLinearState?: string | undefined;
-  sessionState?: IssueSessionState | undefined;
   phase: IssuePhase;
   prNumber?: number | undefined;
   prState?: string | undefined;

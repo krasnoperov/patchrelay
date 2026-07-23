@@ -82,7 +82,6 @@ export interface OperatorIssueStatusResult {
     issueKey?: string;
     title?: string;
     currentLinearState?: string;
-    sessionState?: string;
     phase?: string;
     prNumber?: number;
     prState?: string;

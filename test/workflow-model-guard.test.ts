@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-const RETIRED_LIFECYCLE_TERMS = /factoryState|FactoryState|factory-state|legacy-issue-overview|pr-facts-derivation/;
+const RETIRED_LIFECYCLE_TERMS = /factoryState|FactoryState|factory-state|legacy-issue-overview|pr-facts-derivation|sessionState|issue-session-state|session_state/;
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {

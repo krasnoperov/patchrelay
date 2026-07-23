@@ -19,7 +19,6 @@ export interface ObservationLine {
 }
 
 export interface PatchRelayObservationIssue {
-  sessionState?: string | undefined;
   waitingReason?: string | undefined;
   phase: IssuePhase;
   activeRunType?: string | undefined;
@@ -145,23 +144,19 @@ export function buildPatchRelayQueueObservations(
 ): ObservationLine[] {
   const observations: ObservationLine[] = [];
 
-  switch (issue.sessionState) {
-    case "waiting_input":
+  switch (issue.phase) {
+    case "awaiting_input":
       observations.push({
         tone: "warn",
         text: issue.waitingReason ?? "PatchRelay is waiting for input before continuing.",
       });
       break;
-    case "running":
+    case "implementing":
+    case "changes_requested":
+    case "repairing_ci":
       observations.push({
         tone: "info",
-        text: "PatchRelay is actively working this session.",
-      });
-      break;
-    case "idle":
-      observations.push({
-        tone: "info",
-        text: "PatchRelay is idle for this issue.",
+        text: issue.activeRunType ? "PatchRelay is actively working this issue." : "PatchRelay is preparing the next workflow task.",
       });
       break;
     case "done":
@@ -171,13 +166,12 @@ export function buildPatchRelayQueueObservations(
       });
       break;
     case "failed":
+    case "escalated":
       observations.push({
         tone: "warn",
-        text: "PatchRelay needs human help to recover this session.",
+        text: "PatchRelay needs human help to recover this issue.",
       });
       break;
-    default:
-      switch (issue.phase) {
     case "awaiting_queue":
       observations.push({
         tone: "info",
@@ -198,19 +192,11 @@ export function buildPatchRelayQueueObservations(
         text: "PatchRelay merged the PR and is watching the deploy workflow on main.",
       });
       break;
-    case "done":
-      observations.push({
-        tone: "success",
-        text: "PatchRelay is complete because GitHub reports the PR has merged.",
-      });
-      break;
     default:
       observations.push({
         tone: "info",
         text: "PatchRelay is tracking this issue.",
       });
-      break;
-      }
       break;
   }
 

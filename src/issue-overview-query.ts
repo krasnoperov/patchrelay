@@ -185,7 +185,7 @@ export class IssueOverviewQuery {
       lastGitHubFailureSource: issueRecord?.lastGitHubFailureSource,
       deployStartedAt: issueRecord?.deployStartedAt,
     });
-    const waitingReason = derivedWaitingReason ?? session.waitingReason;
+    const waitingReason = derivedWaitingReason;
     const issue: TrackedIssueRecord = {
       id: issueRecord?.id ?? session.id,
       projectId: session.projectId,
@@ -195,7 +195,6 @@ export class IssueOverviewQuery {
       ...(issueRecord?.title ? { title: issueRecord.title } : {}),
       ...(issueRecord?.url ? { issueUrl: issueRecord.url } : {}),
       ...(issueRecord?.currentLinearState ? { currentLinearState: issueRecord.currentLinearState } : {}),
-      sessionState: session.sessionState,
       phase: issueRecord ? deriveIssuePhase({
         ...issueRecord,
         activeRunType: activeRun?.runType,

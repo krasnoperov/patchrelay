@@ -24,6 +24,7 @@ function makeIssue(key: string, overrides?: Partial<WatchIssue>): WatchIssue {
     issueKey: key,
     projectId: "test-project",
     delegatedToPatchRelay: true,
+    phase: "delegated",
     workflowOutcome: undefined,
     blockedByCount: 0,
     blockedByKeys: [],
@@ -231,13 +232,13 @@ test("computeAggregates counts blocked and ready issues separately", () => {
 test("computeAggregates does not count terminal issues as ready even if stale ready flags linger", () => {
   const issues = [
     makeIssue("USE-1", {
-      sessionState: "done",
       workflowOutcome: "completed",
+      phase: "done",
       readyForExecution: true,
     }),
     makeIssue("USE-2", {
-      sessionState: "failed",
       workflowOutcome: "failed",
+      phase: "failed",
       readyForExecution: true,
     }),
   ];
@@ -1126,8 +1127,8 @@ test("buildTimelineRows keeps active runs focused on the latest live context", (
 test("computeAggregates counts active, done, failed", () => {
   const issues = [
     makeIssue("USE-1", { workflowOutcome: undefined, activeRunType: "implementation" }),
-    makeIssue("USE-2", { workflowOutcome: undefined, sessionState: "done" }),
-    makeIssue("USE-3", { workflowOutcome: undefined, sessionState: "failed" }),
+    makeIssue("USE-2", { workflowOutcome: "completed", phase: "done" }),
+    makeIssue("USE-3", { workflowOutcome: "failed", phase: "failed" }),
     makeIssue("USE-4", { workflowOutcome: "escalated" }),
     makeIssue("USE-5", { workflowOutcome: undefined }),
     makeIssue("USE-6", { workflowOutcome: undefined, activeRunType: "implementation" }),

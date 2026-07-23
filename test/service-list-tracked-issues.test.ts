@@ -119,11 +119,10 @@ test("listTrackedIssues suppresses stale interrupted notes while a run is active
     });
     db.unsafeRawConnectionForTests().prepare(`
       UPDATE issue_sessions
-      SET summary_text = ?, session_state = ?, active_run_id = ?
+      SET summary_text = ?, active_run_id = ?
       WHERE project_id = ? AND linear_issue_id = ?
     `).run(
       "Codex turn was interrupted",
-      "running",
       run.id,
       issue.projectId,
       issue.linearIssueId,
@@ -174,13 +173,11 @@ test("listTrackedIssues treats a detached running latest run as active work", as
     db.runs.updateRunThread(run.id, { threadId: "thread-detached", turnId: "turn-detached" });
     db.unsafeRawConnectionForTests().prepare(`
       UPDATE issue_sessions
-      SET summary_text = ?, session_state = ?, active_run_id = ?, waiting_reason = ?
+      SET summary_text = ?, active_run_id = ?
       WHERE project_id = ? AND linear_issue_id = ?
     `).run(
       "PatchRelay work is complete",
-      "idle",
       null,
-      "PatchRelay work is complete",
       issue.projectId,
       issue.linearIssueId,
     );
@@ -188,7 +185,6 @@ test("listTrackedIssues treats a detached running latest run as active work", as
     const tracked = service.listTrackedIssues().find((entry) => entry.issueKey === "USE-D");
     assert.ok(tracked);
     assert.equal(tracked.activeRunType, "implementation");
-    assert.equal(tracked.sessionState, "running");
     assert.equal(tracked.waitingReason, "PatchRelay is actively working");
     assert.equal(tracked.readyForExecution, false);
   } finally {
@@ -235,11 +231,10 @@ test("listTrackedIssues suppresses stale zombie notes while a run is active", as
     });
     db.unsafeRawConnectionForTests().prepare(`
       UPDATE issue_sessions
-      SET summary_text = ?, session_state = ?, active_run_id = ?
+      SET summary_text = ?, active_run_id = ?
       WHERE project_id = ? AND linear_issue_id = ?
     `).run(
       "Zombie: never started (no thread after restart)",
-      "running",
       run.id,
       issue.projectId,
       issue.linearIssueId,

@@ -39,7 +39,6 @@ export class PublicAgentSessionStatusQuery {
         title: overview.issue.title,
         issueUrl: overview.issue.issueUrl,
         currentLinearState: overview.issue.currentLinearState,
-        ...(overview.session?.sessionState ? { sessionState: overview.session.sessionState } : {}),
         phase: overview.issue.phase,
         ...(overview.session?.prNumber !== undefined ? { prNumber: overview.session.prNumber } : {}),
         ...(issueRecord?.prUrl ? { prUrl: issueRecord.prUrl } : {}),

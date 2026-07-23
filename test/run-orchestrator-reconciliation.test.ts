@@ -730,8 +730,8 @@ test("reconcileActiveRuns reattaches a detached running run before continuing re
       runType: "implementation",
     });
     db.runs.updateRunThread(run.id, { threadId: "thread-detached", turnId: "turn-detached" });
-    db.unsafeRawConnectionForTests().prepare("UPDATE issue_sessions SET active_run_id = NULL, session_state = ? WHERE project_id = ? AND linear_issue_id = ?")
-      .run("idle", issue.projectId, issue.linearIssueId);
+    db.unsafeRawConnectionForTests().prepare("UPDATE issue_sessions SET active_run_id = NULL WHERE project_id = ? AND linear_issue_id = ?")
+      .run(issue.projectId, issue.linearIssueId);
 
     await orchestrator.reconcileActiveRuns();
 
@@ -739,7 +739,6 @@ test("reconcileActiveRuns reattaches a detached running run before continuing re
     const updatedSession = db.issueSessions.getIssueSession(issue.projectId, issue.linearIssueId);
     assert.equal(updatedIssue?.activeRunId, run.id);
     assert.equal(updatedSession?.activeRunId, run.id);
-    assert.equal(updatedSession?.sessionState, "running");
     assert.equal(db.runs.getRunById(run.id)?.status, "running");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

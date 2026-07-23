@@ -35,8 +35,6 @@ export class ImmediateIssueSessionProjectionInvalidator implements IssueSessionP
       getIssue: (projectId: string, linearIssueId: string) => IssueRecord | undefined;
       listDependents: (projectId: string, blockerLinearIssueId: string) => Array<{ projectId: string; linearIssueId: string }>;
       projectIssue: (issue: IssueRecord, options?: IssueSessionProjectionOptions) => void;
-      countUnresolvedBlockers?: (projectId: string, linearIssueId: string) => number;
-      getIssueSessionWaitingReason?: (projectId: string, linearIssueId: string) => string | undefined;
       telemetry?: PatchRelayTelemetry | undefined;
     },
   ) {}
@@ -120,36 +118,8 @@ export class ImmediateIssueSessionProjectionInvalidator implements IssueSessionP
       });
       return;
     }
-    const beforeWaitingReason = this.deps.getIssueSessionWaitingReason?.(issue.projectId, issue.linearIssueId);
     this.deps.projectIssue(issue, options);
     this.emitReprojected(reason, issue);
-    const unresolved = this.deps.countUnresolvedBlockers?.(issue.projectId, issue.linearIssueId);
-    const afterWaitingReason = this.deps.getIssueSessionWaitingReason?.(issue.projectId, issue.linearIssueId);
-    if (
-      unresolved === 0
-      && beforeWaitingReason?.startsWith("Blocked by ")
-      && !afterWaitingReason?.startsWith("Blocked by ")
-    ) {
-      emitTelemetry(this.deps.telemetry ?? noopTelemetry, {
-        type: "health.invariant",
-        invariant: "stale_blocked_read_model",
-        status: "repaired",
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
-        detail: "Projection cleared stale blocked waiting reason after blockers resolved",
-      });
-    } else if (unresolved === 0 && afterWaitingReason?.startsWith("Blocked by ")) {
-      emitTelemetry(this.deps.telemetry ?? noopTelemetry, {
-        type: "health.invariant",
-        invariant: "stale_blocked_read_model",
-        status: "observed",
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
-        detail: "Issue session still reports blocked after source blockers resolved",
-      });
-    }
   }
 
   private emitInvalidated(

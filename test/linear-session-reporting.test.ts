@@ -347,33 +347,29 @@ test("review round activities summarize reviewer and captured comments without c
   );
 });
 
-test("linear summaries prefer session state over a derived display phase", () => {
+test("linear summaries derive directly from workflow facts", () => {
   assert.equal(
     summarizeIssueStateForLinear({
       workflowOutcome: undefined,
-      sessionState: "waiting_input",
-      waitingReason: "Waiting for a merge queue retry.",
       prNumber: 7,
       delegatedToPatchRelay: true,
       prState: "open",
       prReviewState: "approved",
       prCheckStatus: "passed",
     }),
-    "Waiting for a merge queue retry.",
+    "PR #7 is approved and awaiting merge.",
   );
 
   assert.equal(
     summarizeIssueStateForLinear({
       workflowOutcome: undefined,
-      sessionState: "running",
-      waitingReason: "PatchRelay is finalizing a published PR",
       prNumber: 8,
       delegatedToPatchRelay: true,
       prState: "open",
       prReviewState: "approved",
       prCheckStatus: "passed",
     }),
-    "PatchRelay is finalizing a published PR",
+    "PR #8 is approved and awaiting merge.",
   );
 });
 
@@ -404,7 +400,6 @@ test("linear summaries describe paused undelegated PR-backed states explicitly",
   assert.equal(
     summarizeIssueStateForLinear({
       workflowOutcome: undefined,
-      sessionState: "idle",
       delegatedToPatchRelay: false,
       prNumber: 41,
       prState: "open",
@@ -417,7 +412,6 @@ test("linear summaries describe paused undelegated PR-backed states explicitly",
   assert.equal(
     summarizeIssueStateForLinear({
       workflowOutcome: undefined,
-      sessionState: "idle",
       delegatedToPatchRelay: false,
       prNumber: 42,
       prState: "open",
@@ -430,7 +424,6 @@ test("linear summaries describe paused undelegated PR-backed states explicitly",
   assert.equal(
     summarizeIssueStateForLinear({
       workflowOutcome: undefined,
-      sessionState: "idle",
       delegatedToPatchRelay: false,
       prNumber: 43,
       prState: "open",
@@ -445,7 +438,6 @@ test("linear summaries describe paused undelegated no-PR states explicitly", () 
   assert.equal(
     summarizeIssueStateForLinear({
       workflowOutcome: undefined,
-      sessionState: "idle",
       delegatedToPatchRelay: false,
       prState: undefined,
       prReviewState: undefined,
