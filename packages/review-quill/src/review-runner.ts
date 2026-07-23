@@ -23,7 +23,7 @@ import type { PriorReviewThreadCandidate } from "./prior-review-thread-selector.
 
 export interface ReviewRunOptions {
   signal?: AbortSignal;
-  onThreadSnapshot?: (thread: CodexThreadSummary) => void;
+  onThreadProgress?: (progress: { threadId: string; turnId: string }) => void;
 }
 
 type ReviewThreadStartMode = "fresh" | "forked" | "fresh_fallback";
@@ -333,6 +333,10 @@ export class ReviewRunner {
     await this.codex.stop();
   }
 
+  async readThread(threadId: string): Promise<CodexThreadSummary> {
+    return await this.codex.readThread(threadId);
+  }
+
   async review(
     context: ReviewContext,
     options: ReviewRunOptions = {},
@@ -464,19 +468,11 @@ export class ReviewRunner {
     try {
       const started = await this.startTurnWithMaterializationRetry(threadId, cwd, input);
       completionSubscription?.expectTurn(started.turnId);
-      const startedThread: CodexThreadSummary = {
-        id: threadId,
-        turns: [
-          ...priorThread.turns,
-          { id: started.turnId, status: started.status, items: [] },
-        ],
-      };
-      const startedThreadPersisted = this.emitThreadSnapshot(options.onThreadSnapshot, startedThread);
+      this.emitThreadProgress(options.onThreadProgress, { threadId, turnId: started.turnId });
       const completedThread = await this.waitForTurnCompletion(
         threadId,
         started.turnId,
         options,
-        startedThreadPersisted ? JSON.stringify(startedThread) : undefined,
         completionSubscription?.completion,
       );
       const latestMessage = collectAssistantMessages(completedThread).at(-1);
@@ -611,19 +607,10 @@ export class ReviewRunner {
     threadId: string,
     turnId: string,
     options: ReviewRunOptions,
-    initialPersistedThreadJson?: string,
     completionNotification?: Promise<void>,
   ): Promise<Awaited<ReturnType<CodexAppServerClient["readThread"]>>> {
-    const { signal, onThreadSnapshot } = options;
+    const { signal } = options;
     const deadline = Date.now() + 15 * 60_000;
-    let persistedThreadJson = initialPersistedThreadJson;
-    const persistThread = (thread: CodexThreadSummary): void => {
-      const threadJson = JSON.stringify(thread);
-      if (threadJson === persistedThreadJson) return;
-      if (this.emitThreadSnapshot(onThreadSnapshot, thread)) {
-        persistedThreadJson = threadJson;
-      }
-    };
     let interruptSubmitted = false;
     const submitInterrupt = async (): Promise<void> => {
       if (interruptSubmitted || !signal?.aborted) return;
@@ -650,7 +637,6 @@ export class ReviewRunner {
         let thread: Awaited<ReturnType<CodexAppServerClient["readThread"]>>;
         try {
           thread = await this.codex.readThread(threadId);
-          persistThread(thread);
         } catch (error) {
           if (isThreadMaterializationRace(error)) {
             await this.sleepUntilNextPoll(750, signal);
@@ -732,18 +718,16 @@ export class ReviewRunner {
     }
   }
 
-  private emitThreadSnapshot(
-    onThreadSnapshot: ReviewRunOptions["onThreadSnapshot"],
-    thread: CodexThreadSummary,
-  ): boolean {
-    if (!onThreadSnapshot) return true;
+  private emitThreadProgress(
+    onThreadProgress: ReviewRunOptions["onThreadProgress"],
+    progress: { threadId: string; turnId: string },
+  ): void {
+    if (!onThreadProgress) return;
     try {
-      onThreadSnapshot(thread);
-      return true;
+      onThreadProgress(progress);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn({ threadId: thread.id, error: message }, "Failed to persist Codex thread snapshot; continuing review");
-      return false;
+      this.logger.warn({ ...progress, error: message }, "Failed to record Codex thread progress; continuing review");
     }
   }
 

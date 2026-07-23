@@ -297,7 +297,6 @@ test("executeReview skips stale heads before starting Codex review work", async 
     conclusion: "error",
     threadId: "old-thread",
     turnId: "old-turn",
-    transcript: { id: "old-thread", turns: [{ id: "old-turn", status: "failed", items: [] }] },
     createdAt: "2026-05-24T00:00:00.000Z",
     updatedAt: "2026-05-24T00:01:00.000Z",
   } as const;
@@ -419,10 +418,9 @@ test("executeReview skips stale heads before starting Codex review work", async 
   assert.match(String(storedAttempt?.summary), /Superseded by newer head new-head/);
   assert.ok(updates.some((update) => update.status === "running"));
   assert.ok(updates.some((update) => update.status === "superseded"));
-  assert.ok(!updates.some((update) => update.threadId === null || update.turnId === null || update.transcript === null));
+  assert.ok(!updates.some((update) => update.threadId === null || update.turnId === null));
   assert.equal(storedAttempt?.threadId, "old-thread");
   assert.equal(storedAttempt?.turnId, "old-turn");
-  assert.deepEqual(storedAttempt?.transcript, existingAttempt.transcript);
 });
 
 test("triggerReconcile does not re-review an unchanged head after PR metadata edits", async () => {

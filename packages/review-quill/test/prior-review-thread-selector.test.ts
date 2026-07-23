@@ -79,20 +79,17 @@ test("selectPriorReviewThread rejects each unsafe identity and transcript mismat
   }), { kind: "miss", reason: "identity_unavailable" });
 });
 
-test("latest different-head lookup returns the newest row even when only an older transcript is valid", () => {
+test("latest different-head lookup returns the newest row for live transcript lookup", () => {
   const store = new SqliteStore(":memory:");
   const older = store.createAttempt({
     repoFullName: "owner/repo", prNumber: 7, headSha: "head-1", status: "completed", conclusion: "approved",
   });
-  store.updateAttempt(older.id, { threadId: "thread-old", turnId: "turn-old", transcript: {
-    id: "thread-old", turns: [{ id: "turn-old", status: "completed", items: [] }],
-  } });
+  store.updateAttempt(older.id, { threadId: "thread-old", turnId: "turn-old" });
   const newest = store.createAttempt({
     repoFullName: "owner/repo", prNumber: 7, headSha: "head-2", status: "failed",
   });
 
-  const result = store.getLatestDifferentHeadAttemptWithTranscript("owner/repo", 7, "head-3");
-  assert.equal(result?.attempt.id, newest.id);
-  assert.equal(result?.transcript, undefined);
+  const result = store.getLatestDifferentHeadAttempt("owner/repo", 7, "head-3");
+  assert.equal(result?.id, newest.id);
   store.close();
 });

@@ -3,7 +3,7 @@ import { accessSync, constants, existsSync, readFileSync, statSync } from "node:
 import path from "node:path";
 import { loadConfig } from "./config.ts";
 import { getReviewQuillPathLayout } from "./runtime-paths.ts";
-import type { ReviewQuillRepositoryConfig } from "./types.ts";
+import type { CodexThreadSummary, ReviewQuillRepositoryConfig } from "./types.ts";
 
 export interface CommandResult {
   exitCode: number;
@@ -158,12 +158,15 @@ function getLocalBaseUrl(): string {
   return `http://${host}:${config.server.port}`;
 }
 
-async function requestLocalJson<T>(relativePath: string, options?: { method?: string; body?: unknown }): Promise<T> {
+async function requestLocalJson<T>(
+  relativePath: string,
+  options?: { method?: string; body?: unknown; timeoutMs?: number },
+): Promise<T> {
   const response = await fetch(`${getLocalBaseUrl()}${relativePath}`, {
     method: options?.method ?? "GET",
     ...(options?.body !== undefined ? { headers: { "content-type": "application/json" } } : {}),
     ...(options?.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
-    signal: AbortSignal.timeout(2_000),
+    signal: AbortSignal.timeout(options?.timeoutMs ?? 2_000),
   });
   const text = await response.text();
   if (!response.ok) {
@@ -262,6 +265,12 @@ export async function fetchServiceCodexStatus(): Promise<{
   error?: string;
 }> {
   return await requestLocalJson("/status");
+}
+
+export async function fetchServiceCodexThread(threadId: string): Promise<CodexThreadSummary> {
+  return await requestLocalJson(`/admin/codex/threads/${encodeURIComponent(threadId)}`, {
+    timeoutMs: 30_000,
+  });
 }
 
 export async function fetchWatchSnapshot(): Promise<{

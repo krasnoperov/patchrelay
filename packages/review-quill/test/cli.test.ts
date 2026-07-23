@@ -492,8 +492,10 @@ test("attempts marks stale active runs and prints the stale reason", async () =>
   }
 });
 
-test("transcript shows the full stored Codex thread for one PR review attempt", async () => {
+test("transcript reads the full Codex thread live for one PR review attempt", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "review-quill-cli-transcript-"));
+  const port = 18790;
+  let server: ReturnType<typeof createServer> | undefined;
   try {
     const configDir = path.join(baseDir, "config");
     mkdirSync(configDir, { recursive: true });
@@ -501,7 +503,7 @@ test("transcript shows the full stored Codex thread for one PR review attempt", 
     const dbPath = path.join(baseDir, "review-quill.sqlite");
 
     writeFileSync(configPath, `${JSON.stringify({
-      server: { bind: "127.0.0.1", port: 8788, publicBaseUrl: "https://review-quill.example.com" },
+      server: { bind: "127.0.0.1", port, publicBaseUrl: "https://review-quill.example.com" },
       database: { path: dbPath, wal: true },
       codex: {
         bin: "codex",
@@ -537,7 +539,11 @@ test("transcript shows the full stored Codex thread for one PR review attempt", 
       summary: "Looks good.",
       threadId: "thread-review-42",
       turnId: "turn-review-42",
-      transcript: {
+      completedAt: "2026-04-07T10:15:00.000Z",
+    });
+    store.close();
+
+    const liveThread = {
         id: "thread-review-42",
         turns: [
           {
@@ -549,10 +555,20 @@ test("transcript shows the full stored Codex thread for one PR review attempt", 
             ],
           },
         ],
-      },
-      completedAt: "2026-04-07T10:15:00.000Z",
+      };
+    server = createServer((request, response) => {
+      if (request.url === "/admin/codex/threads/thread-review-42") {
+        setTimeout(() => {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify(liveThread));
+        }, 2_100);
+        return;
+      }
+      response.writeHead(404).end();
     });
-    store.close();
+    await new Promise<void>((resolve, reject) => {
+      server?.listen(port, "127.0.0.1", (error?: Error) => error ? reject(error) : resolve());
+    });
 
     await withEnv(
       {
@@ -566,7 +582,6 @@ test("transcript shows the full stored Codex thread for one PR review attempt", 
         const code = await runCli(["transcript", "mafia", "42"], {
           stdout: stdout.stream,
           stderr: stderr.stream,
-          readCodexThread: async () => { throw new Error("live app-server should not be read when a snapshot is stored"); },
         });
 
         assert.equal(code, 0);
@@ -574,7 +589,7 @@ test("transcript shows the full stored Codex thread for one PR review attempt", 
         assert.match(rendered, /Repo: krasnoperov\/mafia/);
         assert.match(rendered, /Attempt: #\d+/);
         assert.match(rendered, /Thread: thread-review-42/);
-        assert.match(rendered, /Transcript source: stored attempt snapshot/);
+        assert.match(rendered, /Transcript source: Review Quill daemon \(live Codex app-server\)/);
         assert.match(rendered, /Visible thread items are shown below/);
         assert.match(rendered, /Turn 1: turn-review-42 \[completed\]/);
         assert.match(rendered, /assistant \(assistant-1\):/);
@@ -583,6 +598,9 @@ test("transcript shows the full stored Codex thread for one PR review attempt", 
       },
     );
   } finally {
+    if (server) {
+      await new Promise<void>((resolve) => server?.close(() => resolve()));
+    }
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
