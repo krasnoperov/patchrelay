@@ -77,7 +77,7 @@ Required **repository permissions**:
 
 | Permission | Access | Why |
 |-|-|-|
-| Contents | Read and write | Fast-forward `main` to tested speculative SHAs |
+| Contents | Read and write | Fast-forward `main` to tested candidate SHAs |
 | Pull requests | Read and write | |
 | Checks | Read and write | Emit eviction check runs |
 | Metadata | Read-only | |
@@ -163,26 +163,34 @@ On startup, the steward reconciles GitHub branch protection for every attached r
 
 The steward runs a reconcile loop per repo. Each tick asks: "for each queue entry, what state transition is currently possible?" The following sections show the real git commands executed at each step. Implementation in `packages/merge-steward/src/github/shell-git.ts` and `packages/merge-steward/src/reconciler-*.ts`.
 
-### Speculative chain
+### Candidate chain
 
-The queue is serial, but validation is parallel: each entry is tested on a **cumulative speculative branch** that stacks every entry ahead of it in the queue.
+The queue lands serially but can validate several dependency-ready entries in
+parallel. Each entry has one immutable candidate SHA. A candidate is either the
+existing PR head or a cumulative integration commit.
 
 ```mermaid
 flowchart LR
     main([main])
-    A[PR #A spec]
-    B[PR #B spec]
-    C[PR #C spec]
+    A[Candidate A]
+    B[Candidate B]
+    C[Candidate C]
     main --> A
     A --> B
     B --> C
 ```
 
-The head entry's spec is `main + A`. The second entry's spec is `main + A + B`, built on top of A's spec. The third is `main + A + B + C`. When A lands, B's spec is already the tested tree — no re-validation needed. When A fails and gets evicted, B and C rebuild without it (**cascade invalidation**).
+For each entry, Merge Steward first asks whether its prospective base is an
+ancestor of the exact PR head. If yes, that head is the candidate and its
+SHA-bound checks are reused. If no, an integration candidate is built. The
+second and third candidates extend the preceding immutable candidate. When A
+lands, B remains valid only if the new `main` is its ancestor.
 
-### Step 1 — build the speculative branch
+### Step 1 — resolve the candidate
 
-When an entry becomes the head (no retry gate), the steward builds its speculative branch in an **isolated worktree** so it never touches the main clone's working tree. `main`'s own CI status is **not** a gate: the queue advances solely on the speculative SHA's checks. A red `main` neither pauses the queue nor delays the next landing — `main` CI is information-only (an out-of-band breakage canary), because the speculative SHA the steward validates *is* the exact tree that becomes `main`.
+If the PR head already contains the prospective base, no commit or CI run is
+created: the exact head is the candidate. Otherwise the steward builds an
+integration candidate in an isolated worktree:
 
 ```bash
 # 1. Refresh remote refs
@@ -203,8 +211,8 @@ git -C <wt-path> config user.email <bot-email>
 # 5. Merge the PR branch into the spec (non-fast-forward; patience strategy)
 git -C <wt-path> merge --no-ff -X patience -m "Merge PR #<num>: <branch>" origin/<pr-branch>
 
-# 6. Record the spec SHA for later verification
-git -C <wt-path> rev-parse HEAD   # → this is the SHA CI will run against
+# 6. Record the immutable candidate SHA
+git -C <wt-path> rev-parse HEAD
 
 # 7. Remove the worktree but keep the branch ref
 git worktree remove --force <wt-path>
@@ -212,30 +220,33 @@ git worktree remove --force <wt-path>
 
 If the `merge` step hits a conflict, the steward first tries to auto-resolve lockfile-only conflicts by regenerating them (`tryAutoResolveConflict`). Otherwise it aborts the merge, destroys the spec branch, and either retries (on base-SHA change) or evicts the entry with an `integration_conflict` incident.
 
-### Step 2 — push the spec and wait for CI
+### Step 2 — validate the exact SHA
 
 ```bash
-# Push the spec branch to GitHub so CI and reviewers can see it
+# Integration candidates need a temporary ref so GitHub Actions can test them
 git push --force-with-lease origin mq-spec-<entry-id>
 ```
 
-The steward then triggers a CI run on that SHA (or lets GitHub's push-triggered workflows fire) and transitions the entry to `validating`. Status updates come from webhook events (`check_suite completed`) rather than polling.
-
-After the push, the steward emits a `merge-steward/spec-ready` check_run on the **PR head** (not the spec SHA) announcing where the spec is. review-quill subscribes to this check name when it runs in `integration_tree` mode and uses the spec SHA as the integration target. The contract is documented in [github-queue-contract.md](./github-queue-contract.md#spec-ready-check_run-lander--reviewer).
+Head candidates reuse the checks already attached to their exact SHA.
+Integration candidates trigger CI on the candidate SHA. Required check
+identity includes both context name and the producing GitHub App when policy
+provides it. Missing, pending, skipped, wrong-App, or ambiguous duplicate runs
+fail closed; a uniquely newer rerun supersedes its older run.
 
 ### Step 3 — revalidate and fast-forward main
 
-After the validating state has observed green spec CI, the steward revalidates before merging:
+After validation is green, the steward revalidates before landing:
 
 1. GitHub PR is not already `merged` externally.
 2. The reviewer approval on the original PR head still holds.
-3. The spec SHA is still a fast-forward from current `main` (`git merge-base --is-ancestor`).
+3. Current required-check policy is freshly loaded and green on the candidate SHA.
+4. The candidate SHA is still a fast-forward from current `main`.
 
 If these checks hold, the merge is a single command:
 
 ```bash
-# Fast-forward main to the already-tested spec SHA
-git push origin mq-spec-<entry-id>:main
+# Push the immutable object id, never the mutable candidate ref
+git push origin <candidate-sha>:main
 ```
 
 That is the actual "merge" — **no `gh pr merge` button is ever pressed**. What lands on `main` is byte-for-byte the tree that CI validated. This is why the steward needs `Contents: Read and write` on the GitHub App and must be allowed to push to protected branches.
@@ -252,34 +263,23 @@ git push origin --delete mq-spec-<entry-id>
 # Done via GitHub API, not shell git
 ```
 
-A post-merge verification pass records the state of `main`'s CI on the new tip for operator visibility. That status is information-only and does not block the next speculative landing.
+A post-merge verification pass records the state of checks on the landed SHA
+for operator visibility. It does not authorize the landing retroactively.
 
 ### Cascade invalidation
 
-If the head entry fails mid-queue (spec CI red, push rejected, merge conflict), the steward invalidates every downstream spec that depended on it and rebuilds them without the evicted entry. Each downstream entry transitions back to `preparing_head` and runs Step 1 again against the new base.
-
-### Patch-id-aware updateHead
-
-When a queue entry's PR head is force-pushed to a SHA that produces the **same `patch_id` and same integration tree** as the prior head (most commonly: a rebase onto fresh main with no real change), the steward short-circuits the spec-rebuild path:
-
-1. Cached on the entry: `headPatchId`, `specTreeId`.
-2. Recompute `patch_id` for the new head and the integration tree against the current base.
-3. If both match the cached values, rebuild the spec commit on the same tree but with the new head as a parent (`git commit-tree spec_tree -p current_base -p new_head`) and force-push the spec branch.
-4. Re-trigger CI on the new spec SHA — `check_runs` are anchored to commit SHAs and there is no API to copy a passing verdict to a different SHA.
-
-What this saves: the spec-build content work (merge computation, conflict checking) and the prepare-state churn through `preparing_head`. What it does not save: the CI run itself.
-
-The new spec commit must include the *current* PR head as a parent so GitHub's post-fast-forward "PR is merged" detection works after landing. Reusing the old spec commit unchanged would leave the PR open after `main` advances.
-
-Downstream entries on the same chain are still invalidated through the existing machinery — changing `entry.specSha` invalidates anything with `specBasedOn === entry.id`. The same-tree rebuild produces a new SHA, so downstream specs were built on a commit that no longer represents this entry's spec head.
+If an entry fails mid-queue, the steward invalidates only candidates in its
+dependency closure. Independent stacks continue. A deterministic conflict is
+cached by `(base SHA, head SHA)` and is not rebuilt until either input changes.
 
 ### Stack-aware admission
 
-When admitting a PR whose `baseRefName` matches another open PR's `branch` (head ref), the steward defers admission until the parent PR is itself in the queue, then enqueues immediately behind the parent. The base-ref data is fetched as part of `getStatus()` (`packages/merge-steward/src/github/pr-client.ts`) and persisted on `QueueEntry.baseRefName`.
-
-Once a stacked child is in the queue, the existing chain machinery (`reconciler-prepare.ts`: `base = isHead ? main : prevEntry?.specBranch`) handles the cumulative speculative validation on top of the parent's spec. When the parent merges, GitHub auto-retargets the child's base to main. PatchRelay notices the base change, pushes a rebased child, and the cycle continues normally.
-
-If a stacked parent is force-pushed (review-fix run produces a new patch on the parent), the existing invalidate-downstream machinery fires for the child and the child's spec is rebuilt against the parent's new spec. No new steward code; the existing chain invalidation handles it.
+`baseRefName` is a dependency edge. Topology always wins over priority: a
+child cannot become dependency-ready before its active parent. A failed,
+closed, or conflicting parent blocks only its descendants; independent roots
+continue. Cycles are quarantined. A parent head change invalidates its
+dependent candidate closure, while a successful landing preserves a
+downstream candidate only when the new `main` remains its ancestor.
 
 ### State machine (simplified)
 
@@ -291,8 +291,8 @@ queued → preparing_head → validating → merging → merged
 | State | Meaning |
 |-|-|
 | `queued` | Waiting in line |
-| `preparing_head` | Fetching and building the speculative branch |
-| `validating` | CI running on the speculative SHA |
+| `preparing_head` | Resolving an exact-head or integration candidate |
+| `validating` | Evaluating checks on the immutable candidate SHA |
 | `merging` | Revalidation + fast-forward landing |
 | `merged` | Done |
 | `evicted` | Failed after retry budget; incident created |
@@ -304,11 +304,14 @@ The real gate is:
 
 - GitHub says the PR review state is approved
 - configured required checks are green
-- the steward's speculative integrated branch passes CI
+- the exact candidate passes current policy
+- current `main` is an ancestor of that candidate
 
 `review-quill/verdict` only matters if you choose to include it in the repo's required checks.
 
-GitHub branch protection is still useful as defense in depth, but the steward does not merge by pressing GitHub's merge button — it fast-forwards `main` to the already-tested speculative SHA. Successful queue merges therefore depend on the steward App being allowed to push that result to the protected branch.
+GitHub branch protection is still useful as defense in depth, but the steward
+does not merge by pressing GitHub's merge button — it fast-forwards `main` to
+the exact already-tested SHA.
 
 ## HTTP API
 

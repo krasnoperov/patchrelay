@@ -1,10 +1,12 @@
 import type { GitHubAppCredentials } from "./github-auth.ts";
 import { issueGitHubAppToken } from "./github-auth.ts";
+import type { RequiredCheck } from "./types.ts";
 
 export interface DiscoveredRepoSettings {
   defaultBranch: string;
   branch: string;
   requiredChecks: string[];
+  requiredCheckRules: RequiredCheck[];
   requireAllChecksOnEmptyRequiredSet: boolean;
   warnings: string[];
 }
@@ -15,6 +17,7 @@ interface GitHubRepositoryResponse {
 
 interface GitHubRuleStatusCheck {
   context?: string;
+  integration_id?: number | null;
 }
 
 interface GitHubRule {
@@ -26,6 +29,7 @@ interface GitHubRule {
 
 interface GitHubBranchProtectionCheck {
   context?: string;
+  app_id?: number | null;
 }
 
 interface GitHubBranchProtectionResponse {
@@ -79,8 +83,37 @@ function parseRulesResponse(raw: unknown): GitHubRule[] {
   return [];
 }
 
-function normalizeRequiredChecks(rules: GitHubRule[]): { requiredChecks: string[]; warnings: string[] } {
-  const requiredChecks = new Set<string>();
+function requiredCheckKey(check: RequiredCheck): string {
+  return `${check.name.trim().toLowerCase()}\u0000${check.appId ?? "*"}`;
+}
+
+function mergeRequiredChecks(checks: RequiredCheck[]): RequiredCheck[] {
+  const byName = new Map<string, RequiredCheck[]>();
+  for (const check of checks) {
+    const name = check.name.trim();
+    if (!name) continue;
+    const normalizedName = name.toLowerCase();
+    const list = byName.get(normalizedName) ?? [];
+    list.push({ name, appId: check.appId });
+    byName.set(normalizedName, list);
+  }
+
+  const merged: RequiredCheck[] = [];
+  for (const sameName of byName.values()) {
+    const appSpecific = sameName.filter((check) => check.appId !== null);
+    const selected = appSpecific.length > 0 ? appSpecific : sameName.slice(0, 1);
+    for (const check of selected) {
+      if (!merged.some((candidate) => requiredCheckKey(candidate) === requiredCheckKey(check))) {
+        merged.push(check);
+      }
+    }
+  }
+  return merged.sort((left, right) =>
+    left.name.localeCompare(right.name) || (left.appId ?? -1) - (right.appId ?? -1));
+}
+
+function normalizeRequiredChecks(rules: GitHubRule[]): { requiredCheckRules: RequiredCheck[]; warnings: string[] } {
+  const requiredCheckRules: RequiredCheck[] = [];
   const warnings = new Set<string>();
 
   for (const rule of rules) {
@@ -88,7 +121,10 @@ function normalizeRequiredChecks(rules: GitHubRule[]): { requiredChecks: string[
       for (const check of rule.parameters?.required_status_checks ?? []) {
         const context = check.context?.trim();
         if (context) {
-          requiredChecks.add(context);
+          requiredCheckRules.push({
+            name: context,
+            appId: typeof check.integration_id === "number" ? check.integration_id : null,
+          });
         }
       }
     }
@@ -99,29 +135,32 @@ function normalizeRequiredChecks(rules: GitHubRule[]): { requiredChecks: string[
   }
 
   return {
-    requiredChecks: [...requiredChecks].sort((left, right) => left.localeCompare(right)),
+    requiredCheckRules: mergeRequiredChecks(requiredCheckRules),
     warnings: [...warnings],
   };
 }
 
-function extractProtectionChecks(protection: GitHubBranchProtectionResponse | undefined): string[] {
+function extractProtectionChecks(protection: GitHubBranchProtectionResponse | undefined): RequiredCheck[] {
   if (!protection?.required_status_checks) {
     return [];
   }
-  const checks = new Set<string>();
+  const checks: RequiredCheck[] = [];
   for (const context of protection.required_status_checks.contexts ?? []) {
     const trimmed = context?.trim();
     if (trimmed) {
-      checks.add(trimmed);
+      checks.push({ name: trimmed, appId: null });
     }
   }
   for (const check of protection.required_status_checks.checks ?? []) {
     const trimmed = check.context?.trim();
     if (trimmed) {
-      checks.add(trimmed);
+      checks.push({
+        name: trimmed,
+        appId: typeof check.app_id === "number" ? check.app_id : null,
+      });
     }
   }
-  return [...checks].sort((left, right) => left.localeCompare(right));
+  return mergeRequiredChecks(checks);
 }
 
 export async function discoverRepoSettings(
@@ -149,7 +188,7 @@ export async function discoverRepoSettings(
     `https://api.github.com/repos/${encodedRepo}/rules/branches/${encodeURIComponent(branch)}`,
     token,
   );
-  const { requiredChecks: ruleChecks, warnings } = normalizeRequiredChecks(parseRulesResponse(rulesResponse));
+  const { requiredCheckRules: ruleChecks, warnings } = normalizeRequiredChecks(parseRulesResponse(rulesResponse));
   const protection = await fetchGitHubJsonOptional<GitHubBranchProtectionResponse>(
     `https://api.github.com/repos/${encodedRepo}/branches/${encodeURIComponent(branch)}/protection`,
     token,
@@ -160,7 +199,9 @@ export async function discoverRepoSettings(
     && protectionChecks.length === 0
     && Boolean(protection?.required_status_checks)
   );
-  const requiredChecks = [...new Set([...ruleChecks, ...protectionChecks])].sort((left, right) => left.localeCompare(right));
+  const requiredCheckRules = mergeRequiredChecks([...ruleChecks, ...protectionChecks]);
+  const requiredChecks = [...new Set(requiredCheckRules.map((check) => check.name))]
+    .sort((left, right) => left.localeCompare(right));
 
   if (requiredChecks.length === 0) {
     warnings.push(
@@ -174,6 +215,7 @@ export async function discoverRepoSettings(
     defaultBranch,
     branch,
     requiredChecks,
+    requiredCheckRules,
     requireAllChecksOnEmptyRequiredSet,
     warnings,
   };

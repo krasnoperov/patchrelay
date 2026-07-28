@@ -198,4 +198,76 @@ describe("GitHubActionsRunner.getStatus", () => {
     });
     assert.strictEqual(await runner.getStatus("sha:abc123"), "pass");
   });
+
+  it("reruns the workflow that produced the required failing check", async () => {
+    const ghPath = path.join(baseDir, "gh");
+    writeFileSync(ghPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const url = args.find((arg) => arg.startsWith('repos/'));
+if (url?.includes('/commits/abc123/check-runs?')) {
+  process.stdout.write(JSON.stringify([
+    { id: 100, name: 'Tests', status: 'completed', conclusion: 'failure',
+      details_url: 'https://github.com/owner/repo/actions/runs/40/job/400' },
+    { id: 101, name: 'Unrelated workflow', status: 'completed', conclusion: 'failure',
+      details_url: 'https://github.com/owner/repo/actions/runs/42/job/420' }
+  ]));
+  process.exit(0);
+}
+if (url === 'repos/owner/repo/actions/runs/40/rerun-failed-jobs' && args.includes('POST')) {
+  process.exit(0);
+}
+process.exit(1);
+`, "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${baseDir}${path.delimiter}${prevPath ?? ""}`;
+    const runner = new GitHubActionsRunner("owner/repo", () => ["Tests"]);
+
+    assert.equal(await runner.rerunRun("sha:abc123", "feature/x", "abc123"), "sha:abc123");
+  });
+
+  it("fails closed when no required failed workflow run exists to rerun", async () => {
+    const ghPath = path.join(baseDir, "gh");
+    writeFileSync(ghPath, `#!/usr/bin/env node
+process.stdout.write(JSON.stringify([
+  { id: 41, name: 'Tests', status: 'completed', conclusion: 'success',
+    details_url: 'https://github.com/owner/repo/actions/runs/41/job/410' }
+]));
+`, "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${baseDir}${path.delimiter}${prevPath ?? ""}`;
+    const runner = new GitHubActionsRunner("owner/repo", () => ["Tests"]);
+
+    await assert.rejects(
+      runner.rerunRun("sha:abc123", "feature/x", "abc123"),
+      /No required failed workflow run/,
+    );
+  });
+
+  it("reruns each workflow represented by required failing checks", async () => {
+    const ghPath = path.join(baseDir, "gh");
+    writeFileSync(ghPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const url = args.find((arg) => arg.startsWith('repos/'));
+if (url?.includes('/commits/abc123/check-runs?')) {
+  process.stdout.write(JSON.stringify([
+    { id: 100, name: 'Tests', status: 'completed', conclusion: 'failure',
+      details_url: 'https://github.com/owner/repo/actions/runs/40/job/400' },
+    { id: 101, name: 'Lint', status: 'completed', conclusion: 'failure',
+      details_url: 'https://github.com/owner/repo/actions/runs/41/job/410' }
+  ]));
+  process.exit(0);
+}
+if ((url === 'repos/owner/repo/actions/runs/40/rerun-failed-jobs'
+  || url === 'repos/owner/repo/actions/runs/41/rerun-failed-jobs')
+  && args.includes('POST')) {
+  process.exit(0);
+}
+process.exit(1);
+`, "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${baseDir}${path.delimiter}${prevPath ?? ""}`;
+    const runner = new GitHubActionsRunner("owner/repo", () => ["Tests", "Lint"]);
+
+    assert.equal(await runner.rerunRun("sha:abc123", "feature/x", "abc123"), "sha:abc123");
+  });
 });

@@ -9,7 +9,7 @@ import type { QueueEntry } from "./types.ts";
  * position in the merge queue is obvious from GitHub — and readable by
  * patchrelay to drive its Linear "In Merge Queue" status:
  *
- *   validating → testing label  (spec CI is running / awaiting turn)
+ *   validating → testing label  (candidate checks are running / awaiting turn)
  *   merging    → merging label  (head of queue, merge in progress)
  *   everything else (queued, preparing_head, merged, evicted, …) → neither
  *

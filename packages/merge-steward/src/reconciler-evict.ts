@@ -2,12 +2,12 @@ import type { FailureClass, EvictionContext, QueueEntry } from "./types.ts";
 import { randomUUID } from "node:crypto";
 import { selectDownstream } from "./invalidation.ts";
 import type { ReconcileContext } from "./reconciler-core.ts";
-import { CLEAN_SPEC, emit, ref } from "./reconciler-core.ts";
+import { CLEAN_CANDIDATE_REF, emit, ref } from "./reconciler-core.ts";
 import { INVALIDATION_PATCH } from "./invalidation.ts";
 
-export async function cleanupSpec(ctx: ReconcileContext, entry: QueueEntry): Promise<void> {
-  if (entry.specBranch) {
-    await ctx.specBuilder.deleteSpeculative(entry.specBranch).catch(() => {
+export async function cleanupCandidate(ctx: ReconcileContext, entry: QueueEntry): Promise<void> {
+  if (entry.candidateRef) {
+    await ctx.specBuilder.deleteSpeculative(entry.candidateRef).catch(() => {
       // Best-effort cleanup — branch may not exist.
     });
   }
@@ -17,7 +17,7 @@ export async function invalidateDownstream(ctx: ReconcileContext, allActive: Que
   const targets = selectDownstream(allActive, allActive[afterIndex]!.id);
   for (const downstream of targets) {
     emit(ctx, downstream, "invalidated", { detail: `base changed after position ${afterIndex}` });
-    await cleanupSpec(ctx, downstream);
+    await cleanupCandidate(ctx, downstream);
     ctx.store.transition(downstream.id, "preparing_head", INVALIDATION_PATCH, "invalidated: base changed");
   }
 }
@@ -28,7 +28,7 @@ export async function evictEntry(
   failureClass: FailureClass,
   extra?: { conflictFiles?: string[]; failedChecks?: Array<{ name: string; conclusion: string; url?: string }> },
 ): Promise<void> {
-  await cleanupSpec(ctx, entry);
+  await cleanupCandidate(ctx, entry);
 
   let baseSha = entry.baseSha;
   if (!baseSha) {
@@ -85,6 +85,6 @@ export async function evictEntry(
 
   ctx.store.insertIncident(incident);
   emit(ctx, entry, "evicted", { failureClass });
-  ctx.store.transition(entry.id, "evicted", CLEAN_SPEC, `evicted: ${failureClass}`);
+  ctx.store.transition(entry.id, "evicted", CLEAN_CANDIDATE_REF, `evicted: ${failureClass}`);
   await ctx.eviction.reportEviction(entry, incident);
 }

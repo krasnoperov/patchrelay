@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { unlinkSync } from "node:fs";
 import { SqliteStore } from "../../src/db/sqlite-store.ts";
+import { ensureSchema } from "../../src/db/schema.ts";
+import { SqliteConnection } from "../../src/db/shared.ts";
 import { GitSim } from "../../src/sim/git-sim.ts";
 import type { QueueEntry } from "../../src/types.ts";
 
@@ -30,15 +32,75 @@ function makeEntry(id: string, prNumber: number, position: number): QueueEntry {
     maxRetries: 3,
     lastFailedBaseSha: null,
     issueKey: null,
-    specBranch: null,
-    specSha: null,
-    specBasedOn: null,
+    candidateRef: null,
+    candidateSha: null,
+    candidateBasedOn: null,
     enqueuedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
 }
 
 describe("SQLite crash recovery", () => {
+  it("migrates active legacy candidate state and drops every obsolete column", () => {
+    const dbPath = tempDbPath();
+    after(() => { try { unlinkSync(dbPath); } catch {} });
+    const connection = new SqliteConnection(dbPath);
+    connection.exec(`
+      CREATE TABLE queue_entries (
+        id TEXT PRIMARY KEY,
+        repo_id TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        branch TEXT NOT NULL,
+        head_sha TEXT NOT NULL,
+        base_sha TEXT NOT NULL,
+        status TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        priority INTEGER NOT NULL,
+        generation INTEGER NOT NULL,
+        ci_run_id TEXT,
+        ci_retries INTEGER NOT NULL,
+        retry_attempts INTEGER NOT NULL,
+        max_retries INTEGER NOT NULL,
+        last_failed_base_sha TEXT,
+        issue_key TEXT,
+        spec_branch TEXT,
+        spec_sha TEXT,
+        spec_based_on TEXT,
+        head_patch_id TEXT,
+        spec_tree_id TEXT,
+        enqueued_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO queue_entries VALUES (
+        'legacy-entry', 'test-repo', 77, 'feature/legacy', 'head-77', 'base-77',
+        'validating', 1, 0, 0, 'ci-77', 0, 0, 2, NULL, NULL,
+        'mq-spec-legacy', 'candidate-77', 'parent-entry',
+        'obsolete-patch', 'obsolete-tree',
+        '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z'
+      );
+    `);
+
+    ensureSchema(connection);
+    const migrated = connection.prepare("SELECT * FROM queue_entries WHERE id = ?").get("legacy-entry")!;
+    assert.equal(migrated.candidate_kind, "integration");
+    assert.equal(migrated.candidate_ref, "mq-spec-legacy");
+    assert.equal(migrated.candidate_sha, "candidate-77");
+    assert.equal(migrated.candidate_based_on, "parent-entry");
+    const columns = new Set(
+      connection.prepare("PRAGMA table_info(queue_entries)").all().map((row) => String(row.name)),
+    );
+    for (const obsolete of ["spec_branch", "spec_sha", "spec_based_on", "head_patch_id", "spec_tree_id"]) {
+      assert.equal(columns.has(obsolete), false, `${obsolete} must be removed`);
+    }
+    connection.close();
+
+    const reopened = new SqliteStore(dbPath);
+    const entry = reopened.getEntry("legacy-entry")!;
+    assert.equal(entry.candidateKind, "integration");
+    assert.equal(entry.candidateSha, "candidate-77");
+    reopened.close();
+  });
+
   it("state survives store destruction and reconstruction", async () => {
     const dbPath = tempDbPath();
     after(() => { try { unlinkSync(dbPath); } catch {} });
@@ -127,9 +189,9 @@ describe("SQLite crash recovery", () => {
       retryAttempts: 2,
       baseSha: "base-1",
       lastFailedBaseSha: "old-base",
-      specBranch: "mq-spec-e1",
-      specSha: "spec-sha-1",
-      specBasedOn: "e0",
+      candidateRef: "mq-spec-e1",
+      candidateSha: "spec-sha-1",
+      candidateBasedOn: "e0",
     });
 
     // Force-push resets via updateHead.
@@ -143,9 +205,9 @@ describe("SQLite crash recovery", () => {
     assert.strictEqual(entry.ciRetries, 0);
     assert.strictEqual(entry.retryAttempts, 0);
     assert.strictEqual(entry.lastFailedBaseSha, null);
-    assert.strictEqual(entry.specBranch, null, "specBranch must be cleared");
-    assert.strictEqual(entry.specSha, null, "specSha must be cleared");
-    assert.strictEqual(entry.specBasedOn, null, "specBasedOn must be cleared");
+    assert.strictEqual(entry.candidateRef, null, "candidateRef must be cleared");
+    assert.strictEqual(entry.candidateSha, null, "candidateSha must be cleared");
+    assert.strictEqual(entry.candidateBasedOn, null, "candidateBasedOn must be cleared");
 
     store.close();
   });

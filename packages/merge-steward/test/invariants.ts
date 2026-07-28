@@ -16,7 +16,7 @@ export function assertInvariants(
   mainIsGreen: boolean,
   allEntryIds: Set<string>,
 ): void {
-  assertSerialization(entries);
+  assertSerialization(entries, mergedPRs);
   assertGreenMain(entries, mainIsGreen);
   assertNoLoss(entries, allEntryIds);
   assertSingleHead(entries);
@@ -24,17 +24,21 @@ export function assertInvariants(
   assertMonotonicProgress(entries);
 }
 
-function assertSerialization(entries: QueueEntry[]): void {
-  const mergedEntries = entries
-    .filter((e) => e.status === "merged")
-    .sort((a, b) => a.position - b.position);
-
-  for (let i = 1; i < mergedEntries.length; i++) {
-    const prev = mergedEntries[i - 1]!;
-    const curr = mergedEntries[i]!;
+function assertSerialization(entries: QueueEntry[], mergedPRs: number[]): void {
+  const firstMergeIndex = new Map<number, number>();
+  mergedPRs.forEach((prNumber, index) => {
+    if (!firstMergeIndex.has(prNumber)) firstMergeIndex.set(prNumber, index);
+  });
+  for (const child of entries.filter((entry) => entry.status === "merged")) {
+    if (!child.baseRefName) continue;
+    const parent = entries
+      .filter((entry) => entry.branch === child.baseRefName && entry.status === "merged")
+      .sort((left, right) => right.position - left.position)[0];
+    if (!parent) continue;
     assert.ok(
-      prev.position < curr.position,
-      `Serialization violated: PR #${prev.prNumber} (pos ${prev.position}) merged after PR #${curr.prNumber} (pos ${curr.position})`,
+      (firstMergeIndex.get(parent.prNumber) ?? Number.MAX_SAFE_INTEGER)
+        < (firstMergeIndex.get(child.prNumber) ?? -1),
+      `Stack order violated: parent PR #${parent.prNumber} did not merge before child PR #${child.prNumber}`,
     );
   }
 }
@@ -45,8 +49,13 @@ function assertGreenMain(entries: QueueEntry[], mainIsGreen: boolean): void {
   for (const entry of entries) {
     if (entry.status === "merged") {
       assert.ok(
-        entry.ciRunId !== null,
-        `PR #${entry.prNumber} was merged without a CI run (ciRunId is null)`,
+        entry.ciRunId !== null
+          || (
+            entry.candidateKind === "head"
+            && entry.candidateSha === entry.headSha
+            && entry.candidatePolicyFingerprint !== null
+          ),
+        `PR #${entry.prNumber} was merged without exact candidate validation`,
       );
     }
   }

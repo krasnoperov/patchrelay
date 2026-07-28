@@ -6,21 +6,9 @@ import { buildDiffContext } from "./diff-context/index.ts";
 import { buildPromptContext } from "./prompt-context/index.ts";
 import { renderFollowUpReviewPrompt, renderReviewPrompt } from "./prompt-builder/index.ts";
 import { findDisallowedReviewPromptSectionIds, findUnknownReviewPromptSectionIds } from "./prompt-builder/render.ts";
-import { materializeReviewWorkspaceWithMode } from "./review-workspace/index.ts";
-import { resolveReviewSurfaceMode } from "./carry-forward.ts";
+import { materializeReviewWorkspace } from "./review-workspace/index.ts";
 import type { PriorReviewThreadCandidate } from "./prior-review-thread-selector.ts";
 import { buildPromptFingerprint } from "./prompt-fingerprint.ts";
-
-export class CannotIntegrateError extends Error {
-  readonly headSha: string;
-  readonly baseSha: string;
-  constructor(headSha: string, baseSha: string) {
-    super(`Cannot integrate PR head ${headSha.slice(0, 8)} with base ${baseSha.slice(0, 8)} — merge-tree conflict`);
-    this.name = "CannotIntegrateError";
-    this.headSha = headSha;
-    this.baseSha = baseSha;
-  }
-}
 
 export async function resolvePromptPullRequest(params: {
   github: GitHubClient;
@@ -30,7 +18,7 @@ export async function resolvePromptPullRequest(params: {
   const latestPr = await params.github.getPullRequest(params.repoFullName, params.pr.number);
   // Keep the reconcile-selected head stable. We only refresh the mutable PR
   // description/title when GitHub still points at the same commit.
-  if (latestPr.headSha !== params.pr.headSha) {
+  if (latestPr.headSha !== params.pr.headSha || latestPr.baseSha !== params.pr.baseSha) {
     return params.pr;
   }
   return {
@@ -71,22 +59,19 @@ export async function buildReviewContext(params: {
   logger: Logger;
   selfLogin: string | undefined;
   priorThread?: PriorReviewThreadCandidate;
+  materialized?: Awaited<ReturnType<typeof materializeReviewWorkspace>>;
 }): Promise<{ context: ReviewContext; dispose: () => Promise<void>; priorThread?: PriorReviewThreadCandidate }> {
-  const token = params.github.currentTokenForRepo(params.repo.repoFullName);
-  if (!token) {
-    throw new Error(`No GitHub installation token available for ${params.repo.repoFullName}`);
-  }
-
-  const materialized = await materializeReviewWorkspaceWithMode({
-    repoFullName: params.repo.repoFullName,
-    baseBranch: params.repo.baseBranch,
-    pr: params.pr,
-    token,
-    surfaceMode: resolveReviewSurfaceMode(params.repo),
-  });
-  if (materialized.kind === "cannot_integrate") {
-    throw new CannotIntegrateError(materialized.headSha, materialized.baseSha);
-  }
+  const materialized = params.materialized ?? await (async () => {
+    const token = params.github.currentTokenForRepo(params.repo.repoFullName);
+    if (!token) {
+      throw new Error(`No GitHub installation token available for ${params.repo.repoFullName}`);
+    }
+    return await materializeReviewWorkspace({
+      repoFullName: params.repo.repoFullName,
+      pr: params.pr,
+      token,
+    });
+  })();
 
   try {
     const promptPr = await resolvePromptPullRequest({

@@ -87,7 +87,7 @@ export function statusColor(status: QueueEntryStatus, entry?: { waitDetail?: str
   }
 }
 
-export function humanStatus(status: QueueEntryStatus, entry?: { lastFailedBaseSha: string | null; specBranch: string | null; waitDetail?: string | null | undefined }): string {
+export function humanStatus(status: QueueEntryStatus, entry?: { lastFailedBaseSha: string | null; candidateRef: string | null; waitDetail?: string | null | undefined }): string {
   switch (status) {
     case "queued":
       return "waiting in queue";
@@ -129,7 +129,7 @@ export function queueProgress(status: QueueEntryStatus): { current: number; tota
   }
 }
 
-export function nextStepLabel(status: QueueEntryStatus, entry?: { lastFailedBaseSha: string | null; specBasedOn: string | null; waitDetail?: string | null | undefined }): string {
+export function nextStepLabel(status: QueueEntryStatus, entry?: { lastFailedBaseSha: string | null; candidateBasedOn: string | null; waitDetail?: string | null | undefined }): string {
   switch (status) {
     case "queued":
       return "starting shortly";
@@ -137,7 +137,7 @@ export function nextStepLabel(status: QueueEntryStatus, entry?: { lastFailedBase
       if (entry?.lastFailedBaseSha) return "conflicts with main, will retry when queue advances";
       return "building test branch with PRs ahead";
     case "validating":
-      return entry?.specBasedOn
+      return entry?.candidateBasedOn
         ? "CI running, tested together with PRs ahead"
         : "CI running on combined changes";
     case "merging":
@@ -157,16 +157,16 @@ export function nextStepLabel(status: QueueEntryStatus, entry?: { lastFailedBase
   }
 }
 
-/** Describe the spec chain for a queue entry. */
-export function specChainLabel(entry: { specBranch: string | null; specBasedOn: string | null; specSha: string | null }, allEntries: Array<{ id: string; prNumber: number; specBranch: string | null }>): string {
-  if (!entry.specBranch) return "no spec yet";
-  const parent = entry.specBasedOn
-    ? allEntries.find((e) => e.id === entry.specBasedOn)
+/** Describe the immutable candidate chain for a queue entry. */
+export function candidateChainLabel(entry: { candidateRef: string | null; candidateBasedOn: string | null; candidateSha: string | null }, allEntries: Array<{ id: string; prNumber: number; candidateRef: string | null }>): string {
+  if (!entry.candidateSha) return "no candidate yet";
+  const parent = entry.candidateBasedOn
+    ? allEntries.find((e) => e.id === entry.candidateBasedOn)
     : null;
   const base = parent
     ? `#${parent.prNumber}`
     : "main";
-  return `${shortSha(entry.specSha)} \u2190 ${base}`;
+  return `${shortSha(entry.candidateSha)} \u2190 ${base}`;
 }
 
 export function runtimeLabel(runtime: QueueRuntimeStatus): string {

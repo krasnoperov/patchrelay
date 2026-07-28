@@ -11,6 +11,7 @@ import { TERMINAL_STATUSES } from "../types.ts";
 import type { DatabaseConnection } from "./shared.ts";
 import { SqliteConnection, isoNow } from "./shared.ts";
 import { ensureSchema } from "./schema.ts";
+import { orderActiveQueue } from "../queue-order.ts";
 
 function mapEntry(row: Record<string, unknown>): QueueEntry {
   return {
@@ -30,9 +31,15 @@ function mapEntry(row: Record<string, unknown>): QueueEntry {
     maxRetries: Number(row.max_retries),
     lastFailedBaseSha: row.last_failed_base_sha === null ? null : String(row.last_failed_base_sha),
     issueKey: row.issue_key === null ? null : String(row.issue_key),
-    specBranch: row.spec_branch === null || row.spec_branch === undefined ? null : String(row.spec_branch),
-    specSha: row.spec_sha === null || row.spec_sha === undefined ? null : String(row.spec_sha),
-    specBasedOn: row.spec_based_on === null || row.spec_based_on === undefined ? null : String(row.spec_based_on),
+    candidateKind: row.candidate_kind === null || row.candidate_kind === undefined
+      ? null
+      : String(row.candidate_kind) as QueueEntry["candidateKind"],
+    candidatePolicyFingerprint: row.candidate_policy_fingerprint === null || row.candidate_policy_fingerprint === undefined
+      ? null
+      : String(row.candidate_policy_fingerprint),
+    candidateRef: row.candidate_ref === null || row.candidate_ref === undefined ? null : String(row.candidate_ref),
+    candidateSha: row.candidate_sha === null || row.candidate_sha === undefined ? null : String(row.candidate_sha),
+    candidateBasedOn: row.candidate_based_on === null || row.candidate_based_on === undefined ? null : String(row.candidate_based_on),
     waitDetail: row.wait_detail === null || row.wait_detail === undefined ? null : String(row.wait_detail),
     postMergeStatus: row.post_merge_status === null || row.post_merge_status === undefined
       ? null
@@ -42,8 +49,6 @@ function mapEntry(row: Record<string, unknown>): QueueEntry {
     postMergeCheckedAt: row.post_merge_checked_at === null || row.post_merge_checked_at === undefined ? null : String(row.post_merge_checked_at),
     prTitle: row.pr_title === null || row.pr_title === undefined ? null : String(row.pr_title),
     baseRefName: row.base_ref_name === null || row.base_ref_name === undefined ? null : String(row.base_ref_name),
-    headPatchId: row.head_patch_id === null || row.head_patch_id === undefined ? null : String(row.head_patch_id),
-    specTreeId: row.spec_tree_id === null || row.spec_tree_id === undefined ? null : String(row.spec_tree_id),
     decidedAt: row.decided_at === null || row.decided_at === undefined ? null : String(row.decided_at),
     enqueuedAt: String(row.enqueued_at),
     updatedAt: String(row.updated_at),
@@ -115,12 +120,7 @@ export class SqliteStore implements QueueStore {
   }
 
   getHead(repoId: string): QueueEntry | undefined {
-    const row = this.conn.prepare(
-      `SELECT * FROM queue_entries
-       WHERE repo_id = ? AND status NOT IN (${NOT_TERMINAL_SQL})
-       ORDER BY priority DESC, position ASC LIMIT 1`,
-    ).get(repoId, ...TERMINAL_STATUSES);
-    return row ? mapEntry(row) : undefined;
+    return this.listActive(repoId)[0];
   }
 
   getEntry(entryId: string): QueueEntry | undefined {
@@ -144,9 +144,9 @@ export class SqliteStore implements QueueStore {
     const rows = this.conn.prepare(
       `SELECT * FROM queue_entries
        WHERE repo_id = ? AND status NOT IN (${NOT_TERMINAL_SQL})
-       ORDER BY priority DESC, position ASC`,
+       ORDER BY position ASC`,
     ).all(repoId, ...TERMINAL_STATUSES);
-    return rows.map(mapEntry);
+    return orderActiveQueue(rows.map(mapEntry));
   }
 
   listAll(repoId: string): QueueEntry[] {
@@ -166,23 +166,40 @@ export class SqliteStore implements QueueStore {
     return rows.map(mapEntry);
   }
 
+  listRecentTerminal(repoId: string, limit = 3): QueueEntry[] {
+    const rows = this.conn.prepare(
+      `SELECT * FROM queue_entries
+       WHERE repo_id = ? AND status IN (${TERMINAL_STATUSES.map(() => "?").join(", ")})
+       ORDER BY COALESCE(decided_at, updated_at) DESC
+       LIMIT ?`,
+    ).all(repoId, ...TERMINAL_STATUSES, limit);
+    return rows.map(mapEntry);
+  }
+
   insert(entry: QueueEntry): void {
     this.conn.transaction(() => {
       this.conn.prepare(
         `INSERT INTO queue_entries
          (id, repo_id, pr_number, branch, head_sha, base_sha, status, position,
           priority, generation, ci_run_id, ci_retries, retry_attempts,
-          max_retries, last_failed_base_sha, issue_key, wait_detail,
+          max_retries, last_failed_base_sha, issue_key,
+          candidate_kind, candidate_policy_fingerprint,
+          candidate_ref, candidate_sha, candidate_based_on, wait_detail,
           post_merge_status, post_merge_sha, post_merge_summary, post_merge_checked_at,
           pr_title, base_ref_name, decided_at,
           enqueued_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         entry.id, entry.repoId, entry.prNumber, entry.branch,
         entry.headSha, entry.baseSha, entry.status, entry.position,
         entry.priority, entry.generation, entry.ciRunId, entry.ciRetries,
         entry.retryAttempts, entry.maxRetries, entry.lastFailedBaseSha,
         entry.issueKey ?? null,
+        entry.candidateKind ?? null,
+        entry.candidatePolicyFingerprint ?? null,
+        entry.candidateRef ?? null,
+        entry.candidateSha ?? null,
+        entry.candidateBasedOn ?? null,
         entry.waitDetail ?? null,
         entry.postMergeStatus ?? null,
         entry.postMergeSha ?? null,
@@ -204,9 +221,9 @@ export class SqliteStore implements QueueStore {
       Pick<
         QueueEntry,
         "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" |
-        "lastFailedBaseSha" | "specBranch" | "specSha" | "specBasedOn" | "waitDetail" |
-        "postMergeStatus" | "postMergeSha" | "postMergeSummary" | "postMergeCheckedAt" |
-        "headPatchId" | "specTreeId"
+        "lastFailedBaseSha" | "candidateRef" | "candidateSha" | "candidateBasedOn" | "waitDetail" |
+        "candidateKind" | "candidatePolicyFingerprint" |
+        "postMergeStatus" | "postMergeSha" | "postMergeSummary" | "postMergeCheckedAt"
       >
     >,
     detail?: string,
@@ -231,17 +248,20 @@ export class SqliteStore implements QueueStore {
       if (patch?.ciRetries !== undefined) { sets.push("ci_retries = ?"); values.push(patch.ciRetries); }
       if (patch?.retryAttempts !== undefined) { sets.push("retry_attempts = ?"); values.push(patch.retryAttempts); }
       if (patch?.lastFailedBaseSha !== undefined) { sets.push("last_failed_base_sha = ?"); values.push(patch.lastFailedBaseSha); }
-      if (patch?.specBranch !== undefined) { sets.push("spec_branch = ?"); values.push(patch.specBranch); }
-      if (patch?.specSha !== undefined) { sets.push("spec_sha = ?"); values.push(patch.specSha); }
-      if (patch?.specBasedOn !== undefined) { sets.push("spec_based_on = ?"); values.push(patch.specBasedOn); }
+      if (patch?.candidateKind !== undefined) { sets.push("candidate_kind = ?"); values.push(patch.candidateKind); }
+      if (patch?.candidatePolicyFingerprint !== undefined) {
+        sets.push("candidate_policy_fingerprint = ?");
+        values.push(patch.candidatePolicyFingerprint);
+      }
+      if (patch?.candidateRef !== undefined) { sets.push("candidate_ref = ?"); values.push(patch.candidateRef); }
+      if (patch?.candidateSha !== undefined) { sets.push("candidate_sha = ?"); values.push(patch.candidateSha); }
+      if (patch?.candidateBasedOn !== undefined) { sets.push("candidate_based_on = ?"); values.push(patch.candidateBasedOn); }
       if (patch?.waitDetail !== undefined) { sets.push("wait_detail = ?"); values.push(patch.waitDetail); }
       else if (from !== to) { sets.push("wait_detail = NULL"); }
       if (patch?.postMergeStatus !== undefined) { sets.push("post_merge_status = ?"); values.push(patch.postMergeStatus); }
       if (patch?.postMergeSha !== undefined) { sets.push("post_merge_sha = ?"); values.push(patch.postMergeSha); }
       if (patch?.postMergeSummary !== undefined) { sets.push("post_merge_summary = ?"); values.push(patch.postMergeSummary); }
       if (patch?.postMergeCheckedAt !== undefined) { sets.push("post_merge_checked_at = ?"); values.push(patch.postMergeCheckedAt); }
-      if (patch?.headPatchId !== undefined) { sets.push("head_patch_id = ?"); values.push(patch.headPatchId); }
-      if (patch?.specTreeId !== undefined) { sets.push("spec_tree_id = ?"); values.push(patch.specTreeId); }
 
       this.conn.prepare(
         `UPDATE queue_entries SET ${sets.join(", ")} WHERE id = ?`,
@@ -267,10 +287,10 @@ export class SqliteStore implements QueueStore {
           head_sha = ?, status = 'queued', generation = ?,
           ci_run_id = NULL, ci_retries = 0, retry_attempts = 0,
           last_failed_base_sha = NULL,
-          spec_branch = NULL, spec_sha = NULL, spec_based_on = NULL,
+          candidate_kind = NULL, candidate_policy_fingerprint = NULL,
+          candidate_ref = NULL, candidate_sha = NULL, candidate_based_on = NULL,
           wait_detail = NULL,
           post_merge_status = NULL, post_merge_sha = NULL, post_merge_summary = NULL, post_merge_checked_at = NULL,
-          head_patch_id = NULL, spec_tree_id = NULL,
           updated_at = ?
          WHERE id = ?`,
       ).run(newHeadSha, newGen, isoNow(), entryId);
@@ -279,49 +299,28 @@ export class SqliteStore implements QueueStore {
     })();
   }
 
-  rebuildSpecHeadEquivalent(
-    entryId: string,
-    patch: {
-      headSha: string;
-      specSha: string;
-      specBranch: string;
-      headPatchId: string;
-      specTreeId: string;
-      ciRunId: string | null;
-    },
-    detail?: string,
-  ): void {
+  updateBaseRef(entryId: string, baseRefName: string | null, detail?: string): void {
     this.conn.transaction(() => {
-      const current = this.conn.prepare("SELECT status, generation FROM queue_entries WHERE id = ?").get(entryId);
+      const current = this.conn.prepare(
+        "SELECT status, base_ref_name FROM queue_entries WHERE id = ?",
+      ).get(entryId);
       if (!current) return;
       const from = String(current.status) as QueueEntryStatus;
       if (TERMINAL_STATUSES.includes(from)) return;
-      const newGen = Number(current.generation) + 1;
+      const currentBaseRef = current.base_ref_name === null ? null : String(current.base_ref_name);
+      if (currentBaseRef === baseRefName) return;
 
       this.conn.prepare(
         `UPDATE queue_entries SET
-          head_sha = ?, status = 'validating', generation = ?,
-          ci_run_id = ?, ci_retries = 0, retry_attempts = 0,
+          base_ref_name = ?, status = 'queued',
+          ci_run_id = NULL, ci_retries = 0, retry_attempts = 0,
           last_failed_base_sha = NULL,
-          spec_branch = ?, spec_sha = ?,
-          head_patch_id = ?, spec_tree_id = ?,
-          wait_detail = NULL,
-          post_merge_status = NULL, post_merge_sha = NULL, post_merge_summary = NULL, post_merge_checked_at = NULL,
-          updated_at = ?
+          candidate_kind = NULL, candidate_policy_fingerprint = NULL,
+          candidate_ref = NULL, candidate_sha = NULL, candidate_based_on = NULL,
+          wait_detail = NULL, updated_at = ?
          WHERE id = ?`,
-      ).run(
-        patch.headSha,
-        newGen,
-        patch.ciRunId,
-        patch.specBranch,
-        patch.specSha,
-        patch.headPatchId,
-        patch.specTreeId,
-        isoNow(),
-        entryId,
-      );
-
-      this.writeEvent(entryId, from, "validating", detail ?? `patch-id-equivalent rebuild: generation ${newGen}`);
+      ).run(baseRefName, isoNow(), entryId);
+      this.writeEvent(entryId, from, "queued", detail ?? `base ref changed to ${baseRefName ?? "(default)"}`);
     })();
   }
 

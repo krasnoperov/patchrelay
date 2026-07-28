@@ -22,8 +22,7 @@ CREATE TABLE IF NOT EXISTS review_attempts (
   turn_id TEXT,
   external_check_run_id INTEGER,
   patch_id TEXT,
-  integration_tree_id TEXT,
-  review_surface_mode TEXT,
+  pr_base_sha TEXT,
   base_sha TEXT,
   prior_attempt_id INTEGER,
   review_body TEXT,
@@ -41,9 +40,5 @@ CREATE INDEX IF NOT EXISTS idx_review_attempts_repo_pr
 CREATE INDEX IF NOT EXISTS idx_webhook_events_retention
   ON webhook_events(processed_at, received_at);
 `;
-// idx_review_attempts_patch and idx_review_attempts_patch_tree are
-// created in SqliteStore *after* addColumnIfMissing populates the
-// patch_id / integration_tree_id columns. Legacy databases were
-// created before those columns existed, so referencing them here
-// (CREATE TABLE IF NOT EXISTS skips the body when the table is
-// already present) would fail with "no such column: patch_id".
+// idx_review_attempts_patch is created in SqliteStore after
+// addColumnIfMissing populates patch_id for legacy databases.

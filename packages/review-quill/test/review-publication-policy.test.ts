@@ -5,6 +5,7 @@ import {
   buildReviewBody,
   classifyPublicationDisposition,
   filterFindings,
+  findStaleDecisiveReviews,
   hasMatchingLatestReviewForHead,
   resolveEvent,
 } from "../src/review-publication-policy.ts";
@@ -138,7 +139,38 @@ test("classifyPublicationDisposition marks stale heads as superseded", () => {
     state: "OPEN",
     isDraft: false,
     headSha: "new-head-sha",
-  }, "old-head-sha");
+    baseSha: "base-sha",
+  }, { headSha: "old-head-sha", baseSha: "base-sha" });
 
   assert.equal(disposition.action, "supersede");
+});
+
+test("classifyPublicationDisposition supersedes a review when the PR is retargeted", () => {
+  const disposition = classifyPublicationDisposition({
+    state: "OPEN",
+    isDraft: false,
+    headSha: "same-head-sha",
+    baseSha: "new-parent-sha",
+  }, { headSha: "same-head-sha", baseSha: "old-main-sha" });
+
+  assert.equal(disposition.action, "supersede");
+  assert.match(disposition.action === "supersede" ? disposition.summary : "", /base changed/);
+});
+
+test("base invalidation includes the decisive review on the current head", () => {
+  const reviews = [
+    { id: 1, authorLogin: "review-quill", state: "APPROVED", commitId: "old-head" },
+    { id: 2, authorLogin: "review-quill", state: "APPROVED", commitId: "current-head" },
+    { id: 3, authorLogin: "human", state: "APPROVED", commitId: "current-head" },
+  ];
+
+  assert.deepEqual(
+    findStaleDecisiveReviews({
+      reviews,
+      reviewerLogin: "review-quill",
+      headSha: "current-head",
+      includeCurrentHead: true,
+    }).map((review) => review.id),
+    [2, 1],
+  );
 });

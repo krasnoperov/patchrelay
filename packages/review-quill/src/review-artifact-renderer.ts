@@ -20,8 +20,6 @@ export interface RenderedReviewArtifacts {
 export interface RenderReviewArtifactsInput {
   verdict: ReviewVerdict;
   inventoryPaths: string[];
-  /** Repo-resolved surface mode. `integration_tree` forces body-only output. */
-  surfaceMode: "integration_tree" | "head" | (string & {});
 }
 
 /**
@@ -30,10 +28,6 @@ export interface RenderReviewArtifactsInput {
  * drop stats for logging. No side effects, no DB, no GitHub I/O; this is what
  * makes the publication policy testable without standing up a fake GitHub.
  *
- * Inline-vs-body-only is driven by `surfaceMode`: in `integration_tree` mode
- * the agent reviewed a synthetic merge commit, so inline anchors at PR head
- * wouldn't line up — keep the verdict body-only with findings folded into
- * the markdown.
  */
 export function renderReviewArtifacts(input: RenderReviewArtifactsInput): RenderedReviewArtifacts {
   const knownPaths = new Set(input.inventoryPaths);
@@ -43,20 +37,13 @@ export function renderReviewArtifacts(input: RenderReviewArtifactsInput): Render
   const droppedByConfidence = droppedTotal - droppedByPath;
 
   const event = resolveEvent(input.verdict, filteredFindings);
-  const useBodyOnly = input.surfaceMode === "integration_tree";
-
-  const reviewBody = useBodyOnly
-    ? buildReviewBody({ verdict: input.verdict, event, inlineFindings: filteredFindings })
-    : buildReviewBody({ verdict: input.verdict, event });
-
-  const inlineComments = useBodyOnly
-    ? []
-    : filteredFindings.map((finding) => ({
-        path: finding.path,
-        line: finding.line,
-        side: "RIGHT" as const,
-        body: buildInlineCommentBody(finding),
-      }));
+  const reviewBody = buildReviewBody({ verdict: input.verdict, event });
+  const inlineComments = filteredFindings.map((finding) => ({
+    path: finding.path,
+    line: finding.line,
+    side: "RIGHT" as const,
+    body: buildInlineCommentBody(finding),
+  }));
 
   return {
     reviewBody,
@@ -64,6 +51,6 @@ export function renderReviewArtifacts(input: RenderReviewArtifactsInput): Render
     filteredFindings,
     event,
     dropStats: { droppedTotal, droppedByPath, droppedByConfidence },
-    useBodyOnly,
+    useBodyOnly: false,
   };
 }

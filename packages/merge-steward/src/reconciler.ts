@@ -5,10 +5,11 @@ import { sanitizeEntry } from "./reconciler-sanitize.ts";
 import { prepareEntry } from "./reconciler-prepare.ts";
 import { checkValidation } from "./reconciler-validate.ts";
 import { mergeHead } from "./reconciler-merge.ts";
-import { cleanupSpec } from "./reconciler-evict.ts";
+import { cleanupCandidate } from "./reconciler-evict.ts";
 import { INVALIDATION_PATCH } from "./invalidation.ts";
 import { verifyPostMergeStatus } from "./reconciler-post-merge.ts";
 import { syncQueueStateLabels } from "./reconciler-queue-labels.ts";
+import { buildDependencyReadySchedule } from "./queue-order.ts";
 
 export type { ReconcileContext } from "./reconciler-core.ts";
 
@@ -21,12 +22,41 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
   // (e.g. an externally-merged PR), and verifyMergedEntriesPostPush below is
   // the only thing that advances them. depth=0 simply skips the active loop.
 
-  // Process up to speculativeDepth entries. GitHub truth checks are
-  // bounded by this window — we never scan the full queue.
-  const depth = Math.min(ctx.speculativeDepth, allActive.length);
+  const schedule = buildDependencyReadySchedule(
+    allActive,
+    ctx.store.listAll(ctx.repoId),
+    ctx.baseBranch,
+  );
+  for (const blocked of schedule.blocked.slice(0, ctx.speculativeDepth)) {
+    const entry = ctx.store.getEntry(blocked.entry.id);
+    if (!entry || TERMINAL_STATUSES.includes(entry.status)) continue;
+    if (await sanitizeEntry(ctx, entry)) continue;
+    if (entry.candidateSha || entry.candidateRef || entry.candidateKind) {
+      emit(ctx, entry, "invalidated", { detail: blocked.reason });
+      emit(ctx, entry, "stack_dependency_waiting", { detail: blocked.reason });
+      await cleanupCandidate(ctx, entry);
+      ctx.store.transition(
+        entry.id,
+        "preparing_head",
+        { ...INVALIDATION_PATCH, waitDetail: blocked.reason },
+        `invalidated: ${blocked.reason}`,
+      );
+      continue;
+    }
+    if (entry.waitDetail !== blocked.reason) {
+      emit(ctx, entry, "stack_dependency_waiting", { detail: blocked.reason });
+      ctx.store.transition(entry.id, entry.status, { waitDetail: blocked.reason }, blocked.reason);
+    }
+  }
+
+  // Process up to speculativeDepth dependency-ready entries. A failed stack
+  // is excluded from this view, so it cannot prevent independent roots from
+  // becoming the landing head.
+  const ready = schedule.ready;
+  const depth = Math.min(ctx.speculativeDepth, ready.length);
 
   for (let i = 0; i < depth; i++) {
-    const entryId = allActive[i]!.id;
+    const entryId = ready[i]!.id;
     const entry = ctx.store.getEntry(entryId);
     if (!entry || TERMINAL_STATUSES.includes(entry.status)) continue;
 
@@ -45,13 +75,13 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
     // changes. Reset so it rebuilds on the correct base next tick.
     // Exclude "merged" — a merged dependency means main advanced to its
     // spec, so our cumulative spec is still valid (speculative consistency).
-    if (entry.specBasedOn) {
-      const dep = ctx.store.getEntry(entry.specBasedOn);
+    if (entry.candidateBasedOn) {
+      const dep = ctx.store.getEntry(entry.candidateBasedOn);
       if (!dep || dep.status === "dequeued" || dep.status === "evicted") {
         emit(ctx, entry, "invalidated", {
-          detail: `dependency ${entry.specBasedOn} is ${dep?.status ?? "removed"}`,
+          detail: `dependency ${entry.candidateBasedOn} is ${dep?.status ?? "removed"}`,
         });
-        await cleanupSpec(ctx, entry);
+        await cleanupCandidate(ctx, entry);
         ctx.store.transition(entry.id, "preparing_head",
           INVALIDATION_PATCH, `stale dependency ${dep?.status ?? "removed"}`);
         continue;
@@ -59,7 +89,7 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
     }
 
     const isHead = i === 0;
-    const prevEntry = i > 0 ? ctx.store.getEntry(allActive[i - 1]!.id) ?? null : null;
+    const prevEntry = i > 0 ? ctx.store.getEntry(ready[i - 1]!.id) ?? null : null;
     const phase = entry.status;
 
     try {
@@ -76,7 +106,18 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
         case "validating": {
           const freshActive = ctx.store.listActive(ctx.repoId);
           const freshIdx = freshActive.findIndex((e) => e.id === entry.id);
-          await checkValidation(ctx, entry, freshActive, freshIdx >= 0 ? freshIdx : i);
+          const freshLandingHead = buildDependencyReadySchedule(
+            freshActive,
+            ctx.store.listAll(ctx.repoId),
+            ctx.baseBranch,
+          ).ready[0]?.id === entry.id;
+          await checkValidation(
+            ctx,
+            entry,
+            freshActive,
+            freshIdx >= 0 ? freshIdx : i,
+            freshLandingHead,
+          );
           break;
         }
 
@@ -111,7 +152,7 @@ async function verifyMergedEntriesPostPush(ctx: ReconcileContext): Promise<void>
   // doesn't scan every terminal row each tick — only the unresolved ones.
   const mergedEntries = ctx.store.listPostMergePending(ctx.repoId);
   for (const entry of mergedEntries) {
-    const postMergeSha = entry.postMergeSha ?? entry.specSha ?? entry.headSha;
+    const postMergeSha = entry.postMergeSha ?? entry.candidateSha ?? entry.headSha;
     if (!postMergeSha) {
       continue;
     }

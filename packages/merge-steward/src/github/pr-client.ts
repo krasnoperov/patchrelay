@@ -1,5 +1,6 @@
 import type { GitHubPRApi } from "../interfaces.ts";
 import type { CheckResult, PRStatus } from "../types.ts";
+import { mapGitHubCheckConclusion } from "../check-policy.ts";
 import { exec } from "../exec.ts";
 
 /**
@@ -74,15 +75,19 @@ export class GitHubPRClient implements GitHubPRApi {
 
     try {
       const checks = JSON.parse(result.stdout) as Array<{
+        id?: number;
         name: string;
         status?: string;
         conclusion: string | null;
         html_url?: string;
+        app?: { id?: number };
       }>;
       return checks
         .map((c) => ({
           name: c.name,
-          conclusion: mapRestConclusion(c.status, c.conclusion),
+          conclusion: mapGitHubCheckConclusion(c.status, c.conclusion),
+          ...(typeof c.app?.id === "number" ? { appId: c.app.id } : {}),
+          ...(typeof c.id === "number" ? { runId: c.id } : {}),
           ...(c.html_url ? { url: c.html_url } : {}),
         }));
     } catch {
@@ -192,12 +197,3 @@ export class GitHubPRClient implements GitHubPRApi {
 }
 
 /** Map GitHub REST API check-run status/conclusion to our union. */
-function mapRestConclusion(status: string | undefined, conclusion: string | null): CheckResult["conclusion"] {
-  if (status !== "completed" || conclusion === null) return "pending";
-  switch (conclusion) {
-    case "success": case "neutral": case "skipped": return "success";
-    case "failure": case "cancelled": case "timed_out":
-    case "stale": case "action_required": return "failure";
-    default: return "pending";
-  }
-}

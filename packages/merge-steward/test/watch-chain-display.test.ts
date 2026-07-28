@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { QueueEntry, QueueEntryStatus } from "../src/types.ts";
-import { ciStatusIcon, specChainLabel } from "../src/watch/format.ts";
+import { ciStatusIcon, candidateChainLabel } from "../src/watch/format.ts";
 import { buildChainEntries, buildDisplayEntries } from "../src/watch/display-filter.ts";
 
 function makeEntry(overrides: Partial<QueueEntry> & { prNumber: number; position: number; status: QueueEntryStatus }): QueueEntry {
@@ -19,9 +19,9 @@ function makeEntry(overrides: Partial<QueueEntry> & { prNumber: number; position
     maxRetries: 2,
     lastFailedBaseSha: null,
     issueKey: null,
-    specBranch: null,
-    specSha: null,
-    specBasedOn: null,
+    candidateRef: null,
+    candidateSha: null,
+    candidateBasedOn: null,
     decidedAt: null,
     enqueuedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -97,8 +97,6 @@ test("active filter keeps merged entries visible while post-merge CI is still pe
     postMergeSha: "landed-sha",
     postMergeCheckedAt: new Date().toISOString(),
     baseRefName: null,
-    headPatchId: null,
-    specTreeId: null,
   });
   const active = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
 
@@ -119,8 +117,6 @@ test("active filter drops merged entries once post-merge CI has settled past the
     postMergeSha: "landed-sha",
     postMergeCheckedAt: new Date(Date.now() - 4 * 60_000).toISOString(),
     baseRefName: null,
-    headPatchId: null,
-    specTreeId: null,
   });
   const active = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
 
@@ -139,8 +135,6 @@ test("chain header keeps a merged entry present until post-merge CI resolves", (
     postMergeSha: "landed-sha",
     postMergeCheckedAt: new Date().toISOString(),
     baseRefName: null,
-    headPatchId: null,
-    specTreeId: null,
   });
   const active = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
 
@@ -279,20 +273,20 @@ test("buildChainEntries prefers the newest queue attempt for a PR", () => {
   assert.strictEqual(chain[0]!.status, "merged");
 });
 
-// ─── Spec chain label ───────────────────────────────────────────
+// ─── Candidate chain label ──────────────────────────────────────
 
-test("specChainLabel shows main as base for head entry", () => {
-  const entry = { specBranch: "mq-spec-1", specBasedOn: null, specSha: "abc1234567" };
-  assert.strictEqual(specChainLabel(entry, []), "abc1234 \u2190 main");
+test("candidateChainLabel shows main as base for head entry", () => {
+  const entry = { candidateRef: "mq-spec-1", candidateBasedOn: null, candidateSha: "abc1234567" };
+  assert.strictEqual(candidateChainLabel(entry, []), "abc1234 \u2190 main");
 });
 
-test("specChainLabel shows parent PR number for non-head entry", () => {
-  const entries = [{ id: "qe-1", prNumber: 110, specBranch: "mq-spec-1" }];
-  const entry = { specBranch: "mq-spec-2", specBasedOn: "qe-1", specSha: "def5678901" };
-  assert.strictEqual(specChainLabel(entry, entries), "def5678 \u2190 #110");
+test("candidateChainLabel shows parent PR number for non-head entry", () => {
+  const entries = [{ id: "qe-1", prNumber: 110, candidateRef: "mq-spec-1" }];
+  const entry = { candidateRef: "mq-spec-2", candidateBasedOn: "qe-1", candidateSha: "def5678901" };
+  assert.strictEqual(candidateChainLabel(entry, entries), "def5678 \u2190 #110");
 });
 
-test("specChainLabel returns 'no spec yet' when no spec branch", () => {
-  const entry = { specBranch: null, specBasedOn: null, specSha: null };
-  assert.strictEqual(specChainLabel(entry, []), "no spec yet");
+test("candidateChainLabel returns 'no candidate yet' before resolution", () => {
+  const entry = { candidateRef: null, candidateBasedOn: null, candidateSha: null };
+  assert.strictEqual(candidateChainLabel(entry, []), "no candidate yet");
 });

@@ -13,7 +13,7 @@ function actionsFor(h: ReturnType<Awaited<typeof createHarness>>, prNumber: numb
 }
 
 describe("observability: reconciler event stream", () => {
-  it("happy path emits full event sequence for serial merge", async () => {
+  it("exact-head path emits candidate selection, validation, and landing without integration CI", async () => {
     const h = await createHarness({ ciRule: () => "pass" });
     await h.enqueue(prA);
     await h.runUntilStable();
@@ -22,35 +22,27 @@ describe("observability: reconciler event stream", () => {
     // Should see the full lifecycle:
     assert.ok(actions.includes("promoted"), "should emit promoted");
     assert.ok(actions.includes("fetch_started"), "should emit fetch_started");
-    assert.ok(actions.includes("spec_build_started"), "should emit spec_build_started");
-    assert.ok(actions.includes("spec_build_succeeded"), "should emit spec_build_succeeded");
-    assert.ok(actions.includes("ci_triggered"), "should emit ci_triggered");
+    assert.ok(actions.includes("candidate_selected"), "should emit candidate_selected");
     assert.ok(actions.includes("ci_passed"), "should emit ci_passed");
     assert.ok(actions.includes("merge_revalidating"), "should emit merge_revalidating");
+    assert.ok(actions.includes("head_candidate_landed"), "should emit head_candidate_landed");
     assert.ok(actions.includes("merge_succeeded"), "should emit merge_succeeded");
+    assert.ok(!actions.includes("integration_build_started"), "exact head must not build an integration candidate");
+    assert.ok(!actions.includes("ci_triggered"), "exact head must reuse checks on its SHA");
 
-    // Plan §5.2: spec-ready check_run is emitted after the spec push.
-    assert.ok(
-      h.evictionSim.specReadyEvents.length > 0,
-      "should emit spec-ready event after spec push",
-    );
-    const specReady = h.evictionSim.specReadyEvents.find((e) => e.entry.prNumber === 1);
-    assert.ok(specReady, "spec-ready event for PR 1");
-    assert.match(specReady!.specBranch, /^mq-spec-/);
-
-    // Order: promoted before spec_build before ci_triggered before merge_succeeded
+    // Order: promotion → candidate proof → exact checks → landing.
     const promotedIdx = actions.indexOf("promoted");
-    const specIdx = actions.indexOf("spec_build_started");
-    const ciIdx = actions.indexOf("ci_triggered");
+    const candidateIdx = actions.indexOf("candidate_selected");
+    const ciIdx = actions.indexOf("ci_passed");
     const mergeIdx = actions.indexOf("merge_succeeded");
-    assert.ok(promotedIdx < specIdx, "promoted before spec_build");
-    assert.ok(specIdx < ciIdx, "spec_build before CI");
+    assert.ok(promotedIdx < candidateIdx, "promoted before candidate selection");
+    assert.ok(candidateIdx < ciIdx, "candidate selected before check validation");
     assert.ok(ciIdx < mergeIdx, "CI before merge");
 
     h.assertInvariants();
   });
 
-  it("conflict emits spec_build_conflict with file info", async () => {
+  it("conflict emits integration_build_conflict with file info", async () => {
     const prConflict: SimPR = { number: 2, branch: "feat-conflict", files: [{ path: "shared.ts", content: "conflict" }] };
     const prOriginal: SimPR = { number: 1, branch: "feat-orig", files: [{ path: "shared.ts", content: "original" }] };
 
@@ -60,9 +52,9 @@ describe("observability: reconciler event stream", () => {
     await h.runUntilStable({ maxTicks: 30 });
 
     const conflictEvents = h.reconcileEvents.filter(
-      (e) => e.prNumber === 2 && e.action === "spec_build_conflict",
+      (e) => e.prNumber === 2 && e.action === "integration_build_conflict",
     );
-    assert.ok(conflictEvents.length > 0, "should emit spec_build_conflict for PR #2");
+    assert.ok(conflictEvents.length > 0, "should emit integration_build_conflict for PR #2");
 
     const evictEvents = h.reconcileEvents.filter(
       (e) => e.prNumber === 2 && e.action === "evicted",
@@ -77,7 +69,7 @@ describe("observability: reconciler event stream", () => {
     const prConflict: SimPR = { number: 2, branch: "feat-conflict", files: [{ path: "shared.ts", content: "conflict" }] };
     const prOriginal: SimPR = { number: 1, branch: "feat-orig", files: [{ path: "shared.ts", content: "original" }] };
 
-    const h = await createHarness({ ciRule: () => "pass", maxRetries: 2 });
+    const h = await createHarness({ ciRule: () => "pass", maxRetries: 2, speculativeDepth: 2 });
     await h.enqueue(prOriginal);
     await h.enqueue(prConflict);
 
@@ -92,24 +84,25 @@ describe("observability: reconciler event stream", () => {
     h.assertInvariants();
   });
 
-  it("speculative execution emits spec_build events", async () => {
+  it("lookahead emits a head candidate for A and an integration candidate for B", async () => {
     const h = await createHarness({ ciRule: () => "pass", speculativeDepth: 3 });
     await h.enqueue(prA);
     await h.enqueue(prB);
     await h.runUntilStable();
 
-    // A should have spec_build events (head builds spec for downstream).
-    const aSpecEvents = h.reconcileEvents.filter(
-      (e) => e.prNumber === 1 && e.action === "spec_build_succeeded",
+    const aCandidates = h.reconcileEvents.filter(
+      (e) => e.prNumber === 1 && e.action === "candidate_selected",
     );
-    assert.ok(aSpecEvents.length > 0, "A should emit spec_build_succeeded");
+    assert.equal(aCandidates[0]?.candidateKind, "head");
+    assert.ok(!h.reconcileEvents.some(
+      (e) => e.prNumber === 1 && e.action === "integration_build_succeeded",
+    ));
 
-    // B should have spec_build events with dependsOn referencing A.
-    const bSpecEvents = h.reconcileEvents.filter(
-      (e) => e.prNumber === 2 && e.action === "spec_build_succeeded",
+    const bIntegrationEvents = h.reconcileEvents.filter(
+      (e) => e.prNumber === 2 && e.action === "integration_build_succeeded",
     );
-    assert.ok(bSpecEvents.length > 0, "B should emit spec_build_succeeded");
-    assert.ok(bSpecEvents[0]!.dependsOn, "B's spec should reference A as dependency");
+    assert.ok(bIntegrationEvents.length > 0, "B should emit integration_build_succeeded");
+    assert.ok(bIntegrationEvents[0]!.dependsOn, "B's candidate should reference A");
 
     h.assertInvariants();
   });
@@ -147,7 +140,10 @@ describe("observability: reconciler event stream", () => {
 
     // The validating transition should explain what happened.
     const validatingEvent = events.find((e) => e.toStatus === "validating");
-    assert.ok(validatingEvent?.detail?.includes("spec") || validatingEvent?.detail?.includes("CI"), "validating detail should mention spec or CI");
+    assert.ok(
+      validatingEvent?.detail?.includes("candidate") || validatingEvent?.detail?.includes("CI"),
+      "validating detail should mention candidate or CI",
+    );
 
     // The merged transition should explain.
     const mergedEvent = events.find((e) => e.toStatus === "merged");

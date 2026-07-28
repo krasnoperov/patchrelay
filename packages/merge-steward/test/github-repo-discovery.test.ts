@@ -34,8 +34,8 @@ test("discoverRepoSettings resolves default branch and required checks from GitH
           type: "required_status_checks",
           parameters: {
             required_status_checks: [
-              { context: "lint" },
-              { context: "test" },
+              { context: "lint", integration_id: 11 },
+              { context: "test", integration_id: 22 },
             ],
           },
         },
@@ -60,6 +60,10 @@ test("discoverRepoSettings resolves default branch and required checks from GitH
     assert.equal(discovered.defaultBranch, "main");
     assert.equal(discovered.branch, "main");
     assert.deepEqual(discovered.requiredChecks, ["lint", "test"]);
+    assert.deepEqual(discovered.requiredCheckRules, [
+      { name: "lint", appId: 11 },
+      { name: "test", appId: 22 },
+    ]);
     assert.equal(discovered.requireAllChecksOnEmptyRequiredSet, false);
     assert.deepEqual(discovered.warnings, []);
     assert.equal(calls.length, 4);
@@ -131,7 +135,7 @@ test("discoverRepoSettings falls back to classic branch protection required chec
       return createJsonResponse({
         required_status_checks: {
           contexts: ["Verify"],
-          checks: [{ context: "Verify" }],
+          checks: [{ context: "Verify", app_id: 99 }],
         },
       });
     }
@@ -151,6 +155,7 @@ test("discoverRepoSettings falls back to classic branch protection required chec
     assert.equal(discovered.defaultBranch, "main");
     assert.equal(discovered.branch, "main");
     assert.deepEqual(discovered.requiredChecks, ["Verify"]);
+    assert.deepEqual(discovered.requiredCheckRules, [{ name: "Verify", appId: 99 }]);
     assert.equal(discovered.requireAllChecksOnEmptyRequiredSet, false);
     assert.deepEqual(discovered.warnings, []);
   } finally {

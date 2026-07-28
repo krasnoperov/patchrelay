@@ -6,14 +6,11 @@ import {
   DEFAULT_NO_CACHE_LABEL,
   lookupCarryForwardCandidate,
   republishCarryForward,
+  revalidateCarryForwardInput,
   resolveNoCacheLabel,
-  resolveReviewSurfaceMode,
   tryCarryForward,
 } from "../src/carry-forward.ts";
-import type {
-  PullRequestSummary,
-  ReviewQuillRepositoryConfig,
-} from "../src/types.ts";
+import type { PullRequestSummary, ReviewQuillRepositoryConfig } from "../src/types.ts";
 import { buildPromptFingerprint } from "../src/prompt-fingerprint.ts";
 
 function makeRepo(overrides: Partial<ReviewQuillRepositoryConfig> = {}): ReviewQuillRepositoryConfig {
@@ -40,8 +37,9 @@ function makePr(overrides: Partial<PullRequestSummary> = {}): PullRequestSummary
     state: "OPEN",
     isDraft: false,
     headSha: "newhead",
-    headRefName: "feature/x",
-    baseRefName: "main",
+    headRefName: "feature/child",
+    baseRefName: "feature/parent",
+    baseSha: "parent-sha",
     labels: [],
     ...overrides,
   };
@@ -55,27 +53,15 @@ const silentLogger = {
   child() { return silentLogger; },
 } as never;
 
-test("resolveReviewSurfaceMode defaults to head", () => {
-  assert.equal(resolveReviewSurfaceMode(makeRepo()), "head");
-});
-
-test("resolveReviewSurfaceMode honors integration_tree override", () => {
-  assert.equal(resolveReviewSurfaceMode(makeRepo({ reviewSurfaceMode: "integration_tree" })), "integration_tree");
-});
-
-test("resolveNoCacheLabel uses the documented default", () => {
+test("resolveNoCacheLabel uses the documented default and project override", () => {
   assert.equal(resolveNoCacheLabel(makeRepo()), DEFAULT_NO_CACHE_LABEL);
   assert.equal(DEFAULT_NO_CACHE_LABEL, "review:no-cache");
-});
-
-test("resolveNoCacheLabel honors a project override", () => {
   assert.equal(resolveNoCacheLabel(makeRepo({ noCacheLabel: "skip-cache" })), "skip-cache");
 });
 
-test("findApprovedAttemptByPatchId returns rows with stored body and event", () => {
+test("carry-forward lookup requires an approved stored verdict and matching prompt", () => {
   const store = new SqliteStore(":memory:");
-  const promptFingerprint = buildPromptFingerprint(makePr({ title: "Original prompt", body: "Original body" }));
-  // Old-shape row with no body (rollout-safety: never serves carry-forward).
+  const promptFingerprint = buildPromptFingerprint(makePr());
   store.createAttempt({
     repoFullName: "fixture/repo",
     prNumber: 7,
@@ -83,10 +69,9 @@ test("findApprovedAttemptByPatchId returns rows with stored body and event", () 
     status: "completed",
     conclusion: "approved",
     patchId: "patch-A",
-    reviewSurfaceMode: "head",
+    diffBaseSha: "parent-sha",
     promptFingerprint,
   });
-  // New-shape row with a stored body — eligible for carry-forward.
   const cached = store.createAttempt({
     repoFullName: "fixture/repo",
     prNumber: 7,
@@ -94,159 +79,41 @@ test("findApprovedAttemptByPatchId returns rows with stored body and event", () 
     status: "completed",
     conclusion: "approved",
     patchId: "patch-A",
-    reviewSurfaceMode: "head",
+    diffBaseSha: "parent-sha",
     promptFingerprint,
     reviewBody: "Approved by review-quill",
     reviewEvent: "APPROVE",
     publicationMode: "body_only",
   });
 
-  const found = store.findApprovedAttemptByPatchId("fixture/repo", 7, "patch-A", "head", promptFingerprint);
-  assert.ok(found);
-  assert.equal(found?.id, cached.id);
-  assert.equal(found?.reviewBody, "Approved by review-quill");
-
-  // A different patch-id finds nothing.
-  assert.equal(store.findApprovedAttemptByPatchId("fixture/repo", 7, "patch-B", "head", promptFingerprint), undefined);
-
-  // Mode mismatch is filtered out.
-  assert.equal(store.findApprovedAttemptByPatchId("fixture/repo", 7, "patch-A", "integration_tree", promptFingerprint), undefined);
-
-  // Prompt-input mismatch is filtered out. Same patch-id with changed title/body
-  // must be reviewed on the next pushed head instead of carried forward.
+  const identity = { patchId: "patch-A", prBaseSha: "parent-sha", diffBaseSha: "parent-sha" };
+  assert.equal(lookupCarryForwardCandidate(makeRepo(), 7, identity, store, promptFingerprint)?.id, cached.id);
   assert.equal(
-    store.findApprovedAttemptByPatchId(
-      "fixture/repo",
+    lookupCarryForwardCandidate(
+      makeRepo(),
       7,
-      "patch-A",
-      "head",
-      buildPromptFingerprint(makePr({ title: "Updated prompt", body: "Updated body" })),
+      { ...identity, prBaseSha: "new-parent", diffBaseSha: "new-parent" },
+      store,
+      promptFingerprint,
+    ),
+    undefined,
+    "a changed effective base requires a fresh review even when the patch is unchanged",
+  );
+  assert.equal(
+    lookupCarryForwardCandidate(
+      makeRepo(),
+      7,
+      identity,
+      store,
+      buildPromptFingerprint(makePr({ title: "Changed prompt" })),
     ),
     undefined,
   );
-
   store.close();
 });
 
-test("findApprovedAttemptByPatchAndTree filters on both keys", () => {
+test("republishCarryForward publishes on a new head and records both PR and diff bases", async () => {
   const store = new SqliteStore(":memory:");
-  const promptFingerprint = buildPromptFingerprint(makePr());
-  store.createAttempt({
-    repoFullName: "fixture/repo",
-    prNumber: 7,
-    headSha: "h1",
-    status: "completed",
-    conclusion: "approved",
-    patchId: "P",
-    integrationTreeId: "T1",
-    reviewSurfaceMode: "integration_tree",
-    promptFingerprint,
-    reviewBody: "ok",
-    reviewEvent: "APPROVE",
-    publicationMode: "body_only",
-  });
-  const exact = store.findApprovedAttemptByPatchAndTree("fixture/repo", 7, "P", "T1", "integration_tree", promptFingerprint);
-  assert.ok(exact);
-  assert.equal(store.findApprovedAttemptByPatchAndTree("fixture/repo", 7, "P", "T2", "integration_tree", promptFingerprint), undefined);
-  store.close();
-});
-
-test("findApprovedAttemptByPatchId ignores declined and failed attempts", () => {
-  const store = new SqliteStore(":memory:");
-  const promptFingerprint = buildPromptFingerprint(makePr());
-  store.createAttempt({
-    repoFullName: "fixture/repo",
-    prNumber: 7,
-    headSha: "h1",
-    status: "completed",
-    conclusion: "declined",
-    patchId: "P",
-    reviewSurfaceMode: "head",
-    promptFingerprint,
-    reviewBody: "Changes requested",
-    reviewEvent: "REQUEST_CHANGES",
-    publicationMode: "body_only",
-  });
-  store.createAttempt({
-    repoFullName: "fixture/repo",
-    prNumber: 7,
-    headSha: "h2",
-    status: "failed",
-    conclusion: "error",
-    patchId: "P",
-    reviewSurfaceMode: "head",
-    promptFingerprint,
-    reviewBody: "(should be ignored)",
-    reviewEvent: "COMMENT",
-    publicationMode: "body_only",
-  });
-
-  assert.equal(store.findApprovedAttemptByPatchId("fixture/repo", 7, "P", "head", promptFingerprint), undefined);
-  store.close();
-});
-
-test("tryCarryForward skips PRs with the no-cache label and never touches GitHub", async () => {
-  const store = new SqliteStore(":memory:");
-  let submitCalled = false;
-  const github = {
-    currentTokenForRepo: () => "tok",
-    submitReview: async () => { submitCalled = true; },
-  } as never;
-
-  const result = await tryCarryForward(
-    makeRepo(),
-    makePr({ labels: ["review:no-cache"] }),
-    { store, github, logger: silentLogger },
-  );
-  assert.equal(result.kind, "skipped");
-  if (result.kind === "skipped") {
-    assert.equal(result.reason, "no_cache_label");
-  }
-  assert.equal(submitCalled, false);
-  store.close();
-});
-
-test("lookupCarryForwardCandidate dispatches by review surface mode", () => {
-  const store = new SqliteStore(":memory:");
-  const promptFingerprint = buildPromptFingerprint(makePr());
-  store.createAttempt({
-    repoFullName: "fixture/repo",
-    prNumber: 7,
-    headSha: "h1",
-    status: "completed",
-    conclusion: "approved",
-    patchId: "P",
-    reviewSurfaceMode: "head",
-    promptFingerprint,
-    reviewBody: "ok",
-    reviewEvent: "APPROVE",
-    publicationMode: "body_only",
-  });
-  const head = lookupCarryForwardCandidate(
-    makeRepo(),
-    7,
-    { patchId: "P", baseSha: "B", mode: "head" },
-    store,
-    promptFingerprint,
-  );
-  assert.ok(head);
-
-  // integration_tree mode without a tree id never finds anything (v1
-  // never populates integration_tree_id, so this branch is permanently
-  // unreachable until §3.4 ships).
-  const treeNoId = lookupCarryForwardCandidate(
-    makeRepo(),
-    7,
-    { patchId: "P", baseSha: "B", mode: "integration_tree" },
-    store,
-  );
-  assert.equal(treeNoId, undefined);
-  store.close();
-});
-
-test("republishCarryForward submits a fresh review and inserts a linked attempt", async () => {
-  const store = new SqliteStore(":memory:");
-  const currentPr = makePr({ headSha: "new-head", title: "Current title", body: "Current body" });
   const prior = store.createAttempt({
     repoFullName: "fixture/repo",
     prNumber: 7,
@@ -254,113 +121,98 @@ test("republishCarryForward submits a fresh review and inserts a linked attempt"
     status: "completed",
     conclusion: "approved",
     patchId: "P",
-    reviewSurfaceMode: "head",
-    promptFingerprint: buildPromptFingerprint(makePr({ title: "Old title", body: "Old body" })),
-    baseSha: "B",
     reviewBody: "Approved by review-quill",
     reviewEvent: "APPROVE",
     publicationMode: "body_only",
   });
-
   const submitted: Array<Record<string, unknown>> = [];
   const github = {
-    submitReview: async (
-      repo: string,
-      prNumber: number,
-      params: Record<string, unknown>,
-    ) => {
+    submitReview: async (repo: string, prNumber: number, params: Record<string, unknown>) => {
       submitted.push({ repo, prNumber, ...params });
     },
   } as never;
-
   const identity: ChangeIdentity = {
     patchId: "P",
-    baseSha: "newer-base",
-    mode: "head",
+    prBaseSha: "github-parent-sha",
+    diffBaseSha: "merge-base-sha",
   };
+
   const inserted = await republishCarryForward(
     makeRepo(),
-    currentPr,
+    makePr({ headSha: "new-head" }),
     prior,
     identity,
     { store, github, logger: silentLogger },
   );
 
-  // GitHub got exactly one submitReview call, on the NEW head SHA, with
-  // the prior body+event.
   assert.equal(submitted.length, 1);
   assert.equal(submitted[0]?.commitId, "new-head");
-  assert.equal(submitted[0]?.event, "APPROVE");
-  assert.equal(submitted[0]?.body, "Approved by review-quill");
-
-  // The new attempt row links back to the prior and carries forward
-  // body/event/mode/baseSha so it can serve the next head too.
-  assert.equal(inserted.headSha, "new-head");
   assert.equal(inserted.priorAttemptId, prior.id);
-  assert.equal(inserted.status, "completed");
-  assert.equal(inserted.conclusion, "approved");
-  assert.equal(inserted.patchId, "P");
-  assert.equal(inserted.promptFingerprint, buildPromptFingerprint(currentPr));
-  assert.equal(inserted.reviewBody, "Approved by review-quill");
-  assert.equal(inserted.reviewEvent, "APPROVE");
-  assert.equal(inserted.reviewSurfaceMode, "head");
-  assert.equal(inserted.baseSha, "newer-base");
-  assert.equal(inserted.publicationMode, "body_only");
-
-  // Subsequent lookups now find this row too — the cache populates
-  // through carry-forward chains.
-  const found = store.findApprovedAttemptByPatchId("fixture/repo", 7, "P", "head", buildPromptFingerprint(currentPr));
-  assert.equal(found?.id, inserted.id);
+  assert.equal(inserted.prBaseSha, "github-parent-sha");
+  assert.equal(inserted.diffBaseSha, "merge-base-sha");
   store.close();
 });
 
-test("republishCarryForward refuses to act on a candidate missing body or event", async () => {
+test("republishCarryForward updates a same-head row without duplicating its GitHub review", async () => {
   const store = new SqliteStore(":memory:");
-  // Old-shape row from before the migration — no reviewBody / reviewEvent.
-  const stale = store.createAttempt({
+  const prior = store.createAttempt({
     repoFullName: "fixture/repo",
     prNumber: 7,
-    headSha: "old-head",
+    headSha: "same-head",
     status: "completed",
     conclusion: "approved",
     patchId: "P",
-    reviewSurfaceMode: "head",
+    reviewBody: "Approved by review-quill",
+    reviewEvent: "APPROVE",
   });
-
   const github = {
-    submitReview: async () => assert.fail("submitReview should not be called"),
+    submitReview: async () => assert.fail("same-head carry-forward must not post a duplicate review"),
   } as never;
 
-  await assert.rejects(
-    () => republishCarryForward(
-      makeRepo(),
-      makePr({ headSha: "new-head" }),
-      stale,
-      { patchId: "P", baseSha: "B", mode: "head" },
-      { store, github, logger: silentLogger },
-    ),
-    /requires reviewBody and reviewEvent/,
+  const updated = await republishCarryForward(
+    makeRepo(),
+    makePr({ headSha: "same-head", baseSha: "retargeted-base" }),
+    prior,
+    { patchId: "P", prBaseSha: "retargeted-base", diffBaseSha: "merge-base" },
+    { store, github, logger: silentLogger },
   );
+
+  assert.equal(updated.id, prior.id);
+  assert.equal(updated.prBaseSha, "retargeted-base");
+  assert.equal(updated.diffBaseSha, "merge-base");
   store.close();
 });
 
-test("tryCarryForward skips stacked PRs (parent-base resolution deferred)", async () => {
+test("carry-forward input revalidation rejects a same-head base change", async () => {
+  const reviewed = makePr({ headSha: "same-head", baseSha: "old-parent" });
+  const github = {
+    getPullRequest: async () => makePr({
+      headSha: "same-head",
+      baseSha: "new-parent",
+    }),
+  } as never;
+
+  const result = await revalidateCarryForwardInput(
+    github,
+    "fixture/repo",
+    reviewed,
+  );
+
+  assert.equal(result.valid, false);
+  assert.equal(result.currentPr.baseSha, "new-parent");
+});
+
+test("tryCarryForward honors the no-cache label before materializing a workspace", async () => {
   const store = new SqliteStore(":memory:");
   const github = {
-    currentTokenForRepo: () => "tok",
-    submitReview: async () => assert.fail("should not be called for stacked PR"),
+    currentTokenForRepo: () => assert.fail("no-cache must short-circuit before token or git access"),
   } as never;
 
   const result = await tryCarryForward(
-    makeRepo({ baseBranch: "main" }),
-    makePr({ baseRefName: "feature/parent" }),
+    makeRepo(),
+    makePr({ labels: ["review:no-cache"] }),
     { store, github, logger: silentLogger },
   );
-  // Stacked PRs return identity_unavailable in v1 because we cannot
-  // safely compute patch_id against the parent without fetching that ref.
-  assert.equal(result.kind, "skipped");
-  if (result.kind === "skipped") {
-    assert.equal(result.reason, "identity_unavailable");
-  }
+  assert.deepEqual(result, { kind: "skipped", reason: "no_cache_label" });
   store.close();
 });

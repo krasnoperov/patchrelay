@@ -290,15 +290,14 @@ export class RunFinalizer {
       baseRef: "origin/main",
       headSha: issue.prHeadSha,
     });
-    if (!identity.patchId && !identity.integrationTreeId) return;
+    if (!identity.patchId) return;
     this.db.issueSessions.commitIssueState({
       writer: WRITER,
       expectedVersion: issue.version,
       update: {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
-        ...(identity.patchId ? { lastPublishedPatchId: identity.patchId } : {}),
-        ...(identity.integrationTreeId ? { lastPublishedIntegrationTreeId: identity.integrationTreeId } : {}),
+        lastPublishedPatchId: identity.patchId,
         lastPublishedHeadSha: issue.prHeadSha,
       },
     });
@@ -752,8 +751,8 @@ export class RunFinalizer {
 
     const refreshedIssue = await this.completionPolicy.refreshIssueAfterReactivePublish(run, freshIssue);
     // Plan §4.2(c): post-hoc change-identity detection. When the run
-    // produced a new head SHA, compute and persist the patch-id and
-    // integration-tree-id so the next run's prompt rule can recognize
+    // produced a new head SHA, compute and persist the patch-id so the next
+    // run's prompt rule can recognize
     // a patch-id-equivalent re-push and skip the publish. Best-effort:
     // any git error returns undefined and we leave the cache as-is.
     this.maybeUpdateLastPublishedIdentity(run, refreshedIssue);

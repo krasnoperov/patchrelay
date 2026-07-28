@@ -1,9 +1,22 @@
 import type { CIRunner } from "../interfaces.ts";
-import type { CIStatus } from "../types.ts";
+import type { CIStatus, RequiredCheck } from "../types.ts";
 import { exec } from "../exec.ts";
+import { evaluateCheckPolicy, mapGitHubCheckConclusion } from "../check-policy.ts";
 
-function normalizeCheckName(name: string): string {
-  return name.trim().toLowerCase();
+interface GitHubCheckRun {
+  id?: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  details_url?: string | null;
+  app?: { id?: number };
+}
+
+function actionsWorkflowRunId(detailsUrl: string | null | undefined): number | undefined {
+  const match = detailsUrl?.match(/\/actions\/runs\/(\d+)(?:\/|$)/);
+  if (!match) return undefined;
+  const id = Number(match[1]);
+  return Number.isSafeInteger(id) && id > 0 ? id : undefined;
 }
 
 /**
@@ -15,8 +28,8 @@ function normalizeCheckName(name: string): string {
 export class GitHubActionsRunner implements CIRunner {
   constructor(
     private readonly repoFullName: string,
-    private readonly getRequiredChecks: () => string[] = () => [],
-    _shouldRequireAllChecksOnEmptyRequiredSet: () => boolean = () => false,
+    private readonly getRequiredChecks: () => Array<string | RequiredCheck> = () => [],
+    private readonly shouldRequireAllChecksOnEmptyRequiredSet: () => boolean = () => false,
   ) {}
 
   async triggerRun(_branch: string, sha: string): Promise<string> {
@@ -24,64 +37,84 @@ export class GitHubActionsRunner implements CIRunner {
     return `sha:${sha}`;
   }
 
+  async rerunRun(_runId: string, _branch: string, sha: string): Promise<string> {
+    const checkRuns = await this.listCheckRuns(sha);
+    const evaluation = this.evaluate(checkRuns);
+    const byCheckRunId = new Map(
+      checkRuns
+        .filter((check): check is GitHubCheckRun & { id: number } => typeof check.id === "number")
+        .map((check) => [check.id, check]),
+    );
+    const workflowRunIds = new Set<number>();
+    for (const failure of evaluation.failing) {
+      const workflowRunId = actionsWorkflowRunId(
+        failure.runId === undefined ? undefined : byCheckRunId.get(failure.runId)?.details_url,
+      );
+      if (!workflowRunId) {
+        throw new Error(
+          `Required failing check ${failure.name} is not tied to a rerunnable GitHub Actions workflow`,
+        );
+      }
+      workflowRunIds.add(workflowRunId);
+    }
+    if (workflowRunIds.size === 0) {
+      throw new Error(`No required failed workflow run can be rerun for candidate ${sha.slice(0, 12)}`);
+    }
+
+    for (const workflowRunId of workflowRunIds) {
+      const rerun = await exec("gh", [
+        "api",
+        "--method", "POST",
+        `repos/${this.repoFullName}/actions/runs/${workflowRunId}/rerun-failed-jobs`,
+      ], { allowNonZero: true, githubRepoFullName: this.repoFullName });
+      if (rerun.exitCode !== 0) {
+        throw new Error(`GitHub rejected workflow rerun ${workflowRunId} for candidate ${sha.slice(0, 12)}`);
+      }
+    }
+    return `sha:${sha}`;
+  }
+
   async getStatus(runId: string): Promise<CIStatus> {
     const sha = runId.replace(/^sha:/, "");
-
-    const result = await exec("gh", [
-      "api",
-      `repos/${this.repoFullName}/commits/${sha}/check-runs`,
-      "--jq", ".check_runs",
-    ], { allowNonZero: true, githubRepoFullName: this.repoFullName });
-
-    if (result.exitCode !== 0) return "pending";
-
     try {
-      const checkRuns = JSON.parse(result.stdout) as Array<{
-        name: string;
-        status: string;
-        conclusion: string | null;
-      }>;
-
-      if (checkRuns.length === 0) return "pending";
-
-      const requiredChecks = this.getRequiredChecks();
-      const normalizedRequired = requiredChecks.map(normalizeCheckName);
-      const hasRequired = requiredChecks.length > 0;
-      const relevant = hasRequired
-        ? checkRuns.filter((c) => normalizedRequired.includes(normalizeCheckName(c.name)))
-        : checkRuns;
-
-      if (relevant.length === 0) return "pending";
-
-      if (relevant.some((c) => c.status !== "completed")) return "pending";
-      // REST API returns lowercase conclusions.  For required checks,
-      // "skipped" is rejected — a gate job can report success while the
-      // underlying required job was skipped by a workflow branch filter,
-      // letting untested code through.  When no required checks are
-      // configured, "skipped" is accepted as passing, matching
-      // mapRestConclusion in pr-client.ts — otherwise getMainStatus reports
-      // "fail" whenever main has conditional workflow jobs that are skipped
-      // (e.g. deploy-stage on main), even though listChecksForRef treats
-      // those same checks as success, producing a "main_broken" block with
-      // an empty failing-check list and stalling the queue.
-      // Accept "skipped" whenever there are no named required checks,
-      // including strict-protection-with-empty-contexts mode. A skipped
-      // job is an `if:` or `on:` gate by the workflow author declaring
-      // the job does not apply here; it is not a failure. The bypass
-      // concern (a gate job reporting success while a required job was
-      // skipped) only matters when we have a named required-check set
-      // to gate against, i.e. `hasRequired === true`.
-      const acceptSkipped = !hasRequired;
-      if (relevant.some((c) => {
-        if (c.conclusion === "success" || c.conclusion === "neutral") return false;
-        if (acceptSkipped && c.conclusion === "skipped") return false;
-        return true;
-      })) return "fail";
-
-      return "pass";
+      return this.evaluate(await this.listCheckRuns(sha)).status;
     } catch {
       return "pending";
     }
+  }
+
+  private async listCheckRuns(sha: string): Promise<GitHubCheckRun[]> {
+    const result = await exec("gh", [
+      "api",
+      `repos/${this.repoFullName}/commits/${sha}/check-runs?per_page=100`,
+      "--jq", ".check_runs",
+    ], { allowNonZero: true, githubRepoFullName: this.repoFullName });
+
+    if (result.exitCode !== 0) {
+      throw new Error(`Could not list check runs for candidate ${sha.slice(0, 12)}`);
+    }
+
+    try {
+      return JSON.parse(result.stdout) as GitHubCheckRun[];
+    } catch {
+      throw new Error(`GitHub returned malformed check runs for candidate ${sha.slice(0, 12)}`);
+    }
+  }
+
+  private evaluate(checkRuns: GitHubCheckRun[]) {
+    const required = this.getRequiredChecks().map((check): RequiredCheck =>
+      typeof check === "string" ? { name: check, appId: null } : check);
+    const checks = checkRuns.map((check) => ({
+      name: check.name,
+      conclusion: mapGitHubCheckConclusion(check.status, check.conclusion),
+      ...(typeof check.app?.id === "number" ? { appId: check.app.id } : {}),
+      ...(typeof check.id === "number" ? { runId: check.id } : {}),
+    }));
+    return evaluateCheckPolicy(
+      required,
+      this.shouldRequireAllChecksOnEmptyRequiredSet(),
+      checks,
+    );
   }
 
   async cancelRun(_runId: string): Promise<void> {

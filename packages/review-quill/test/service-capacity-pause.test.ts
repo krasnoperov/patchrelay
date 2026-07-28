@@ -18,6 +18,7 @@ function openPullRequest() {
     headSha: "capacity-head",
     headRefName: "feat/capacity",
     baseRefName: "main",
+    baseSha: "main-sha",
     labels: ["review:no-cache"],
   };
 }

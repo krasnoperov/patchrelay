@@ -26,8 +26,8 @@ function makeConfig(overrides: Partial<StewardConfig> = {}): StewardConfig {
     priorityQueueLabel: "queue:priority",
     mergeQueueCheckName: "merge-steward/queue",
     evictionCheckName: "merge-steward/queue",
-    specReadyCheckName: "merge-steward/spec-ready",
-    specBranchPrefix: "mq-spec-",
+    queueTestingLabel: "queue:testing",
+    queueMergingLabel: "queue:merging",
     excludeBranches: [],
     autoResolvePatterns: [],
     ...overrides,
@@ -52,16 +52,16 @@ function makeEntry(overrides: Partial<QueueEntry> = {}): QueueEntry {
     maxRetries: 2,
     lastFailedBaseSha: null,
     issueKey: null,
-    specBranch: null,
-    specSha: null,
-    specBasedOn: null,
+    candidateKind: null,
+    candidatePolicyFingerprint: null,
+    candidateRef: null,
+    candidateSha: null,
+    candidateBasedOn: null,
     postMergeStatus: null,
     postMergeSha: null,
     postMergeSummary: null,
     postMergeCheckedAt: null,
     baseRefName: null,
-    headPatchId: null,
-    specTreeId: null,
     enqueuedAt: "2026-05-22T00:00:00.000Z",
     updatedAt: "2026-05-22T00:00:00.000Z",
     ...overrides,
@@ -86,6 +86,15 @@ function makeStore(entries: QueueEntry[] = []): QueueStore {
     listAll(repoId) {
       return entries.filter((entry) => entry.repoId === repoId);
     },
+    listPostMergePending(repoId) {
+      return entries.filter((entry) => entry.repoId === repoId && entry.status === "merged"
+        && entry.postMergeStatus !== "pass" && entry.postMergeStatus !== "fail");
+    },
+    listRecentTerminal(repoId, limit = 3) {
+      return entries
+        .filter((entry) => entry.repoId === repoId && ["merged", "evicted", "dequeued"].includes(entry.status))
+        .slice(0, limit);
+    },
     insert() {},
     transition(entryId, to, patch) {
       const entry = byId.get(entryId);
@@ -93,7 +102,7 @@ function makeStore(entries: QueueEntry[] = []): QueueStore {
     },
     dequeue() {},
     updateHead() {},
-    rebuildSpecHeadEquivalent() {},
+    updateBaseRef() {},
     updatePriority() {},
     insertIncident() {},
     listIncidents() { return []; },
@@ -102,6 +111,43 @@ function makeStore(entries: QueueEntry[] = []): QueueStore {
     listRecentEvents() { return []; },
   };
 }
+
+test("startup removes stale queue labels left after a terminal transition", async () => {
+  const labels = new Set(["queue", "queue:merging"]);
+  const edits: Array<{ add?: string[]; remove?: string[] }> = [];
+  const terminal = makeEntry({
+    status: "merged",
+    decidedAt: "2026-05-22T00:01:00.000Z",
+    postMergeStatus: "pass",
+  });
+  const github = {
+    async listLabels() {
+      return [...labels];
+    },
+    async setLabels(_prNumber: number, change: { add?: string[]; remove?: string[] }) {
+      edits.push(change);
+      for (const label of change.remove ?? []) labels.delete(label);
+      for (const label of change.add ?? []) labels.add(label);
+    },
+  };
+  const runtime = new MergeStewardRuntime(
+    makeConfig(),
+    {} as never,
+    makeStore([terminal]),
+    {} as never,
+    {} as never,
+    github as never,
+    {} as never,
+    {} as never,
+    pino({ enabled: false }),
+  );
+
+  await runtime.start();
+  await runtime.stop();
+
+  assert.deepEqual(edits, [{ remove: ["queue:merging"] }]);
+  assert.deepEqual([...labels], ["queue"]);
+});
 
 test("triggerReconcile reports already_running while a tick is active", async () => {
   let releaseTick: (() => void) | undefined;

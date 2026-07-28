@@ -86,12 +86,9 @@ export interface IssueRecord {
   lastAttemptedFailureHeadSha?: string | undefined;
   lastAttemptedFailureSignature?: string | undefined;
   lastAttemptedFailureAt?: string | undefined;
-  // Plan §4.1: change identity of the last patchrelay-attributed publish.
-  // Populated by post-hoc detection so future runs can recognize a
-  // patch-id-equivalent push and skip the cosmetic re-publish loop.
-  // Currently observability-only — consumer wiring is a follow-up.
+  // Change identity of the last patchrelay-attributed publish. Agents use
+  // this to avoid pushing a patch-equivalent head for cosmetic reasons.
   lastPublishedPatchId?: string | undefined;
-  lastPublishedIntegrationTreeId?: string | undefined;
   lastPublishedHeadSha?: string | undefined;
   // Plan §8.3: parent-of-child index for stacked PRs. Set when
   // patchrelay observes a PR with a base ref that is *not* the repo

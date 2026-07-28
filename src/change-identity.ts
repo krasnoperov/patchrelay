@@ -1,12 +1,8 @@
 import { spawnSync } from "node:child_process";
 
-// Plan §2.3 / §4.1: stable change identity for a worktree's head
-// against a base ref. Two values:
-//
-// - `patchId`: `git diff <base>..<head> | git patch-id --stable`. Stable
-//   across rebases and trivial reordering.
-// - `integrationTreeId`: `git merge-tree --write-tree <base> <head>` —
-//   the tree id of the merged result. Returns `undefined` on conflict.
+// Stable patch identity for a worktree's head against a base ref:
+// `git diff <base>..<head> | git patch-id --stable`. It is stable across
+// rebases and trivial reordering.
 //
 // Each call is "fail conservative": any git error produces
 // `undefined` rather than throwing. Callers must treat `undefined` as
@@ -17,7 +13,6 @@ import { spawnSync } from "node:child_process";
 
 export interface ChangeIdentity {
   patchId?: string | undefined;
-  integrationTreeId?: string | undefined;
   baseSha?: string | undefined;
   headSha?: string | undefined;
 }
@@ -35,10 +30,8 @@ export function computeChangeIdentityFromWorktree(params: {
   if (!baseSha || !headSha) return {};
 
   const patchId = computePatchId(cwd, baseSha, headSha);
-  const integrationTreeId = computeIntegrationTreeId(cwd, baseSha, headSha);
   return {
     ...(patchId ? { patchId } : {}),
-    ...(integrationTreeId ? { integrationTreeId } : {}),
     baseSha,
     headSha,
   };
@@ -64,17 +57,6 @@ function computePatchId(cwd: string, base: string, head: string): string | undef
   if (result.status !== 0) return undefined;
   const first = result.stdout.split(/\s+/, 1)[0]?.trim();
   return first ? first : undefined;
-}
-
-function computeIntegrationTreeId(cwd: string, base: string, head: string): string | undefined {
-  const result = spawnSync(
-    "git",
-    ["-C", cwd, "merge-tree", "--write-tree", "--no-messages", base, head],
-    { encoding: "utf8" },
-  );
-  if (result.status !== 0) return undefined;
-  const tree = result.stdout.trim().split(/\s+/, 1)[0];
-  return tree || undefined;
 }
 
 function shellQuote(value: string): string {

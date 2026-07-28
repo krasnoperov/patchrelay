@@ -1,8 +1,9 @@
 import type { DatabaseConnection } from "./shared.ts";
 
 /**
- * Create the steward's SQLite schema. Idempotent — safe to call on every startup.
- * No migration path: this is the final shape. There are no legacy installations.
+ * Create and upgrade the steward's SQLite schema. Idempotent — safe to call
+ * on every startup. Migrations preserve active queue state, then remove
+ * obsolete columns so the runtime has one candidate model.
  */
 export function ensureSchema(connection: DatabaseConnection): void {
   connection.exec(`
@@ -23,9 +24,11 @@ export function ensureSchema(connection: DatabaseConnection): void {
       max_retries INTEGER NOT NULL DEFAULT 3,
       last_failed_base_sha TEXT,
       issue_key TEXT,
-      spec_branch TEXT,
-      spec_sha TEXT,
-      spec_based_on TEXT,
+      candidate_kind TEXT,
+      candidate_policy_fingerprint TEXT,
+      candidate_ref TEXT,
+      candidate_sha TEXT,
+      candidate_based_on TEXT,
       wait_detail TEXT,
       post_merge_status TEXT,
       post_merge_sha TEXT,
@@ -82,12 +85,25 @@ export function ensureSchema(connection: DatabaseConnection): void {
   ensureColumn(connection, "queue_entries", "post_merge_checked_at", "TEXT");
   ensureColumn(connection, "queue_entries", "wait_detail", "TEXT");
   ensureColumn(connection, "queue_entries", "pr_title", "TEXT");
-  // Plan §8.4: stack-aware admission ordering needs the PR's base ref.
+  ensureColumn(connection, "queue_entries", "candidate_kind", "TEXT");
+  ensureColumn(connection, "queue_entries", "candidate_policy_fingerprint", "TEXT");
+  ensureColumn(connection, "queue_entries", "candidate_ref", "TEXT");
+  ensureColumn(connection, "queue_entries", "candidate_sha", "TEXT");
+  ensureColumn(connection, "queue_entries", "candidate_based_on", "TEXT");
   ensureColumn(connection, "queue_entries", "base_ref_name", "TEXT");
-  // Plan §5.3: cached identity for patch-id-aware updateHead.
-  ensureColumn(connection, "queue_entries", "head_patch_id", "TEXT");
-  ensureColumn(connection, "queue_entries", "spec_tree_id", "TEXT");
   ensureColumn(connection, "queue_entries", "decided_at", "TEXT");
+  migrateLegacyCandidateColumns(connection);
+  // Retire patch-equivalence caches from older installations. Candidate
+  // validity is SHA-bound; preserving these columns would imply otherwise.
+  dropColumnIfPresent(connection, "queue_entries", "head_patch_id");
+  dropColumnIfPresent(connection, "queue_entries", "spec_tree_id");
+  connection.exec(`
+    UPDATE queue_entries
+       SET candidate_kind = 'integration'
+     WHERE candidate_kind IS NULL
+       AND candidate_sha IS NOT NULL
+       AND candidate_ref IS NOT NULL
+  `);
   connection.exec(`
     UPDATE queue_entries
        SET post_merge_status = 'pending'
@@ -111,6 +127,40 @@ export function ensureSchema(connection: DatabaseConnection): void {
   `);
 }
 
+function migrateLegacyCandidateColumns(connection: DatabaseConnection): void {
+  const legacyColumns = [
+    ["spec_branch", "candidate_ref"],
+    ["spec_sha", "candidate_sha"],
+    ["spec_based_on", "candidate_based_on"],
+  ] as const;
+
+  for (const [legacy, candidate] of legacyColumns) {
+    if (!hasColumn(connection, "queue_entries", legacy)) continue;
+    connection.exec(`
+      UPDATE queue_entries
+         SET ${candidate} = ${legacy}
+       WHERE ${candidate} IS NULL
+         AND ${legacy} IS NOT NULL
+    `);
+  }
+
+  // Derive kind while the legacy ref is still available, then remove all
+  // old candidate representations in this same startup migration.
+  connection.exec(`
+    UPDATE queue_entries
+       SET candidate_kind = CASE
+         WHEN candidate_sha = head_sha AND candidate_ref IS NULL THEN 'head'
+         WHEN candidate_sha IS NOT NULL THEN 'integration'
+         ELSE NULL
+       END
+     WHERE candidate_kind IS NULL
+  `);
+
+  for (const [legacy] of legacyColumns) {
+    dropColumnIfPresent(connection, "queue_entries", legacy);
+  }
+}
+
 function hasColumn(connection: DatabaseConnection, table: string, column: string): boolean {
   const rows = connection.prepare(`PRAGMA table_info(${table})`).all();
   for (const row of rows) {
@@ -131,4 +181,15 @@ function ensureColumn(
     return;
   }
   connection.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+}
+
+function dropColumnIfPresent(
+  connection: DatabaseConnection,
+  table: string,
+  column: string,
+): void {
+  if (!hasColumn(connection, table, column)) {
+    return;
+  }
+  connection.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
 }

@@ -35,9 +35,9 @@ describe("speculative cascade merge", () => {
     await h.tick();
     assert.deepStrictEqual(h.merged, [1, 2, 3], "All three should have merged");
 
-    // Count CI triggers: each PR should have exactly ONE CI run (no re-CI after cascade).
+    // A reuses exact-head checks; B and C each run one integration CI.
     const ciTriggered = h.reconcileEvents.filter((e) => e.action === "ci_triggered");
-    assert.strictEqual(ciTriggered.length, 3, "Should have exactly 3 CI triggers (one per PR, no re-CI)");
+    assert.strictEqual(ciTriggered.length, 2, "Only the two integration candidates should trigger CI");
 
     h.assertInvariants();
   });
@@ -111,7 +111,7 @@ describe("speculative cascade merge", () => {
     h.assertInvariants();
   });
 
-  it("spec chain is valid: B's spec is descendant of A's spec", async () => {
+  it("candidate chain is valid: B's integration SHA descends from A's exact head", async () => {
     const h = await createHarness({ ciRule: () => "pass", speculativeDepth: 3 });
     await h.enqueue(prA);
     await h.enqueue(prB);
@@ -123,13 +123,15 @@ describe("speculative cascade merge", () => {
     const entryA = h.entries.find((e) => e.prNumber === 1)!;
     const entryB = h.entries.find((e) => e.prNumber === 2)!;
 
-    assert.ok(entryA.specBranch, "A should have a spec branch");
-    assert.ok(entryB.specBranch, "B should have a spec branch");
-    assert.strictEqual(entryB.specBasedOn, entryA.id, "B's spec should be based on A's entry");
+    assert.equal(entryA.candidateKind, "head");
+    assert.equal(entryA.candidateRef, null);
+    assert.equal(entryA.candidateSha, entryA.headSha);
+    assert.ok(entryB.candidateRef, "B should have an integration ref");
+    assert.strictEqual(entryB.candidateBasedOn, entryA.id, "B's candidate should be based on A");
 
-    // Verify in git that B's spec is a descendant of A's spec
-    const isDescendant = await h.gitSim.isAncestor(entryA.specSha!, entryB.specSha!);
-    assert.ok(isDescendant, "B's spec SHA should be a descendant of A's spec SHA");
+    // Verify in git that B's candidate is a descendant of A's candidate.
+    const isDescendant = await h.gitSim.isAncestor(entryA.candidateSha!, entryB.candidateSha!);
+    assert.ok(isDescendant, "B's candidate SHA should descend from A's candidate SHA");
 
     h.assertInvariants();
   });

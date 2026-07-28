@@ -7,7 +7,7 @@ import type { CIStatus } from "../types.ts";
  */
 export type CIRule = (files: string[]) => CIStatus;
 
-interface CIRun {
+export interface CIRun {
   id: string;
   branch: string;
   sha: string;
@@ -43,13 +43,20 @@ export class CISim implements CIRunner {
    * function since the CI sim doesn't own the git layer.
    */
   resolveFiles: ((branch: string, sha: string) => Promise<string[]>) | null = null;
+  onRun: ((run: CIRun) => void) | null = null;
 
   async triggerRun(branch: string, sha: string): Promise<string> {
     const id = `ci-${this.nextId++}`;
     const files = this.resolveFiles ? await this.resolveFiles(branch, sha) : [];
     const status = this.rule(files);
-    this.runs.set(id, { id, branch, sha, status, cancelled: false });
+    const run = { id, branch, sha, status, cancelled: false };
+    this.runs.set(id, run);
+    this.onRun?.(run);
     return id;
+  }
+
+  async rerunRun(_runId: string, branch: string, sha: string): Promise<string> {
+    return await this.triggerRun(branch, sha);
   }
 
   async getStatus(runId: string): Promise<CIStatus> {

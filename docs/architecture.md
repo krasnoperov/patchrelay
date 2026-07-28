@@ -377,7 +377,7 @@ The GitHub fact projector and workflow-task derivation both consult a `failureSo
 | `branch_ci` | A required check on the PR head | `repairing_ci` (only when *not* In Deploy) |
 | `queue_eviction` | The configured eviction check (`merge-steward/queue`) | `repairing_queue` |
 
-While the issue is **In Deploy** (display state `awaiting_queue`), `branch_ci` failures are metadata only: no `ci_repair` task is launched. The lander owns the integration tree on a different SHA; branch CI on the PR head does not block landing. The only signal that returns the issue to In Progress in this window is the `queue_eviction` source.
+While the issue is **In Deploy** (display state `awaiting_queue`), `branch_ci` failures are metadata only: no `ci_repair` task is launched. The lander owns an immutable candidate SHA; branch CI on some other SHA does not block landing. The only signal that returns the issue to In Progress in this window is the `queue_eviction` source.
 
 Classification happens in GitHub fact derivation (which calls `isQueueEvictionFailure` once and forwards the result) and is enforced again in workflow-task derivation so the display projection and the workflow-task path cannot drift.
 

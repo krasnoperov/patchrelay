@@ -4,7 +4,7 @@ Three independent services handle the path from "PR exists" to "merged on `main`
 
 - **patchrelay** develops code and produces pull requests. Owns issue worktrees, agent runs (implementation, review fix, CI repair), and Linear session UX.
 - **review-quill** reviews every merge-ready head and publishes an ordinary GitHub `APPROVE` or `REQUEST_CHANGES` review.
-- **merge-steward** admits approved, green PRs into a serial merge queue, speculatively integrates each one on top of the current `main`, validates, and fast-forwards.
+- **merge-steward** admits approved, green PRs into a serial landing queue, resolves and validates the exact future-`main` SHA, and fast-forwards.
 
 Neither downstream service calls the other's API, and neither calls patchrelay. GitHub is the shared bus — PR state, reviews, checks, and branch changes are the protocol. Each service is independently usable; a repo can adopt any subset.
 
@@ -48,22 +48,23 @@ sequenceDiagram
     Note over A,MS: If APPROVE + required checks green:
     GH-->>MS: webhook: review approved / checks green
     MS->>GH: Admit to queue (DB record)
-    MS->>GH: Build spec branch mq-spec-N (merge of main + PR)
-    MS->>GH: Push spec, emit merge-steward/spec-ready check_run
-    Note over RQ: review-quill sees spec-ready;<br/>in integration_tree mode, targets the spec SHA
-    GH-->>MS: webhook: check_suite completed on spec
+    MS->>MS: Resolve exact head or integration candidate
+    opt Integration candidate
+        MS->>GH: Push temporary candidate ref and run CI
+        GH-->>MS: webhook: check_suite completed
+    end
 
-    alt CI green on spec
-        MS->>GH: Fast-forward push spec SHA → main
+    alt Current policy green on exact candidate
+        MS->>GH: Fast-forward push candidate SHA → main
         Note over MS,GH: main now points at the tested SHA
-    else CI red on spec
+    else Candidate cannot be validated
         MS->>GH: Retry (if base SHA changed) or evict + emit merge-steward/queue check_run
         GH-->>A: eviction check_run visible on PR
         A->>GH: Fix branch, push new head → loop restarts
     end
 ```
 
-This sequence is built on the four primitives described in [concepts.md](./concepts.md): a commit's tree, the integration tree, `patch_id`, and fast-forward landing. The two carry-forward branches (re-publish vs fresh review) and the spec-ready check are the ways those primitives surface on the bus.
+This sequence is built on four primitives described in [concepts.md](./concepts.md): commits and trees, an exact landing candidate, `patch_id`, and fast-forward landing.
 
 ## Queue state machine
 
@@ -71,7 +72,7 @@ This sequence is built on the four primitives described in [concepts.md](./conce
 stateDiagram-v2
     [*] --> queued: admit
     queued --> preparing_head: becomes head
-    preparing_head --> validating: spec built, CI triggered
+    preparing_head --> validating: candidate resolved
     preparing_head --> evicted: conflict or retry budget exhausted
     validating --> merging: CI passed
     validating --> preparing_head: CI failed, retry
@@ -90,8 +91,8 @@ States:
 | State | Meaning |
 |-|-|
 | `queued` | Admitted; waiting in line |
-| `preparing_head` | Building the speculative branch on top of `main` (or the previous entry's spec) |
-| `validating` | CI running on the speculative SHA |
+| `preparing_head` | Resolving the candidate against `main` or the preceding candidate |
+| `validating` | Evaluating checks on the immutable candidate SHA |
 | `merging` | Revalidating approval + attempting fast-forward push to `main` |
 | `merged` | Done — `main` now points at the tested SHA |
 | `evicted` | Failed after retries; durable incident created, GitHub check run emitted |
@@ -99,21 +100,21 @@ States:
 
 ## What this pipeline eliminates
 
-The pipeline is built around five rules that fall out of the four primitives. Each rule maps to a specific class of waste that was directly observed in production transcripts before the merge-trees rollout:
+The pipeline is built around five rules that fall out of the four primitives. Each rule maps to a specific class of waste that was directly observed in production transcripts before the exact-candidate rollout:
 
 | Rule | Where it lives | Waste it eliminates |
 |-|-|-|
-| Carry the verdict by `patch_id` | review-quill `service.ts` carry-forward gate | Re-review on rebase against fresh main |
+| Carry the verdict by `patch_id` plus immutable diff base | review-quill `service.ts` carry-forward gate | Re-review after commit-only rewrites with unchanged review input |
 | Don't originate redundant pushes | patchrelay run-finalizer (`shouldNotPublish` + post-hoc `patch_id` detection) | Cosmetic re-pushes that dismiss approvals |
 | Branch CI is metadata once In Merge Queue | patchrelay state-machine table + workflow-task derivation guard | `ci_repair` runs fired on flaky branch CI while the lander already has the PR |
 | Cancel a run when an approval lands on the run's source SHA | patchrelay `superseded` RunStatus + finalizer publication block | Mid-run race where a fresh approval is dismissed by a still-running review-fix push |
-| Test the integration tree, not the head | merge-steward speculative branch (`mq-spec-*`) | Green PR head that breaks main after fast-forward |
+| Validate the exact commit that will become main | merge-steward candidate selection plus exact-SHA checks | Re-testing an already-valid head, or landing a commit different from the one tested |
 
 Three sequencing tiers prevent integration conflicts upstream of the rules above. See [concepts.md](./concepts.md#sequencing--three-tiers-for-predictable-conflicts).
 
 ## Production proof points
 
-The merge-trees rollout is intentionally observable through ordinary PatchRelay runtime state: Linear issue state, GitHub webhook transitions, and the `runs` table. A healthy repair path should read as a small story:
+The exact-candidate rollout is intentionally observable through ordinary PatchRelay runtime state: Linear issue state, GitHub webhook transitions, and the `runs` table. A healthy repair path should read as a small story:
 
 ```text
 review-quill requests changes
@@ -190,11 +191,18 @@ Configure branch protection on the base branch (e.g., `main`):
 | Dismiss stale pull request approvals when new commits are pushed | **Disabled** |
 | Require approval of the most recent reviewable push | **Disabled** |
 
-If the branch restricts who can push, allow the Merge Steward GitHub App to push to the protected branch. The steward lands by fast-forwarding `main` to the already-tested speculative SHA; it does not press GitHub's merge button.
+If the branch restricts who can push, allow the Merge Steward GitHub App to
+push to the protected branch. The steward lands by fast-forwarding `main` to
+the exact already-tested candidate SHA; it does not press GitHub's merge
+button.
 
-**Why "Dismiss stale approvals" can stay disabled:** the steward does not rely on rewriting the reviewed PR head as the review signal. It validates a speculative integrated SHA before landing.
+**Why "Dismiss stale approvals" can stay disabled:** immediately before
+landing, the steward verifies approval on the current PR head and validates the
+exact landing candidate.
 
-**Why "Require approval of the most recent reviewable push" can stay disabled:** the approval gate is the reviewed PR head plus the steward's integrated CI gate, not a second human review of the steward's speculative branch.
+**Why "Require approval of the most recent reviewable push" can stay
+disabled:** the approval gate is the reviewed PR head plus exact-candidate
+validation, not a second human review of a temporary integration ref.
 
 If you want machine review to count toward merge admission, include `review-quill/verdict` in the required checks.
 

@@ -20,7 +20,7 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   exit 0
 fi
 if [ "$1" = "api" ]; then
-  printf '[{"name":"Tests","status":"completed","conclusion":"success","html_url":"https://github.com/owner/repo/checks/1"},{"name":"AI Review","status":"completed","conclusion":"skipped","html_url":"https://github.com/owner/repo/checks/2"}]'
+  printf '[{"id":101,"name":"Tests","status":"completed","conclusion":"success","html_url":"https://github.com/owner/repo/checks/1","app":{"id":42}},{"id":102,"name":"AI Review","status":"completed","conclusion":"skipped","html_url":"https://github.com/owner/repo/checks/2","app":{"id":7}}]'
   exit 0
 fi
 exit 1
@@ -40,8 +40,8 @@ exit 1
       assert.equal(status.reviewApproved, true);
       const checks = await client.listChecks(101);
       assert.deepEqual(checks, [
-        { name: "Tests", conclusion: "success", url: "https://github.com/owner/repo/checks/1" },
-        { name: "AI Review", conclusion: "success", url: "https://github.com/owner/repo/checks/2" },
+        { name: "Tests", conclusion: "success", appId: 42, runId: 101, url: "https://github.com/owner/repo/checks/1" },
+        { name: "AI Review", conclusion: "skipped", appId: 7, runId: 102, url: "https://github.com/owner/repo/checks/2" },
       ]);
     } finally {
       if (previousPath === undefined) {

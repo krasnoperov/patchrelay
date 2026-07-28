@@ -22,7 +22,6 @@ const repositorySchema = z.object({
   diffSummarizeOnly: z.array(z.string()).default([...DEFAULT_DIFF_SUMMARIZE_ONLY]),
   patchBodyBudgetTokens: z.number().int().min(1_000).default(DEFAULT_PATCH_BODY_BUDGET_TOKENS),
   noCacheLabel: z.string().min(1).optional(),
-  reviewSurfaceMode: z.enum(["head", "integration_tree"]).optional(),
 });
 
 const promptLayerSchema = z.object({

@@ -19,7 +19,7 @@ flowchart LR
     GH -->|webhook: head updated| Reviewer
     Reviewer -->|APPROVE / REQUEST_CHANGES| GH
     GH -->|webhook: approved + green| Lander
-    Lander -->|spec branch + check_run| GH
+    Lander -->|tested candidate SHA| GH
     GH -->|webhook: eviction check_run| Author
 ```
 
@@ -29,7 +29,8 @@ flowchart LR
 | Reviewer | `review-quill` | Copilot Code Review, CodeRabbit, a human, any other GitHub PR review producer | Decides if a change is correct. Verdict attaches to the change, not to a SHA. |
 | Lander | `merge-steward` | Mergify, Aviator, Bors, GitHub native merge queue | Tests the integrated tree against current `main`. Advances `main` when green. |
 
-All three roles share the same five GitHub artifacts (the *bus*). All five names are configurable per project — see [github-queue-contract.md](./github-queue-contract.md). Defaults preserve current behaviour.
+All three roles communicate through a small set of GitHub artifacts (the
+*bus*). See [github-queue-contract.md](./github-queue-contract.md).
 
 ## Four primitives
 
@@ -41,19 +42,22 @@ Git stores snapshots, not diffs. Every commit points to a *tree* — the full st
 
 This matters because the question *"does my change still make sense after main moved?"* is really a question about *which two trees you compare*.
 
-### 2. The integration tree
+### 2. The landing candidate
 
-When your branch lands on `main`, the result is a new tree — `main` plus your change, woven together. That tree exists whether you've built it or not. We call it the **integration tree**:
+For each dependency-ready PR, the lander resolves the exact commit that would
+become `main`:
 
 ```
-integration_tree = git merge-tree --write-tree <main> <pr-head>
+if ancestor(prospective_base, pr_head):
+    candidate = pr_head
+else:
+    candidate = merge_commit(prospective_base, pr_head)
 ```
 
-No working directory, no merge commit, no side effects. Pure function: `(main, head) → tree`.
-
-The integration tree is what the lander tests. It is what reviews can optionally target (see *Two review surfaces* below). It is what `main` will fast-forward to.
-
-Non-zero exit from `git merge-tree` means *cannot integrate* — a real conflict signal, not an error condition.
+The candidate is immutable. Checks authorize only that SHA. The first branch
+reuses exact head checks and creates no duplicate commit; the second creates
+and tests an integration commit. A merge conflict means there is no candidate.
+Review Quill stays on the GitHub PR surface.
 
 ### 3. patch-id — the identity of a change
 
@@ -63,9 +67,13 @@ Two commits represent the *same change* when the diff they produce against their
 patch_id = git diff $(git merge-base <base> <head>)..<head> | git patch-id --stable
 ```
 
-Same `patch_id` = same change. Even after rebase, amend, cherry-pick, or force-push that only reorders commits.
+Same `patch_id` against the same immutable diff base = the same reviewed change.
+Amends, cherry-picks, or commit reorders can preserve that identity; a changed
+effective base deliberately does not.
 
-What it ignores (on purpose): commit messages, author/dates, parent SHAs, the base branch.
+What it ignores (on purpose): commit messages, author/dates, and commit
+partitioning. Review Quill separately includes the effective diff-base SHA in
+its carry-forward key.
 
 What changes it (on purpose): edits to the diff itself — including conflict resolutions.
 
@@ -81,7 +89,8 @@ git push origin C:main
 
 Atomic. Cheap. No merge button. No new commit on top.
 
-The merge work — building the integration tree, running CI on it — happens *before* the pointer moves. By the time `main` advances, there is nothing left to test.
+Candidate resolution and validation happen before the pointer moves. By the
+time `main` advances, there is nothing left to infer.
 
 > *Main is a tag. We move it through commits we trust.*
 
@@ -111,7 +120,7 @@ stateDiagram-v2
 |-|-|-|
 | Implementing | Author | A patchrelay run (or human) is producing or revising the change — including addressing review/CI/queue feedback. |
 | Reviewing | Reviewer + branch CI | review-quill verdict and configured required checks working until both green. |
-| In Merge Queue | Lander | merge-steward holds the issue **pre-merge**: spec built, spec CI, awaiting its turn, then merging. Visible on GitHub via `queue:testing` / `queue:merging` labels. |
+| In Merge Queue | Lander | merge-steward holds the issue **pre-merge**: candidate resolved, exact-SHA checks, awaiting its turn, then landing. Visible on GitHub via `queue:testing` / `queue:merging` labels. |
 | Deploying | Deploy | The change is **on main** and the deploy workflow is running. |
 | Done | — | The deploy succeeded. |
 
@@ -142,49 +151,53 @@ What stays allowed:
 - Forcing a fresh CI run on a known flake (`gh run rerun`).
 - Branch hygiene (squashing WIP commits).
 
-The Reviewer carries approvals across patch-id-equivalent heads, so the cost of these is small even when they happen.
+The Reviewer carries approvals across heads only when both the patch and its
+immutable diff base are unchanged.
 
-## The reviewer rule — carry the verdict across rebases
+## The reviewer rule — carry the verdict across equivalent review inputs
 
-Index approvals by `patch_id` (and, in integration-tree mode, by `(patch_id, integration_tree_id)`). On a new head:
+Index approvals by `patch_id`. On a new head:
 
 ```
 same identity   →  re-emit the prior verdict. no review.
 different       →  fresh review.
 ```
 
-Without carry-forward, every rebase onto fresh main triggers a fresh model-driven review. With it, trivial rebases are free.
+Without carry-forward, every commit-only rewrite triggers a fresh model-driven
+review. With it, equivalent patches against the same captured base are free;
+rebasing onto a different base intentionally triggers a fresh review because
+the code context changed.
 
 A PR carrying the configured no-cache label (default `review:no-cache`) is always re-reviewed even when the patch is unchanged — useful for release / changelog PRs that need a fresh body rendering.
 
-### Two review surfaces, two cache shapes
+### One review surface
 
-The Reviewer can target one of two surfaces. The cache key must match the surface; mixing them produces incorrect carry-forward.
-
-| Mode | Reviewer reads | Cache key | When base advances |
-|-|-|-|-|
-| `head` (default) | The PR head's diff against its base | `patch_id` only | Verdict carries; semantic merge issues are caught at integration time by spec CI |
-| `integration_tree` (opt-in) | The synthetic merged tree | `(patch_id, integration_tree_id)` | Most rebases re-review (the integrated tree changes when main moves), but semantic merge issues are caught at *review* time |
-
-Default is `head` — Gerrit's trivial-rebase rule. Set `reviewSurfaceMode: "integration_tree"` in the per-repo review-quill config to opt in.
+The Reviewer reads the PR head against GitHub's structured PR base and keys
+carry-forward on `patch_id` plus the effective immutable diff-base SHA. For a
+stacked child, the parent PR branch is the base, so parent-only changes are not
+reviewed again. Semantic integration
+issues stay in the lander's merge gate.
 
 ## The lander rule — test the tree that will land
 
-The lander builds the integration tree, wraps it in a commit on a spec branch (`mq-spec-<entry-id>`), and runs CI on *that*. The PR head is irrelevant to the merge gate.
+The lander selects one exact candidate for every dependency-ready PR.
 
 ```
-tree   = merge-tree(main, pr-head)
-commit = commit-tree(tree, parents=[main, pr-head])
-push   spec/<n> → GitHub
-run    CI on spec/<n>
-
-green  →  push spec/<n> → main   (fast-forward)
-fail   →  emit eviction signal (merge-steward/queue check_run)
+candidate = pr-head                         # when base is an ancestor
+candidate = merge-commit(base, pr-head)    # otherwise
+green     = current policy passes on candidate SHA
+land      = push candidate SHA → main
+fail      = emit eviction signal (merge-steward/queue check_run)
 ```
 
-When two PRs are queued, the second's spec is built on top of the first's spec — not on main. CI tests *"what would land if everything ahead of me lands."* When the head spec lands, main fast-forwards through it. The next spec is already a fast-forward from the new main.
+When two PRs are queued, the second candidate is resolved against the first
+candidate, not against stale `main`. Stack dependency edges override priority.
+Independent roots may proceed when another stack is blocked.
 
-Each rung of the train is a tested integration tree.
+Each rung of the train is one exact tested candidate. Immediately before a
+non-force push, the lander refreshes main, PR head, approval, required policy,
+check producer identity, check results, and ancestry. Any uncertainty stops the
+landing.
 
 ## The eviction rule — the only signal that returns In Merge Queue to Implementing
 
@@ -235,14 +248,18 @@ Once we sequence PRs, stacked PRs exist in the factory. They are *not* a new fir
 
 That's the whole contract. Every actor reads the chain from those two places. No parallel lifecycle, no "stack id," no new CLI verbs.
 
-For a stacked PR, the diff base is the parent PR's head, not main. Everything else flows from that one substitution:
+For a stacked PR, the review diff base is the parent PR's captured head, not
+main. The lander separately treats that base ref as a dependency edge:
 
 ```
-non-stacked:   integration_tree = merge-tree(main, head)
-stacked:       integration_tree = merge-tree(parent_PR_head, head)
+review(child) = diff(captured_parent_head, child_head)
+land(child)   = candidate(after_parent_candidate, child_head)
 ```
 
-The cache-key shape, the eviction contract, and the state machine are unchanged. When a parent PR's head moves, PatchRelay rebases the child via the existing `branch_upkeep` path. When the parent merges, GitHub auto-retargets the child's base to main and the stack collapses by one rung.
+Review carry-forward also includes the effective immutable diff-base SHA, so a
+parent-base change forces a fresh review even if a patch hash happens to match.
+When a parent candidate changes, the lander invalidates its dependent candidate
+closure. GitHub retargeting the child to main collapses the stack by one rung.
 
 ## How the four primitives eliminate observed waste
 
@@ -250,7 +267,7 @@ Five waste classes were directly observed in production transcripts (LSR-272 / L
 
 | Observed waste | Mechanism that eliminates it |
 |-|-|
-| Re-review on rebase | Carry-forward by `patch_id` — same change, same verdict |
+| Re-review after commit-only rewrites | Carry-forward by `patch_id` plus immutable diff base |
 | Chase-rebase loop on already-approved PRs | The Author rule: no patch-id-equivalent push originated by the agent |
 | `ci_repair` fired during In Merge Queue on flaky branch CI | The eviction rule: branch CI is metadata while In Merge Queue |
 | Cosmetic re-push dismisses a fresh approval mid-run | Mid-run approval cancellation: when an approval lands on the run's source SHA, the run is superseded and `shouldNotPublish` blocks the finalizer |

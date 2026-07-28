@@ -211,7 +211,7 @@
   <section class="slide active">
     <div class="kicker">PatchRelay stack</div>
     <h1>Tools that ship through GitHub truth.</h1>
-    <p class="lede">PatchRelay writes branches, review-quill reviews changes, and merge-steward lands tested integration trees. The services stay separate; GitHub is the bus.</p>
+    <p class="lede">PatchRelay writes branches, review-quill reviews changes, and merge-steward lands exact tested candidates. The services stay separate; GitHub is the bus.</p>
   </section>
 
   <section class="slide">
@@ -258,7 +258,7 @@
       </div>
       <div class="card">
         <h3><code>patch_id</code></h3>
-        <p>The stable identity of the diff. Rebases and equivalent force-pushes can keep the same change identity.</p>
+        <p>The stable identity of the diff. Equivalent commit rewrites against the same captured base can keep the same review identity.</p>
       </div>
     </div>
     <pre>git diff $(git merge-base &lt;base&gt; &lt;head&gt;)..&lt;head&gt; | git patch-id --stable</pre>
@@ -357,7 +357,7 @@ patchrelay logs APP-123 --lines 100</pre>
     <ol>
       <li>PatchRelay changes the branch.</li>
       <li>review-quill reviews the change identity.</li>
-      <li>merge-steward tests the integration tree.</li>
+      <li>merge-steward validates and lands one exact candidate SHA.</li>
       <li>GitHub carries all signals between them.</li>
       <li>A repair always returns with a fresh head.</li>
     </ol>

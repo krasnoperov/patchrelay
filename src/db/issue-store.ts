@@ -85,7 +85,6 @@ export interface UpsertIssueParams {
   lastAttemptedFailureSignature?: string | null;
   lastAttemptedFailureAt?: string | null;
   lastPublishedPatchId?: string | null;
-  lastPublishedIntegrationTreeId?: string | null;
   lastPublishedHeadSha?: string | null;
   parentPrBranch?: string | null;
   ciRepairAttempts?: number;
@@ -836,9 +835,6 @@ export function mapIssueRow(row: Record<string, unknown>): IssueRecord {
       : {}),
     ...(row.last_published_patch_id !== null && row.last_published_patch_id !== undefined
       ? { lastPublishedPatchId: String(row.last_published_patch_id) }
-      : {}),
-    ...(row.last_published_integration_tree_id !== null && row.last_published_integration_tree_id !== undefined
-      ? { lastPublishedIntegrationTreeId: String(row.last_published_integration_tree_id) }
       : {}),
     ...(row.last_published_head_sha !== null && row.last_published_head_sha !== undefined
       ? { lastPublishedHeadSha: String(row.last_published_head_sha) }

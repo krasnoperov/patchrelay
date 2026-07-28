@@ -162,16 +162,20 @@ export class AttemptReconciler {
     repo: ReviewQuillRepositoryConfig,
     pr: Awaited<ReturnType<GitHubClient["listOpenPullRequests"]>>[number],
     reviews: PullRequestReviewRecord[],
+    options: { invalidateCurrentHead?: boolean } = {},
   ): Promise<void> {
     const { github, logger, reviewerLogin } = this.deps;
     const staleReviews = findStaleDecisiveReviews({
       reviews,
       reviewerLogin,
       headSha: pr.headSha,
+      includeCurrentHead: options.invalidateCurrentHead === true,
     });
     if (staleReviews.length === 0) return;
 
-    const message = `Superseded by newer head ${pr.headSha.slice(0, 12)}; review-quill will re-review the latest commit separately.`;
+    const message = options.invalidateCurrentHead
+      ? `Invalidated because the PR base changed; review-quill will re-review head ${pr.headSha.slice(0, 12)} against the new base.`
+      : `Superseded by newer head ${pr.headSha.slice(0, 12)}; review-quill will re-review the latest commit separately.`;
     for (const review of staleReviews) {
       try {
         await github.dismissReview(repo.repoFullName, pr.number, review.id, message);
@@ -182,7 +186,8 @@ export class AttemptReconciler {
           dismissedReviewCommitId: review.commitId,
           currentHeadSha: pr.headSha,
           state: review.state,
-        }, "Dismissed stale decisive review on superseded head");
+          reason: options.invalidateCurrentHead ? "base_changed" : "head_changed",
+        }, "Dismissed decisive review whose review input is stale");
       } catch (error) {
         const failure = error instanceof Error ? error.message : String(error);
         logger.warn({
@@ -192,7 +197,13 @@ export class AttemptReconciler {
           dismissedReviewCommitId: review.commitId,
           currentHeadSha: pr.headSha,
           error: failure,
-        }, "Failed to dismiss stale decisive review on superseded head");
+          reason: options.invalidateCurrentHead ? "base_changed" : "head_changed",
+        }, "Failed to dismiss decisive review whose review input is stale");
+        if (options.invalidateCurrentHead) {
+          throw new Error(
+            `Could not invalidate Review Quill approval ${review.id} after PR base change: ${failure}`,
+          );
+        }
       }
     }
   }

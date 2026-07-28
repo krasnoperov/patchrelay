@@ -104,6 +104,23 @@ test("migrations delete PatchRelay's retired Codex transcript copies", () => {
   }
 });
 
+test("migrations physically remove the retired integration-tree identity column", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-integration-tree-migration-"));
+  try {
+    const connection = new SqliteConnection(path.join(baseDir, "legacy.sqlite"));
+    runPatchRelayMigrations(connection);
+    connection.exec("ALTER TABLE issues ADD COLUMN last_published_integration_tree_id TEXT");
+
+    runPatchRelayMigrations(connection);
+
+    const columns = connection.prepare("PRAGMA table_info(issues)").all() as Array<Record<string, unknown>>;
+    assert.ok(columns.some((column) => column.name === "last_published_patch_id"));
+    assert.ok(!columns.some((column) => column.name === "last_published_integration_tree_id"));
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("migrations discard retired session columns and preserve authoritative rows", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-lifecycle-migration-"));
   try {

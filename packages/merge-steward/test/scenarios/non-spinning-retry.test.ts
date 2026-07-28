@@ -3,6 +3,42 @@ import assert from "node:assert/strict";
 import { createHarness, type SimPR } from "../harness.ts";
 
 describe("non-spinning retry", () => {
+  it("does not rebuild a conflicting downstream child while its prospective base is unchanged", async () => {
+    const h = await createHarness({
+      ciRule: () => "pending",
+      speculativeDepth: 2,
+      maxRetries: 2,
+    });
+    await h.enqueue({
+      number: 1,
+      branch: "feat-parent",
+      files: [{ path: "shared.ts", content: "parent" }],
+    });
+    await h.enqueue({
+      number: 2,
+      branch: "feat-child",
+      files: [{ path: "shared.ts", content: "child" }],
+    });
+
+    await h.tick(); // promote both
+    await h.tick(); // parent candidate; child observes its first conflict
+    for (let i = 0; i < 5; i++) await h.tick();
+
+    const child = h.entries.find((entry) => entry.prNumber === 2)!;
+    assert.equal(child.status, "preparing_head");
+    assert.equal(
+      h.reconcileEvents.filter((event) =>
+        event.prNumber === 2 && event.action === "integration_build_conflict").length,
+      1,
+      "the same downstream base/head pair must be merged only once",
+    );
+    assert.ok(
+      h.reconcileEvents.some((event) =>
+        event.prNumber === 2 && event.action === "retry_gated"),
+      "later ticks should consult the deterministic conflict cache",
+    );
+  });
+
   it("does not spin on conflict when base has not changed", async () => {
     const prA: SimPR = {
       number: 1,
@@ -23,21 +59,20 @@ describe("non-spinning retry", () => {
     await h.runUntilStable({ maxTicks: 20 });
     assert.ok(h.merged.includes(1));
 
-    // B should have conflicted at least once.
-    const bEntry = h.entries.find((e) => e.prNumber === 2)!;
-    assert.ok(bEntry.retryAttempts >= 1, "B should have conflicted at least once");
-
-    // GitHubSim reports CLEAN by default, so the gate-clearing logic
-    // will retry — but the real conflict persists. B should eventually
-    // evict after exhausting retries.
-    await h.runUntilStable({ maxTicks: 20 });
     const bFinal = h.entries.find((e) => e.prNumber === 2)!;
-    assert.strictEqual(bFinal.status, "evicted", "B should evict after retries exhausted");
+    assert.strictEqual(bFinal.status, "evicted");
+    assert.equal(bFinal.retryAttempts, 0, "deterministic conflicts do not spend a retry budget");
+    assert.equal(
+      h.reconcileEvents.filter((event) =>
+        event.prNumber === 2 && event.action === "integration_build_conflict").length,
+      1,
+      "the same base/head conflict must be built only once",
+    );
 
     h.assertInvariants();
   });
 
-  it("retries after base advances and evicts on second conflict", async () => {
+  it("evicts a deterministic conflict regardless of the push retry budget", async () => {
     const prA: SimPR = {
       number: 1,
       branch: "feat-a",
@@ -49,9 +84,7 @@ describe("non-spinning retry", () => {
       files: [{ path: "shared.ts", content: "version B" }],
     };
 
-    // With GitHub reporting CLEAN, the gate clears and B retries until
-    // budget exhausted. B truly conflicts (shared.ts), so all retries fail.
-    const h = await createHarness({ ciRule: () => "pass", maxRetries: 2 });
+    const h = await createHarness({ ciRule: () => "pass", maxRetries: 100 });
     await h.enqueue(prA);
     await h.enqueue(prB);
 
@@ -59,8 +92,7 @@ describe("non-spinning retry", () => {
     assert.ok(h.merged.includes(1), "A should merge");
 
     const bFinal = h.entries.find((e) => e.prNumber === 2)!;
-    assert.strictEqual(bFinal.status, "evicted",
-      "B should evict after retries exhausted on real conflict");
+    assert.strictEqual(bFinal.status, "evicted");
 
     const incidents = h.store.listIncidents(bFinal.id);
     assert.ok(incidents.length > 0);
@@ -68,7 +100,7 @@ describe("non-spinning retry", () => {
     h.assertInvariants();
   });
 
-  it("evicts a retry-gated head when GitHub reports the PR is still dirty", async () => {
+  it("does not let GitHub's mergeability guess override a proven local conflict", async () => {
     const prA: SimPR = {
       number: 1,
       branch: "feat-a",
@@ -84,9 +116,9 @@ describe("non-spinning retry", () => {
     await h.enqueue(prA);
     await h.enqueue(prB);
 
-    // Set DIRTY before B hits the retry gate — this prevents the
-    // CLEAN gate-clearing path and triggers immediate eviction.
-    h.githubSim.setMergeStateStatus(2, "DIRTY");
+    // CLEAN is only a GitHub approximation; the exact local merge inputs
+    // still prove the integration candidate cannot be created.
+    h.githubSim.setMergeStateStatus(2, "CLEAN");
 
     await h.runUntilStable({ maxTicks: 20 });
     assert.ok(h.merged.includes(1));

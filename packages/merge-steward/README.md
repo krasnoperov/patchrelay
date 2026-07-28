@@ -8,17 +8,21 @@ For the background story and design trade-offs, read [merge-steward: speculative
 
 ## Why this matters
 
-The queue keeps delivery fast without pretending branch CI is enough. Each speculative branch is the cumulative queue order on top of the latest base: `main + A`, then `main + A + B`, then `main + A + B + C`. No more "CI was green yesterday, breaks on merge today" — the integration bug is caught before `main` ever sees it.
+The queue keeps delivery fast without pretending branch CI is always enough. For each dependency-ready PR it resolves one immutable candidate: the exact PR head when it already contains the prospective base, or an integration commit when it does not. Downstream candidates are cumulative: `main + A`, then `main + A + B`, then `main + A + B + C`.
 
 ## How it works
 
 1. A PR becomes eligible when GitHub says it is approved and its required checks are green.
 2. The steward notices through webhook wakeups or startup reconcile scans, and admits the PR to the queue.
-3. It builds a speculative branch — `main + PR` at the head, cumulative downstream (`main + A + B`, `main + A + B + C`).
-4. CI runs on that speculative SHA.
-5. Once the speculative SHA's checks are green and it is still a fast-forward from current `main`, the steward pushes that SHA to `main` immediately. It does **not** wait for `main`'s own CI to settle, and **never** pauses the queue because `main` is red — the green speculative SHA *is* the next `main`.
+3. It resolves the exact future-`main` candidate. If the prospective base is an ancestor of the PR head, the candidate is that already-tested head SHA. Otherwise it builds a cumulative integration commit.
+4. It validates checks on that exact SHA. Only newly-created integration candidates trigger synthetic CI.
+5. Immediately before landing, it refreshes policy, approval, head, checks, and ancestry, then non-force pushes the same immutable SHA to `main`. It never substitutes a mutable branch ref.
 6. On CI failure: retry (gated on base SHA change), then evict with a durable incident record and GitHub check run.
 7. PatchRelay, the `ship-pr` skill, or any agent sees the check run failure and fixes the branch; when CI passes again the PR can be re-admitted.
+
+This is structural, not an optional fast path. An exact head is safe precisely
+when it already contains the prospective base; if it does not, Merge Steward
+creates and tests the integration candidate. Checks never move between SHAs.
 
 ## Use with your own agent
 
@@ -78,11 +82,12 @@ The real gate is:
 
 - GitHub says the PR review state is approved
 - configured required checks are green
-- the steward's speculative integrated branch also passes CI
+- the exact landing candidate is green under the current check policy
+- current `main` is an ancestor of that same immutable candidate SHA
 
-`review-quill/verdict` only matters if you include it in the repo's required checks. Branch protection is useful as defense in depth, but the steward merges by fast-forwarding `main` to the already-tested speculative SHA — not by pressing GitHub's merge button. Successful merges therefore depend on the steward App being allowed to push to the protected branch. See [docs/merge-steward.md](https://github.com/krasnoperov/patchrelay/blob/main/docs/merge-steward.md) for the full App permission set.
+`review-quill/verdict` only matters if you include it in the repo's required checks. Branch protection is useful as defense in depth, but the steward merges by fast-forwarding `main` to the already-tested candidate SHA — not by pressing GitHub's merge button. Successful merges therefore depend on the steward App being allowed to push to the protected branch. See [docs/merge-steward.md](https://github.com/krasnoperov/patchrelay/blob/main/docs/merge-steward.md) for the full App permission set.
 
-**`main`'s own CI is information-only.** The speculative SHA the steward tests *is* the exact tree that becomes `main`, so re-testing `main` after the push adds no signal — it only catches flakiness or out-of-band changes (direct pushes, hotfixes). The queue therefore **ignores `main`'s CI entirely** for advancement: it does not gate landing on `main` being green, does not wait for `main` CI before the next landing, and is never "paused" by a red `main`. A red `main` with a green speculative SHA simply means the red was flaky or is fixed by landing — so the steward lands. Use `main`'s CI as a project-health canary, not a queue control.
+**`main`'s own CI is information-only.** The candidate SHA the steward validates is exactly what becomes `main`, so re-testing it after the push adds no eligibility signal. Use `main` CI as a project-health canary, not a queue control.
 
 ## Interaction with PatchRelay
 

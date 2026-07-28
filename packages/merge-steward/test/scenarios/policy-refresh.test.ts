@@ -10,7 +10,7 @@ import { createHarness, type SimPR } from "../harness.ts";
 const prA: SimPR = { number: 1, branch: "feat-a", files: [{ path: "a.ts", content: "a" }] };
 
 describe("GitHub policy refresh safety", () => {
-  it("refreshes policy after an unexpected push rejection and re-prepares without spending retry budget", async () => {
+  it("refreshes policy before push and waits on the same candidate without spending retry budget", async () => {
     const h = await createHarness({ ciRule: () => "pass" });
     let refreshedChecks = ["Deploy"];
     const policy = new GitHubPolicyCache({
@@ -59,8 +59,9 @@ describe("GitHub policy refresh safety", () => {
 
     await reconcile(buildContext());
 
-    assert.strictEqual(h.entries[0]!.status, "preparing_head");
+    assert.strictEqual(h.entries[0]!.status, "validating");
     assert.strictEqual(h.entries[0]!.retryAttempts, 0);
+    assert.ok(h.entries[0]!.candidateSha, "policy movement must not manufacture a new candidate SHA");
     assert.deepStrictEqual(policy.getRequiredChecks(), ["Deploy"]);
     assert.ok(events.some((event) => event.action === "policy_changed"));
   });

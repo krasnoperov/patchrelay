@@ -14,7 +14,7 @@ function baseVerdict(overrides: Partial<ReviewVerdict> = {}): ReviewVerdict {
   } as ReviewVerdict;
 }
 
-test("renderReviewArtifacts produces inline comments for head-mode reviews", () => {
+test("renderReviewArtifacts produces inline comments for PR head reviews", () => {
   const artifacts = renderReviewArtifacts({
     verdict: baseVerdict({
       verdict: "request_changes",
@@ -30,7 +30,6 @@ test("renderReviewArtifacts produces inline comments for head-mode reviews", () 
       ],
     }),
     inventoryPaths: ["src/a.ts"],
-    surfaceMode: "head",
   });
   assert.equal(artifacts.useBodyOnly, false);
   assert.equal(artifacts.event, "REQUEST_CHANGES");
@@ -38,28 +37,6 @@ test("renderReviewArtifacts produces inline comments for head-mode reviews", () 
   assert.equal(artifacts.inlineComments[0]?.path, "src/a.ts");
   assert.equal(artifacts.inlineComments[0]?.line, 10);
   assert.equal(artifacts.inlineComments[0]?.side, "RIGHT");
-});
-
-test("renderReviewArtifacts forces body-only output in integration_tree mode", () => {
-  const artifacts = renderReviewArtifacts({
-    verdict: baseVerdict({
-      verdict: "request_changes",
-      findings: [
-        {
-          path: "src/a.ts",
-          line: 10,
-          severity: "blocking",
-          message: "Bug",
-          confidence: 100,
-        } as never,
-      ],
-    }),
-    inventoryPaths: ["src/a.ts"],
-    surfaceMode: "integration_tree",
-  });
-  assert.equal(artifacts.useBodyOnly, true);
-  assert.deepEqual(artifacts.inlineComments, []);
-  assert.match(artifacts.reviewBody, /Bug/);
 });
 
 test("renderReviewArtifacts drops findings whose path is outside the diff inventory", () => {
@@ -72,7 +49,6 @@ test("renderReviewArtifacts drops findings whose path is outside the diff invent
       ],
     }),
     inventoryPaths: ["src/a.ts"],
-    surfaceMode: "head",
   });
   assert.equal(artifacts.filteredFindings.length, 1);
   assert.equal(artifacts.filteredFindings[0]?.path, "src/a.ts");
@@ -85,7 +61,6 @@ test("renderReviewArtifacts reports APPROVE event when no blocking findings surv
   const artifacts = renderReviewArtifacts({
     verdict: baseVerdict({ verdict: "approve", findings: [] }),
     inventoryPaths: [],
-    surfaceMode: "head",
   });
   assert.equal(artifacts.event, "APPROVE");
   assert.equal(artifacts.inlineComments.length, 0);

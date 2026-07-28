@@ -34,8 +34,7 @@ export function selectPriorReviewThread(input: {
   if (!attempt.threadId?.trim() || !attempt.turnId?.trim() || !transcript || transcript.turns.length === 0) {
     return { kind: "miss", reason: "missing_thread_state" };
   }
-  if (attempt.reviewSurfaceMode !== input.identity.mode) return { kind: "miss", reason: "surface_mismatch" };
-  if (attempt.baseSha !== input.identity.baseSha) return { kind: "miss", reason: "base_mismatch" };
+  if (attempt.diffBaseSha !== input.identity.diffBaseSha) return { kind: "miss", reason: "base_mismatch" };
   if (attempt.promptFingerprint !== input.promptFingerprint) return { kind: "miss", reason: "prompt_mismatch" };
   if (transcript.id !== attempt.threadId) return { kind: "miss", reason: "thread_mismatch" };
   const lastTurn = transcript.turns.at(-1);

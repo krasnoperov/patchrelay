@@ -6,8 +6,8 @@ const prA: SimPR = { number: 1, branch: "feat-a", files: [{ path: "a.ts", conten
 const prB: SimPR = { number: 2, branch: "feat-b", files: [{ path: "b.ts", content: "b" }] };
 const prC: SimPR = { number: 3, branch: "feat-c", files: [{ path: "c.ts", content: "c" }] };
 
-describe("speculative happy path", () => {
-  it("3 PRs speculate in parallel and all merge", async () => {
+describe("candidate lookahead happy path", () => {
+  it("resolves 3 candidates in parallel and merges all", async () => {
     const h = await createHarness({ ciRule: () => "pass", speculativeDepth: 3 });
     await h.enqueue(prA);
     await h.enqueue(prB);
@@ -46,29 +46,30 @@ describe("speculative happy path", () => {
     h.assertInvariants();
   });
 
-  it("speculative branches use cumulative base", async () => {
+  it("integration candidates use the preceding immutable candidate as their base", async () => {
     const h = await createHarness({ ciRule: () => "pass", speculativeDepth: 3 });
     await h.enqueue(prA);
     await h.enqueue(prB);
 
-    // Run just 2 ticks — enough to build spec branches but not merge.
+    // Run just 2 ticks — enough to resolve candidates but not merge.
     await h.tick(); // A: queued → preparing_head, B: queued → preparing_head
     await h.tick(); // A: preparing_head → validating (with spec), B: preparing_head → validating (with spec)
 
-    // Check the store for spec branch info on B.
     const entryA = h.entries.find((e) => e.prNumber === 1)!;
     const entryB = h.entries.find((e) => e.prNumber === 2)!;
 
     // B's speculative branch should be based on A's entry.
     assert.strictEqual(
-      entryB.specBasedOn,
+      entryB.candidateBasedOn,
       entryA.id,
-      "B's spec should be based on A's entry",
+      "B's integration candidate should be based on A's exact head candidate",
     );
 
-    // Both should have spec branches.
-    assert.ok(entryA.specBranch !== null, "A should have a specBranch");
-    assert.ok(entryB.specBranch !== null, "B should have a specBranch");
+    assert.equal(entryA.candidateKind, "head");
+    assert.equal(entryA.candidateRef, null);
+    assert.equal(entryA.candidateSha, entryA.headSha);
+    assert.equal(entryB.candidateKind, "integration");
+    assert.ok(entryB.candidateRef !== null, "B should have an integration CI ref");
 
     h.assertInvariants();
   });

@@ -24,9 +24,9 @@ function makeEntry(): QueueEntry {
     maxRetries: 2,
     lastFailedBaseSha: null,
     issueKey: "ISSUE-42",
-    specBranch: null,
-    specSha: null,
-    specBasedOn: null,
+    candidateRef: null,
+    candidateSha: null,
+    candidateBasedOn: null,
     enqueuedAt: "2026-03-31T00:00:00.000Z",
     updatedAt: "2026-03-31T00:00:00.000Z",
   };

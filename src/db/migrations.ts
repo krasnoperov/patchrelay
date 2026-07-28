@@ -431,7 +431,6 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   // a push it can attribute to itself; consumers (prompt assembly,
   // post-hoc detection) layer in follow-up PRs.
   addColumnIfMissing(connection, "issues", "last_published_patch_id", "TEXT");
-  addColumnIfMissing(connection, "issues", "last_published_integration_tree_id", "TEXT");
   addColumnIfMissing(connection, "issues", "last_published_head_sha", "TEXT");
   // Plan §8.3: parent-of-child index for stacked PRs.
   addColumnIfMissing(connection, "issues", "parent_pr_branch", "TEXT");
@@ -442,6 +441,9 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
 
   backfillLegacyPendingRunWorkflowTasks(connection);
   removeRetiredIssueColumnsIfPresent(connection);
+  if (columnExists(connection, "issues", "last_published_integration_tree_id")) {
+    connection.prepare("ALTER TABLE issues DROP COLUMN last_published_integration_tree_id").run();
+  }
   addColumnIfMissing(connection, "issues", "issue_triage_hash", "TEXT");
   addColumnIfMissing(connection, "issues", "issue_triage_result_json", "TEXT");
   // PR3: post-merge deploy tracking. Timestamp the issue entered the
@@ -719,7 +721,6 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         last_attempted_failure_signature TEXT,
         last_attempted_failure_at TEXT,
         last_published_patch_id TEXT,
-        last_published_integration_tree_id TEXT,
         last_published_head_sha TEXT,
         parent_pr_branch TEXT,
         ci_repair_attempts INTEGER NOT NULL DEFAULT 0,
@@ -788,7 +789,6 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         last_attempted_failure_signature,
         last_attempted_failure_at,
         last_published_patch_id,
-        last_published_integration_tree_id,
         last_published_head_sha,
         parent_pr_branch,
         ci_repair_attempts,
@@ -855,7 +855,6 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         last_attempted_failure_signature,
         last_attempted_failure_at,
         last_published_patch_id,
-        last_published_integration_tree_id,
         last_published_head_sha,
         parent_pr_branch,
         COALESCE(ci_repair_attempts, 0),

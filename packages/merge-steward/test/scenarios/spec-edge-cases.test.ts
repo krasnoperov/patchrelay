@@ -18,7 +18,7 @@ describe("speculative edge cases", () => {
 
     const bEntry = h.entries.find((e) => e.prNumber === 2)!;
     assert.strictEqual(bEntry.status, "validating", "B should be validating speculatively");
-    assert.ok(bEntry.specBranch !== null, "B should have a spec branch");
+    assert.ok(bEntry.candidateRef !== null, "B should have a spec branch");
 
     // Force-push A — this changes A's branch, making B's spec stale.
     await h.forcePush(1);

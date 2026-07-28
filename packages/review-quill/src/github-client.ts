@@ -300,6 +300,7 @@ export class GitHubClient {
       headSha: String((pr.head as Record<string, unknown> | undefined)?.sha ?? ""),
       headRefName: String((pr.head as Record<string, unknown> | undefined)?.ref ?? ""),
       baseRefName: String((pr.base as Record<string, unknown> | undefined)?.ref ?? ""),
+      baseSha: String((pr.base as Record<string, unknown> | undefined)?.sha ?? ""),
       ...(typeof (pr.user as Record<string, unknown> | undefined)?.login === "string"
         ? { authorLogin: String((pr.user as Record<string, unknown>).login) }
         : {}),
@@ -341,6 +342,7 @@ export class GitHubClient {
       headSha: String((pr.head as Record<string, unknown> | undefined)?.sha ?? ""),
       headRefName: String((pr.head as Record<string, unknown> | undefined)?.ref ?? ""),
       baseRefName: String((pr.base as Record<string, unknown> | undefined)?.ref ?? ""),
+      baseSha: String((pr.base as Record<string, unknown> | undefined)?.sha ?? ""),
       ...(typeof (pr.user as Record<string, unknown> | undefined)?.login === "string"
         ? { authorLogin: String((pr.user as Record<string, unknown>).login) }
         : {}),

@@ -4,14 +4,13 @@ import type {
   ReviewAttemptConclusion,
   ReviewAttemptRecord,
   ReviewAttemptStatus,
-  ReviewSurfaceMode,
   WebhookEventRecord,
 } from "../types.ts";
 
 const ATTEMPT_COLUMNS = `
   id, repo_full_name, pr_number, head_sha, status, conclusion, summary,
   pr_title, prompt_fingerprint, thread_id, turn_id, external_check_run_id,
-  patch_id, integration_tree_id, review_surface_mode, base_sha,
+  patch_id, pr_base_sha, base_sha,
   prior_attempt_id, review_body, review_event, publication_mode,
   created_at, updated_at, completed_at
 `;
@@ -31,9 +30,8 @@ function mapAttempt(row: Record<string, unknown>): ReviewAttemptRecord {
     ...(row.turn_id ? { turnId: String(row.turn_id) } : {}),
     ...(row.external_check_run_id !== null && row.external_check_run_id !== undefined ? { externalCheckRunId: Number(row.external_check_run_id) } : {}),
     ...(row.patch_id ? { patchId: String(row.patch_id) } : {}),
-    ...(row.integration_tree_id ? { integrationTreeId: String(row.integration_tree_id) } : {}),
-    ...(row.review_surface_mode ? { reviewSurfaceMode: String(row.review_surface_mode) as ReviewSurfaceMode } : {}),
-    ...(row.base_sha ? { baseSha: String(row.base_sha) } : {}),
+    ...(row.pr_base_sha ? { prBaseSha: String(row.pr_base_sha) } : {}),
+    ...(row.base_sha ? { diffBaseSha: String(row.base_sha) } : {}),
     ...(row.prior_attempt_id !== null && row.prior_attempt_id !== undefined ? { priorAttemptId: Number(row.prior_attempt_id) } : {}),
     ...(row.review_body ? { reviewBody: String(row.review_body) } : {}),
     ...(row.review_event ? { reviewEvent: String(row.review_event) as "APPROVE" | "REQUEST_CHANGES" | "COMMENT" } : {}),
@@ -65,20 +63,21 @@ export class SqliteStore {
     this.db.exec(SCHEMA_SQL);
     this.addColumnIfMissing("review_attempts", "pr_title", "TEXT");
     this.addColumnIfMissing("review_attempts", "prompt_fingerprint", "TEXT");
+    this.db.exec("DROP INDEX IF EXISTS idx_review_attempts_patch_tree");
     this.dropColumnIfPresent("review_attempts", "transcript_json");
+    this.dropColumnIfPresent("review_attempts", "integration_tree_id");
+    this.dropColumnIfPresent("review_attempts", "review_surface_mode");
     // Carry-forward identity columns. Existing rows backfill NULL and behave
     // as cache misses; new approved rows populate them so future heads can
     // re-emit the verdict without re-running the reviewer.
     this.addColumnIfMissing("review_attempts", "patch_id", "TEXT");
-    this.addColumnIfMissing("review_attempts", "integration_tree_id", "TEXT");
-    this.addColumnIfMissing("review_attempts", "review_surface_mode", "TEXT");
+    this.addColumnIfMissing("review_attempts", "pr_base_sha", "TEXT");
     this.addColumnIfMissing("review_attempts", "base_sha", "TEXT");
     this.addColumnIfMissing("review_attempts", "prior_attempt_id", "INTEGER");
     this.addColumnIfMissing("review_attempts", "review_body", "TEXT");
     this.addColumnIfMissing("review_attempts", "review_event", "TEXT");
     this.addColumnIfMissing("review_attempts", "publication_mode", "TEXT");
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_review_attempts_patch ON review_attempts(repo_full_name, pr_number, patch_id);`);
-    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_review_attempts_patch_tree ON review_attempts(repo_full_name, pr_number, patch_id, integration_tree_id);`);
   }
 
   private addColumnIfMissing(table: string, column: string, type: string): void {
@@ -168,18 +167,15 @@ export class SqliteStore {
     return row ? mapAttempt(row) : undefined;
   }
 
-  // Carry-forward lookup for head-mode review surface. Finds an approved
-  // attempt with the same patch-id (any prior head) that has a stored
-  // body+event we can re-emit on the new head SHA. Filters on
-  // review_surface_mode so a project that flips modes doesn't carry
-  // across the change. Old rows missing review_body are skipped — that's
-  // the rollout-safety contract: only rows written after the migration
+  // Finds an approved attempt with the same patch-id (any prior head) that
+  // has a stored body+event we can re-emit on the new head SHA. Old rows
+  // missing review_body are skipped — only rows written after the migration
   // can serve cache hits.
   findApprovedAttemptByPatchId(
     repoFullName: string,
     prNumber: number,
     patchId: string,
-    mode: ReviewSurfaceMode,
+    diffBaseSha: string,
     promptFingerprint?: string,
   ): ReviewAttemptRecord | undefined {
     const promptFilter = promptFingerprint ? "AND prompt_fingerprint = ?" : "";
@@ -187,7 +183,7 @@ export class SqliteStore {
       repoFullName,
       prNumber,
       patchId,
-      mode,
+      diffBaseSha,
       ...(promptFingerprint ? [promptFingerprint] : []),
     ];
     const row = this.db.prepare(`
@@ -196,52 +192,11 @@ export class SqliteStore {
       WHERE repo_full_name = ?
         AND pr_number = ?
         AND patch_id = ?
+        AND base_sha = ?
         AND status = 'completed'
         AND conclusion = 'approved'
         AND review_body IS NOT NULL
         AND review_event IS NOT NULL
-        AND review_surface_mode = ?
-        ${promptFilter}
-      ORDER BY id DESC
-      LIMIT 1
-    `).get(...bindings);
-    return row ? mapAttempt(row) : undefined;
-  }
-
-  // Carry-forward lookup for integration-tree-mode review surface.
-  // Stricter than `findApprovedAttemptByPatchId`: both the patch-id AND
-  // the integrated tree must match (the synthetic merge tree main moved
-  // underneath could differ between the prior and current head). Same
-  // rollout-safety filter (review_body / review_event must be present).
-  findApprovedAttemptByPatchAndTree(
-    repoFullName: string,
-    prNumber: number,
-    patchId: string,
-    integrationTreeId: string,
-    mode: ReviewSurfaceMode,
-    promptFingerprint?: string,
-  ): ReviewAttemptRecord | undefined {
-    const promptFilter = promptFingerprint ? "AND prompt_fingerprint = ?" : "";
-    const bindings = [
-      repoFullName,
-      prNumber,
-      patchId,
-      integrationTreeId,
-      mode,
-      ...(promptFingerprint ? [promptFingerprint] : []),
-    ];
-    const row = this.db.prepare(`
-      SELECT ${ATTEMPT_COLUMNS}
-      FROM review_attempts
-      WHERE repo_full_name = ?
-        AND pr_number = ?
-        AND patch_id = ?
-        AND integration_tree_id = ?
-        AND status = 'completed'
-        AND conclusion = 'approved'
-        AND review_body IS NOT NULL
-        AND review_event IS NOT NULL
-        AND review_surface_mode = ?
         ${promptFilter}
       ORDER BY id DESC
       LIMIT 1
@@ -257,9 +212,8 @@ export class SqliteStore {
     prTitle?: string;
     promptFingerprint?: string;
     patchId?: string;
-    integrationTreeId?: string;
-    reviewSurfaceMode?: ReviewSurfaceMode;
-    baseSha?: string;
+    prBaseSha?: string;
+    diffBaseSha?: string;
     priorAttemptId?: number;
     reviewBody?: string;
     reviewEvent?: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
@@ -272,13 +226,13 @@ export class SqliteStore {
     const result = this.db.prepare(`
       INSERT INTO review_attempts (
         repo_full_name, pr_number, head_sha, status, pr_title, prompt_fingerprint,
-        patch_id, integration_tree_id, review_surface_mode, base_sha,
+        patch_id, pr_base_sha, base_sha,
         prior_attempt_id, review_body, review_event, publication_mode,
         conclusion, summary, completed_at,
         created_at, updated_at
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?,
+        ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?
@@ -291,9 +245,8 @@ export class SqliteStore {
       params.prTitle ?? null,
       params.promptFingerprint ?? null,
       params.patchId ?? null,
-      params.integrationTreeId ?? null,
-      params.reviewSurfaceMode ?? null,
-      params.baseSha ?? null,
+      params.prBaseSha ?? null,
+      params.diffBaseSha ?? null,
       params.priorAttemptId ?? null,
       params.reviewBody ?? null,
       params.reviewEvent ?? null,
@@ -321,9 +274,8 @@ export class SqliteStore {
     completedAt?: string | null;
     promptFingerprint?: string | null;
     patchId?: string | null;
-    integrationTreeId?: string | null;
-    reviewSurfaceMode?: ReviewSurfaceMode | null;
-    baseSha?: string | null;
+    prBaseSha?: string | null;
+    diffBaseSha?: string | null;
     priorAttemptId?: number | null;
     reviewBody?: string | null;
     reviewEvent?: "APPROVE" | "REQUEST_CHANGES" | "COMMENT" | null;
@@ -367,17 +319,13 @@ export class SqliteStore {
       sets.push("patch_id = @patchId");
       values.patchId = params.patchId;
     }
-    if (params.integrationTreeId !== undefined) {
-      sets.push("integration_tree_id = @integrationTreeId");
-      values.integrationTreeId = params.integrationTreeId;
+    if (params.prBaseSha !== undefined) {
+      sets.push("pr_base_sha = @prBaseSha");
+      values.prBaseSha = params.prBaseSha;
     }
-    if (params.reviewSurfaceMode !== undefined) {
-      sets.push("review_surface_mode = @reviewSurfaceMode");
-      values.reviewSurfaceMode = params.reviewSurfaceMode;
-    }
-    if (params.baseSha !== undefined) {
-      sets.push("base_sha = @baseSha");
-      values.baseSha = params.baseSha;
+    if (params.diffBaseSha !== undefined) {
+      sets.push("base_sha = @diffBaseSha");
+      values.diffBaseSha = params.diffBaseSha;
     }
     if (params.priorAttemptId !== undefined) {
       sets.push("prior_attempt_id = @priorAttemptId");

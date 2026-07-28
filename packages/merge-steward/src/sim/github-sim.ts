@@ -4,8 +4,10 @@ import type { CheckResult, IncidentRecord, PRStatus, QueueEntry } from "../types
 interface SimPR {
   number: number;
   branch: string;
+  baseRefName: string;
   headSha: string;
   merged: boolean;
+  closed: boolean;
   mergeStateStatus: string;
   reviewApproved: boolean;
   checks: CheckResult[];
@@ -20,12 +22,14 @@ export class GitHubSim implements GitHubPRApi {
   private prs = new Map<number, SimPR>();
 
   /** Register a PR for simulation. */
-  addPR(pr: { number: number; branch: string; headSha: string; reviewApproved?: boolean; labels?: string[] }): void {
+  addPR(pr: { number: number; branch: string; headSha: string; baseRefName?: string; reviewApproved?: boolean; labels?: string[] }): void {
     this.prs.set(pr.number, {
       number: pr.number,
       branch: pr.branch,
+      baseRefName: pr.baseRefName ?? "main",
       headSha: pr.headSha,
       merged: false,
+      closed: false,
       mergeStateStatus: "CLEAN",
       reviewApproved: pr.reviewApproved ?? true,
       checks: [],
@@ -54,10 +58,23 @@ export class GitHubSim implements GitHubPRApi {
     if (pr) pr.mergeStateStatus = mergeStateStatus;
   }
 
+  setBaseRef(prNumber: number, baseRefName: string): void {
+    const pr = this.prs.get(prNumber);
+    if (pr) pr.baseRefName = baseRefName;
+  }
+
+  closePR(prNumber: number): void {
+    const pr = this.prs.get(prNumber);
+    if (pr) pr.closed = true;
+  }
+
   /** Set check results for a PR. */
   setChecks(prNumber: number, checks: CheckResult[]): void {
     const pr = this.prs.get(prNumber);
-    if (pr) pr.checks = checks;
+    if (pr) {
+      pr.checks = checks;
+      this.refChecks.set(pr.headSha, checks);
+    }
   }
 
   /** Called after mergePR to sync git state in tests. */
@@ -76,8 +93,9 @@ export class GitHubSim implements GitHubPRApi {
     return {
       number: pr.number,
       branch: pr.branch,
+      baseRefName: pr.baseRefName,
       headSha: pr.headSha,
-      mergeable: !pr.merged,
+      mergeable: !pr.merged && !pr.closed,
       mergeStateStatus: pr.mergeStateStatus,
       reviewApproved: pr.reviewApproved,
       merged: pr.merged,
@@ -92,6 +110,7 @@ export class GitHubSim implements GitHubPRApi {
 
   /** Configurable main/ref checks for failure classification. */
   private refChecks = new Map<string, CheckResult[]>();
+  resolveRefChecks: ((ref: string) => CheckResult[] | undefined) | null = null;
 
   setRefChecks(ref: string, checks: CheckResult[]): void {
     this.refChecks.set(ref, checks);
@@ -100,12 +119,12 @@ export class GitHubSim implements GitHubPRApi {
   async listChecksForRef(ref: string): Promise<CheckResult[]> {
     // Strip origin/ prefix — matches production client behavior.
     const normalized = ref.replace(/^origin\//, "");
-    return this.refChecks.get(normalized) ?? [];
+    return this.refChecks.get(normalized) ?? this.resolveRefChecks?.(normalized) ?? [];
   }
 
   async findPRByBranch(branch: string): Promise<number | null> {
     for (const pr of this.prs.values()) {
-      if (pr.branch === branch && !pr.merged) return pr.number;
+      if (pr.branch === branch && !pr.merged && !pr.closed) return pr.number;
     }
     return null;
   }
@@ -122,7 +141,7 @@ export class GitHubSim implements GitHubPRApi {
 
   async listOpenPRs(): Promise<Array<{ number: number; branch: string; headSha: string }>> {
     return [...this.prs.values()]
-      .filter((pr) => !pr.merged)
+      .filter((pr) => !pr.merged && !pr.closed)
       .map((pr) => ({ number: pr.number, branch: pr.branch, headSha: pr.headSha }));
   }
 
@@ -162,13 +181,8 @@ export class GitHubSim implements GitHubPRApi {
  */
 export class EvictionReporterSim implements EvictionReporter {
   readonly evictions: Array<{ entry: QueueEntry; incident: IncidentRecord }> = [];
-  readonly specReadyEvents: Array<{ entry: QueueEntry; specBranch: string; specSha: string }> = [];
 
   async reportEviction(entry: QueueEntry, incident: IncidentRecord): Promise<void> {
     this.evictions.push({ entry: { ...entry }, incident: { ...incident } });
-  }
-
-  async reportSpecReady(entry: QueueEntry, specBranch: string, specSha: string): Promise<void> {
-    this.specReadyEvents.push({ entry: { ...entry }, specBranch, specSha });
   }
 }

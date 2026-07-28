@@ -6,7 +6,7 @@ import { GitHubSim, EvictionReporterSim } from "../src/sim/github-sim.ts";
 import { MemoryStore } from "../src/memory-store.ts";
 import { reconcile } from "../src/reconciler.ts";
 import type { ReconcileContext } from "../src/reconciler.ts";
-import type { QueueEntry, QueueEntryStatus, ReconcileEvent } from "../src/types.ts";
+import type { QueueEntry, QueueEntryStatus, ReconcileEvent, RequiredCheck } from "../src/types.ts";
 import { TERMINAL_STATUSES } from "../src/types.ts";
 import { INVALIDATION_PATCH } from "../src/invalidation.ts";
 import { assertInvariants } from "./invariants.ts";
@@ -16,6 +16,7 @@ export interface SimPR {
   branch: string;
   files: Array<{ path: string; content: string }>;
   priority?: number;
+  baseRefName?: string;
 }
 
 export interface HarnessOptions {
@@ -24,6 +25,7 @@ export interface HarnessOptions {
   flakyRetries?: number;
   maxRetries?: number;
   speculativeDepth?: number;
+  requiredCheckRules?: RequiredCheck[];
 }
 
 export class Harness {
@@ -44,6 +46,8 @@ export class Harness {
   private readonly flakyRetries: number;
   private readonly maxRetries: number;
   private readonly speculativeDepth: number;
+  private readonly ciRule: CIRule;
+  private readonly requiredCheckRules: RequiredCheck[];
   private nextPosition = 1;
   private nextEntryId = 1;
   private tickCount = 0;
@@ -57,20 +61,24 @@ export class Harness {
     this.flakyRetries = options.flakyRetries ?? 0;
     this.maxRetries = options.maxRetries ?? 3;
     this.speculativeDepth = options.speculativeDepth ?? 1;
+    this.requiredCheckRules = options.requiredCheckRules ?? [];
 
+    this.ciRule = options.ciRule ?? (() => "pass");
     this.gitSim = new GitSim();
-    this.ciSim = new CISim(options.ciRule ?? (() => "pass"));
+    this.ciSim = new CISim(this.ciRule);
     this.githubSim = new GitHubSim();
     this.evictionSim = new EvictionReporterSim();
     this.store = new MemoryStore();
     this.policy = new GitHubPolicyCache({
       repoFullName: "test/repo",
-      initialRequiredChecks: [],
+      initialRequiredChecks: this.requiredCheckRules.map((check) => check.name),
+      initialRequiredCheckRules: this.requiredCheckRules,
       logger: { info() {}, warn() {}, error() {}, debug() {}, fatal() {}, trace() {}, child() { return this; } } as any,
       refreshPolicy: async () => ({
         defaultBranch: this.baseBranch,
         branch: this.baseBranch,
         requiredChecks: [],
+        requiredCheckRules: this.requiredCheckRules,
         requireAllChecksOnEmptyRequiredSet: false,
         warnings: [],
       }),
@@ -83,13 +91,44 @@ export class Harness {
         return [];
       }
     };
+    this.ciSim.onRun = (run) => {
+      this.githubSim.setRefChecks(run.sha, this.checksForStatus(
+        run.status,
+        Number(run.id.replace(/^ci-/, "")),
+      ));
+    };
+    this.githubSim.resolveRefChecks = (sha) => {
+      const runs = [...this.ciSim.allRuns.values()].filter((candidate) => candidate.sha === sha);
+      if (runs.length === 0) return undefined;
+      return runs.flatMap((run) => {
+        const conclusion = run.status === "pass"
+          ? "success" as const
+          : run.status === "fail"
+            ? "failure" as const
+            : "pending" as const;
+        const runId = Number(run.id.replace(/^ci-/, ""));
+        return this.requiredCheckRules.length > 0
+          ? this.requiredCheckRules.map((rule) => ({
+            name: rule.name,
+            ...(rule.appId === null ? {} : { appId: rule.appId }),
+            conclusion,
+            runId,
+          }))
+          : [{ name: "ci", conclusion, runId }];
+      });
+    };
 
     this.gitSim.onPush = (branch: string, sha: string, targetBranch?: string) => {
       if (targetBranch === this.baseBranch) {
-        // Push-to-main: mark any PR whose branch was merged via spec as merged.
-        // The spec branch contains the PR's commits, so the PR is effectively merged.
+        // Push-to-main: mark any PR whose branch was landed directly or whose
+        // commits were merged via a spec as merged.
         for (const entry of this.store.listAll(this.repoId)) {
-          if (entry.specBranch === branch) {
+          if (
+            entry.candidateRef === branch
+            || entry.branch === branch
+            || entry.headSha === branch
+            || entry.candidateSha === branch
+          ) {
             this.githubSim.markMergedByBranch(entry.branch);
           }
         }
@@ -114,7 +153,11 @@ export class Harness {
   }
 
   async enqueue(pr: SimPR): Promise<QueueEntry> {
-    await this.gitSim.createBranch(pr.branch, this.baseBranch);
+    try {
+      await this.gitSim.createBranch(pr.branch, pr.baseRefName ?? this.baseBranch);
+    } catch {
+      // Re-admission after a terminal attempt reuses the existing PR branch.
+    }
     await git.checkout({
       fs: this.gitSim.volume,
       dir: this.gitSim.repoDir,
@@ -140,8 +183,11 @@ export class Harness {
       number: pr.number,
       branch: pr.branch,
       headSha,
+      baseRefName: pr.baseRefName ?? this.baseBranch,
       reviewApproved: true,
     });
+    const headStatus = this.ciRule(pr.files.map((file) => file.path));
+    this.githubSim.setRefChecks(headSha, this.checksForStatus(headStatus));
 
     const entry: QueueEntry = {
       id: `qe-${this.nextEntryId++}`,
@@ -160,16 +206,17 @@ export class Harness {
       maxRetries: this.maxRetries,
       lastFailedBaseSha: null,
       issueKey: null,
-      specBranch: null,
-      specSha: null,
-      specBasedOn: null,
+      candidateKind: null,
+      candidatePolicyFingerprint: null,
+      candidateRef: null,
+      candidateSha: null,
+      candidateBasedOn: null,
       waitDetail: null,
       postMergeStatus: null,
       postMergeSha: null,
       postMergeSummary: null,
       postMergeCheckedAt: null,
-      headPatchId: null,
-      specTreeId: null,
+      baseRefName: pr.baseRefName ?? this.baseBranch,
       enqueuedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -259,6 +306,8 @@ export class Harness {
     );
     const newSha = await this.gitSim.headSha(entry.branch);
     this.githubSim.updateSha(prNumber, newSha);
+    const changedFiles = await this.gitSim.changedFiles(entry.branch, this.baseBranch);
+    this.githubSim.setRefChecks(newSha, this.checksForStatus(this.ciRule(changedFiles)));
     this.store.updateHead(entry.id, newSha);
     await git.checkout({
       fs: this.gitSim.volume,
@@ -266,6 +315,12 @@ export class Harness {
       ref: this.baseBranch,
       force: true,
     });
+  }
+
+  /** Simulate GitHub rerunning checks for the same immutable PR head. */
+  async setHeadCI(prNumber: number, status: "pass" | "fail" | "pending"): Promise<void> {
+    const pr = await this.githubSim.getStatus(prNumber);
+    this.githubSim.setRefChecks(pr.headSha, this.checksForStatus(status));
   }
 
   /** Dequeue a PR (simulates label removal). */
@@ -318,6 +373,22 @@ export class Harness {
     return this.entries.some(
       (e) => !TERMINAL_STATUSES.includes(e.status),
     );
+  }
+
+  private checksForStatus(status: "pass" | "fail" | "pending", runId?: number) {
+    const conclusion = status === "pass"
+      ? "success" as const
+      : status === "fail"
+        ? "failure" as const
+        : "pending" as const;
+    return this.requiredCheckRules.length > 0
+          ? this.requiredCheckRules.map((rule) => ({
+            name: rule.name,
+            ...(rule.appId === null ? {} : { appId: rule.appId }),
+            conclusion,
+            ...(runId === undefined ? {} : { runId }),
+          }))
+      : [{ name: "ci", conclusion, ...(runId === undefined ? {} : { runId }) }];
   }
 }
 

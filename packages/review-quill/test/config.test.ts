@@ -68,7 +68,7 @@ test("loadConfig defaults waitForGreenChecks to false for repositories", () => {
   }
 });
 
-test("loadConfig preserves review surface mode and no-cache label repository options", () => {
+test("loadConfig preserves no-cache label repository option", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "review-quill-config-review-surface-"));
   const configDir = path.join(baseDir, "config");
   const configPath = path.join(configDir, "review-quill.json");
@@ -82,14 +82,12 @@ test("loadConfig preserves review surface mode and no-cache label repository opt
         {
           repoId: "usertold",
           repoFullName: "owner/repo",
-          reviewSurfaceMode: "integration_tree",
           noCacheLabel: "review:fresh",
         },
       ],
     }, null, 2));
 
     const config = loadConfig(configPath);
-    assert.equal(config.repositories[0]?.reviewSurfaceMode, "integration_tree");
     assert.equal(config.repositories[0]?.noCacheLabel, "review:fresh");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

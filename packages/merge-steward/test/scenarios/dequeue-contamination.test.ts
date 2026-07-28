@@ -26,7 +26,7 @@ describe("mid-queue dequeue does not contaminate downstream specs", () => {
 
     // C's spec should be built on B's spec (cumulative chain).
     const cBefore = h.entries.find((e) => e.prNumber === 3);
-    assert.ok(cBefore?.specBasedOn, "C should have specBasedOn set (built on B's spec)");
+    assert.ok(cBefore?.candidateBasedOn, "C should have candidateBasedOn set (built on B's spec)");
 
     // Dequeue B (simulates label removal / PR close).
     h.dequeueByPR(prB.number);
@@ -48,7 +48,7 @@ describe("mid-queue dequeue does not contaminate downstream specs", () => {
 
     // After rebuild, C's spec should no longer reference B.
     const cAfter = h.entries.find((e) => e.prNumber === 3);
-    assert.strictEqual(cAfter?.specBasedOn, null, "C's final specBasedOn should be null (rebuilt as head on main)");
+    assert.strictEqual(cAfter?.candidateBasedOn, null, "C's final candidateBasedOn should be null (rebuilt as head on main)");
 
     h.assertInvariants();
   });

@@ -30,16 +30,14 @@ function makeEntry(overrides: Partial<QueueEntry> & { prNumber: number; position
     maxRetries: 2,
     lastFailedBaseSha: null,
     issueKey: null,
-    specBranch: null,
-    specSha: null,
-    specBasedOn: null,
+    candidateRef: null,
+    candidateSha: null,
+    candidateBasedOn: null,
     postMergeStatus: null,
     postMergeSha: null,
     postMergeSummary: null,
     postMergeCheckedAt: null,
     baseRefName: null,
-    headPatchId: null,
-    specTreeId: null,
     decidedAt: null,
     enqueuedAt: minutesAgo(10),
     updatedAt: minutesAgo(5),
@@ -126,8 +124,8 @@ test("a speculatively stacked entry resolves its parent PR and orders behind it"
     prNumber: 71,
     position: 2,
     status: "validating",
-    specBranch: "mq-spec-71",
-    specBasedOn: head.id,
+    candidateRef: "mq-spec-71",
+    candidateBasedOn: head.id,
   });
   // Pass them out of queue order to prove ordering comes from position, not input.
   const model = buildDashboard([makeRepo(makeSnapshot([stacked, head]))], { now: NOW });
@@ -139,7 +137,7 @@ test("a speculatively stacked entry resolves its parent PR and orders behind it"
 
 test("stack link is dropped once the parent is no longer active", () => {
   const parent = makeEntry({ prNumber: 80, position: 1, status: "merged", postMergeStatus: "pass", updatedAt: minutesAgo(5) });
-  const child = makeEntry({ prNumber: 81, position: 2, status: "validating", specBranch: "mq-spec-81", specBasedOn: parent.id });
+  const child = makeEntry({ prNumber: 81, position: 2, status: "validating", candidateRef: "mq-spec-81", candidateBasedOn: parent.id });
   const model = buildDashboard([makeRepo(makeSnapshot([parent, child]))], { now: NOW });
   const child81 = model.repos[0]?.entries.find((e) => e.prNumber === 81);
   assert.equal(child81?.stackedOnPr, null);

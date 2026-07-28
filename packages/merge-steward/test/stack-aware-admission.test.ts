@@ -30,7 +30,11 @@ function fakeGithub(prs: Map<number, PRStatus>): GitHubPRApi {
     async listChecksForRef() {
       return [{ name: "ci", conclusion: "success" }];
     },
-    async listLabels() { return []; },
+    async listLabels(prNumber) {
+      return prNumber === 200 && prs.get(prNumber)?.title === "priority child"
+        ? ["priority"]
+        : [];
+    },
     async setLabels() {},
     async listOpenPRs() { return []; },
     async findPRByBranch() { return null; },
@@ -48,6 +52,7 @@ function fakeSpecBuilder(): SpeculativeBranchBuilder {
 
 const policy = {
   getRequiredChecks: () => [],
+  getRequiredCheckRules: () => [],
   shouldRequireAllChecksOnEmptyRequiredSet: () => false,
 } as unknown as GitHubPolicyCache;
 
@@ -148,6 +153,38 @@ describe("plan §8.4 stack-aware admission", () => {
     assert.ok(parent.position < child.position, "parent must precede child");
     assert.ok(sibling.position < child.position, "sibling sits between parent and child by enqueue order");
     assert.ok(parent.position < sibling.position, "sibling was admitted after parent");
+  });
+
+  it("never lets a priority child sort ahead of its active parent", async () => {
+    const store = new MemoryStore();
+    const queue = new MergeStewardQueueCommands(
+      config,
+      policy,
+      store,
+      fakeGithub(new Map([
+        [100, basePr({ number: 100, branch: "feat-a", baseRefName: "main" })],
+        [150, basePr({ number: 150, branch: "feat-sibling", baseRefName: "main" })],
+        [200, basePr({
+          number: 200,
+          branch: "feat-b",
+          baseRefName: "feat-a",
+          title: "priority child",
+        })],
+      ])),
+      fakeSpecBuilder(),
+      noopLogger,
+    );
+
+    assert.equal(await queue.tryAdmit(100, "feat-a", "head-a"), true);
+    assert.equal(await queue.tryAdmit(150, "feat-sibling", "head-sibling"), true);
+    assert.equal(await queue.tryAdmit(200, "feat-b", "head-b"), true);
+
+    const ordered = store.listActive("repo");
+    assert.deepEqual(
+      ordered.map((entry) => entry.prNumber),
+      [100, 200, 150],
+      "the parent becomes ready first; its priority child may then outrank an unrelated root",
+    );
   });
 });
 

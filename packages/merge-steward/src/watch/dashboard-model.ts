@@ -196,7 +196,7 @@ function repoEntriesFromSnapshot(
     .sort((a, b) => a.position - b.position)[0] ?? null;
 
   // Resolve speculative stacking: an entry's spec can be built on top of
-  // another entry's spec (specBasedOn -> that entry's id). Map ids to PR
+  // another entry's spec (candidateBasedOn -> that entry's id). Map ids to PR
   // numbers so the views can show "stacked on #N". Only surface the link
   // when the parent is still active, since a merged parent collapses the stack.
   const idToEntry = new Map<string, QueueEntry>();
@@ -213,7 +213,7 @@ function repoEntriesFromSnapshot(
     const glyph = GLYPH[kind];
     const color = COLOR[kind];
     const phrase = entryPhrase(entry, isHead);
-    const parent = entry.specBasedOn ? idToEntry.get(entry.specBasedOn) ?? null : null;
+    const parent = entry.candidateBasedOn ? idToEntry.get(entry.candidateBasedOn) ?? null : null;
     const stackedOnPr = parent && isActive(parent.status) ? parent.prNumber : null;
     // decidedAt is the terminal-transition time (never bumped by post-merge
     // re-checks). Duration = enqueue -> decided (or -> now while in flight);

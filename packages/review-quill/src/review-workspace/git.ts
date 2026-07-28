@@ -78,28 +78,6 @@ export async function gitWorktreeRemove(cachePath: string, worktreePath: string)
   await runGit(["-C", cachePath, "worktree", "remove", "--force", worktreePath]);
 }
 
-// Plan §3.4: build a synthetic merge commit that has `tree` as its
-// content and `[base, head]` as parents. Used for integration_tree
-// review surface mode — the reviewer reads the merged tree as if the
-// PR had landed, but with the original PR head still reachable so
-// post-merge PR detection works.
-export async function gitCommitTree(
-  worktreePath: string,
-  tree: string,
-  parents: string[],
-  message: string,
-): Promise<string> {
-  const args = ["-C", worktreePath, "commit-tree", tree];
-  for (const parent of parents) {
-    args.push("-p", parent);
-  }
-  args.push("-m", message);
-  // Identity vars come from the runner env (review-quill bot identity);
-  // commit-tree picks them up via process.env.
-  const out = await runGit(args);
-  return out.trim();
-}
-
 export async function gitDiffNameStatus(
   worktreePath: string,
   baseRef: string,
@@ -209,48 +187,4 @@ export async function gitPatchId(
   if (!firstLine) return undefined;
   const id = firstLine.trim().split(/\s+/)[0];
   return id && id.length > 0 ? id : undefined;
-}
-
-export type MergeTreeResult =
-  | { conflict: false; treeId: string }
-  | { conflict: true };
-
-// `git merge-tree --write-tree` returns a tree object id on success.
-// Nonzero exit signals "cannot integrate" — a real conflict, not an
-// error condition (per §2.3 of the contract). Caller decides what to
-// do with conflicts.
-export async function gitMergeTree(
-  worktreePath: string,
-  base: string,
-  head: string,
-): Promise<MergeTreeResult> {
-  return await new Promise<MergeTreeResult>((resolve, reject) => {
-    const proc = spawn("git", ["-C", worktreePath, "merge-tree", "--write-tree", base, head], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    const errChunks: string[] = [];
-    proc.stdout.on("data", (d: Buffer) => stdout += d.toString("utf8"));
-    proc.stderr.on("data", (d: Buffer) => errChunks.push(d.toString("utf8")));
-    proc.on("error", reject);
-    proc.on("close", (code) => {
-      if (code === 0) {
-        const treeId = stdout.trim().split("\n")[0]?.trim() ?? "";
-        if (treeId.length === 0) {
-          reject(new Error(`git merge-tree --write-tree returned empty output: ${errChunks.join("")}`));
-          return;
-        }
-        resolve({ conflict: false, treeId });
-        return;
-      }
-      // git merge-tree prints "<base-tree>\n<conflicting paths>\n" to
-      // stdout on conflict (exit 1) and an actual error message to
-      // stderr on operand misuse (exit 129). Treat 129 as a real error.
-      if (code === 1) {
-        resolve({ conflict: true });
-        return;
-      }
-      reject(new Error(`git merge-tree --write-tree failed (code ${code}): ${errChunks.join("")}`));
-    });
-  });
 }

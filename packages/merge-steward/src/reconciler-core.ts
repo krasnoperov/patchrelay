@@ -23,9 +23,17 @@ export interface ReconcileContext {
   onEvent: (event: ReconcileEvent) => void;
 }
 
-export const SPEC_BRANCH_PREFIX = "mq-spec-";
+export const CANDIDATE_REF_PREFIX = "mq-spec-";
 export const FAILED_CONCLUSIONS = new Set<string>(["failure"]);
-export const CLEAN_SPEC = { specBranch: null, specSha: null, specBasedOn: null } as const;
+export const CLEAR_CANDIDATE = {
+  candidateKind: null,
+  candidatePolicyFingerprint: null,
+  candidateRef: null,
+  candidateSha: null,
+  candidateBasedOn: null,
+} as const;
+/** Remove only the ephemeral remote/dependency ref while retaining candidate audit identity. */
+export const CLEAN_CANDIDATE_REF = { candidateRef: null, candidateBasedOn: null } as const;
 export const CLEAN_CI = { ciRunId: null, ciRetries: 0 } as const;
 
 export function emit(ctx: ReconcileContext, entry: QueueEntry, action: ReconcileAction, extra?: Partial<ReconcileEvent>): void {
@@ -36,8 +44,8 @@ export function ref(ctx: ReconcileContext, name: string): string {
   return ctx.remotePrefix + name;
 }
 
-export function specBranchName(entryId: string): string {
-  return `${SPEC_BRANCH_PREFIX}${entryId}`;
+export function candidateRefName(entryId: string): string {
+  return `${CANDIDATE_REF_PREFIX}${entryId}`;
 }
 
 export function isBudgetExhausted(entry: QueueEntry): boolean {
