@@ -9,6 +9,7 @@ import { cleanupCandidate } from "./reconciler-evict.ts";
 import { INVALIDATION_PATCH } from "./invalidation.ts";
 import { verifyPostMergeStatus } from "./reconciler-post-merge.ts";
 import { syncQueueStateLabels } from "./reconciler-queue-labels.ts";
+import { buildDependencyReadySchedule } from "./queue-order.ts";
 
 export type { ReconcileContext } from "./reconciler-core.ts";
 
@@ -21,7 +22,11 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
   // (e.g. an externally-merged PR), and verifyMergedEntriesPostPush below is
   // the only thing that advances them. depth=0 simply skips the active loop.
 
-  const schedule = buildDependencyReadySchedule(ctx, allActive);
+  const schedule = buildDependencyReadySchedule(
+    allActive,
+    ctx.store.listAll(ctx.repoId),
+    ctx.baseBranch,
+  );
   for (const blocked of schedule.blocked.slice(0, ctx.speculativeDepth)) {
     const entry = ctx.store.getEntry(blocked.entry.id);
     if (!entry || TERMINAL_STATUSES.includes(entry.status)) continue;
@@ -101,7 +106,11 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
         case "validating": {
           const freshActive = ctx.store.listActive(ctx.repoId);
           const freshIdx = freshActive.findIndex((e) => e.id === entry.id);
-          const freshLandingHead = buildDependencyReadySchedule(ctx, freshActive).ready[0]?.id === entry.id;
+          const freshLandingHead = buildDependencyReadySchedule(
+            freshActive,
+            ctx.store.listAll(ctx.repoId),
+            ctx.baseBranch,
+          ).ready[0]?.id === entry.id;
           await checkValidation(
             ctx,
             entry,
@@ -136,56 +145,6 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
   }
 
   await verifyMergedEntriesPostPush(ctx);
-}
-
-function buildDependencyReadySchedule(
-  ctx: ReconcileContext,
-  active: import("./types.ts").QueueEntry[],
-): {
-  ready: import("./types.ts").QueueEntry[];
-  blocked: Array<{ entry: import("./types.ts").QueueEntry; reason: string }>;
-} {
-  const activeByBranch = new Map(active.map((entry) => [entry.branch, entry]));
-  const latestByBranch = new Map<string, import("./types.ts").QueueEntry>();
-  for (const entry of ctx.store.listAll(ctx.repoId)) {
-    const current = latestByBranch.get(entry.branch);
-    if (!current || entry.position > current.position) latestByBranch.set(entry.branch, entry);
-  }
-  const readyIds = new Set<string>();
-  const ready: import("./types.ts").QueueEntry[] = [];
-  const blocked: Array<{ entry: import("./types.ts").QueueEntry; reason: string }> = [];
-
-  for (const entry of active) {
-    const parentBranch = entry.baseRefName;
-    if (!parentBranch || parentBranch === ctx.baseBranch) {
-      ready.push(entry);
-      readyIds.add(entry.id);
-      continue;
-    }
-
-    const activeParent = activeByBranch.get(parentBranch);
-    if (activeParent && readyIds.has(activeParent.id)) {
-      ready.push(entry);
-      readyIds.add(entry.id);
-      continue;
-    }
-
-    const latestParent = latestByBranch.get(parentBranch);
-    if (!activeParent && latestParent?.status === "merged") {
-      ready.push(entry);
-      readyIds.add(entry.id);
-      continue;
-    }
-
-    const reason = activeParent
-      ? `stack parent ${parentBranch} is itself blocked`
-      : latestParent
-        ? `stack parent ${parentBranch} is ${latestParent.status}; waiting for a successful parent entry`
-        : `stack parent ${parentBranch} is not known to the queue`;
-    blocked.push({ entry, reason });
-  }
-
-  return { ready, blocked };
 }
 
 async function verifyMergedEntriesPostPush(ctx: ReconcileContext): Promise<void> {

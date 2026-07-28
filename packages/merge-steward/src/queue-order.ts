@@ -1,5 +1,10 @@
 import type { QueueEntry } from "./types.ts";
 
+export interface DependencyReadySchedule {
+  ready: QueueEntry[];
+  blocked: Array<{ entry: QueueEntry; reason: string }>;
+}
+
 function compareReady(left: QueueEntry, right: QueueEntry): number {
   return (right.priority - left.priority) || (left.position - right.position);
 }
@@ -52,4 +57,58 @@ export function orderActiveQueue(entries: QueueEntry[]): QueueEntry[] {
 
   const malformed = entries.filter((entry) => !emitted.has(entry.id)).sort(compareReady);
   return [...ordered, ...malformed];
+}
+
+/**
+ * Project the active queue into entries whose stack ancestry can advance and
+ * entries whose parent state blocks them. This is pure queue policy: callers
+ * supply the already-read active and historical entries, then perform any
+ * resulting transitions themselves.
+ */
+export function buildDependencyReadySchedule(
+  active: QueueEntry[],
+  allEntries: QueueEntry[],
+  baseBranch: string,
+): DependencyReadySchedule {
+  const activeByBranch = new Map(active.map((entry) => [entry.branch, entry]));
+  const latestByBranch = new Map<string, QueueEntry>();
+  for (const entry of allEntries) {
+    const current = latestByBranch.get(entry.branch);
+    if (!current || entry.position > current.position) latestByBranch.set(entry.branch, entry);
+  }
+  const readyIds = new Set<string>();
+  const ready: QueueEntry[] = [];
+  const blocked: DependencyReadySchedule["blocked"] = [];
+
+  for (const entry of active) {
+    const parentBranch = entry.baseRefName;
+    if (!parentBranch || parentBranch === baseBranch) {
+      ready.push(entry);
+      readyIds.add(entry.id);
+      continue;
+    }
+
+    const activeParent = activeByBranch.get(parentBranch);
+    if (activeParent && readyIds.has(activeParent.id)) {
+      ready.push(entry);
+      readyIds.add(entry.id);
+      continue;
+    }
+
+    const latestParent = latestByBranch.get(parentBranch);
+    if (!activeParent && latestParent?.status === "merged") {
+      ready.push(entry);
+      readyIds.add(entry.id);
+      continue;
+    }
+
+    const reason = activeParent
+      ? `stack parent ${parentBranch} is itself blocked`
+      : latestParent
+        ? `stack parent ${parentBranch} is ${latestParent.status}; waiting for a successful parent entry`
+        : `stack parent ${parentBranch} is not known to the queue`;
+    blocked.push({ entry, reason });
+  }
+
+  return { ready, blocked };
 }
