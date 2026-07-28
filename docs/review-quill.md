@@ -113,7 +113,7 @@ If you want machine review to count toward merge admission, include `review-quil
 
 Default context path for each reviewable PR:
 
-1. Ephemeral local checkout at the exact PR head SHA (or, in `integration_tree` mode, a synthetic merge commit — see [Review surface modes](#review-surface-modes) below).
+1. Ephemeral local checkout at the exact PR head SHA.
 2. Local `git diff <base>...HEAD` inventory and curated patch set.
 3. Repo guidance: configured review docs plus universal `AGENTS.md` (`REVIEW_WORKFLOW.md`, `AGENTS.md` by default), plus local Markdown docs explicitly referenced by the PR title/body.
 4. Prior formal PR reviews from GitHub.
@@ -135,14 +135,18 @@ Codex remains the source of truth for the full review transcript. SQLite stores 
 
 ## Carry-forward
 
-review-quill caches approved verdicts so a head SHA change that does not change the patch (rebase onto fresh main, force-push of the same content, etc.) does not trigger a fresh review run. The cache key is the change identity computed by the algorithms in [github-queue-contract.md](./github-queue-contract.md#identity-algorithms).
+review-quill caches approved verdicts so a head SHA change that preserves both
+the patch and its effective immutable diff base does not trigger a fresh review
+run. A changed base forces a fresh review even when the patch hash matches. The
+cache key is the change identity computed by the algorithm in
+[github-queue-contract.md](./github-queue-contract.md#identity-algorithm).
 
 ```mermaid
 flowchart TD
     head[New head SHA observed]
     elig{Eligible?<br/>labels + checks}
     mat[Materialise workspace<br/>resolve PR base ref]
-    id[Compute patch_id<br/>+ integration_tree_id in integration_tree mode]
+    id[Compute patch_id against<br/>GitHub's structured PR base]
     nocache{No-cache label?}
     lookup{Approved attempt<br/>with same identity<br/>+ stored body?}
     republish[Re-publish stored review_body / review_event<br/>against new SHA<br/>insert carry-forward attempt row]
@@ -168,24 +172,21 @@ Three properties worth knowing:
 
 A PR carrying the configured no-cache label (default `review:no-cache`) is always re-reviewed even when the patch is unchanged.
 
-## Review surface modes
+## Review surface
 
-`reviewSurfaceMode` (per-repo config) selects what surface the reviewer reads. The cache key shape is coupled to the mode — see [github-queue-contract.md](./github-queue-contract.md#review-carry-forward) for the full contract.
-
-| Mode | What the reviewer reads | Cache key | Trade-off |
-|-|-|-|-|
-| `head` (default) | The PR head's diff against its base | `patch_id` only | Trivial rebases carry forward; semantic merge issues are caught at integration time by the lander's spec CI |
-| `integration_tree` | A synthetic merge commit (`git commit-tree tree -p base -p head`) checked out as the worktree | `(patch_id, integration_tree_id)` | Most base-advance rebases re-review (the integrated tree changes when main moves); semantic merge issues are caught at *review* time |
-
-In `integration_tree` mode, when `git merge-tree --write-tree` reports a real conflict, the attempt is marked declined with reason `cannot_integrate` rather than throwing. Publication is body-only (the inline-comments path is incompatible with publishing against a synthetic SHA the PR head doesn't know about); findings are embedded in the review body as file:line references.
+Review Quill has one review surface: the exact PR head diffed against GitHub's
+structured PR base. It captures `base.ref` and `base.sha`, resolves the
+merge-base to an immutable SHA for the run, and includes the captured base in
+deduplication and pre-publication revalidation. A stacked child therefore
+excludes its parent's changes naturally. Integration conflicts remain Merge
+Steward's responsibility, where the exact landing tree is built and tested.
 
 ## Operator-visible bus
 
-review-quill subscribes to and writes the following GitHub artifacts. Names are configurable per repo; defaults shown.
+review-quill reads and writes the following GitHub artifacts.
 
 | Artifact | Direction | Default name |
 |-|-|-|
-| `merge-steward/spec-ready` | Read (in `integration_tree` mode) — the lander signals "spec for this PR is at SHA X" | `merge-steward/spec-ready` |
 | No-cache PR label | Read | `review:no-cache` |
 | GitHub PR review (`APPROVE` / `REQUEST_CHANGES` / `COMMENT`) | Write | — |
 | `review-quill/verdict` check_run | Write | `review-quill/verdict` |

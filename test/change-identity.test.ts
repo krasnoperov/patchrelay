@@ -25,7 +25,7 @@ function setupRepo(): { dir: string; cleanup: () => void } {
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-test("returns patchId and integrationTreeId for a clean diff", () => {
+test("returns a stable patchId for a clean diff", () => {
   const { dir, cleanup } = setupRepo();
   try {
     git(dir, "checkout", "-q", "-b", "feature");
@@ -38,7 +38,6 @@ test("returns patchId and integrationTreeId for a clean diff", () => {
       baseRef: "main",
     });
     assert.ok(identity.patchId, "patchId should be present");
-    assert.ok(identity.integrationTreeId, "integrationTreeId should be present");
     assert.match(identity.patchId!, /^[0-9a-f]{40}$/, "patchId should be a 40-char hex");
   } finally {
     cleanup();
@@ -81,9 +80,8 @@ test("returns undefined fields gracefully on bad ref", () => {
       worktreePath: dir,
       baseRef: "no-such-ref",
     });
-    // Both identity values undefined; baseSha undefined.
+    // Patch identity is unavailable when the base SHA is unavailable.
     assert.equal(identity.patchId, undefined);
-    assert.equal(identity.integrationTreeId, undefined);
     assert.equal(identity.baseSha, undefined);
   } finally {
     cleanup();

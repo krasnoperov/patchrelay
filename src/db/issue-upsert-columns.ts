@@ -87,7 +87,6 @@ export const ISSUE_COLUMN_DEFS: Record<IssueColumnKey, IssueColumnDef> = {
   lastAttemptedFailureSignature: { column: "last_attempted_failure_signature" },
   lastAttemptedFailureAt: { column: "last_attempted_failure_at" },
   lastPublishedPatchId: { column: "last_published_patch_id" },
-  lastPublishedIntegrationTreeId: { column: "last_published_integration_tree_id" },
   lastPublishedHeadSha: { column: "last_published_head_sha" },
   parentPrBranch: { column: "parent_pr_branch" },
   ciRepairAttempts: { column: "ci_repair_attempts", insertDefault: 0 },
