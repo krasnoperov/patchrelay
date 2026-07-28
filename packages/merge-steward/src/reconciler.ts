@@ -63,10 +63,11 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
     // Truth guard: verify entry against GitHub before processing.
     if (await sanitizeEntry(ctx, entry)) {
       // Entry may have been terminalized (closed/duplicate) — clear any
-      // stale queue sub-state label it still carries.
+      // stale queue sub-state label it still carries. Stop this snapshot:
+      // later entries were ordered against topology that has now changed.
       const sanitized = ctx.store.getEntry(entry.id);
       if (sanitized) await syncQueueStateLabels(ctx, sanitized);
-      continue;
+      break;
     }
 
     // Stale dependency guard: if this entry's spec was built on top of
@@ -142,6 +143,12 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
     // while merging, cleared once merged/preparing/terminal.
     const post = ctx.store.getEntry(entry.id);
     if (post) await syncQueueStateLabels(ctx, post);
+    if (post && (post.status === "evicted" || post.status === "dequeued")) {
+      // Dependency readiness was computed before this terminal transition.
+      // Re-enter on the next tick so an independent root cannot reuse or
+      // rebuild through a child that just became blocked by its parent.
+      break;
+    }
   }
 
   await verifyMergedEntriesPostPush(ctx);
