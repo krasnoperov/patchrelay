@@ -181,6 +181,8 @@ test("merge-steward init and repo commands manage bootstrap state with explicit 
     assert.match(repoConfig, /"mergeQueueCheckName": "custom\/queue-eviction"/);
     const unit = readFileSync(path.join(systemdDir, "merge-steward.service"), "utf8");
     assert.match(unit, /^Restart=always$/m);
+    assert.match(unit, /^ExecStart=\/usr\/bin\/env merge-steward serve$/m);
+    assert.doesNotMatch(unit, /\.pnpm\/merge-steward@/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
