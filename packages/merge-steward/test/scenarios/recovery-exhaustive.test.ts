@@ -70,6 +70,47 @@ describe("restart recovery across persisted phases", () => {
     assert.equal(h.entries[0]?.status, "merged");
   });
 
+  it("does not test main again while GitHub is still recognizing an external merge", async () => {
+    const h = await createHarness();
+    await h.enqueue({
+      number: 704,
+      branch: "feature/merge-recognition-lag",
+      files: [{ path: "lag.ts", content: "landed" }],
+    });
+
+    // Advance main independently so the external merge creates a commit that
+    // contains the PR head rather than simply pointing main at that head.
+    await h.gitSim.commitFile("main-only.ts", "main", "advance main");
+    const merged = await h.gitSim.merge("feature/merge-recognition-lag", "main");
+    assert.equal(merged.success, true);
+
+    await h.tick(); // queued -> preparing_head
+    await h.tick(); // observe that main already contains the PR head
+
+    const waiting = h.entries[0]!;
+    assert.equal(waiting.status, "preparing_head");
+    assert.equal(waiting.candidateKind, null);
+    assert.equal(waiting.candidateSha, null);
+    assert.equal(h.ciSim.runCount, 0, "current main must not be re-tested as an integration candidate");
+    assert.match(waiting.waitDetail ?? "", /already contained in main/);
+    assert.equal(
+      h.reconcileEvents.filter((event) => event.action === "merge_waiting_recognition").length,
+      1,
+    );
+
+    await h.tick();
+    assert.equal(
+      h.reconcileEvents.filter((event) => event.action === "merge_waiting_recognition").length,
+      1,
+      "unchanged recognition lag must not emit or transition repeatedly",
+    );
+
+    h.githubSim.markMergedByBranch("feature/merge-recognition-lag");
+    await h.tick();
+    assert.equal(h.entries[0]?.status, "merged");
+    assert.deepEqual(h.merged, [704]);
+  });
+
   it("keeps an integration candidate and its CI run across restart", async () => {
     const h = await createHarness({ speculativeDepth: 2 });
     await h.enqueue({

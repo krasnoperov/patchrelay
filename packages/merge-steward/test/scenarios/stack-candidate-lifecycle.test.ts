@@ -88,6 +88,13 @@ describe("stack candidate lifecycle", () => {
       1,
       "unchanged dependency state should not emit on every tick",
     );
+    const blockedHead = blocked.headSha;
+    const mainAfterIndependent = await h.gitSim.headSha("main");
+    assert.equal(
+      await h.gitSim.isAncestor(blockedHead, mainAfterIndependent),
+      false,
+      "an independent root must rebuild without the now-blocked child",
+    );
 
     // Model the repaired attempt as a fresh branch tip based on current main.
     await h.gitSim.deleteBranch("broken-parent");
