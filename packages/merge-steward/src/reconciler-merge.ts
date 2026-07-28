@@ -1,8 +1,9 @@
 import type { CheckResult, QueueEntry } from "./types.ts";
 import type { ReconcileContext } from "./reconciler-core.ts";
-import { CLEAN_CI, CLEAN_SPEC, emit, isBudgetExhausted, ref } from "./reconciler-core.ts";
-import { cleanupSpec, evictEntry, invalidateDownstream } from "./reconciler-evict.ts";
+import { CLEAN_CANDIDATE_REF, CLEAN_CI, CLEAR_CANDIDATE, emit, isBudgetExhausted, ref } from "./reconciler-core.ts";
+import { cleanupCandidate, evictEntry, invalidateDownstream } from "./reconciler-evict.ts";
 import { verifyPostMergeStatus } from "./reconciler-post-merge.ts";
+import { evaluateCheckPolicy, formatRequiredCheck } from "./check-policy.ts";
 
 const DEFAULT_PR_MERGED_POLL_ATTEMPTS = 6;
 const DEFAULT_PR_MERGED_POLL_DELAY_MS = 2_000;
@@ -93,30 +94,18 @@ function classifyPushFailure(error: unknown, detail: string): PushFailureKind {
   return "github_push_rejected";
 }
 
-function normalizeCheckName(name: string): string {
-  return name.trim().toLowerCase();
-}
-
-function getMissingRequiredChecks(requiredChecks: string[], checks: Array<{ name: string }>): string[] {
-  if (requiredChecks.length === 0) {
-    return [];
-  }
-  const available = new Set(checks.map((check) => normalizeCheckName(check.name)).filter(Boolean));
-  return requiredChecks.filter((check) => !available.has(normalizeCheckName(check)));
-}
-
 function summarizeChecks(checks: CheckResult[], missingRequiredChecks: string[]): string {
   const visible = checks
     .filter((check) => check.name.trim())
     .map((check) => `${check.name}=${check.conclusion}`);
   const parts: string[] = [];
   if (visible.length > 0) {
-    parts.push(`spec checks ${visible.slice(0, 5).join(", ")}`);
+    parts.push(`candidate checks ${visible.slice(0, 5).join(", ")}`);
     if (visible.length > 5) {
       parts.push(`+${visible.length - 5} more`);
     }
   } else {
-    parts.push("no spec checks visible");
+    parts.push("no candidate checks visible");
   }
   if (missingRequiredChecks.length > 0) {
     parts.push(`missing required ${missingRequiredChecks.join(", ")}`);
@@ -124,50 +113,53 @@ function summarizeChecks(checks: CheckResult[], missingRequiredChecks: string[])
   return parts.join("; ");
 }
 
-async function inspectSpecChecks(ctx: ReconcileContext, specSha: string | null): Promise<{
+async function inspectCandidateChecks(ctx: ReconcileContext, candidateSha: string | null): Promise<{
   detail: string;
   failingChecks: CheckResult[];
   pendingChecks: CheckResult[];
   missingRequiredChecks: string[];
 }> {
-  if (!specSha) {
+  if (!candidateSha) {
     return {
-      detail: "spec checks unavailable: no spec SHA",
+      detail: "candidate checks unavailable: no candidate SHA",
       failingChecks: [],
       pendingChecks: [],
-      missingRequiredChecks: ctx.policy.getRequiredChecks(),
+      missingRequiredChecks: ctx.policy.getRequiredCheckRules().map(formatRequiredCheck),
     };
   }
 
   try {
-    const checks = await ctx.github.listChecksForRef(specSha);
-    const failingChecks = checks.filter((check) => check.conclusion === "failure");
-    const pendingChecks = checks.filter((check) => check.conclusion === "pending");
-    const missingRequiredChecks = getMissingRequiredChecks(ctx.policy.getRequiredChecks(), checks);
+    const checks = await ctx.github.listChecksForRef(candidateSha);
+    const evaluation = evaluateCheckPolicy(
+      ctx.policy.getRequiredCheckRules(),
+      ctx.policy.shouldRequireAllChecksOnEmptyRequiredSet(),
+      checks,
+    );
+    const missingRequiredChecks = evaluation.missing.map(formatRequiredCheck);
     return {
       detail: summarizeChecks(checks, missingRequiredChecks),
-      failingChecks,
-      pendingChecks,
+      failingChecks: evaluation.failing,
+      pendingChecks: evaluation.pending,
       missingRequiredChecks,
     };
   } catch (error) {
     return {
-      detail: `spec checks unavailable: ${describeError(error)}`,
+      detail: `candidate checks unavailable: ${describeError(error)}`,
       failingChecks: [],
       pendingChecks: [],
-      missingRequiredChecks: ctx.policy.getRequiredChecks(),
+      missingRequiredChecks: ctx.policy.getRequiredCheckRules().map(formatRequiredCheck),
     };
   }
 }
 
-async function verifySpecStillFastForwards(
+async function verifyCandidateStillFastForwards(
   ctx: ReconcileContext,
-  specSha: string,
+  candidateSha: string,
 ): Promise<{ currentBase: string | null; isFastForward: boolean | null; detail?: string }> {
   try {
     await ctx.git.fetch();
     const currentBase = await ctx.git.headSha(ref(ctx, ctx.baseBranch));
-    const isFastForward = await ctx.git.isAncestor(currentBase, specSha);
+    const isFastForward = await ctx.git.isAncestor(currentBase, candidateSha);
     return { currentBase, isFastForward };
   } catch (error) {
     return {
@@ -184,8 +176,19 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
 
   if (prStatus.merged) {
     emit(ctx, entry, "merge_external");
-    ctx.store.transition(entry.id, "merged", CLEAN_SPEC, "merged externally");
-    await cleanupSpec(ctx, entry);
+    ctx.store.transition(entry.id, "merged", CLEAN_CANDIDATE_REF, "merged externally");
+    await cleanupCandidate(ctx, entry);
+    return;
+  }
+
+  if (!prStatus.mergeable) {
+    emit(ctx, entry, "sanitized_closed", {
+      detail: `PR #${entry.prNumber} closed before landing`,
+    });
+    const allActive = ctx.store.listActive(ctx.repoId);
+    await cleanupCandidate(ctx, entry);
+    ctx.store.transition(entry.id, "dequeued", CLEAN_CANDIDATE_REF, "PR closed before landing");
+    await invalidateDownstream(ctx, allActive, 0);
     return;
   }
 
@@ -203,13 +206,32 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
   if (prStatus.headSha !== entry.headSha) {
     emit(ctx, entry, "branch_mismatch", { detail: `PR head: expected ${entry.headSha.slice(0, 8)}, got ${prStatus.headSha.slice(0, 8)}` });
     const allActive = ctx.store.listActive(ctx.repoId);
+    await cleanupCandidate(ctx, entry);
     ctx.store.updateHead(entry.id, prStatus.headSha);
     await invalidateDownstream(ctx, allActive, 0);
     return;
   }
 
-  if (!entry.specBranch || !entry.specSha) {
-    ctx.store.transition(entry.id, "preparing_head", { ...CLEAN_CI, ...CLEAN_SPEC }, "no spec branch, re-prepare");
+  const liveBaseRefName = prStatus.baseRefName ?? ctx.baseBranch;
+  const recordedBaseRefName = entry.baseRefName ?? ctx.baseBranch;
+  if (liveBaseRefName !== recordedBaseRefName) {
+    emit(ctx, entry, "invalidated", {
+      detail: `PR base changed from ${recordedBaseRefName} to ${liveBaseRefName}`,
+    });
+    const allActive = ctx.store.listActive(ctx.repoId);
+    await cleanupCandidate(ctx, entry);
+    ctx.store.updateBaseRef(
+      entry.id,
+      liveBaseRefName,
+      `PR base changed from ${recordedBaseRefName} to ${liveBaseRefName}`,
+    );
+    await invalidateDownstream(ctx, allActive, 0);
+    return;
+  }
+
+  const validatedHead = entry.candidateKind === "head";
+  if ((!entry.candidateRef || !entry.candidateSha) && !validatedHead) {
+    ctx.store.transition(entry.id, "preparing_head", { ...CLEAN_CI, ...CLEAR_CANDIDATE }, "no integration candidate, re-prepare");
     return;
   }
 
@@ -217,33 +239,145 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
   try {
     await ctx.git.fetch();
     currentBase = await ctx.git.headSha(ref(ctx, ctx.baseBranch));
-    const isFF = await ctx.git.isAncestor(currentBase, entry.specSha);
+    const policyRefresh = await ctx.policy.refreshBeforeLanding("candidate_landing");
+    if (policyRefresh.changed) {
+      emit(ctx, entry, "policy_changed", {
+        detail: `GitHub required checks changed from [${policyRefresh.previousRequiredChecks.join(", ") || "(none)"}] to [${policyRefresh.requiredChecks.join(", ") || "(none)"}]`,
+      });
+    }
+    if (validatedHead) {
+      if (entry.candidateSha !== entry.headSha) {
+        const detail = "head candidate SHA no longer matches the admitted PR head";
+        emit(ctx, entry, "invalidated", { detail });
+        ctx.store.transition(
+          entry.id,
+          "preparing_head",
+          { ...CLEAN_CI, ...CLEAR_CANDIDATE },
+          detail,
+        );
+        return;
+      }
+    }
+    const landingSha = validatedHead ? entry.headSha : entry.candidateSha!;
+    const candidateChecks = await ctx.github.listChecksForRef(landingSha);
+    const checkEvaluation = evaluateCheckPolicy(
+      ctx.policy.getRequiredCheckRules(),
+      ctx.policy.shouldRequireAllChecksOnEmptyRequiredSet(),
+      candidateChecks,
+    );
+    if (checkEvaluation.status !== "pass") {
+      const missing = checkEvaluation.missing.map(formatRequiredCheck);
+      const detail = missing.length > 0
+        ? `candidate checks missing under current policy: ${missing.join(", ")}`
+        : `candidate checks are ${checkEvaluation.status} under current policy`;
+      emit(ctx, entry, "invalidated", { detail });
+      ctx.store.transition(entry.id, "validating", { waitDetail: detail }, detail);
+      return;
+    }
+    const isFF = await ctx.git.isAncestor(currentBase, landingSha);
     if (!isFF) {
-      emit(ctx, entry, "branch_mismatch", { detail: `spec is not a fast-forward from main (${currentBase.slice(0, 8)})` });
+      emit(ctx, entry, "branch_mismatch", {
+        detail: `candidate is not a fast-forward from main (${currentBase.slice(0, 8)})`,
+      });
       const allActive = ctx.store.listActive(ctx.repoId);
-      ctx.store.transition(entry.id, "preparing_head", { ...CLEAN_CI, ...CLEAN_SPEC }, "main diverged, re-prepare");
+      ctx.store.transition(entry.id, "preparing_head", { ...CLEAN_CI, ...CLEAR_CANDIDATE }, "main diverged, re-prepare");
       await invalidateDownstream(ctx, allActive, 0);
       return;
     }
-  } catch {
-    // Can't verify — proceed and let push fail if needed.
+
+    // GitHub PR truth is deliberately the final remote read before the push.
+    // This common gate applies to both exact-head and integration candidates;
+    // neither may land after a force-push, retarget, external merge, or
+    // approval revocation during policy/check/ancestry revalidation.
+    const landingPrStatus = await ctx.github.getStatus(entry.prNumber);
+    if (landingPrStatus.merged) {
+      emit(ctx, entry, "merge_external");
+      ctx.store.transition(entry.id, "merged", CLEAN_CANDIDATE_REF, "merged externally during landing revalidation");
+      await cleanupCandidate(ctx, entry);
+      return;
+    }
+    if (!landingPrStatus.mergeable) {
+      emit(ctx, entry, "sanitized_closed", {
+        detail: `PR #${entry.prNumber} closed during landing revalidation`,
+      });
+      const allActive = ctx.store.listActive(ctx.repoId);
+      await cleanupCandidate(ctx, entry);
+      ctx.store.transition(entry.id, "dequeued", CLEAN_CANDIDATE_REF, "PR closed during landing revalidation");
+      await invalidateDownstream(ctx, allActive, 0);
+      return;
+    }
+    if (landingPrStatus.headSha !== entry.headSha) {
+      emit(ctx, entry, "branch_mismatch", {
+        detail: `PR head changed during landing: expected ${entry.headSha.slice(0, 8)}, got ${landingPrStatus.headSha.slice(0, 8)}`,
+      });
+      const allActive = ctx.store.listActive(ctx.repoId);
+      await cleanupCandidate(ctx, entry);
+      ctx.store.updateHead(entry.id, landingPrStatus.headSha);
+      await invalidateDownstream(ctx, allActive, 0);
+      return;
+    }
+    const landingBaseRefName = landingPrStatus.baseRefName ?? ctx.baseBranch;
+    if (landingBaseRefName !== recordedBaseRefName) {
+      emit(ctx, entry, "invalidated", {
+        detail: `PR base changed during landing from ${recordedBaseRefName} to ${landingBaseRefName}`,
+      });
+      const allActive = ctx.store.listActive(ctx.repoId);
+      await cleanupCandidate(ctx, entry);
+      ctx.store.updateBaseRef(
+        entry.id,
+        landingBaseRefName,
+        `PR base changed during landing from ${recordedBaseRefName} to ${landingBaseRefName}`,
+      );
+      await invalidateDownstream(ctx, allActive, 0);
+      return;
+    }
+    if (!landingPrStatus.reviewApproved) {
+      const detail = landingPrStatus.reviewDecision === "CHANGES_REQUESTED"
+        ? "blocking review appeared during landing"
+        : "approval was withdrawn during landing";
+      emit(ctx, entry, "merge_waiting_approval", { detail });
+      ctx.store.transition(entry.id, "merging", { waitDetail: detail }, detail);
+      return;
+    }
+
+    const currentPolicyFingerprint = ctx.policy.getFingerprint();
+    if (entry.candidatePolicyFingerprint !== currentPolicyFingerprint) {
+      ctx.store.transition(entry.id, "merging", {
+        candidatePolicyFingerprint: currentPolicyFingerprint,
+      }, `candidate revalidated under policy ${currentPolicyFingerprint.slice(0, 12)}`);
+    }
+  } catch (error) {
+    const detail = `candidate revalidation unavailable: ${describeError(error)}`;
+    emit(ctx, entry, "invalidated", { detail });
+    ctx.store.transition(
+      entry.id,
+      validatedHead ? "preparing_head" : "validating",
+      validatedHead ? { ...CLEAN_CI, ...CLEAR_CANDIDATE, waitDetail: detail } : { waitDetail: detail },
+      detail,
+    );
+    return;
   }
 
-  // The queue gates only on its own spec CI. main's CI status is irrelevant to
-  // landing: the spec was built on current main (the fast-forward check above
-  // guarantees main hasn't diverged) and its checks passed, so pushing it advances
+  // The queue gates only on the exact candidate's CI. main's CI status is
+  // irrelevant to landing: the candidate includes current main (the fast-forward
+  // check above guarantees main has not diverged) and its checks passed, so pushing it advances
   // main to a green SHA. We never wait for main's own CI to settle, and never pause
   // the queue because main is red — a red main is either flaky or fixed by landing
-  // this green spec. main CI is information-only (out-of-band breakage canary).
+  // this green candidate. main CI is information-only (out-of-band breakage canary).
 
   try {
-    await ctx.git.push(entry.specBranch, false, ctx.baseBranch);
+    // The eligibility proof is SHA-bound. Never substitute the mutable remote
+    // tracking branch here: a force-push fetched between status reads could
+    // otherwise validate H1 and land H2. Git accepts an object ID as the
+    // source side of a push refspec, so push the exact validated commit.
+    await ctx.git.push(entry.candidateSha!, false, ctx.baseBranch);
   } catch (error) {
     const pushErrorDetail = describeError(error);
     const pushFailureKind = classifyPushFailure(error, pushErrorDetail);
-    const fastForward = entry.specSha
-      ? await verifySpecStillFastForwards(ctx, entry.specSha)
-      : { currentBase: null, isFastForward: null, detail: "fast-forward verification unavailable: no spec SHA" };
+    const landingSha = validatedHead ? entry.headSha : entry.candidateSha;
+    const fastForward = landingSha
+      ? await verifyCandidateStillFastForwards(ctx, landingSha)
+      : { currentBase: null, isFastForward: null, detail: "fast-forward verification unavailable: no candidate SHA" };
 
     try {
       const refresh = await ctx.policy.refreshOnIssue("merge_push_rejected");
@@ -251,7 +385,7 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
         emit(ctx, entry, "policy_changed", {
           detail: `GitHub required checks changed from [${refresh.previousRequiredChecks.join(", ") || "(none)"}] to [${refresh.requiredChecks.join(", ") || "(none)"}]`,
         });
-        ctx.store.transition(entry.id, "preparing_head", { ...CLEAN_CI, ...CLEAN_SPEC }, "GitHub protection changed, re-preparing");
+        ctx.store.transition(entry.id, "preparing_head", { ...CLEAN_CI, ...CLEAR_CANDIDATE }, "GitHub protection changed, re-preparing");
         const allActive = ctx.store.listActive(ctx.repoId);
         await invalidateDownstream(ctx, allActive, 0);
         return;
@@ -260,14 +394,14 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
       // Fall through to the normal push failure handling when policy refresh is unavailable.
     }
 
-    const checkState = await inspectSpecChecks(ctx, entry.specSha);
+    const checkState = await inspectCandidateChecks(ctx, landingSha);
     const detail = [
       `push to ${ctx.baseBranch} failed (${pushFailureKind})`,
-      `spec ${shortSha(entry.specSha)}`,
+      `candidate ${shortSha(landingSha)}`,
       `main ${shortSha(fastForward.currentBase ?? currentBase)}`,
       fastForward.isFastForward === null
         ? fastForward.detail
-        : `spec fast-forward ${fastForward.isFastForward ? "yes" : "no"}`,
+        : `candidate fast-forward ${fastForward.isFastForward ? "yes" : "no"}`,
       checkState.detail,
       pushErrorDetail,
     ].filter((part): part is string => Boolean(part && part.trim())).join("; ");
@@ -292,7 +426,7 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
         ctx.store.transition(entry.id, "preparing_head", {
           retryAttempts: entry.retryAttempts + 1,
           ...CLEAN_CI,
-          ...CLEAN_SPEC,
+          ...CLEAR_CANDIDATE,
         }, `push failed, retry ${entry.retryAttempts + 1}/${entry.maxRetries}`);
       }
       await invalidateDownstream(ctx, allActive, 0);
@@ -301,31 +435,40 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
 
     if (isBudgetExhausted(entry)) {
       emit(ctx, entry, "budget_exhausted", {
-        detail: "push retry budget exhausted; keeping validated spec for GitHub recovery",
+        detail: "push retry budget exhausted; keeping validated candidate for GitHub recovery",
       });
     }
 
     ctx.store.transition(entry.id, "merging", {
       retryAttempts: Math.min(entry.retryAttempts + 1, entry.maxRetries),
       waitDetail: detail,
-    }, `push failed, keeping validated spec: ${detail}`);
+    }, `push failed, keeping validated candidate: ${detail}`);
     return;
   }
 
+  if (validatedHead) {
+    emit(ctx, entry, "head_candidate_landed", {
+      baseSha: currentBase ?? undefined,
+      candidateKind: "head",
+      candidateSha: entry.headSha,
+      policyFingerprint: ctx.policy.getFingerprint(),
+      detail: `validated head ${entry.headSha.slice(0, 8)} fast-forwarded to ${ctx.baseBranch}`,
+    });
+  }
   emit(ctx, entry, "merge_succeeded");
   const verificationResult = await verifyPostMergeStatus(ctx, {
     ...entry,
-    postMergeSha: entry.specSha ?? entry.headSha,
+    postMergeSha: validatedHead ? entry.headSha : entry.candidateSha ?? entry.headSha,
   });
   ctx.store.transition(entry.id, "merged", {
-    ...CLEAN_SPEC,
+    ...CLEAN_CANDIDATE_REF,
     postMergeStatus: verificationResult.postMergeStatus,
     postMergeSha: verificationResult.postMergeSha,
     postMergeSummary: verificationResult.postMergeSummary,
     postMergeCheckedAt: new Date().toISOString(),
-  }, `spec pushed to main; ${verificationResult.postMergeSummary}`);
+  }, `${validatedHead ? "validated head" : "integration candidate"} pushed to main; ${verificationResult.postMergeSummary}`);
 
-  await cleanupSpec(ctx, entry);
+  await cleanupCandidate(ctx, entry);
 
   await deletePrBranchAfterGitHubMarksMerged(ctx, entry);
 }

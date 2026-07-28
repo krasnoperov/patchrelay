@@ -31,6 +31,7 @@ export class MergeStewardRuntime {
 
   async start(): Promise<void> {
     this.logger.info({ pollIntervalMs: this.config.pollIntervalMs }, "Steward service starting");
+    await this.recoverTerminalQueueLabels();
     this.scheduleNextTick();
   }
 
@@ -74,6 +75,35 @@ export class MergeStewardRuntime {
 
   getGitHubPolicy() {
     return this.policy.getSnapshot();
+  }
+
+  private async recoverTerminalQueueLabels(): Promise<void> {
+    const managed = [this.config.queueTestingLabel, this.config.queueMergingLabel].filter(Boolean);
+    if (managed.length === 0) return;
+
+    // A crash can happen after the durable terminal transition but before the
+    // best-effort label edit. At most the newest landing can be in that window;
+    // checking three recent rows leaves margin without scanning queue history.
+    for (const entry of this.store.listRecentTerminal(this.config.repoId, 3)) {
+      try {
+        const current = await this.github.listLabels(entry.prNumber);
+        const remove = managed.filter((label) => current.includes(label));
+        if (remove.length === 0) continue;
+        await this.github.setLabels(entry.prNumber, { remove });
+        this.logger.info({
+          prNumber: entry.prNumber,
+          entryId: entry.id,
+          labels: remove,
+        }, "Recovered stale queue labels from a terminal entry");
+      } catch (error) {
+        // Webhooks and later restarts provide another cleanup opportunity.
+        this.logger.warn({
+          prNumber: entry.prNumber,
+          entryId: entry.id,
+          err: error,
+        }, "Could not recover terminal queue labels");
+      }
+    }
   }
 
   private scheduleNextTick(): void {
@@ -146,7 +176,7 @@ export class MergeStewardRuntime {
         },
         onEvent: (event) => {
           this.lastReconcileEvent = summarizeReconcileEvent(event);
-          const isWarn = event.action === "evicted" || event.action === "spec_build_conflict"
+          const isWarn = event.action === "evicted" || event.action === "integration_build_conflict"
             || event.action === "ci_failed"
             || event.action === "merge_rejected" || event.action === "budget_exhausted";
           const isDebug = event.action === "ci_pending" || event.action === "retry_gated"
@@ -183,6 +213,8 @@ function summarizeReconcileEvent(event: ReconcileEvent): ReconcileEventSummary {
     action: event.action,
     ...(event.detail ? { detail: event.detail } : {}),
     ...(event.ciRunId ? { ciRunId: event.ciRunId } : {}),
-    ...(event.specBranch ? { specBranch: event.specBranch } : {}),
+    ...(event.candidateRef ? { candidateRef: event.candidateRef } : {}),
+    ...(event.candidateKind ? { candidateKind: event.candidateKind } : {}),
+    ...(event.candidateSha ? { candidateSha: event.candidateSha } : {}),
   };
 }

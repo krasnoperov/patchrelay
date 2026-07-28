@@ -7,6 +7,7 @@ import type {
   IncidentRecord,
 } from "./types.ts";
 import { TERMINAL_STATUSES } from "./types.ts";
+import { orderActiveQueue } from "./queue-order.ts";
 
 function isoNow(): string {
   return new Date().toISOString();
@@ -47,10 +48,9 @@ export class MemoryStore implements QueueStore {
   }
 
   listActive(repoId: string): QueueEntry[] {
-    return [...this.entries.values()]
+    return orderActiveQueue([...this.entries.values()]
       .filter((e) => e.repoId === repoId && !TERMINAL_STATUSES.includes(e.status))
-      .sort((a, b) => (b.priority - a.priority) || (a.position - b.position))
-      .map((e) => ({ ...e }));
+      .map((e) => ({ ...e })));
   }
 
   listPostMergePending(repoId: string): QueueEntry[] {
@@ -58,6 +58,15 @@ export class MemoryStore implements QueueStore {
       .filter((e) => e.repoId === repoId && e.status === "merged"
         && e.postMergeStatus !== "pass" && e.postMergeStatus !== "fail")
       .sort((a, b) => a.position - b.position)
+      .map((e) => ({ ...e }));
+  }
+
+  listRecentTerminal(repoId: string, limit = 3): QueueEntry[] {
+    return [...this.entries.values()]
+      .filter((e) => e.repoId === repoId && TERMINAL_STATUSES.includes(e.status))
+      .sort((a, b) =>
+        (b.decidedAt ?? b.updatedAt).localeCompare(a.decidedAt ?? a.updatedAt))
+      .slice(0, limit)
       .map((e) => ({ ...e }));
   }
 
@@ -76,7 +85,7 @@ export class MemoryStore implements QueueStore {
   transition(
     entryId: string,
     to: QueueEntryStatus,
-    patch?: Partial<Pick<QueueEntry, "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" | "lastFailedBaseSha" | "specBranch" | "specSha" | "specBasedOn" | "waitDetail" | "postMergeStatus" | "postMergeSha" | "postMergeSummary" | "postMergeCheckedAt" | "headPatchId" | "specTreeId">>,
+    patch?: Partial<Pick<QueueEntry, "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" | "lastFailedBaseSha" | "candidateKind" | "candidatePolicyFingerprint" | "candidateRef" | "candidateSha" | "candidateBasedOn" | "waitDetail" | "postMergeStatus" | "postMergeSha" | "postMergeSummary" | "postMergeCheckedAt">>,
     detail?: string,
   ): void {
     const entry = this.entries.get(entryId);
@@ -95,9 +104,13 @@ export class MemoryStore implements QueueStore {
       if (patch.ciRetries !== undefined) entry.ciRetries = patch.ciRetries;
       if (patch.retryAttempts !== undefined) entry.retryAttempts = patch.retryAttempts;
       if (patch.lastFailedBaseSha !== undefined) entry.lastFailedBaseSha = patch.lastFailedBaseSha;
-      if (patch.specBranch !== undefined) entry.specBranch = patch.specBranch;
-      if (patch.specSha !== undefined) entry.specSha = patch.specSha;
-      if (patch.specBasedOn !== undefined) entry.specBasedOn = patch.specBasedOn;
+      if (patch.candidateKind !== undefined) entry.candidateKind = patch.candidateKind;
+      if (patch.candidatePolicyFingerprint !== undefined) {
+        entry.candidatePolicyFingerprint = patch.candidatePolicyFingerprint;
+      }
+      if (patch.candidateRef !== undefined) entry.candidateRef = patch.candidateRef;
+      if (patch.candidateSha !== undefined) entry.candidateSha = patch.candidateSha;
+      if (patch.candidateBasedOn !== undefined) entry.candidateBasedOn = patch.candidateBasedOn;
       if (patch.waitDetail !== undefined) entry.waitDetail = patch.waitDetail;
       if (patch.postMergeStatus !== undefined) {
         entry.postMergeStatus = patch.postMergeStatus;
@@ -105,48 +118,11 @@ export class MemoryStore implements QueueStore {
       if (patch.postMergeSha !== undefined) entry.postMergeSha = patch.postMergeSha;
       if (patch.postMergeSummary !== undefined) entry.postMergeSummary = patch.postMergeSummary;
       if (patch.postMergeCheckedAt !== undefined) entry.postMergeCheckedAt = patch.postMergeCheckedAt;
-      if (patch.headPatchId !== undefined) entry.headPatchId = patch.headPatchId;
-      if (patch.specTreeId !== undefined) entry.specTreeId = patch.specTreeId;
     }
     if (from !== to && patch?.waitDetail === undefined) {
       entry.waitDetail = null;
     }
     this.appendEvent(entryId, from, to, detail);
-  }
-
-  rebuildSpecHeadEquivalent(
-    entryId: string,
-    patch: {
-      headSha: string;
-      specSha: string;
-      specBranch: string;
-      headPatchId: string;
-      specTreeId: string;
-      ciRunId: string | null;
-    },
-    detail?: string,
-  ): void {
-    const entry = this.entries.get(entryId);
-    if (!entry || TERMINAL_STATUSES.includes(entry.status)) return;
-    const from = entry.status;
-    entry.headSha = patch.headSha;
-    entry.status = "validating";
-    entry.generation++;
-    entry.ciRunId = patch.ciRunId;
-    entry.ciRetries = 0;
-    entry.retryAttempts = 0;
-    entry.lastFailedBaseSha = null;
-    entry.specBranch = patch.specBranch;
-    entry.specSha = patch.specSha;
-    entry.headPatchId = patch.headPatchId;
-    entry.specTreeId = patch.specTreeId;
-    entry.waitDetail = null;
-    entry.postMergeStatus = null;
-    entry.postMergeSha = null;
-    entry.postMergeSummary = null;
-    entry.postMergeCheckedAt = null;
-    entry.updatedAt = isoNow();
-    this.appendEvent(entryId, from, "validating", detail ?? `patch-id-equivalent rebuild: generation ${entry.generation}`);
   }
 
   dequeue(entryId: string): void {
@@ -164,18 +140,38 @@ export class MemoryStore implements QueueStore {
     entry.ciRetries = 0;
     entry.retryAttempts = 0;
     entry.lastFailedBaseSha = null;
-    entry.specBranch = null;
-    entry.specSha = null;
-    entry.specBasedOn = null;
+    entry.candidateKind = null;
+    entry.candidatePolicyFingerprint = null;
+    entry.candidateRef = null;
+    entry.candidateSha = null;
+    entry.candidateBasedOn = null;
     entry.waitDetail = null;
     entry.postMergeStatus = null;
     entry.postMergeSha = null;
     entry.postMergeSummary = null;
     entry.postMergeCheckedAt = null;
-    entry.headPatchId = null;
-    entry.specTreeId = null;
     entry.updatedAt = isoNow();
     this.appendEvent(entryId, from, "queued", `updateHead: generation ${entry.generation}`);
+  }
+
+  updateBaseRef(entryId: string, baseRefName: string | null, detail?: string): void {
+    const entry = this.entries.get(entryId);
+    if (!entry || TERMINAL_STATUSES.includes(entry.status) || entry.baseRefName === baseRefName) return;
+    const from = entry.status;
+    entry.baseRefName = baseRefName;
+    entry.status = "queued";
+    entry.ciRunId = null;
+    entry.ciRetries = 0;
+    entry.retryAttempts = 0;
+    entry.lastFailedBaseSha = null;
+    entry.candidateKind = null;
+    entry.candidatePolicyFingerprint = null;
+    entry.candidateRef = null;
+    entry.candidateSha = null;
+    entry.candidateBasedOn = null;
+    entry.waitDetail = null;
+    entry.updatedAt = isoNow();
+    this.appendEvent(entryId, from, "queued", detail ?? `base ref changed to ${baseRefName ?? "(default)"}`);
   }
 
   updatePriority(entryId: string, priority: number, detail?: string): void {

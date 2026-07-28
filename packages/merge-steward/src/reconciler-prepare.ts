@@ -1,6 +1,6 @@
 import type { MergeResult, QueueEntry } from "./types.ts";
 import type { ReconcileContext } from "./reconciler-core.ts";
-import { CLEAN_CI, CLEAN_SPEC, emit, isBudgetExhausted, isRetryGated, ref, specBranchName } from "./reconciler-core.ts";
+import { CLEAN_CI, CLEAR_CANDIDATE, emit, isRetryGated, ref, candidateRefName } from "./reconciler-core.ts";
 import { evictEntry } from "./reconciler-evict.ts";
 
 export async function prepareEntry(
@@ -12,7 +12,7 @@ export async function prepareEntry(
   emit(ctx, entry, "fetch_started");
   await ctx.git.fetch();
 
-  const base = isHead ? ref(ctx, ctx.baseBranch) : prevEntry?.specBranch ?? null;
+  const base = isHead ? ref(ctx, ctx.baseBranch) : prevEntry?.candidateSha ?? null;
   if (!base) return;
 
   const baseSha = await ctx.git.headSha(base);
@@ -20,59 +20,58 @@ export async function prepareEntry(
   const currentRef = await ctx.git.headSha(ref(ctx, entry.branch));
   if (currentRef !== entry.headSha) {
     emit(ctx, entry, "branch_mismatch", { detail: `expected ${entry.headSha.slice(0, 8)}, got ${currentRef.slice(0, 8)}` });
-
-    // Plan §5.3: patch-id-aware short-circuit. If the new head is
-    // patch-id-equivalent to the prior head AND the freshly merged
-    // tree matches the cached spec tree, rebuild the spec commit
-    // with the new head as its second parent so GitHub still marks
-    // the PR merged after the lander's fast-forward — but skip the
-    // prepare cycle. CI must re-run on the new spec SHA (check_runs
-    // are SHA-anchored). Falls back to the standard `updateHead`
-    // path if the git plumbing is unavailable or if the identities
-    // don't match.
-    const shortCircuited = await tryPatchIdEquivalentRebuild(ctx, entry, base, currentRef);
-    if (shortCircuited) return;
-
     ctx.store.updateHead(entry.id, currentRef);
     return;
   }
 
-  if (isHead) {
-    // Preparing/validating the head never waits on main's CI: the spec is built on
-    // current main and gated solely on its own checks. main's health is information-only.
-
-    if (isBudgetExhausted(entry) && entry.lastFailedBaseSha !== null) {
-      emit(ctx, entry, "budget_exhausted", { baseSha });
+  // Preparing/validating the head never waits on main's CI. The exact
+  // candidate includes current main and is gated solely by its own checks.
+  //
+  // The conflict cache applies at every lookahead depth. A downstream child
+  // otherwise rebuilds the same impossible merge on every reconcile tick
+  // while its predecessor is still validating.
+  if (isRetryGated(entry, baseSha)) {
+    emit(ctx, entry, "retry_gated", {
+      baseSha,
+      detail: "same base and head already produced a deterministic conflict",
+    });
+    if (isHead) {
       await evictEntry(ctx, entry, "integration_conflict");
-      return;
+    } else if (entry.waitDetail !== "deterministic conflict; waiting for prospective base to change") {
+      ctx.store.transition(entry.id, "preparing_head", {
+        waitDetail: "deterministic conflict; waiting for prospective base to change",
+      }, "deterministic conflict cached; waiting for prospective base to change");
     }
-
-    if (isRetryGated(entry, baseSha)) {
-      try {
-        const prStatus = await ctx.github.getStatus(entry.prNumber);
-        if (prStatus.mergeStateStatus === "DIRTY") {
-          emit(ctx, entry, "budget_exhausted", {
-            baseSha,
-            detail: "retry gated and GitHub still reports merge conflict",
-          });
-          await evictEntry(ctx, entry, "integration_conflict");
-          return;
-        }
-        emit(ctx, entry, "retry_gated", { baseSha, detail: "local conflict but GitHub reports CLEAN, retrying" });
-        ctx.store.transition(entry.id, "preparing_head", {
-          lastFailedBaseSha: null,
-          ...CLEAN_CI,
-          ...CLEAN_SPEC,
-        }, "GitHub reports CLEAN, clearing retry gate");
-      } catch {
-        emit(ctx, entry, "retry_gated", { baseSha, detail: "base unchanged since last conflict" });
-      }
-      return;
-    }
+    return;
   }
 
-  const specName = specBranchName(entry.id);
-  emit(ctx, entry, "spec_build_started", { specBranch: specName, baseSha, ...(prevEntry ? { dependsOn: prevEntry.id } : {}) });
+  // Candidate selection is structural, not a separate fast-forward workflow.
+  // If the prospective base is already an ancestor of the PR head, that exact
+  // immutable head is the future main candidate and its existing SHA-bound
+  // checks are the only checks that can authorize it.
+  if (await ctx.git.isAncestor(baseSha, entry.headSha)) {
+    emit(ctx, entry, "candidate_selected", {
+      candidateKind: "head",
+      candidateSha: entry.headSha,
+      baseSha,
+      policyFingerprint: ctx.policy.getFingerprint(),
+      ...(prevEntry ? { dependsOn: prevEntry.id } : {}),
+    });
+    ctx.store.transition(entry.id, "validating", {
+      baseSha,
+      ...CLEAN_CI,
+      candidateKind: "head",
+      candidatePolicyFingerprint: ctx.policy.getFingerprint(),
+      candidateRef: null,
+      candidateSha: entry.headSha,
+      candidateBasedOn: isHead ? null : prevEntry!.id,
+      waitDetail: null,
+    }, `head candidate ${entry.headSha.slice(0, 12)} selected on ${baseSha.slice(0, 12)}`);
+    return;
+  }
+
+  const specName = candidateRefName(entry.id);
+  emit(ctx, entry, "integration_build_started", { candidateRef: specName, baseSha, ...(prevEntry ? { dependsOn: prevEntry.id } : {}) });
 
   const branchSuffix = entry.branch.replace(/^.*\//, "").replace(/-/g, " ");
   const mergeMessage = `Merge PR #${entry.prNumber}: ${branchSuffix}`;
@@ -82,155 +81,64 @@ export async function prepareEntry(
     result = await ctx.specBuilder.buildSpeculative(entry.branch, base, specName, mergeMessage);
   } catch (err) {
     if (isHead) {
-      const detail = `git error during spec build: ${err instanceof Error ? err.message : String(err)}`;
+      const detail = `git error during candidate build: ${err instanceof Error ? err.message : String(err)}`;
       emit(ctx, entry, "branch_unreachable", { baseSha, detail });
       await evictEntry(ctx, entry, "branch_local");
     } else {
-      emit(ctx, entry, "invalidated", { detail: "stale spec branch, rebuilding" });
-      ctx.store.transition(prevEntry!.id, "preparing_head", { ...CLEAN_CI, ...CLEAN_SPEC }, "spec branch missing, rebuilding");
-      ctx.store.transition(entry.id, "preparing_head", { ...CLEAN_CI, ...CLEAN_SPEC }, "stale dependency, rebuilding");
+      emit(ctx, entry, "invalidated", { detail: "stale integration candidate, rebuilding" });
+      ctx.store.transition(prevEntry!.id, "preparing_head", { ...CLEAN_CI, ...CLEAR_CANDIDATE }, "candidate ref missing, rebuilding");
+      ctx.store.transition(entry.id, "preparing_head", { ...CLEAN_CI, ...CLEAR_CANDIDATE }, "stale dependency, rebuilding");
     }
     return;
   }
 
   if (!result.success) {
-    emit(ctx, entry, "spec_build_conflict", { baseSha, conflictFiles: result.conflictFiles });
-    if (isBudgetExhausted(entry)) {
-      emit(ctx, entry, "budget_exhausted");
+    emit(ctx, entry, "integration_build_conflict", { baseSha, conflictFiles: result.conflictFiles });
+    if (isHead) {
       await evictEntry(ctx, entry, "integration_conflict",
         result.conflictFiles ? { conflictFiles: result.conflictFiles } : undefined);
     } else {
       ctx.store.transition(entry.id, "preparing_head", {
-        retryAttempts: entry.retryAttempts + 1,
+        baseSha,
         lastFailedBaseSha: baseSha,
         ...CLEAN_CI,
-        ...CLEAN_SPEC,
-      }, `conflict on ${baseSha.slice(0, 8)}, retry ${entry.retryAttempts + 1}/${entry.maxRetries}`);
+        ...CLEAR_CANDIDATE,
+      }, `deterministic conflict cached for ${baseSha.slice(0, 8)} and head ${entry.headSha.slice(0, 8)}`);
     }
     return;
   }
 
-  const specSha = result.sha ?? entry.headSha;
-  emit(ctx, entry, "spec_build_succeeded", { specBranch: specName, ...(prevEntry ? { dependsOn: prevEntry.id } : {}) });
+  const candidateSha = result.sha ?? entry.headSha;
+  emit(ctx, entry, "integration_build_succeeded", {
+    candidateRef: specName,
+    candidateKind: "integration",
+    candidateSha: candidateSha,
+    baseSha,
+    policyFingerprint: ctx.policy.getFingerprint(),
+    ...(prevEntry ? { dependsOn: prevEntry.id } : {}),
+  });
+  emit(ctx, entry, "candidate_selected", {
+    candidateRef: specName,
+    candidateKind: "integration",
+    candidateSha: candidateSha,
+    baseSha,
+    policyFingerprint: ctx.policy.getFingerprint(),
+    ...(prevEntry ? { dependsOn: prevEntry.id } : {}),
+  });
 
   await ctx.git.push(specName, true);
 
-  // Plan §5.2: emit `merge-steward/spec-ready` on the PR head so
-  // review-quill (and any other consumer) can react to spec
-  // availability via the GitHub bus instead of polling. Best-effort —
-  // failures are caught inside the reporter; CI still triggers.
-  if (ctx.eviction.reportSpecReady) {
-    await ctx.eviction.reportSpecReady(entry, specName, specSha).catch(() => undefined);
-  }
-
-  const runId = await ctx.ci.triggerRun(specName, specSha);
-  emit(ctx, entry, "ci_triggered", { ciRunId: runId, specBranch: specName });
-
-  // Plan §5.3: cache identity for the patch-id-aware short-circuit
-  // on subsequent updateHead detections. Best-effort — if the git
-  // primitives are missing the cached identity stays null and the
-  // short-circuit never fires (existing behavior).
-  const headPatchId = ctx.git.patchIdAgainst
-    ? await ctx.git.patchIdAgainst(base, entry.headSha).catch(() => undefined)
-    : undefined;
-  const specTreeId = ctx.git.treeId
-    ? await ctx.git.treeId(specSha).catch(() => undefined)
-    : undefined;
+  const runId = await ctx.ci.triggerRun(specName, candidateSha);
+  emit(ctx, entry, "ci_triggered", { ciRunId: runId, candidateRef: specName });
 
   ctx.store.transition(entry.id, "validating", {
     baseSha,
+    candidateKind: "integration",
+    candidatePolicyFingerprint: ctx.policy.getFingerprint(),
     ciRunId: runId,
     lastFailedBaseSha: null,
-    specBranch: specName,
-    specSha,
-    specBasedOn: isHead ? null : prevEntry!.id,
-    ...(headPatchId !== undefined ? { headPatchId } : {}),
-    ...(specTreeId !== undefined ? { specTreeId } : {}),
-  }, `spec ready, CI ${runId.slice(0, 12)}`);
-}
-
-async function tryPatchIdEquivalentRebuild(
-  ctx: ReconcileContext,
-  entry: QueueEntry,
-  base: string,
-  newHead: string,
-): Promise<boolean> {
-  // Need the cached identity *and* the git primitives required to
-  // verify the equivalence and rebuild the spec commit. If any
-  // piece is missing, fall back.
-  if (!entry.headPatchId || !entry.specTreeId || !entry.specBranch || !entry.specSha) {
-    return false;
-  }
-  const git = ctx.git;
-  if (!git.patchIdAgainst || !git.integrationTreeId || !git.commitTree || !git.pushCommit) {
-    return false;
-  }
-
-  let newPatchId: string | undefined;
-  let newTreeId: string | undefined;
-  let baseSha: string | undefined;
-  try {
-    [newPatchId, newTreeId, baseSha] = await Promise.all([
-      git.patchIdAgainst(base, newHead),
-      git.integrationTreeId(base, newHead),
-      git.headSha(base),
-    ]);
-  } catch {
-    return false;
-  }
-  if (!newPatchId || !newTreeId || !baseSha) return false;
-  if (newPatchId !== entry.headPatchId) return false;
-  if (newTreeId !== entry.specTreeId) return false;
-
-  // Tree-equivalent. Rebuild spec commit with the new head as the
-  // second parent so post-merge PR detection still works.
-  const branchSuffix = entry.branch.replace(/^.*\//, "").replace(/-/g, " ");
-  const message = `Merge PR #${entry.prNumber}: ${branchSuffix} (rebased)`;
-  let newSpecSha: string | undefined;
-  try {
-    newSpecSha = await git.commitTree(entry.specTreeId, [baseSha, newHead], message);
-  } catch {
-    return false;
-  }
-  if (!newSpecSha) return false;
-
-  try {
-    await git.pushCommit(newSpecSha, entry.specBranch);
-  } catch {
-    return false;
-  }
-
-  emit(ctx, entry, "spec_build_succeeded", {
-    specBranch: entry.specBranch,
-    detail: "patch-id-equivalent rebuild",
-  });
-
-  // Plan §5.2: re-announce spec availability on the new head.
-  if (ctx.eviction.reportSpecReady) {
-    await ctx.eviction.reportSpecReady(entry, entry.specBranch, newSpecSha).catch(() => undefined);
-  }
-
-  let runId: string | null = null;
-  try {
-    runId = await ctx.ci.triggerRun(entry.specBranch, newSpecSha);
-    emit(ctx, entry, "ci_triggered", { ciRunId: runId, specBranch: entry.specBranch });
-  } catch {
-    runId = null;
-  }
-
-  ctx.store.rebuildSpecHeadEquivalent(
-    entry.id,
-    {
-      headSha: newHead,
-      specSha: newSpecSha,
-      specBranch: entry.specBranch,
-      headPatchId: newPatchId,
-      specTreeId: newTreeId,
-      ciRunId: runId,
-    },
-    runId
-      ? `patch-id-equivalent rebuild, CI ${runId.slice(0, 12)}`
-      : "patch-id-equivalent rebuild (CI trigger pending)",
-  );
-  return true;
+    candidateRef: specName,
+    candidateSha,
+    candidateBasedOn: isHead ? null : prevEntry!.id,
+  }, `integration candidate ready, CI ${runId.slice(0, 12)}`);
 }

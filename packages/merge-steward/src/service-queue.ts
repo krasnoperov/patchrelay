@@ -6,10 +6,7 @@ import { INVALIDATION_PATCH, selectDownstream } from "./invalidation.ts";
 import type { GitHubPRApi, SpeculativeBranchBuilder } from "./interfaces.ts";
 import type { QueueStore } from "./store.ts";
 import type { QueueEntry, QueueEntryStatus } from "./types.ts";
-
-function normalizeCheckName(name: string): string {
-  return name.trim().toLowerCase();
-}
+import { evaluateCheckPolicy, formatRequiredCheck } from "./check-policy.ts";
 
 function matchGlob(pattern: string, value: string): boolean {
   const regex = new RegExp("^" + pattern.replace(/\*/g, ".*") + "$");
@@ -76,16 +73,16 @@ export class MergeStewardQueueCommands {
       maxRetries: this.config.maxRetries,
       lastFailedBaseSha: null,
       issueKey: params.issueKey ?? null,
-      specBranch: null,
-      specSha: null,
-      specBasedOn: null,
+      candidateKind: null,
+      candidatePolicyFingerprint: null,
+      candidateRef: null,
+      candidateSha: null,
+      candidateBasedOn: null,
       waitDetail: null,
       postMergeStatus: null,
       postMergeSha: null,
       postMergeSummary: null,
       postMergeCheckedAt: null,
-      headPatchId: null,
-      specTreeId: null,
       prTitle: params.prTitle ?? null,
       baseRefName: params.baseRefName ?? null,
       decidedAt: null,
@@ -190,18 +187,16 @@ export class MergeStewardQueueCommands {
       const priority = labels.includes(this.config.priorityQueueLabel) ? 1 : 0;
 
       const checks = await this.github.listChecks(prNumber);
-      const requiredChecks = this.policy.getRequiredChecks();
-      if (requiredChecks.length > 0) {
-        const required = new Set(requiredChecks.map(normalizeCheckName));
-        const passing = checks.filter((c) => c.conclusion === "success" && required.has(normalizeCheckName(c.name)));
-        if (passing.length < required.size) {
+      const requiredCheckRules = this.policy.getRequiredCheckRules();
+      if (requiredCheckRules.length > 0) {
+        const evaluation = evaluateCheckPolicy(requiredCheckRules, false, checks);
+        if (evaluation.status !== "pass") {
           this.logger.debug(
             {
               prNumber,
-              passing: passing.length,
-              required: required.size,
               checkNames: checks.map((check) => check.name),
-              requiredChecks,
+              requiredChecks: requiredCheckRules.map(formatRequiredCheck),
+              checkPolicyStatus: evaluation.status,
             },
             "Required checks not all green",
           );
@@ -337,8 +332,8 @@ export class MergeStewardQueueCommands {
     const allActive = this.store.listActive(this.config.repoId);
     const targets = selectDownstream(allActive, removedEntry.id);
     for (const downstream of targets) {
-      if (downstream.specBranch) {
-        this.specBuilder.deleteSpeculative(downstream.specBranch).catch(() => {});
+      if (downstream.candidateRef) {
+        this.specBuilder.deleteSpeculative(downstream.candidateRef).catch(() => {});
       }
       this.store.transition(downstream.id, "preparing_head", INVALIDATION_PATCH,
         `invalidated: entry ${removedEntry.id.slice(0, 8)} dequeued`);
@@ -365,8 +360,8 @@ export class MergeStewardQueueCommands {
 
   private requeueAffectedEntries(entries: QueueEntry[], reason: string): void {
     for (const affected of entries) {
-      if (affected.specBranch) {
-        this.specBuilder.deleteSpeculative(affected.specBranch).catch(() => {});
+      if (affected.candidateRef) {
+        this.specBuilder.deleteSpeculative(affected.candidateRef).catch(() => {});
       }
       this.store.transition(affected.id, "queued", INVALIDATION_PATCH, reason);
     }

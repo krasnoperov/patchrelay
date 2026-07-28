@@ -1,7 +1,7 @@
 import type { QueueEntry } from "./types.ts";
 import type { ReconcileContext } from "./reconciler-core.ts";
-import { CLEAN_SPEC, emit } from "./reconciler-core.ts";
-import { cleanupSpec } from "./reconciler-evict.ts";
+import { CLEAN_CANDIDATE_REF, emit } from "./reconciler-core.ts";
+import { cleanupCandidate } from "./reconciler-evict.ts";
 import { verifyPostMergeStatus } from "./reconciler-post-merge.ts";
 
 export async function sanitizeEntry(ctx: ReconcileContext, entry: QueueEntry): Promise<boolean> {
@@ -10,7 +10,7 @@ export async function sanitizeEntry(ctx: ReconcileContext, entry: QueueEntry): P
     emit(ctx, entry, "sanitized_duplicate", {
       detail: `superseded by entry ${canonical.id}`,
     });
-    await cleanupSpec(ctx, entry);
+    await cleanupCandidate(ctx, entry);
     ctx.store.dequeue(entry.id);
     return true;
   }
@@ -25,9 +25,9 @@ export async function sanitizeEntry(ctx: ReconcileContext, entry: QueueEntry): P
       emit(ctx, entry, "merge_external", {
         detail: `PR #${entry.prNumber} already merged on GitHub (detected in sanitize)`,
       });
-      await cleanupSpec(ctx, entry);
+      await cleanupCandidate(ctx, entry);
       ctx.store.transition(entry.id, "merged", {
-        ...CLEAN_SPEC,
+        ...CLEAN_CANDIDATE_REF,
         postMergeStatus: verification.postMergeStatus,
         postMergeSha: verification.postMergeSha,
         postMergeSummary: verification.postMergeSummary,
@@ -35,11 +35,25 @@ export async function sanitizeEntry(ctx: ReconcileContext, entry: QueueEntry): P
       }, "merged externally (sanitize)");
       return true;
     }
+    const liveBaseRefName = prStatus.baseRefName ?? ctx.baseBranch;
+    const recordedBaseRefName = entry.baseRefName ?? ctx.baseBranch;
+    if (liveBaseRefName !== recordedBaseRefName) {
+      emit(ctx, entry, "invalidated", {
+        detail: `PR base changed from ${recordedBaseRefName} to ${liveBaseRefName}`,
+      });
+      await cleanupCandidate(ctx, entry);
+      ctx.store.updateBaseRef(
+        entry.id,
+        liveBaseRefName,
+        `PR base changed from ${recordedBaseRefName} to ${liveBaseRefName}`,
+      );
+      return true;
+    }
     if (!prStatus.mergeable && !prStatus.merged) {
       emit(ctx, entry, "sanitized_closed", {
         detail: `PR #${entry.prNumber} is closed on GitHub`,
       });
-      await cleanupSpec(ctx, entry);
+      await cleanupCandidate(ctx, entry);
       ctx.store.dequeue(entry.id);
       return true;
     }

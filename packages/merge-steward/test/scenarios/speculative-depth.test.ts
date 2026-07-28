@@ -21,7 +21,7 @@ describe("speculative depth limit", () => {
 
     // At this point, at most 2 entries should have spec branches.
     const entries = h.entries;
-    const withSpec = entries.filter((e) => e.specBranch !== null);
+    const withSpec = entries.filter((e) => e.candidateRef !== null);
     assert.ok(
       withSpec.length <= 2,
       `Expected at most 2 spec branches (depth=2), got ${withSpec.length}: ${withSpec.map((e) => `#${e.prNumber}`).join(", ")}`,
@@ -69,7 +69,7 @@ describe("speculative depth limit", () => {
 
     const bEntry = h.entries.find((e) => e.prNumber === 2)!;
     assert.strictEqual(bEntry.status, "queued", "B should still be queued while A is validating (depth-1)");
-    assert.strictEqual(bEntry.specBranch, null, "B should have no spec branch in depth-1 mode");
+    assert.strictEqual(bEntry.candidateRef, null, "B should have no spec branch in depth-1 mode");
 
     await h.runUntilStable();
     assert.deepStrictEqual(h.merged, [1, 2]);

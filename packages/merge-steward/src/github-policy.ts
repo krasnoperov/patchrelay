@@ -1,8 +1,11 @@
 import type { Logger } from "pino";
+import { createHash } from "node:crypto";
 import type { DiscoveredRepoSettings } from "./github-repo-discovery.ts";
+import type { RequiredCheck } from "./types.ts";
 
 export interface GitHubPolicySnapshot {
   requiredChecks: string[];
+  requiredCheckRules: RequiredCheck[];
   requireAllChecksOnEmptyRequiredSet: boolean;
   fetchedAt: string | null;
   lastRefreshReason: string | null;
@@ -22,6 +25,7 @@ export interface GitHubPolicyRefreshResult {
 interface GitHubPolicyCacheOptions {
   repoFullName: string;
   initialRequiredChecks: string[];
+  initialRequiredCheckRules?: RequiredCheck[];
   initialRequireAllChecksOnEmptyRequiredSet?: boolean;
   logger: Logger;
   refreshPolicy(): Promise<DiscoveredRepoSettings>;
@@ -40,8 +44,27 @@ function equalChecks(left: string[], right: string[]): boolean {
   return left.every((value, index) => value === right[index]);
 }
 
+function normalizeCheckRules(values: RequiredCheck[]): RequiredCheck[] {
+  const deduped = new Map<string, RequiredCheck>();
+  for (const value of values) {
+    const name = value.name.trim();
+    if (!name) continue;
+    const appId = value.appId ?? null;
+    deduped.set(`${name.toLowerCase()}\u0000${appId ?? "*"}`, { name, appId });
+  }
+  return [...deduped.values()].sort((left, right) =>
+    left.name.localeCompare(right.name) || (left.appId ?? -1) - (right.appId ?? -1));
+}
+
+function equalCheckRules(left: RequiredCheck[], right: RequiredCheck[]): boolean {
+  return left.length === right.length
+    && left.every((value, index) =>
+      value.name === right[index]?.name && value.appId === right[index]?.appId);
+}
+
 export class GitHubPolicyCache {
   private requiredChecks: string[];
+  private requiredCheckRules: RequiredCheck[];
   private requireAllChecksOnEmptyRequiredSet: boolean;
   private fetchedAt: string | null;
   private lastIssueRefreshAt = 0;
@@ -51,6 +74,10 @@ export class GitHubPolicyCache {
 
   constructor(private readonly options: GitHubPolicyCacheOptions) {
     this.requiredChecks = normalizeChecks(options.initialRequiredChecks);
+    this.requiredCheckRules = normalizeCheckRules(
+      options.initialRequiredCheckRules
+        ?? this.requiredChecks.map((name) => ({ name, appId: null })),
+    );
     this.requireAllChecksOnEmptyRequiredSet = options.initialRequireAllChecksOnEmptyRequiredSet ?? false;
     this.fetchedAt = new Date().toISOString();
     this.issueRefreshCooldownMs = options.issueRefreshCooldownMs ?? 5 * 60_000;
@@ -59,6 +86,7 @@ export class GitHubPolicyCache {
   getSnapshot(): GitHubPolicySnapshot {
     return {
       requiredChecks: [...this.requiredChecks],
+      requiredCheckRules: this.requiredCheckRules.map((check) => ({ ...check })),
       requireAllChecksOnEmptyRequiredSet: this.requireAllChecksOnEmptyRequiredSet,
       fetchedAt: this.fetchedAt,
       lastRefreshReason: this.lastRefreshReason,
@@ -70,11 +98,26 @@ export class GitHubPolicyCache {
     return [...this.requiredChecks];
   }
 
+  getRequiredCheckRules(): RequiredCheck[] {
+    return this.requiredCheckRules.map((check) => ({ ...check }));
+  }
+
+  getFingerprint(): string {
+    return createHash("sha256").update(JSON.stringify({
+      requiredChecks: this.requiredCheckRules,
+      requireAllChecksOnEmptyRequiredSet: this.requireAllChecksOnEmptyRequiredSet,
+    })).digest("hex");
+  }
+
   shouldRequireAllChecksOnEmptyRequiredSet(): boolean {
     return this.requireAllChecksOnEmptyRequiredSet;
   }
 
   async refreshFromWebhook(reason: string): Promise<GitHubPolicyRefreshResult> {
+    return await this.refresh(reason, { force: true, issueTriggered: false });
+  }
+
+  async refreshBeforeLanding(reason: string): Promise<GitHubPolicyRefreshResult> {
     return await this.refresh(reason, { force: true, issueTriggered: false });
   }
 
@@ -101,11 +144,18 @@ export class GitHubPolicyCache {
   ): Promise<GitHubPolicyRefreshResult> {
     const previousRequiredChecks = [...this.requiredChecks];
     const previousRequireAllChecksOnEmptyRequiredSet = this.requireAllChecksOnEmptyRequiredSet;
+    const previousRequiredCheckRules = this.requiredCheckRules;
     const discovered = await this.options.refreshPolicy();
     const nextRequiredChecks = normalizeChecks(discovered.requiredChecks);
+    const nextRequiredCheckRules = normalizeCheckRules(
+      discovered.requiredCheckRules
+        ?? nextRequiredChecks.map((name) => ({ name, appId: null })),
+    );
     const changed = !equalChecks(previousRequiredChecks, nextRequiredChecks)
+      || !equalCheckRules(previousRequiredCheckRules, nextRequiredCheckRules)
       || previousRequireAllChecksOnEmptyRequiredSet !== discovered.requireAllChecksOnEmptyRequiredSet;
     this.requiredChecks = nextRequiredChecks;
+    this.requiredCheckRules = nextRequiredCheckRules;
     this.requireAllChecksOnEmptyRequiredSet = discovered.requireAllChecksOnEmptyRequiredSet;
     this.fetchedAt = new Date().toISOString();
     this.lastRefreshReason = reason;

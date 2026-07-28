@@ -19,8 +19,8 @@ test("summary token shows duration·recency for finished and duration-only while
 test("merge wait detail renders approval-blocked merging clearly", () => {
   const entry = {
     lastFailedBaseSha: null,
-    specBranch: "mq-spec-123",
-    specBasedOn: null,
+    candidateRef: "mq-spec-123",
+    candidateBasedOn: null,
     waitDetail: "blocking review present, waiting for approval",
   };
 
@@ -32,8 +32,8 @@ test("merge wait detail renders approval-blocked merging clearly", () => {
 test("merge wait detail renders main-verification waits clearly", () => {
   const entry = {
     lastFailedBaseSha: null,
-    specBranch: "mq-spec-123",
-    specBasedOn: null,
+    candidateRef: "mq-spec-123",
+    candidateBasedOn: null,
     waitDetail: "main checks still pending, holding merge",
   };
 

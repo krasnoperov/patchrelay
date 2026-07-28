@@ -3,49 +3,25 @@ import assert from "node:assert/strict";
 import { createHarness } from "../harness.ts";
 
 describe("retryHistory records per-transition baseSha", () => {
-  it("each retry history entry reflects the baseSha at that transition", async () => {
-    const h = await createHarness({ maxRetries: 2, flakyRetries: 0, ciRule: () => "fail" });
+  it("records distinct bases when a cached downstream conflict is invalidated and recomputed", async () => {
+    const h = await createHarness({ ciRule: () => "pass", speculativeDepth: 2 });
+    await h.enqueue({ number: 1, branch: "feat-parent", files: [{ path: "shared.ts", content: "parent" }] });
+    await h.enqueue({ number: 2, branch: "feat-child", files: [{ path: "shared.ts", content: "child" }] });
 
-    await h.enqueue({ number: 1, branch: "feat-retry", files: [{ path: "r.ts", content: "r" }] });
+    await h.tick(); // promote
+    await h.tick(); // parent candidate + first child conflict
+    await h.advanceMain(); // invalidate the parent candidate before landing
+    await h.runUntilStable({ maxTicks: 30 });
 
-    // Run 1: queued → preparing_head → validating (baseSha = main_sha_1).
-    await h.tick(); // queued → preparing_head
-    await h.tick(); // rebase + trigger CI (fail) → validating
-
-    const baseSha1 = h.entries[0]!.baseSha;
-
-    // CI fails → back to preparing_head, retry 1.
-    await h.tick();
-
-    // Advance main so next rebase gets a different baseSha.
-    await h.advanceMain();
-
-    // Run 2: refresh updates the branch head, then the next tick re-promotes,
-    // and the following tick validates against the new base.
-    await h.tick();
-    await h.tick();
-    await h.tick();
-
-    const baseSha2 = h.entries[0]!.baseSha;
-    assert.notStrictEqual(baseSha1, baseSha2, "baseSha should change between retries");
-
-    // CI fails again → retry 2.
-    await h.tick();
-    await h.advanceMain();
-
-    // Run until the retry budget is exhausted and the issue is evicted.
-    for (let i = 0; i < 20 && h.evictionSim.evictions.length === 0; i++) {
-      await h.tick();
-    }
-
-    assert.strictEqual(h.evictionSim.evictions.length, 1);
-
-    const history = h.evictionSim.evictions[0]!.incident.context.retryHistory;
-    assert.ok(history.length >= 2, `expected at least 2 retry history entries, got ${history.length}`);
-
-    const baseShas = history.map((h: { baseSha: string }) => h.baseSha).filter((s: string) => s !== "unknown");
-    const uniqueBaseShas = new Set(baseShas);
-    assert.ok(uniqueBaseShas.size > 1, `retryHistory baseShas should differ across retries, got: ${JSON.stringify(baseShas)}`);
+    const child = h.entries.find((entry) => entry.prNumber === 2)!;
+    assert.equal(child.status, "evicted");
+    const incident = h.store.listIncidents(child.id)[0]!;
+    const conflictBases = incident.context.retryHistory
+      .filter((event) => event.outcome === "conflict_retry")
+      .map((event) => event.baseSha)
+      .filter((sha) => sha !== "unknown");
+    assert.ok(conflictBases.length >= 2, `expected two conflict observations, got ${JSON.stringify(conflictBases)}`);
+    assert.ok(new Set(conflictBases).size >= 2, `conflict bases should differ, got ${JSON.stringify(conflictBases)}`);
   });
 
   it("event records include baseSha snapshot", async () => {

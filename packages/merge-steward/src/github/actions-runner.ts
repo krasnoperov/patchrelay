@@ -1,10 +1,7 @@
 import type { CIRunner } from "../interfaces.ts";
-import type { CIStatus } from "../types.ts";
+import type { CIStatus, RequiredCheck } from "../types.ts";
 import { exec } from "../exec.ts";
-
-function normalizeCheckName(name: string): string {
-  return name.trim().toLowerCase();
-}
+import { evaluateCheckPolicy, mapGitHubCheckConclusion } from "../check-policy.ts";
 
 /**
  * CI runner that polls GitHub Actions via the gh CLI.
@@ -15,12 +12,55 @@ function normalizeCheckName(name: string): string {
 export class GitHubActionsRunner implements CIRunner {
   constructor(
     private readonly repoFullName: string,
-    private readonly getRequiredChecks: () => string[] = () => [],
-    _shouldRequireAllChecksOnEmptyRequiredSet: () => boolean = () => false,
+    private readonly getRequiredChecks: () => Array<string | RequiredCheck> = () => [],
+    private readonly shouldRequireAllChecksOnEmptyRequiredSet: () => boolean = () => false,
   ) {}
 
   async triggerRun(_branch: string, sha: string): Promise<string> {
     // CI is triggered by the push. Return the SHA as the poll key.
+    return `sha:${sha}`;
+  }
+
+  async rerunRun(_runId: string, _branch: string, sha: string): Promise<string> {
+    const listed = await exec("gh", [
+      "api",
+      `repos/${this.repoFullName}/actions/runs?head_sha=${encodeURIComponent(sha)}&per_page=100`,
+    ], { allowNonZero: true, githubRepoFullName: this.repoFullName });
+    if (listed.exitCode !== 0) {
+      throw new Error(`Could not list workflow runs for candidate ${sha.slice(0, 12)}`);
+    }
+
+    let workflowRuns: Array<{ id?: number; status?: string; conclusion?: string | null }>;
+    try {
+      workflowRuns = (JSON.parse(listed.stdout) as { workflow_runs?: typeof workflowRuns }).workflow_runs ?? [];
+    } catch {
+      throw new Error(`GitHub returned malformed workflow runs for candidate ${sha.slice(0, 12)}`);
+    }
+    const failedConclusions = new Set([
+      "failure",
+      "cancelled",
+      "timed_out",
+      "stale",
+      "action_required",
+    ]);
+    const latestFailed = workflowRuns
+      .filter((run) =>
+        typeof run.id === "number"
+        && run.status === "completed"
+        && failedConclusions.has(run.conclusion ?? ""))
+      .sort((left, right) => (right.id ?? 0) - (left.id ?? 0))[0];
+    if (!latestFailed?.id) {
+      throw new Error(`No failed workflow run can be rerun for candidate ${sha.slice(0, 12)}`);
+    }
+
+    const rerun = await exec("gh", [
+      "api",
+      "--method", "POST",
+      `repos/${this.repoFullName}/actions/runs/${latestFailed.id}/rerun-failed-jobs`,
+    ], { allowNonZero: true, githubRepoFullName: this.repoFullName });
+    if (rerun.exitCode !== 0) {
+      throw new Error(`GitHub rejected workflow rerun ${latestFailed.id} for candidate ${sha.slice(0, 12)}`);
+    }
     return `sha:${sha}`;
   }
 
@@ -37,48 +77,25 @@ export class GitHubActionsRunner implements CIRunner {
 
     try {
       const checkRuns = JSON.parse(result.stdout) as Array<{
+        id?: number;
         name: string;
         status: string;
         conclusion: string | null;
+        app?: { id?: number };
       }>;
-
-      if (checkRuns.length === 0) return "pending";
-
-      const requiredChecks = this.getRequiredChecks();
-      const normalizedRequired = requiredChecks.map(normalizeCheckName);
-      const hasRequired = requiredChecks.length > 0;
-      const relevant = hasRequired
-        ? checkRuns.filter((c) => normalizedRequired.includes(normalizeCheckName(c.name)))
-        : checkRuns;
-
-      if (relevant.length === 0) return "pending";
-
-      if (relevant.some((c) => c.status !== "completed")) return "pending";
-      // REST API returns lowercase conclusions.  For required checks,
-      // "skipped" is rejected — a gate job can report success while the
-      // underlying required job was skipped by a workflow branch filter,
-      // letting untested code through.  When no required checks are
-      // configured, "skipped" is accepted as passing, matching
-      // mapRestConclusion in pr-client.ts — otherwise getMainStatus reports
-      // "fail" whenever main has conditional workflow jobs that are skipped
-      // (e.g. deploy-stage on main), even though listChecksForRef treats
-      // those same checks as success, producing a "main_broken" block with
-      // an empty failing-check list and stalling the queue.
-      // Accept "skipped" whenever there are no named required checks,
-      // including strict-protection-with-empty-contexts mode. A skipped
-      // job is an `if:` or `on:` gate by the workflow author declaring
-      // the job does not apply here; it is not a failure. The bypass
-      // concern (a gate job reporting success while a required job was
-      // skipped) only matters when we have a named required-check set
-      // to gate against, i.e. `hasRequired === true`.
-      const acceptSkipped = !hasRequired;
-      if (relevant.some((c) => {
-        if (c.conclusion === "success" || c.conclusion === "neutral") return false;
-        if (acceptSkipped && c.conclusion === "skipped") return false;
-        return true;
-      })) return "fail";
-
-      return "pass";
+      const required = this.getRequiredChecks().map((check): RequiredCheck =>
+        typeof check === "string" ? { name: check, appId: null } : check);
+      const checks = checkRuns.map((check) => ({
+        name: check.name,
+        conclusion: mapGitHubCheckConclusion(check.status, check.conclusion),
+        ...(typeof check.app?.id === "number" ? { appId: check.app.id } : {}),
+        ...(typeof check.id === "number" ? { runId: check.id } : {}),
+      }));
+      return evaluateCheckPolicy(
+        required,
+        this.shouldRequireAllChecksOnEmptyRequiredSet(),
+        checks,
+      ).status;
     } catch {
       return "pending";
     }

@@ -198,4 +198,46 @@ describe("GitHubActionsRunner.getStatus", () => {
     });
     assert.strictEqual(await runner.getStatus("sha:abc123"), "pass");
   });
+
+  it("requests a real failed-job rerun for the latest workflow on the same SHA", async () => {
+    const ghPath = path.join(baseDir, "gh");
+    writeFileSync(ghPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const url = args.find((arg) => arg.startsWith('repos/'));
+if (url?.includes('/actions/runs?')) {
+  process.stdout.write(JSON.stringify({ workflow_runs: [
+    { id: 40, status: 'completed', conclusion: 'failure' },
+    { id: 41, status: 'completed', conclusion: 'success' },
+    { id: 42, status: 'completed', conclusion: 'timed_out' }
+  ] }));
+  process.exit(0);
+}
+if (url === 'repos/owner/repo/actions/runs/42/rerun-failed-jobs' && args.includes('POST')) {
+  process.exit(0);
+}
+process.exit(1);
+`, "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${baseDir}${path.delimiter}${prevPath ?? ""}`;
+    const runner = new GitHubActionsRunner("owner/repo", () => ["Tests"]);
+
+    assert.equal(await runner.rerunRun("sha:abc123", "feature/x", "abc123"), "sha:abc123");
+  });
+
+  it("fails closed when no failed workflow run exists to rerun", async () => {
+    const ghPath = path.join(baseDir, "gh");
+    writeFileSync(ghPath, `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({ workflow_runs: [
+  { id: 41, status: 'completed', conclusion: 'success' }
+] }));
+`, "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${baseDir}${path.delimiter}${prevPath ?? ""}`;
+    const runner = new GitHubActionsRunner("owner/repo", () => ["Tests"]);
+
+    await assert.rejects(
+      runner.rerunRun("sha:abc123", "feature/x", "abc123"),
+      /No failed workflow run/,
+    );
+  });
 });

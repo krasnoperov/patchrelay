@@ -5,7 +5,7 @@ import { sanitizeEntry } from "./reconciler-sanitize.ts";
 import { prepareEntry } from "./reconciler-prepare.ts";
 import { checkValidation } from "./reconciler-validate.ts";
 import { mergeHead } from "./reconciler-merge.ts";
-import { cleanupSpec } from "./reconciler-evict.ts";
+import { cleanupCandidate } from "./reconciler-evict.ts";
 import { INVALIDATION_PATCH } from "./invalidation.ts";
 import { verifyPostMergeStatus } from "./reconciler-post-merge.ts";
 import { syncQueueStateLabels } from "./reconciler-queue-labels.ts";
@@ -21,12 +21,37 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
   // (e.g. an externally-merged PR), and verifyMergedEntriesPostPush below is
   // the only thing that advances them. depth=0 simply skips the active loop.
 
-  // Process up to speculativeDepth entries. GitHub truth checks are
-  // bounded by this window — we never scan the full queue.
-  const depth = Math.min(ctx.speculativeDepth, allActive.length);
+  const schedule = buildDependencyReadySchedule(ctx, allActive);
+  for (const blocked of schedule.blocked.slice(0, ctx.speculativeDepth)) {
+    const entry = ctx.store.getEntry(blocked.entry.id);
+    if (!entry || TERMINAL_STATUSES.includes(entry.status)) continue;
+    if (await sanitizeEntry(ctx, entry)) continue;
+    if (entry.candidateSha || entry.candidateRef || entry.candidateKind) {
+      emit(ctx, entry, "invalidated", { detail: blocked.reason });
+      emit(ctx, entry, "stack_dependency_waiting", { detail: blocked.reason });
+      await cleanupCandidate(ctx, entry);
+      ctx.store.transition(
+        entry.id,
+        "preparing_head",
+        { ...INVALIDATION_PATCH, waitDetail: blocked.reason },
+        `invalidated: ${blocked.reason}`,
+      );
+      continue;
+    }
+    if (entry.waitDetail !== blocked.reason) {
+      emit(ctx, entry, "stack_dependency_waiting", { detail: blocked.reason });
+      ctx.store.transition(entry.id, entry.status, { waitDetail: blocked.reason }, blocked.reason);
+    }
+  }
+
+  // Process up to speculativeDepth dependency-ready entries. A failed stack
+  // is excluded from this view, so it cannot prevent independent roots from
+  // becoming the landing head.
+  const ready = schedule.ready;
+  const depth = Math.min(ctx.speculativeDepth, ready.length);
 
   for (let i = 0; i < depth; i++) {
-    const entryId = allActive[i]!.id;
+    const entryId = ready[i]!.id;
     const entry = ctx.store.getEntry(entryId);
     if (!entry || TERMINAL_STATUSES.includes(entry.status)) continue;
 
@@ -45,13 +70,13 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
     // changes. Reset so it rebuilds on the correct base next tick.
     // Exclude "merged" — a merged dependency means main advanced to its
     // spec, so our cumulative spec is still valid (speculative consistency).
-    if (entry.specBasedOn) {
-      const dep = ctx.store.getEntry(entry.specBasedOn);
+    if (entry.candidateBasedOn) {
+      const dep = ctx.store.getEntry(entry.candidateBasedOn);
       if (!dep || dep.status === "dequeued" || dep.status === "evicted") {
         emit(ctx, entry, "invalidated", {
-          detail: `dependency ${entry.specBasedOn} is ${dep?.status ?? "removed"}`,
+          detail: `dependency ${entry.candidateBasedOn} is ${dep?.status ?? "removed"}`,
         });
-        await cleanupSpec(ctx, entry);
+        await cleanupCandidate(ctx, entry);
         ctx.store.transition(entry.id, "preparing_head",
           INVALIDATION_PATCH, `stale dependency ${dep?.status ?? "removed"}`);
         continue;
@@ -59,7 +84,7 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
     }
 
     const isHead = i === 0;
-    const prevEntry = i > 0 ? ctx.store.getEntry(allActive[i - 1]!.id) ?? null : null;
+    const prevEntry = i > 0 ? ctx.store.getEntry(ready[i - 1]!.id) ?? null : null;
     const phase = entry.status;
 
     try {
@@ -76,7 +101,14 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
         case "validating": {
           const freshActive = ctx.store.listActive(ctx.repoId);
           const freshIdx = freshActive.findIndex((e) => e.id === entry.id);
-          await checkValidation(ctx, entry, freshActive, freshIdx >= 0 ? freshIdx : i);
+          const freshLandingHead = buildDependencyReadySchedule(ctx, freshActive).ready[0]?.id === entry.id;
+          await checkValidation(
+            ctx,
+            entry,
+            freshActive,
+            freshIdx >= 0 ? freshIdx : i,
+            freshLandingHead,
+          );
           break;
         }
 
@@ -106,12 +138,62 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
   await verifyMergedEntriesPostPush(ctx);
 }
 
+function buildDependencyReadySchedule(
+  ctx: ReconcileContext,
+  active: import("./types.ts").QueueEntry[],
+): {
+  ready: import("./types.ts").QueueEntry[];
+  blocked: Array<{ entry: import("./types.ts").QueueEntry; reason: string }>;
+} {
+  const activeByBranch = new Map(active.map((entry) => [entry.branch, entry]));
+  const latestByBranch = new Map<string, import("./types.ts").QueueEntry>();
+  for (const entry of ctx.store.listAll(ctx.repoId)) {
+    const current = latestByBranch.get(entry.branch);
+    if (!current || entry.position > current.position) latestByBranch.set(entry.branch, entry);
+  }
+  const readyIds = new Set<string>();
+  const ready: import("./types.ts").QueueEntry[] = [];
+  const blocked: Array<{ entry: import("./types.ts").QueueEntry; reason: string }> = [];
+
+  for (const entry of active) {
+    const parentBranch = entry.baseRefName;
+    if (!parentBranch || parentBranch === ctx.baseBranch) {
+      ready.push(entry);
+      readyIds.add(entry.id);
+      continue;
+    }
+
+    const activeParent = activeByBranch.get(parentBranch);
+    if (activeParent && readyIds.has(activeParent.id)) {
+      ready.push(entry);
+      readyIds.add(entry.id);
+      continue;
+    }
+
+    const latestParent = latestByBranch.get(parentBranch);
+    if (!activeParent && latestParent?.status === "merged") {
+      ready.push(entry);
+      readyIds.add(entry.id);
+      continue;
+    }
+
+    const reason = activeParent
+      ? `stack parent ${parentBranch} is itself blocked`
+      : latestParent
+        ? `stack parent ${parentBranch} is ${latestParent.status}; waiting for a successful parent entry`
+        : `stack parent ${parentBranch} is not known to the queue`;
+    blocked.push({ entry, reason });
+  }
+
+  return { ready, blocked };
+}
+
 async function verifyMergedEntriesPostPush(ctx: ReconcileContext): Promise<void> {
   // Targeted query (not listAll) so an idle repo with a large merged history
   // doesn't scan every terminal row each tick — only the unresolved ones.
   const mergedEntries = ctx.store.listPostMergePending(ctx.repoId);
   for (const entry of mergedEntries) {
-    const postMergeSha = entry.postMergeSha ?? entry.specSha ?? entry.headSha;
+    const postMergeSha = entry.postMergeSha ?? entry.candidateSha ?? entry.headSha;
     if (!postMergeSha) {
       continue;
     }

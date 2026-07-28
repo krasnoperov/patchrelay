@@ -10,11 +10,12 @@ describe("flaky test tolerance", () => {
     const h = await createHarness({
       ciRule: () => {
         ciCallCount++;
-        return ciCallCount <= 1 ? "fail" : "pass";
+        return ciCallCount === 2 ? "fail" : "pass";
       },
       flakyRetries: 2,
     });
     await h.enqueue(prA);
+    await h.advanceMain();
     await h.runUntilStable();
 
     assert.deepStrictEqual(h.merged, [1], "PR should merge after flaky retry");
@@ -29,6 +30,7 @@ describe("flaky test tolerance", () => {
       maxRetries: 1,
     });
     await h.enqueue(prA);
+    await h.advanceMain();
     await h.runUntilStable({ maxTicks: 30 });
 
     assert.strictEqual(h.entryStatus(prA), "evicted");

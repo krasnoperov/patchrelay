@@ -580,6 +580,9 @@ describe("webhook admission integration", () => {
       async triggerRun() {
         return "ci-1";
       },
+      async rerunRun() {
+        return "ci-2";
+      },
       async getStatus() {
         return "pending" as const;
       },

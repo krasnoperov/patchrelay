@@ -14,7 +14,9 @@ describe("PR update (force-push) handling", () => {
 
     const before = h.entries.find((e) => e.prNumber === 1)!;
     assert.strictEqual(before.status, "validating");
-    assert.ok(before.ciRunId !== null);
+    assert.strictEqual(before.ciRunId, null);
+    assert.strictEqual(before.candidateKind, "head");
+    assert.strictEqual(before.candidateSha, before.headSha);
     assert.strictEqual(before.generation, 0);
 
     h.store.updateHead(before.id, "new-sha-after-force-push");
@@ -27,6 +29,8 @@ describe("PR update (force-push) handling", () => {
     assert.strictEqual(after.ciRetries, 0);
     assert.strictEqual(after.retryAttempts, 0);
     assert.strictEqual(after.lastFailedBaseSha, null);
+    assert.strictEqual(after.candidateKind, null);
+    assert.strictEqual(after.candidateSha, null);
     assert.strictEqual(after.waitDetail, null);
 
     const events = h.store.listEvents(before.id);

@@ -20,6 +20,8 @@ export interface QueueStore {
   listAll(repoId: string): QueueEntry[];
   /** Merged entries whose post-merge verification is unresolved (not pass/fail). */
   listPostMergePending(repoId: string): QueueEntry[];
+  /** Most recently decided rows, used for bounded startup cleanup recovery. */
+  listRecentTerminal(repoId: string, limit?: number): QueueEntry[];
 
   // === Mutations (each appends a queue_event in the same transaction) ===
   insert(entry: QueueEntry): void;
@@ -27,36 +29,15 @@ export interface QueueStore {
     entryId: string,
     to: QueueEntryStatus,
     patch?: Partial<Pick<QueueEntry,
-      "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" | "lastFailedBaseSha" | "specBranch" | "specSha" | "specBasedOn" | "waitDetail"
+      "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" | "lastFailedBaseSha" | "candidateRef" | "candidateSha" | "candidateBasedOn" | "waitDetail"
+      | "candidateKind" | "candidatePolicyFingerprint"
       | "postMergeStatus" | "postMergeSha" | "postMergeSummary" | "postMergeCheckedAt"
-      | "headPatchId" | "specTreeId"
     >>,
     detail?: string,
   ): void;
   dequeue(entryId: string): void;
   updateHead(entryId: string, newHeadSha: string): void;
-  /**
-   * Plan §5.3: patch-id-aware short-circuit. The new head is
-   * patch-id-equivalent to the cached identity AND the freshly
-   * computed merge tree matches the cached spec tree. We rebuild the
-   * spec commit with the new head as its second parent (so GitHub
-   * marks the PR merged after fast-forward) but do not blow away the
-   * spec branch or restart the prepare cycle. CI must re-run on the
-   * new spec SHA — check_runs are SHA-anchored and there is no API
-   * to reuse a passing verdict.
-   */
-  rebuildSpecHeadEquivalent(
-    entryId: string,
-    patch: {
-      headSha: string;
-      specSha: string;
-      specBranch: string;
-      headPatchId: string;
-      specTreeId: string;
-      ciRunId: string | null;
-    },
-    detail?: string,
-  ): void;
+  updateBaseRef(entryId: string, baseRefName: string | null, detail?: string): void;
   updatePriority(entryId: string, priority: number, detail?: string): void;
 
   // === Incidents (durable eviction records) ===

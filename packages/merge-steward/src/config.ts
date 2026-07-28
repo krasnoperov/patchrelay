@@ -36,25 +36,14 @@ export const stewardConfigSchema = z.object({
   // Queue sub-state labels — applied/cleared by the reconciler so a PR's
   // live position in the merge queue is visible on GitHub and readable by
   // patchrelay for its Linear "In Merge Queue" status. `queue:testing` =
-  // spec CI validating; `queue:merging` = head, merge in progress.
+  // candidate checks validating; `queue:merging` = head, landing in progress.
   queueTestingLabel: z.string().default("queue:testing"),
   queueMergingLabel: z.string().default("queue:merging"),
   mergeQueueCheckName: z.string().default(DEFAULT_MERGE_QUEUE_CHECK_NAME),
-  // Plan §2.4 — bus-contract artifact names exposed for cross-service
-  // alignment. Defaults preserve current behavior. The steward writes
-  // `evictionCheckName` (today: same as mergeQueueCheckName, kept for
-  // contract clarity) and `specReadyCheckName`; consumers read them.
   /** Eviction check run name. Synonym for mergeQueueCheckName, surfaced
    * under the bus-contract name so consumer code can be naming-aligned
    * with patchrelay's resolver. */
   evictionCheckName: z.string().default(DEFAULT_MERGE_QUEUE_CHECK_NAME),
-  /** Spec-ready check run name (default: "merge-steward/spec-ready").
-   * Read by review-quill in integration_tree mode (plan §3.5). */
-  specReadyCheckName: z.string().default("merge-steward/spec-ready"),
-  /** Prefix for spec branch names (default: "mq-spec-"); matches the
-   * existing SPEC_BRANCH_PREFIX in reconciler-core.ts. The pattern
-   * review-quill matches against is `${prefix}*`. */
-  specBranchPrefix: z.string().default("mq-spec-"),
   /** Branch name patterns to exclude from admission (glob-style). */
   excludeBranches: z.array(z.string()).default([]),
   /**
