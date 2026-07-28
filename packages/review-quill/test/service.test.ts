@@ -184,6 +184,7 @@ test("getAttemptDetail includes current pull request state when GitHub data is a
         headSha: "9f64980040eccbcebca45599b015ca36187e928b",
         headRefName: "krasnoperov-subtitles/LSR-5-fix-502-error-during-conversation",
         baseRefName: "main",
+        baseSha: "main-sha",
         mergedAt: "2026-04-12T00:39:00.000Z",
         closedAt: "2026-04-12T00:39:00.000Z",
       }),
@@ -271,6 +272,7 @@ test("triggerReconcile retires active attempts for merged pull requests", async 
         headSha: "0e987ee9f80ed2b165d41aeb5ea0b32c04dd61dd",
         headRefName: "feat/tutor",
         baseRefName: "main",
+        baseSha: "main-sha",
         mergedAt: "2026-04-11T22:29:32Z",
         closedAt: "2026-04-11T22:29:32Z",
       }),
@@ -287,6 +289,159 @@ test("triggerReconcile retires active attempts for merged pull requests", async 
   assert.equal(updates.length, 1);
 });
 
+test("triggerReconcile dismisses a same-head approval whose captured base changed", async () => {
+  const attempt = {
+    id: 227,
+    repoFullName: "krasnoperov/subtitles",
+    prNumber: 16,
+    headSha: "same-head",
+    status: "completed",
+    conclusion: "approved",
+    prBaseSha: "old-parent",
+    createdAt: "2026-04-12T00:00:00.000Z",
+    updatedAt: "2026-04-12T00:01:00.000Z",
+  } as const;
+  const dismissed: number[] = [];
+  let dismissalFailure = false;
+  const pr = {
+    number: 16,
+    title: "Retargeted stacked child",
+    url: "https://github.com/krasnoperov/subtitles/pull/16",
+    state: "OPEN",
+    isDraft: false,
+    headSha: "same-head",
+    headRefName: "feature/child",
+    baseRefName: "feature/new-parent",
+    baseSha: "new-parent",
+    labels: [],
+  } as const;
+  const service = new ReviewQuillService(
+    {
+      server: { bind: "127.0.0.1", port: 8788 },
+      database: { path: ":memory:", wal: true },
+      logging: { level: "info" },
+      reconciliation: {
+        pollIntervalMs: 1_000,
+        heartbeatIntervalMs: 1_000,
+        staleQueuedAfterMs: 60_000,
+        staleRunningAfterMs: 60_000,
+      },
+      codex: {
+        bin: "codex",
+        args: [],
+        approvalPolicy: "never",
+        sandboxMode: "danger-full-access",
+      },
+      prompting: { replaceSections: {} },
+      repositories: [{
+        repoId: "subtitles",
+        repoFullName: "krasnoperov/subtitles",
+        baseBranch: "main",
+        requiredChecks: [],
+        excludeBranches: [],
+        reviewDocs: [],
+        diffIgnore: [],
+        diffSummarizeOnly: [],
+        patchBodyBudgetTokens: 5_000,
+      }],
+      secretSources: {},
+    } as never,
+    {
+      listAttempts: () => [attempt],
+      listWebhooks: () => [],
+      listActiveAttemptsForRepo: () => [],
+      listAttemptsForPullRequest: () => [attempt],
+      getAttempt: () => attempt,
+    } as never,
+    {
+      listOpenPullRequests: async () => [pr],
+      listPullRequestReviews: async () => [{
+        id: 77,
+        authorLogin: "review-quill[bot]",
+        state: "APPROVED",
+        commitId: "same-head",
+      }],
+      dismissReview: async (_repo: string, _prNumber: number, reviewId: number) => {
+        if (dismissalFailure) throw new Error("GitHub 503");
+        dismissed.push(reviewId);
+      },
+    } as never,
+    {} as never,
+    { info() {}, warn() {}, debug() {}, error() {}, child() { return this; } } as never,
+    "review-quill",
+  );
+  (service as unknown as {
+    evaluateEligibility: () => Promise<{ eligible: false; reason: "required_checks_not_green" }>;
+  }).evaluateEligibility = async () => ({
+    eligible: false,
+    reason: "required_checks_not_green",
+  });
+
+  await service.triggerReconcile();
+
+  assert.deepEqual(dismissed, [77]);
+
+  let disposeCalls = 0;
+  let dispatchCalls = 0;
+  (service as unknown as {
+    evaluateEligibility: () => Promise<{ eligible: true }>;
+    carryForward: () => Promise<{
+      kind: "no_candidate";
+      prepared: {
+        identity: { patchId: string; prBaseSha: string; diffBaseSha: string };
+        workspace: Record<string, never>;
+        dispose: () => Promise<void>;
+      };
+    }>;
+    dispatchReview: () => Promise<void>;
+    discoverRepo: (repo: unknown) => Promise<void>;
+  }).evaluateEligibility = async () => ({ eligible: true });
+  (service as unknown as {
+    carryForward: () => Promise<{
+      kind: "no_candidate";
+      prepared: {
+        identity: { patchId: string; prBaseSha: string; diffBaseSha: string };
+        workspace: Record<string, never>;
+        dispose: () => Promise<void>;
+      };
+    }>;
+  }).carryForward = async () => ({
+    kind: "no_candidate",
+    prepared: {
+      identity: {
+        patchId: "patch",
+        prBaseSha: "new-parent",
+        diffBaseSha: "new-parent",
+      },
+      workspace: {},
+      dispose: async () => {
+        disposeCalls += 1;
+      },
+    },
+  });
+  (service as unknown as { dispatchReview: () => Promise<void> }).dispatchReview = async () => {
+    dispatchCalls += 1;
+  };
+  dismissalFailure = true;
+
+  await assert.rejects(
+    (service as unknown as { discoverRepo: (repo: unknown) => Promise<void> }).discoverRepo({
+      repoId: "subtitles",
+      repoFullName: "krasnoperov/subtitles",
+      baseBranch: "main",
+      requiredChecks: [],
+      excludeBranches: [],
+      reviewDocs: [],
+      diffIgnore: [],
+      diffSummarizeOnly: [],
+      patchBodyBudgetTokens: 5_000,
+    }),
+    /Could not invalidate Review Quill approval 77.*GitHub 503/,
+  );
+  assert.equal(disposeCalls, 1, "prepared worktree must be disposed on dismissal failure");
+  assert.equal(dispatchCalls, 0, "fresh review must not dispatch while the stale approval remains active");
+});
+
 test("executeReview skips stale heads before starting Codex review work", async () => {
   const existingAttempt = {
     id: 99,
@@ -295,6 +450,7 @@ test("executeReview skips stale heads before starting Codex review work", async 
     headSha: "old-head",
     status: "failed",
     conclusion: "error",
+    prBaseSha: "main-sha",
     threadId: "old-thread",
     turnId: "old-turn",
     createdAt: "2026-05-24T00:00:00.000Z",
@@ -367,6 +523,7 @@ test("executeReview skips stale heads before starting Codex review work", async 
         headSha: "new-head",
         headRefName: "feature/podcast-translate-s01e26",
         baseRefName: "main",
+        baseSha: "main-sha",
         labels: [],
       }),
     } as never,
@@ -407,6 +564,7 @@ test("executeReview skips stale heads before starting Codex review work", async 
       headSha: "old-head",
       headRefName: "feature/podcast-translate-s01e26",
       baseRefName: "main",
+      baseSha: "main-sha",
       labels: [],
     },
     existingAttempt,
@@ -431,6 +589,7 @@ test("triggerReconcile does not re-review an unchanged head after PR metadata ed
     headSha: "same-head",
     status: "completed",
     conclusion: "declined",
+    prBaseSha: "main-sha",
     prTitle: "Original title",
     promptFingerprint: "old-fingerprint",
     createdAt: "2026-05-28T09:00:00.000Z",
@@ -492,6 +651,7 @@ test("triggerReconcile does not re-review an unchanged head after PR metadata ed
           headSha: "same-head",
           headRefName: "feat/metadata-only",
           baseRefName: "main",
+          baseSha: "main-sha",
           labels: [],
         },
       ],
@@ -569,7 +729,6 @@ test("triggerReconcile recovers a running attempt left behind by service restart
       listAttemptsForPullRequest: () => [storedAttempt],
       getAttempt: () => storedAttempt,
       findApprovedAttemptByPatchId: () => undefined,
-      findApprovedAttemptByPatchAndTree: () => undefined,
       updateAttempt: (_id: number, params: Record<string, unknown>) => {
         updates.push(params);
         storedAttempt = { ...storedAttempt, ...params };
@@ -587,6 +746,7 @@ test("triggerReconcile recovers a running attempt left behind by service restart
           headSha: "restart-head",
           headRefName: "feat/restart-head",
           baseRefName: "main",
+          baseSha: "main-sha",
           labels: ["review:no-cache"],
         },
       ],
@@ -738,6 +898,53 @@ test("reconcile outcome is failed when every repo discovery fails with GitHub au
   assert.equal(runtime.lastReconcileOutcome, "failed");
   assert.match(runtime.lastReconcileError ?? "", /Bad credentials/);
   assert.equal(Object.keys(runtime.repoLastReconcileErrors).length, 2);
+});
+
+test("dispatchReview owns and disposes a prepared workspace exactly once", async () => {
+  let disposeCalls = 0;
+  const service = buildParallelTestService({
+    headStabilizationMs: 0,
+    github: {
+      getPullRequest: async () => ({
+        number: 7,
+        state: "OPEN",
+        isDraft: false,
+        headSha: "stable-head",
+        baseSha: "stable-base",
+      }),
+    },
+  });
+  (service as unknown as { executeReview: () => Promise<void> }).executeReview = async () => undefined;
+
+  await (service as unknown as {
+    dispatchReview: (
+      repo: unknown,
+      pr: unknown,
+      existing: undefined,
+      identity: unknown,
+      prepared: unknown,
+    ) => Promise<void>;
+  }).dispatchReview(
+    { repoId: "alpha", repoFullName: "krasnoperov/alpha" },
+    {
+      number: 7,
+      state: "OPEN",
+      isDraft: false,
+      headSha: "stable-head",
+      baseSha: "stable-base",
+    },
+    undefined,
+    { patchId: "patch", prBaseSha: "stable-base", diffBaseSha: "stable-base" },
+    {
+      identity: { patchId: "patch", prBaseSha: "stable-base", diffBaseSha: "stable-base" },
+      workspace: {},
+      dispose: async () => {
+        disposeCalls += 1;
+      },
+    },
+  );
+
+  assert.equal(disposeCalls, 1);
 });
 
 test("dispatchReview deduplicates the same (repo, pr, head) — only one execution runs", async () => {
@@ -983,6 +1190,7 @@ test("failed Codex reviews persist the rendered prompt fingerprint and retain Co
     title: "Metadata refreshed during context build",
     body: "This is the exact snapshot rendered into the prompt.",
     headSha: "failing-head",
+    baseSha: "main-sha",
     state: "OPEN",
     isDraft: false,
     labels: [],
@@ -1010,6 +1218,7 @@ test("failed Codex reviews persist the rendered prompt fingerprint and retain Co
         number: 8,
         title: "Observe failed review",
         headSha: "failing-head",
+        baseSha: "main-sha",
         state: "OPEN",
         isDraft: false,
         labels: [],
@@ -1035,6 +1244,7 @@ test("failed Codex reviews persist the rendered prompt fingerprint and retain Co
     return {
       context: {
         pr: renderedPromptPr,
+        workspace: { baseRef: "main-sha" },
         diff: { inventory: [], patches: [], suppressed: [] },
       },
       dispose: async () => undefined,
@@ -1060,6 +1270,7 @@ test("failed Codex reviews persist the rendered prompt fingerprint and retain Co
       number: 8,
       title: "Observe failed review",
       headSha: "failing-head",
+      baseSha: "main-sha",
       state: "OPEN",
       isDraft: false,
       labels: [],

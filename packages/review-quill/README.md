@@ -14,12 +14,14 @@ For each eligible PR head:
 
 1. Detects that a new reviewable PR head exists.
 2. Materializes an ephemeral local checkout at that exact SHA.
-3. Builds a curated diff against the PR base branch.
+3. Builds a curated diff against GitHub's structured PR base. For a stacked
+   PR, that is the parent PR branch rather than the repository default.
 4. Loads repo review guidance plus universal `AGENTS.md` (`REVIEW_WORKFLOW.md`, `AGENTS.md` by default), plus local Markdown docs explicitly referenced by the PR title/body.
 5. Carries forward a prior approved verdict when the patch identity is unchanged.
 6. Runs a review pass through `codex app-server` when a fresh review is needed.
 7. Publishes an ordinary GitHub `APPROVE` or `REQUEST_CHANGES` review.
-8. Supersedes stale attempts and interrupts running review turns when a newer PR head lands first.
+8. Supersedes stale attempts and interrupts running review turns when the PR
+   head or captured base changes first.
 
 The review runs against the real working tree at that SHA, not the GitHub files API.
 
@@ -27,7 +29,7 @@ The default Codex sandbox mode is `danger-full-access` because many systemd host
 
 Review Quill requests native structured verdict output by default. Set `codex.outputSchema` to `false` for a reversible compatibility rollback with older Codex app-server versions.
 
-Review threads start fresh by default. Set `codex.forkPriorReviewThread` to `true` to let a newer PR head fork the immediately preceding completed review thread when its review surface, base, prompt fingerprint, and live terminal Codex thread all match. A successful fork receives a bounded follow-up prompt and inspects the current checkout instead of receiving patch bodies again; fresh starts and fork fallbacks keep the full prompt. Set the option back to `false` for an immediate rollback to always-fresh review threads.
+Review threads start fresh by default. Set `codex.forkPriorReviewThread` to `true` to let a newer PR head fork the immediately preceding completed review thread when its diff base, prompt fingerprint, and live terminal Codex thread all match. A successful fork receives a bounded follow-up prompt and inspects the current checkout instead of receiving patch bodies again; fresh starts and fork fallbacks keep the full prompt. Set the option back to `false` for an immediate rollback to always-fresh review threads.
 
 By default, a PR becomes eligible for review as soon as its branch head updates. Set `waitForGreenChecks: true` per-repo to gate on configured checks first.
 

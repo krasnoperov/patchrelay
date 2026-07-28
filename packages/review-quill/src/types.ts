@@ -1,12 +1,5 @@
 import type { SecretSource } from "./resolve-secret.ts";
 
-// "head" reviews the PR head's diff against its base; carry-forward
-// keys on patch_id alone (Gerrit's trivial-rebase rule). "integration_tree"
-// reviews the synthetic merged tree; carry-forward keys on
-// (patch_id, integration_tree_id). v1 ships head only; integration_tree
-// support requires synthetic-worktree materialization which is deferred.
-export type ReviewSurfaceMode = "head" | "integration_tree";
-
 export interface ReviewQuillRepositoryConfig {
   repoId: string;
   repoFullName: string;
@@ -22,9 +15,6 @@ export interface ReviewQuillRepositoryConfig {
   // PRs typically want a fresh review even when the patch is unchanged.
   // Default `review:no-cache` (resolved at consumer side).
   noCacheLabel?: string | undefined;
-  // Which surface the reviewer reviews. v1 default is `head`. Setting
-  // `integration_tree` is rejected at runtime until that path ships.
-  reviewSurfaceMode?: ReviewSurfaceMode | undefined;
 }
 
 export interface PromptFileFragment {
@@ -97,6 +87,9 @@ export interface PullRequestSummary {
   headSha: string;
   headRefName: string;
   baseRefName: string;
+  // GitHub's structured base commit for this PR snapshot. Capture it with
+  // baseRefName so a review cannot drift if the base moves mid-run.
+  baseSha: string;
   authorLogin?: string;
   mergedAt?: string;
   closedAt?: string;
@@ -190,6 +183,7 @@ export interface ReviewWorkspace {
   diffTarget?: "head" | "working-tree";
   headRef: string;
   headSha: string;
+  prBaseSha?: string;
 }
 
 export interface ReviewDiffContext {
@@ -243,15 +237,11 @@ export interface ReviewAttemptRecord {
   threadId?: string;
   turnId?: string;
   externalCheckRunId?: number;
-  // Identity of the reviewed change. patchId is `git patch-id --stable`
-  // of the PR diff against its merge-base with the resolved base ref.
-  // integrationTreeId is the synthetic merged tree id (only populated in
-  // integration_tree mode). reviewSurfaceMode records which mode produced
-  // this row so a project mode change doesn't carry approvals across modes.
+  // Identity of the reviewed head-only change. patchId is
+  // `git patch-id --stable` of the PR diff against diffBaseSha.
   patchId?: string;
-  integrationTreeId?: string;
-  reviewSurfaceMode?: ReviewSurfaceMode;
-  baseSha?: string;
+  prBaseSha?: string;
+  diffBaseSha?: string;
   // Set on a carry-forward row to point at the original approved attempt
   // whose verdict we re-emitted. NULL on the original.
   priorAttemptId?: number;

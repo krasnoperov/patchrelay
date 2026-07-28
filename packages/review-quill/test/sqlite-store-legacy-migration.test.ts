@@ -6,18 +6,87 @@ import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { SqliteStore } from "../src/db/sqlite-store.ts";
 
+test("SqliteStore upgrades the actual pre-carry-forward review-attempt schema", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "review-quill-pre-carry-"));
+  const dbPath = path.join(baseDir, "review-quill.sqlite");
+  try {
+    const seed = new DatabaseSync(dbPath);
+    seed.exec(`
+      CREATE TABLE webhook_events (
+        delivery_id TEXT PRIMARY KEY,
+        event_type TEXT NOT NULL,
+        repo_full_name TEXT,
+        received_at TEXT NOT NULL,
+        processed_at TEXT,
+        ignored_reason TEXT
+      );
+      CREATE TABLE review_attempts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        repo_full_name TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        head_sha TEXT NOT NULL,
+        status TEXT NOT NULL,
+        conclusion TEXT,
+        summary TEXT,
+        thread_id TEXT,
+        turn_id TEXT,
+        external_check_run_id INTEGER,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        UNIQUE(repo_full_name, pr_number, head_sha)
+      );
+      INSERT INTO review_attempts (
+        repo_full_name, pr_number, head_sha, status, conclusion, summary,
+        created_at, updated_at, completed_at
+      ) VALUES (
+        'krasnoperov/patchrelay', 100, 'old-head', 'completed', 'approved', 'Historic approval',
+        '2026-01-01T00:00:00.000Z', '2026-01-01T00:01:00.000Z', '2026-01-01T00:01:00.000Z'
+      );
+    `);
+    seed.close();
+
+    const store = new SqliteStore(dbPath);
+    const attempt = store.getAttempt("krasnoperov/patchrelay", 100, "old-head");
+    assert.equal(attempt?.summary, "Historic approval");
+    assert.equal(attempt?.patchId, undefined, "historic rows remain conservative cache misses");
+    store.close();
+
+    const verify = new DatabaseSync(dbPath);
+    const names = new Set(
+      (verify.prepare("PRAGMA table_info(review_attempts)").all() as Array<{ name: string }>)
+        .map((column) => column.name),
+    );
+    for (const required of [
+      "prompt_fingerprint",
+      "patch_id",
+      "pr_base_sha",
+      "base_sha",
+      "prior_attempt_id",
+      "review_body",
+      "review_event",
+      "publication_mode",
+    ]) {
+      assert.ok(names.has(required), `${required} should be added`);
+    }
+    verify.close();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 // Regression for the "no such column: patch_id" startup crash hit
 // in production after upgrading to v0.17.x. The carry-forward PR
-// added CREATE INDEX statements referencing patch_id / integration_tree_id
+// added CREATE INDEX statements referencing patch_id
 // to SCHEMA_SQL, but for legacy databases the CREATE TABLE IF NOT EXISTS
 // is a no-op (the table already exists without those columns) so the
 // index DDL ran before addColumnIfMissing and crashed.
-test("SqliteStore opens a legacy database that pre-dates the carry-forward columns", () => {
+test("SqliteStore removes the transcript and integration-surface era schema", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "review-quill-legacy-"));
   const dbPath = path.join(baseDir, "review-quill.sqlite");
   try {
-    // Seed the file with the pre-carry-forward schema. This is the
-    // shape of any DB created by review-quill < 0.13.
+    // Seed a production-era hybrid that contains carry-forward identity,
+    // transcript copies, and the later integration-surface experiment.
     const seed = new DatabaseSync(dbPath);
     seed.exec(`
       CREATE TABLE webhook_events (
@@ -40,24 +109,31 @@ test("SqliteStore opens a legacy database that pre-dates the carry-forward colum
         turn_id TEXT,
         transcript_json TEXT,
         external_check_run_id INTEGER,
+        integration_tree_id TEXT,
+        review_surface_mode TEXT,
+        patch_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         completed_at TEXT,
         UNIQUE(repo_full_name, pr_number, head_sha)
       );
+      CREATE INDEX idx_review_attempts_patch_tree
+        ON review_attempts(repo_full_name, pr_number, patch_id, integration_tree_id);
       INSERT INTO review_attempts (
         repo_full_name, pr_number, head_sha, status, conclusion, summary,
-        thread_id, turn_id, transcript_json, created_at, updated_at, completed_at
+        thread_id, turn_id, transcript_json, integration_tree_id, review_surface_mode,
+        created_at, updated_at, completed_at
       ) VALUES (
         'krasnoperov/patchrelay', 626, 'abc123', 'completed', 'approved', 'Looks good.',
         'thread-626', 'turn-626', '{"id":"thread-626","turns":[{"id":"turn-626","status":"completed","items":[]}]}',
+        'tree-626', 'integration_tree',
         '2026-07-22T00:00:00.000Z', '2026-07-22T00:01:00.000Z', '2026-07-22T00:01:00.000Z'
       );
     `);
     seed.close();
 
     // Should not throw — addColumnIfMissing must add patch_id /
-    // integration_tree_id before the CREATE INDEX statements run.
+    // before the CREATE INDEX statements run.
     const store = new SqliteStore(dbPath);
     store.close();
 
@@ -66,10 +142,17 @@ test("SqliteStore opens a legacy database that pre-dates the carry-forward colum
     const cols = verify.prepare("PRAGMA table_info(review_attempts)").all() as Array<{ name: string }>;
     const names = new Set(cols.map((c) => c.name));
     assert.ok(names.has("patch_id"), "patch_id column should be added on open");
-    assert.ok(names.has("integration_tree_id"), "integration_tree_id column should be added on open");
-    assert.ok(names.has("review_surface_mode"), "review_surface_mode column should be added on open");
+    assert.ok(names.has("pr_base_sha"), "pr_base_sha column should be added on open");
+    assert.ok(names.has("base_sha"), "base_sha column should be added on open");
     assert.ok(names.has("prompt_fingerprint"), "prompt_fingerprint column should be added on open");
     assert.ok(!names.has("transcript_json"), "transcript_json column should be removed on open");
+    assert.ok(!names.has("integration_tree_id"), "integration_tree_id column should be removed on open");
+    assert.ok(!names.has("review_surface_mode"), "review_surface_mode column should be removed on open");
+    const indexes = verify.prepare("PRAGMA index_list(review_attempts)").all() as Array<{ name: string }>;
+    assert.ok(
+      !indexes.some((index) => index.name === "idx_review_attempts_patch_tree"),
+      "legacy patch/tree index should be removed on open",
+    );
     const attempt = verify.prepare(`
       SELECT repo_full_name, pr_number, head_sha, status, conclusion, summary, thread_id, turn_id
       FROM review_attempts

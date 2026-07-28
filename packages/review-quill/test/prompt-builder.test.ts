@@ -38,6 +38,7 @@ function baseContext(): Omit<ReviewContext, "prompt"> {
       headSha: "abc123",
       headRefName: "feature/review",
       baseRefName: "main",
+      baseSha: "main-sha",
       labels: [],
     },
     diff: {

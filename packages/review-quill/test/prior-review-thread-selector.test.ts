@@ -18,8 +18,7 @@ const attempt: ReviewAttemptRecord = {
   promptFingerprint: "prompt-1",
   threadId: "thread-1",
   turnId: "turn-1",
-  reviewSurfaceMode: "head",
-  baseSha: "base-1",
+  diffBaseSha: "base-1",
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
   completedAt: "2026-01-01T00:01:00.000Z",
@@ -27,7 +26,7 @@ const attempt: ReviewAttemptRecord = {
 
 function select(overrides: {
   enabled?: boolean;
-  identity?: { patchId: string; baseSha: string; mode: "head" | "integration_tree" };
+  identity?: { patchId: string; prBaseSha: string; diffBaseSha: string };
   currentHeadSha?: string;
   promptFingerprint?: string;
   attempt?: ReviewAttemptRecord;
@@ -35,7 +34,7 @@ function select(overrides: {
 } = {}) {
   return selectPriorReviewThread({
     enabled: overrides.enabled ?? true,
-    identity: overrides.identity ?? { patchId: "patch-2", baseSha: "base-1", mode: "head" },
+    identity: overrides.identity ?? { patchId: "patch-2", prBaseSha: "pr-base-1", diffBaseSha: "base-1" },
     currentHeadSha: overrides.currentHeadSha ?? "new-head",
     promptFingerprint: overrides.promptFingerprint ?? "prompt-1",
     latest: { attempt: overrides.attempt ?? attempt, transcript: overrides.transcript ?? transcript },
@@ -64,8 +63,7 @@ test("selectPriorReviewThread rejects each unsafe identity and transcript mismat
     ["prior_not_decisive", select({ attempt: { ...attempt, status: "failed" } })],
     ["carry_forward_attempt", select({ attempt: { ...attempt, priorAttemptId: 99 } })],
     ["missing_thread_state", select({ attempt: { ...attempt, threadId: undefined } })],
-    ["surface_mismatch", select({ identity: { patchId: "p", baseSha: "base-1", mode: "integration_tree" } })],
-    ["base_mismatch", select({ identity: { patchId: "p", baseSha: "base-2", mode: "head" } })],
+    ["base_mismatch", select({ identity: { patchId: "p", prBaseSha: "pr-base-2", diffBaseSha: "base-2" } })],
     ["prompt_mismatch", select({ promptFingerprint: "prompt-2" })],
     ["thread_mismatch", select({ transcript: { ...transcript, id: "other-thread" } })],
     ["terminal_turn_mismatch", select({ transcript: { ...transcript, turns: [...transcript.turns, { id: "turn-2", status: "completed", items: [] }] } })],

@@ -17,10 +17,10 @@ import { CodexCapacityError, CodexCapacityPause } from "./codex-capacity.ts";
 import { AttemptReconciler } from "./attempt-reconciler.ts";
 import { decorateAttempt } from "./attempt-state.ts";
 import { getLatestAttemptsByPullRequest } from "./attempt-summary.ts";
-import { CannotIntegrateError, buildReviewContext } from "./review-context.ts";
+import { buildReviewContext } from "./review-context.ts";
 import {
   type ChangeIdentity,
-  resolveReviewSurfaceMode,
+  type PreparedReviewChange,
   tryCarryForward,
 } from "./carry-forward.ts";
 import {
@@ -62,7 +62,8 @@ export class ReviewQuillService {
   private readonly startedAt = new Date().toISOString();
   private readonly pendingReviewsByRepo = new Map<string, ReviewQuillPendingReview[]>();
   /**
-   * In-memory dedupe of executions. Key is `{repoFullName}::{prNumber}::{headSha}`.
+   * In-memory dedupe of executions. Key is
+   * `{repoFullName}::{prNumber}::{headSha}::{baseSha}`.
    * Two discovery passes that both land on the same PR head before the DB row is
    * inserted would otherwise both dispatch — this map ensures only one runs.
    * Cross-restart safety is provided by the `UNIQUE(repo_full_name, pr_number,
@@ -86,6 +87,8 @@ export class ReviewQuillService {
    * executeReview success/failure handling.
    */
   private buildContext: typeof buildReviewContext = buildReviewContext;
+  /** Keeps carry-forward selection separate from prepared-workspace ownership. */
+  private carryForward: typeof tryCarryForward = tryCarryForward;
   private readonly runtime: ReviewQuillRuntimeStatus = {
     lastReconcileStartedAt: null,
     lastReconcileCompletedAt: null,
@@ -329,13 +332,20 @@ export class ReviewQuillService {
     pr: PullRequestSummary,
     existing: ReviewAttemptRecord | undefined,
     identity: ChangeIdentity | undefined,
+    preparedChange?: PreparedReviewChange,
   ): Promise<void> {
-    if (this.stopping) return Promise.resolve();
-    const key = `${repo.repoFullName}::${pr.number}::${pr.headSha}`;
+    if (this.stopping) {
+      void preparedChange?.dispose();
+      return Promise.resolve();
+    }
+    const key = this.reviewInputKey(repo.repoFullName, pr);
     const inFlight = this.inFlightReviews.get(key);
-    if (inFlight) return inFlight;
+    if (inFlight) {
+      void preparedChange?.dispose();
+      return inFlight;
+    }
 
-    this.supersedeInFlightReviewsForPullRequest(repo, pr.number, pr.headSha);
+    this.supersedeInFlightReviewsForPullRequest(repo, pr);
     const controller = new AbortController();
     const timing = new ReviewExecutionTiming(this.nowMs);
     this.inFlightReviewSignals.set(key, controller);
@@ -353,7 +363,7 @@ export class ReviewQuillService {
           }
           this.throwIfReviewSuperseded(controller.signal);
           const currentPr = await this.github.getPullRequest(repo.repoFullName, pr.number);
-          const disposition = classifyPublicationDisposition(currentPr, pr.headSha);
+          const disposition = classifyPublicationDisposition(currentPr, pr);
           if (disposition.action !== "publish") {
             if (disposition.action === "supersede") {
               this.requestReconcile(repo.repoFullName);
@@ -369,7 +379,7 @@ export class ReviewQuillService {
           timing.endSemaphoreWait();
         }
         this.throwIfReviewSuperseded(controller.signal);
-        await this.executeReview(repo, pr, existing, identity, controller.signal, timing);
+        await this.executeReview(repo, pr, existing, identity, controller.signal, timing, preparedChange);
       } catch (error) {
         if (error instanceof ReviewExecutionSupersededError) {
           this.logger.info({
@@ -387,6 +397,7 @@ export class ReviewQuillService {
           err: error instanceof Error ? error.message : String(error),
         }, "Review execution failed");
       } finally {
+        await preparedChange?.dispose();
         this.logger.info({
           repo: repo.repoFullName,
           prNumber: pr.number,
@@ -406,22 +417,28 @@ export class ReviewQuillService {
 
   private supersedeInFlightReviewsForPullRequest(
     repo: ReviewQuillRepositoryConfig,
-    prNumber: number,
-    currentHeadSha: string,
+    pr: Pick<PullRequestSummary, "number" | "headSha" | "baseSha">,
   ): void {
-    const prefix = `${repo.repoFullName}::${prNumber}::`;
+    const prefix = `${repo.repoFullName}::${pr.number}::`;
+    const currentKey = this.reviewInputKey(repo.repoFullName, pr);
     for (const [key, controller] of this.inFlightReviewSignals.entries()) {
-      if (!key.startsWith(prefix) || key === `${prefix}${currentHeadSha}` || controller.signal.aborted) {
+      if (!key.startsWith(prefix) || key === currentKey || controller.signal.aborted) {
         continue;
       }
-      controller.abort(`Superseded by newer head ${currentHeadSha.slice(0, 12)} before review started.`);
-      const supersededHeadSha = key.slice(prefix.length);
+      const supersededHeadSha = key.slice(prefix.length).split("::", 1)[0] ?? "";
+      const reason = supersededHeadSha !== pr.headSha
+        ? `Superseded by newer head ${pr.headSha.slice(0, 12)} before review started.`
+        : `Superseded because the PR base changed to ${(pr.baseSha ?? "").slice(0, 12)} before review started.`;
+      controller.abort(reason);
+      const supersededInput = key.slice(prefix.length);
       const timing = this.inFlightReviewTimings.get(key);
       this.logger.info({
         repo: repo.repoFullName,
-        prNumber,
-        currentHeadSha,
+        prNumber: pr.number,
+        currentHeadSha: pr.headSha,
+        currentBaseSha: pr.baseSha,
         supersededHeadSha,
+        supersededInput,
         supersededKey: key,
         phase: timing?.phase ?? "unknown",
         supersededBeforeAttempt: timing ? !timing.attemptCreated : undefined,
@@ -429,6 +446,13 @@ export class ReviewQuillService {
         elapsedMs: timing?.snapshot().totalExecutionMs,
       }, "Superseded older in-flight review worker for pull request");
     }
+  }
+
+  private reviewInputKey(
+    repoFullName: string,
+    pr: Pick<PullRequestSummary, "number" | "headSha" | "baseSha">,
+  ): string {
+    return `${repoFullName}::${pr.number}::${pr.headSha}::${pr.baseSha ?? ""}`;
   }
 
   private throwIfReviewSuperseded(signal: AbortSignal | undefined): void {
@@ -454,7 +478,7 @@ export class ReviewQuillService {
     await this.reconciler.reconcileClosedPullRequestAttempts(repo, prs);
     for (const pr of prs) {
       await this.reconciler.reconcileActiveAttemptsForPullRequest(repo, pr);
-      this.supersedeInFlightReviewsForPullRequest(repo, pr.number, pr.headSha);
+      this.supersedeInFlightReviewsForPullRequest(repo, pr);
       const currentReviews = await this.github.listPullRequestReviews(repo.repoFullName, pr.number);
       const existing = this.store.getAttempt(repo.repoFullName, pr.number, pr.headSha);
       const eligibility = await this.evaluateEligibility(repo, pr.number, pr.headSha, pr.isDraft, pr.headRefName);
@@ -479,43 +503,69 @@ export class ReviewQuillService {
       }
 
       // Decide whether this PR needs a fresh review run, attempting
-      // carry-forward first when eligible. Dismissal of stale decisive
-      // reviews must run AFTER the carry-forward decision (plan
-      // implementation.md §A.4): otherwise a transient identity-compute
-      // failure would dismiss the prior approval and leave nothing to
-      // re-emit.
+      // carry-forward first when eligible. Dismiss stale decisive reviews
+      // only after the identity decision, but never preserve a same-head
+      // verdict whose captured base no longer matches GitHub.
       let needsExecution = false;
       let identity: ChangeIdentity | undefined;
-      if (existing && !["failed", "cancelled", "superseded"].includes(existing.status)) {
-        // Exact-head match — already reviewed (or in-flight) on this SHA.
+      let preparedChange: PreparedReviewChange | undefined;
+      let dismissalPr = pr;
+      let inputChangedDuringCarryForward = false;
+      const exactInputAttempt = existing?.prBaseSha === pr.baseSha;
+      if (existing && exactInputAttempt && !["failed", "cancelled", "superseded"].includes(existing.status)) {
+        // Exact head and base input — already reviewed or in flight.
       } else if (!eligibility.eligible) {
         // Ineligible — nothing to publish.
       } else {
-        const result = await tryCarryForward(repo, pr, {
+        const result = await this.carryForward(repo, pr, {
           store: this.store,
           github: this.github,
           logger: this.logger,
         });
         if (result.kind === "carried_forward") {
           needsExecution = false;
+        } else if (result.kind === "input_changed") {
+          dismissalPr = result.currentPr;
+          inputChangedDuringCarryForward = true;
+          this.requestReconcile(repo.repoFullName);
         } else {
-          identity = result.kind === "no_candidate" ? result.identity : undefined;
+          identity = result.kind === "no_candidate" ? result.prepared.identity : undefined;
+          preparedChange = result.kind === "no_candidate" ? result.prepared : undefined;
           needsExecution = true;
         }
       }
 
-      // Now safe: either we already re-emitted on the current head
-      // (carry-forward hit) or we are about to run a fresh review that
-      // will publish a new verdict (executeReview branch).
-      await this.reconciler.dismissStaleDecisiveReviews(repo, pr, currentReviews);
+      const dismissalAttempt = this.store.getAttempt(
+        repo.repoFullName,
+        dismissalPr.number,
+        dismissalPr.headSha,
+      );
+      const invalidateCurrentHead = dismissalAttempt !== undefined
+        && dismissalAttempt.prBaseSha !== dismissalPr.baseSha;
+      // A decisive review is valid only for the exact head+base input it saw.
+      // Dismiss same-head verdicts before asynchronous re-review when the base
+      // changed; otherwise Merge Steward could observe the old approval in the
+      // gap. A carry-forward race is reconciled from its freshly-read PR truth.
+      try {
+        await this.reconciler.dismissStaleDecisiveReviews(
+          repo,
+          dismissalPr,
+          currentReviews,
+          { invalidateCurrentHead },
+        );
+      } catch (error) {
+        await preparedChange?.dispose();
+        throw error;
+      }
 
-      if (needsExecution) {
+      if (needsExecution && !inputChangedDuringCarryForward) {
         // While the Codex account is out of capacity, skip dispatch
         // entirely — every attempt would burn a workspace + thread just to
         // fail with the same account-level error. One warn was logged when
         // the pause began; per-PR skips stay at debug. The pause expires by
         // itself, so the next cycle past the deadline dispatches normally.
         if (this.codexCapacityPause.isPaused()) {
+          await preparedChange?.dispose();
           this.logger.debug({
             repo: repo.repoFullName,
             prNumber: pr.number,
@@ -529,7 +579,7 @@ export class ReviewQuillService {
         // way one repo's long-running review never blocks discovery for
         // any other repo. The semaphore inside `dispatchReview` is what
         // bounds CPU/memory, not the discovery loop.
-        this.dispatchReview(repo, pr, existing, identity);
+        this.dispatchReview(repo, pr, existing, identity, preparedChange);
       }
     }
 
@@ -571,6 +621,7 @@ export class ReviewQuillService {
     identity?: ChangeIdentity,
     signal?: AbortSignal,
     timing?: ReviewExecutionTiming,
+    preparedChange?: PreparedReviewChange,
   ): Promise<void> {
     this.throwIfReviewSuperseded(signal);
     // A worker dispatched moments before a Codex capacity pause began may
@@ -585,16 +636,9 @@ export class ReviewQuillService {
       }, "Skipping review execution during Codex capacity pause");
       return;
     }
-    // Plan §3.6: the publication policy below (inline-vs-body-only)
-    // must match whatever materializeReviewWorkspaceWithMode actually
-    // produced. buildReviewContext resolves surface mode straight from
-    // repo config — derive the same here so we don't anchor inline
-    // comments at PR head while the model reviewed an integration
-    // tree (identity computation can return undefined for stacked
-    // PRs and other failure paths; identity.mode is therefore not a
-    // reliable source of truth).
-    const surfaceMode = resolveReviewSurfaceMode(repo);
     const promptFingerprint = buildPromptFingerprint(pr);
+    const existingInputChanged = existingAttempt !== undefined
+      && existingAttempt.prBaseSha !== pr.baseSha;
     let priorThreadCandidate: PriorReviewThreadCandidate | undefined;
     if (this.config.codex.forkPriorReviewThread) {
       const latestAttempt = this.store.getLatestDifferentHeadAttempt(repo.repoFullName, pr.number, pr.headSha);
@@ -641,10 +685,17 @@ export class ReviewQuillService {
         summary: "Retrying previous failed review attempt",
         externalCheckRunId: null,
         completedAt: null,
+        ...(existingInputChanged ? {
+          threadId: null,
+          turnId: null,
+          priorAttemptId: null,
+          reviewBody: null,
+          reviewEvent: null,
+          publicationMode: null,
+        } : {}),
         ...(identity?.patchId !== undefined ? { patchId: identity.patchId } : {}),
-        ...(identity?.integrationTreeId !== undefined ? { integrationTreeId: identity.integrationTreeId } : {}),
-        reviewSurfaceMode: surfaceMode,
-        ...(identity?.baseSha !== undefined ? { baseSha: identity.baseSha } : {}),
+        prBaseSha: identity?.prBaseSha ?? pr.baseSha,
+        ...(identity?.diffBaseSha !== undefined ? { diffBaseSha: identity.diffBaseSha } : {}),
         promptFingerprint,
       }) ?? existingAttempt)
       : this.store.createAttempt({
@@ -655,9 +706,8 @@ export class ReviewQuillService {
         ...(pr.title ? { prTitle: pr.title } : {}),
         promptFingerprint,
         ...(identity?.patchId !== undefined ? { patchId: identity.patchId } : {}),
-        ...(identity?.integrationTreeId !== undefined ? { integrationTreeId: identity.integrationTreeId } : {}),
-        reviewSurfaceMode: surfaceMode,
-        ...(identity?.baseSha !== undefined ? { baseSha: identity.baseSha } : {}),
+        prBaseSha: identity?.prBaseSha ?? pr.baseSha,
+        ...(identity?.diffBaseSha !== undefined ? { diffBaseSha: identity.diffBaseSha } : {}),
       });
     timing?.markAttemptCreated();
     if (existingAttempt && pr.title && attempt.prTitle !== pr.title) {
@@ -674,7 +724,7 @@ export class ReviewQuillService {
       this.throwIfReviewSuperseded(signal);
 
       const preflightPr = await this.github.getPullRequest(repo.repoFullName, pr.number);
-      const preflightDisposition = classifyPublicationDisposition(preflightPr, pr.headSha);
+      const preflightDisposition = classifyPublicationDisposition(preflightPr, pr);
       if (preflightDisposition.action !== "publish") {
         const superseded = preflightDisposition.action === "supersede";
         this.store.updateAttempt(attempt.id, {
@@ -707,44 +757,33 @@ export class ReviewQuillService {
       }, this.config.reconciliation.heartbeatIntervalMs);
       heartbeat.unref?.();
 
-      let prepared: Awaited<ReturnType<typeof buildReviewContext>>;
-      try {
-        prepared = await this.buildContext({
-          github: this.github,
-          repo,
-          pr,
-          prompting: this.config.prompting,
-          logger: this.logger,
-          selfLogin: this.reviewerLogin,
-          ...(priorThreadCandidate ? { priorThread: priorThreadCandidate } : {}),
-        });
-      } catch (error) {
-        if (error instanceof CannotIntegrateError) {
-          // Plan §3.4 conflict path. Mark this attempt declined with a
-          // `cannot_integrate` reason so the lander's spec build is
-          // not bypassed and the operator sees an early-eviction signal.
-          this.store.updateAttempt(attempt.id, {
-            status: "completed",
-            conclusion: "declined",
-            summary: `cannot_integrate: PR head conflicts with ${repo.baseBranch}`,
-            completedAt: new Date().toISOString(),
-          });
-          this.logger.warn({
-            repo: repo.repoFullName,
-            prNumber: pr.number,
-            headSha: error.headSha,
-            baseSha: error.baseSha,
-          }, "Marked review attempt declined: cannot_integrate (merge-tree conflict in integration_tree mode)");
-          return;
-        }
-        throw error;
-      }
+      const prepared = await this.buildContext({
+        github: this.github,
+        repo,
+        pr,
+        prompting: this.config.prompting,
+        logger: this.logger,
+        selfLogin: this.reviewerLogin,
+        ...(priorThreadCandidate ? { priorThread: priorThreadCandidate } : {}),
+        ...(preparedChange ? {
+          materialized: {
+            workspace: preparedChange.workspace,
+            // dispatchReview owns the materialized workspace lifetime. Keep
+            // buildReviewContext's local cleanup hook inert so success,
+            // failure, cancellation, and duplicate-dispatch paths all release
+            // the workspace exactly once from the outer worker boundary.
+            dispose: async () => undefined,
+          },
+        } : {}),
+      });
       // buildReviewContext refreshes same-head PR metadata immediately before
       // rendering. Persist the fingerprint of that exact snapshot so the next
       // follow-up selection is keyed to what Codex actually reviewed, rather
       // than the earlier preflight snapshot.
       this.store.updateAttempt(attempt.id, {
         promptFingerprint: buildPromptFingerprint(prepared.context.pr),
+        prBaseSha: prepared.context.pr.baseSha,
+        diffBaseSha: prepared.context.workspace.baseRef,
       });
       let result: Awaited<ReturnType<ReviewRunner["review"]>>;
       try {
@@ -790,7 +829,6 @@ export class ReviewQuillService {
       const { reviewBody, inlineComments, filteredFindings, event, dropStats } = renderReviewArtifacts({
         verdict: result.verdict,
         inventoryPaths: prepared.context.diff.inventory.map((entry) => entry.path),
-        surfaceMode,
       });
       if (dropStats.droppedTotal > 0) {
         this.logger.info({
@@ -804,7 +842,7 @@ export class ReviewQuillService {
         }, "Dropped low-confidence, hallucinated-path, or over-cap findings before posting");
       }
       const currentPr = await this.github.getPullRequest(repo.repoFullName, pr.number);
-      const publicationDisposition = classifyPublicationDisposition(currentPr, pr.headSha);
+      const publicationDisposition = classifyPublicationDisposition(currentPr, pr);
       if (publicationDisposition.action !== "publish") {
         const superseded = publicationDisposition.action === "supersede";
         this.store.updateAttempt(attempt.id, {

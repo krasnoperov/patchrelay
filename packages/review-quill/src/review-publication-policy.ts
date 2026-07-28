@@ -89,8 +89,8 @@ export function buildReviewBody(params: {
   verdict: ReviewVerdict;
   event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
   // When provided, render these findings into a `## Findings` section in
-  // the body. Used when inline comments cannot be posted (422 retry,
-  // integration_tree mode) so the specifics still survive in markdown.
+  // the body. Used when inline comments cannot be posted after a 422 retry
+  // so the specifics still survive in markdown.
   inlineFindings?: ReviewFinding[];
 }): string {
   const { verdict, event, inlineFindings } = params;
@@ -148,6 +148,7 @@ export function findStaleDecisiveReviews(params: {
   reviews: PullRequestReviewRecord[];
   reviewerLogin: string | undefined;
   headSha: string;
+  includeCurrentHead?: boolean;
 }): PullRequestReviewRecord[] {
   if (!params.reviewerLogin) {
     return [];
@@ -157,7 +158,7 @@ export function findStaleDecisiveReviews(params: {
     .reverse()
     .filter((review) => matchesReviewerLogin(review.authorLogin, params.reviewerLogin)
       && review.commitId !== undefined
-      && review.commitId !== params.headSha
+      && (params.includeCurrentHead || review.commitId !== params.headSha)
       && isDecisiveReviewState(review.state));
 }
 
@@ -195,13 +196,20 @@ export function hasMatchingLatestReviewForHead(
 }
 
 export function classifyPublicationDisposition(
-  currentPr: Pick<PullRequestSummary, "state" | "isDraft" | "headSha">,
-  reviewedHeadSha: string,
+  currentPr: Pick<PullRequestSummary, "state" | "isDraft" | "headSha" | "baseSha">,
+  reviewedPr: Pick<PullRequestSummary, "headSha" | "baseSha">,
 ): PublicationDisposition {
-  if (currentPr.headSha && currentPr.headSha !== reviewedHeadSha) {
+  if (currentPr.headSha && currentPr.headSha !== reviewedPr.headSha) {
     return {
       action: "supersede",
       summary: `Superseded by newer head ${currentPr.headSha.slice(0, 12)} before review publication`,
+      checkConclusion: "cancelled",
+    };
+  }
+  if (currentPr.baseSha && currentPr.baseSha !== reviewedPr.baseSha) {
+    return {
+      action: "supersede",
+      summary: `Superseded because the PR base changed to ${currentPr.baseSha.slice(0, 12)} before review publication`,
       checkConclusion: "cancelled",
     };
   }
