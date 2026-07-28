@@ -45,6 +45,24 @@ export async function prepareEntry(
     return;
   }
 
+  // A remote merge can advance main before GitHub's PR API reports `merged`.
+  // The PR head is then already contained in main, so building and testing an
+  // "integration" candidate would only reproduce the current main commit.
+  // Hold the entry until sanitizeEntry observes GitHub's terminal truth.
+  if (baseSha !== entry.headSha && await ctx.git.isAncestor(entry.headSha, baseSha)) {
+    const detail = `PR head ${entry.headSha.slice(0, 12)} is already contained in main ${baseSha.slice(0, 12)}; waiting for GitHub merge recognition`;
+    if (entry.waitDetail !== detail) {
+      emit(ctx, entry, "merge_waiting_recognition", { baseSha, detail });
+      ctx.store.transition(entry.id, "preparing_head", {
+        baseSha,
+        ...CLEAN_CI,
+        ...CLEAR_CANDIDATE,
+        waitDetail: detail,
+      }, detail);
+    }
+    return;
+  }
+
   // Candidate selection is structural, not a separate fast-forward workflow.
   // If the prospective base is already an ancestor of the PR head, that exact
   // immutable head is the future main candidate and its existing SHA-bound

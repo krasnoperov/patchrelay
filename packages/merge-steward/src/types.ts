@@ -295,6 +295,7 @@ export type ReconcileAction =
   | "budget_exhausted"
   | "merge_waiting_approval" // approval withdrawn, waiting for re-approval
   | "stack_dependency_waiting"
+  | "merge_waiting_recognition" // PR head already reaches main; wait for GitHub to classify the merge
   | "merge_waiting_main"     // main still verifying post-merge; keep spec + CI and retry
   | "main_pending_bypassed"  // main rerun pending for an already-validated merge commit
   | "pr_branch_cleanup_deferred" // GitHub has not yet classified the PR as merged
