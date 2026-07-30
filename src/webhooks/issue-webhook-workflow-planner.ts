@@ -21,7 +21,9 @@ type LinkedPrAdoptionResult = Exclude<Awaited<ReturnType<typeof resolveLinkedPrA
 export interface IssueWebhookWorkflowPlannerInput {
   existingIssue: IssueRecord | undefined;
   hydratedIssue: IssueMetadata;
-  latestRun?: Parameters<typeof resolveAwaitingInputReason>[0]["latestRun"];
+  latestRun?: (NonNullable<Parameters<typeof resolveAwaitingInputReason>[0]["latestRun"]> & {
+    runType?: RunType | undefined;
+  }) | undefined;
   delegated: boolean;
   linkedPrAdoption?: LinkedPrAdoptionResult | undefined;
   triggerAllowed: boolean;
@@ -93,7 +95,10 @@ export function planIssueWebhookWorkflow(input: IssueWebhookWorkflowPlannerInput
     && !openPrExists;
   const collaborationHandoff = input.existingIssue?.delegatedToPatchRelay === false
     && input.delegated
-    && input.activeRunType === "collaboration";
+    && (
+      input.activeRunType === "collaboration"
+      || input.latestRun?.runType === "collaboration"
+    );
 
   const desiredStage = input.linkedPrAdoption
     ? undefined

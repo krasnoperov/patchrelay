@@ -4254,6 +4254,119 @@ test("delegating active collaboration steers a turn-boundary handoff without int
   }
 });
 
+test("hydrated delegation after collaboration completion preserves the draft for delivery", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-collaboration-hydrated-delegate-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const issueRecord = db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-collaboration-hydrated-delegate",
+      issueKey: "MAF-92HD",
+      title: "Explore then deliver after a pause",
+      delegatedToPatchRelay: false,
+      currentLinearState: "Backlog",
+      currentLinearStateType: "unstarted",
+      workflowOutcome: undefined,
+      agentSessionId: "session-collaboration-hydrated-delegate",
+    });
+    const run = db.runs.createRun({
+      issueId: issueRecord.id,
+      projectId: issueRecord.projectId,
+      linearIssueId: issueRecord.linearIssueId,
+      runType: "collaboration",
+    });
+    db.runs.updateRunThread(run.id, {
+      threadId: "thread-collaboration-hydrated-delegate",
+      turnId: "turn-collaboration-hydrated-delegate",
+    });
+    db.runs.finishRun(run.id, { status: "completed" });
+
+    const linearClient: Partial<LinearClient> = {
+      getIssue: async () => ({
+        id: issueRecord.linearIssueId,
+        identifier: issueRecord.issueKey,
+        title: issueRecord.title,
+        teamId: "team-maf",
+        teamKey: "MAF",
+        delegateId: "patchrelay-actor",
+        stateId: "state-start",
+        stateName: "In Progress",
+        stateType: "started",
+        workflowStates: [],
+        labelIds: [],
+        labels: [],
+        teamLabels: [],
+        blockedBy: [],
+        blocks: [],
+      }),
+    };
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => linearClient as LinearClient } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T02:14:30.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { stateId: "state-backlog" },
+      data: {
+        id: issueRecord.linearIssueId,
+        identifier: issueRecord.issueKey,
+        title: issueRecord.title,
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-start", name: "In Progress", type: "started" },
+      },
+    };
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-collaboration-hydrated-delegate",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    const observation = db.workflowObservations
+      .listObservations(issueRecord.projectId, issueRecord.linearIssueId)
+      .find((entry) => entry.type === "linear.delegated");
+    assert.equal(
+      (JSON.parse(observation?.payloadJson ?? "{}") as { preserveDirtyWorktree?: boolean })
+        .preserveDirtyWorktree,
+      true,
+    );
+    const task = db.workflowTasks
+      .listOpenTasks(issueRecord.projectId, issueRecord.linearIssueId)
+      .find((entry) => entry.taskType === "run");
+    assert.equal(task?.runType, "implementation");
+    assert.equal(
+      (JSON.parse(task?.requirementsJson ?? "{}") as { preserveDirtyWorktree?: boolean })
+        .preserveDirtyWorktree,
+      true,
+    );
+    assert.deepEqual(enqueued, [{
+      projectId: issueRecord.projectId,
+      issueId: issueRecord.linearIssueId,
+    }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("un-delegating active collaboration preserves the conversation and session", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-collaboration-undelegate-"));
   try {

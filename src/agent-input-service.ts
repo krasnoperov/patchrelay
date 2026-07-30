@@ -4,6 +4,7 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
 import type { FollowupIntentClassification, FollowupIntentClassifier } from "./followup-intent.ts";
 import type { RunType } from "./run-type.ts";
+import { AgentStopService, type AgentStopResult } from "./agent-stop-service.ts";
 import {
   buildFollowupStatusActivity,
   buildNonActionableFollowupActivity,
@@ -18,14 +19,11 @@ import {
   extractLatestAssistantSummary,
   type InputMessageEventPayload,
   type PromptDeliveredEventPayload,
-  type StopRequestedEventPayload,
 } from "./issue-session-events.ts";
-import { dirtyWorktreeEventPayload, inspectGitWorktreeStatus } from "./git-worktree-status.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 import { deriveIssuePhase } from "./issue-phase.ts";
 import { isIssueDoneProjection } from "./issue-execution-state.ts";
 import { HUMAN_INPUT_OBSERVATION, SIGNAL_CONSUMED_OBSERVATION } from "./workflow-model.ts";
-import { listUnconsumedInboxObservationIds } from "./workflow-observation-context.ts";
 import { createHash } from "node:crypto";
 
 const WRITER = "agent-input-service";
@@ -43,12 +41,7 @@ export interface AgentInputDeliveryResult {
   activeRunType?: RunType | undefined;
 }
 
-export interface AgentInputStopResult {
-  status: "stopped" | "failed";
-  activeRunType?: RunType | undefined;
-  reason?: string | undefined;
-  dirtySummary?: string | undefined;
-}
+export type AgentInputStopResult = AgentStopResult;
 
 export type AgentInputSource =
   | "linear_agent_session"
@@ -58,6 +51,8 @@ export type AgentInputSource =
 type ActiveRun = NonNullable<ReturnType<PatchRelayDatabase["runs"]["getRunById"]>>;
 
 export class AgentInputService {
+  private readonly agentStop: AgentStopService;
+
   constructor(
     private readonly db: PatchRelayDatabase,
     private readonly codex: CodexAppServerClient,
@@ -65,7 +60,9 @@ export class AgentInputService {
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
     private readonly followupClassifier?: FollowupIntentClassifier,
-  ) {}
+  ) {
+    this.agentStop = new AgentStopService(db, codex, logger, feed);
+  }
 
   async deliverAgentInput(params: {
     project: ProjectConfig;
@@ -97,7 +94,7 @@ export class AgentInputService {
     }
 
     if (intent?.intent === "stop") {
-      const stopped = await this.stopIssue({
+      const stopped = await this.agentStop.stopIssue({
         issue,
         body,
         source: params.source,
@@ -437,139 +434,7 @@ export class AgentInputService {
     source: AgentInputSource | "linear_stop_signal" | "operator_stop";
     author?: string | undefined;
   }): Promise<AgentInputStopResult> {
-    const issue = this.db.issues.getIssue(params.issue.projectId, params.issue.linearIssueId) ?? params.issue;
-    const run = issue.activeRunId ? this.db.runs.getRunById(issue.activeRunId) : undefined;
-    const worktreeStatus = issue.worktreePath ? inspectGitWorktreeStatus(issue.worktreePath) : undefined;
-    const dirtyPayload = worktreeStatus ? dirtyWorktreeEventPayload(worktreeStatus) : undefined;
-    const dirtySummary = typeof dirtyPayload?.summary === "string" ? dirtyPayload.summary : undefined;
-
-    if (run?.threadId && run.turnId) {
-      try {
-        await this.codex.interruptTurn({
-          threadId: run.threadId,
-          turnId: run.turnId,
-        });
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        this.logger.warn({ issueKey: issue.issueKey, runId: run.id, error: reason }, "Failed to interrupt Codex turn for stop request");
-        this.feed?.publish({
-          level: "error",
-          kind: "workflow",
-          projectId: issue.projectId,
-          issueKey: issue.issueKey,
-          stage: run.runType,
-          status: "stop_failed",
-          summary: "Could not confirm that the active Codex turn stopped",
-          detail: reason,
-        });
-        return { status: "failed", activeRunType: run.runType, reason };
-      }
-    }
-
-    const stopCommit = this.db.transaction(() => {
-      const commit = this.db.issueSessions.commitIssueState({
-        writer: WRITER,
-        expectedVersion: issue.version,
-        update: {
-          projectId: issue.projectId,
-          linearIssueId: issue.linearIssueId,
-          activeRunId: null,
-          inputRequestKind: "paused_local_work",
-        },
-        onConflict: (current) => (
-          current.activeRunId === run?.id || current.activeRunId === undefined
-            ? {
-                projectId: issue.projectId,
-                linearIssueId: issue.linearIssueId,
-                activeRunId: null,
-                inputRequestKind: "paused_local_work",
-              }
-            : undefined
-        ),
-      });
-      if (commit.outcome !== "applied") {
-        return { applied: false, canceledObservationIds: [] };
-      }
-      if (run) {
-        this.db.runs.finishRun(run.id, {
-          status: "released",
-          ...(run.threadId ? { threadId: run.threadId } : {}),
-          ...(run.turnId ? { turnId: run.turnId } : {}),
-          failureReason: dirtySummary ? `Stop requested; ${dirtySummary}` : "Stop requested",
-        });
-      }
-      const observations = this.db.workflowObservations.listObservations(issue.projectId, issue.linearIssueId);
-      const canceledObservationIds = listUnconsumedInboxObservationIds(observations);
-      if (canceledObservationIds.length > 0) {
-        this.db.workflowObservations.appendObservation({
-          projectId: issue.projectId,
-          subjectId: issue.linearIssueId,
-          source: "operator",
-          type: SIGNAL_CONSUMED_OBSERVATION,
-          payloadJson: JSON.stringify({
-            ...(run ? { runId: run.id } : {}),
-            consumedObservationIds: canceledObservationIds,
-            method: "stop",
-          }),
-          dedupeKey: `signal_consumed:stop:${canceledObservationIds.join(",")}`,
-        });
-      }
-      return { applied: true, canceledObservationIds };
-    });
-    if (!stopCommit.applied) {
-      const reason = "The active run changed while PatchRelay was confirming the stop";
-      this.feed?.publish({
-        level: "error",
-        kind: "workflow",
-        projectId: issue.projectId,
-        issueKey: issue.issueKey,
-        ...(run ? { stage: run.runType } : {}),
-        status: "stop_failed",
-        summary: "Could not safely apply the stop to the current run",
-        detail: reason,
-      });
-      return {
-        status: "failed",
-        ...(run?.runType ? { activeRunType: run.runType } : {}),
-        reason,
-      };
-    }
-    const { canceledObservationIds } = stopCommit;
-
-    this.db.issueSessions.appendIssueSessionEvent({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      eventType: "stop_requested",
-      eventJson: JSON.stringify({
-        body: params.body,
-        source: params.source,
-        ...(params.author ? { author: params.author } : {}),
-        ...dirtyPayload,
-      } satisfies StopRequestedEventPayload),
-      dedupeKey: `stop_requested:${issue.linearIssueId}:${run?.id ?? `idle:${canceledObservationIds.join(",") || "none"}`}`,
-    });
-    this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
-    this.db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(issue.projectId, issue.linearIssueId);
-    const updatedIssue = this.db.issues.getIssue(issue.projectId, issue.linearIssueId);
-    if (updatedIssue) {
-      reconcileWorkflowTasksForIssue(this.db, updatedIssue);
-    }
-    this.feed?.publish({
-      level: "warn",
-      kind: "workflow",
-      projectId: issue.projectId,
-      issueKey: issue.issueKey,
-      ...(run ? { stage: run.runType } : {}),
-      status: "stopped",
-      summary: dirtySummary
-        ? `Stopped work with a dirty worktree: ${dirtySummary}`
-        : "Stopped work",
-    });
-    return {
-      status: "stopped",
-      ...(run?.runType ? { activeRunType: run.runType } : {}),
-      ...(dirtySummary ? { dirtySummary } : {}),
-    };
+    return await this.agentStop.stopIssue(params);
   }
 
   private buildStatusActivity(

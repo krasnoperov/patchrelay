@@ -183,7 +183,9 @@ export class WebhookHandler {
         projectId: project.id,
         subjectId: issue.id,
         source: "linear",
-        type: hydrated.triggerEvent === "delegateChanged"
+        type: result.collaborationHandoff
+          ? "linear.delegated"
+          : hydrated.triggerEvent === "delegateChanged"
           ? result.delegated ? "linear.delegated" : "linear.undelegated"
           : `linear.${hydrated.triggerEvent}`,
         payloadJson: JSON.stringify({

@@ -138,6 +138,29 @@ test("delegating an active collaboration requests a turn-boundary delivery hando
   assert.equal(plan.startupResume.workflowIntent?.runType, "implementation");
 });
 
+test("delegating after a collaboration turn completed preserves its draft for delivery", () => {
+  const plan = planIssueWebhookWorkflow(baseInput({
+    delegated: true,
+    existingIssue: issue({ workflowOutcome: undefined, delegatedToPatchRelay: false }),
+    triggerEvent: "statusChanged",
+    hasActiveRun: false,
+    activeRunType: undefined,
+    latestRun: {
+      id: 42,
+      issueId: 1,
+      projectId: "project-1",
+      linearIssueId: "issue-1",
+      runType: "collaboration",
+      status: "completed",
+      startedAt: UPDATED_AT,
+      updatedAt: UPDATED_AT,
+    },
+  }));
+
+  assert.equal(plan.collaborationHandoff, true);
+  assert.equal(plan.desiredStage, "implementation");
+});
+
 test("removing delivery authority does not interrupt a collaboration handoff turn", () => {
   const plan = planIssueWebhookWorkflow(baseInput({
     delegated: false,
