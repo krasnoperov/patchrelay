@@ -25,6 +25,7 @@ export interface CodexAppServerConfig {
   serviceName?: string;
   baseInstructions?: string;
   developerInstructions?: string;
+  collaborationDeveloperInstructions?: string;
   approvalPolicy: "never" | "on-request" | "on-failure" | "untrusted";
   sandboxMode: "danger-full-access" | "workspace-write" | "read-only";
   experimentalRawEvents?: boolean;

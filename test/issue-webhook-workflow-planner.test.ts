@@ -109,6 +109,50 @@ test("undelegation stops active work even when discovered from a status webhook"
   assert.equal(plan.resolvedIssueUpdate.activeRunId, null);
 });
 
+test("ordinary undelegated webhooks do not release an active collaboration turn", () => {
+  const plan = planIssueWebhookWorkflow(baseInput({
+    delegated: false,
+    existingIssue: issue({ workflowOutcome: undefined, delegatedToPatchRelay: false }),
+    triggerEvent: "agentPrompted",
+    hasActiveRun: true,
+    activeRunType: "collaboration",
+  }));
+
+  assert.deepEqual(plan.effectiveRunRelease, { release: false });
+  assert.deepEqual(plan.undelegation, { paused: false, clearPending: false });
+  assert.equal(plan.collaborationHandoff, false);
+  assert.equal(plan.resolvedIssueUpdate.activeRunId, undefined);
+});
+
+test("delegating an active collaboration requests a turn-boundary delivery handoff", () => {
+  const plan = planIssueWebhookWorkflow(baseInput({
+    delegated: true,
+    existingIssue: issue({ workflowOutcome: undefined, delegatedToPatchRelay: false }),
+    triggerEvent: "delegateChanged",
+    hasActiveRun: true,
+    activeRunType: "collaboration",
+  }));
+
+  assert.equal(plan.collaborationHandoff, true);
+  assert.deepEqual(plan.effectiveRunRelease, { release: false });
+  assert.equal(plan.startupResume.workflowIntent?.runType, "implementation");
+});
+
+test("removing delivery authority does not interrupt a collaboration handoff turn", () => {
+  const plan = planIssueWebhookWorkflow(baseInput({
+    delegated: false,
+    existingIssue: issue({ workflowOutcome: undefined, delegatedToPatchRelay: true }),
+    triggerEvent: "delegateChanged",
+    hasActiveRun: true,
+    activeRunType: "collaboration",
+  }));
+
+  assert.deepEqual(plan.effectiveRunRelease, { release: false });
+  assert.deepEqual(plan.undelegation, { paused: false, clearPending: false });
+  assert.equal(plan.resolvedIssueUpdate.activeRunId, undefined);
+  assert.equal(plan.resolvedIssueUpdate.agentSessionId, undefined);
+});
+
 test("blocked active implementation releases the run and returns to delegated", () => {
   const plan = planIssueWebhookWorkflow(baseInput({
     unresolvedBlockers: 1,

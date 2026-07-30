@@ -64,47 +64,14 @@ export class ServiceIssueActions {
   async stopIssue(issueKey: string): Promise<{ stopped: boolean } | { error: string } | undefined> {
     const issue = this.db.issues.getIssueByKey(issueKey);
     if (!issue) return undefined;
-    if (!issue.activeRunId) return { error: "No active run to stop" };
-
-    const run = this.db.runs.getRunById(issue.activeRunId);
-    if (run?.threadId && run.turnId) {
-      try {
-        await this.codex.steerTurn({
-          threadId: run.threadId,
-          turnId: run.turnId,
-          input: "STOP: The operator has requested this run to halt immediately. Finish your current action, commit any partial progress, and stop.",
-        });
-      } catch {
-        // Turn may already be done.
-      }
-    }
-
-    this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      eventType: "stop_requested",
-      dedupeKey: `operator_stop:${issue.linearIssueId}`,
+    const result = await this.agentInput.stopIssue({
+      issue,
+      body: "The operator requested an immediate stop.",
+      source: "operator_stop",
     });
-    this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
-    this.db.issueSessions.commitIssueState({
-      writer: WRITER,
-      update: {
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        inputRequestKind: "paused_local_work",
-      },
-    });
-
-    this.feed.publish({
-      level: "warn",
-      kind: "workflow",
-      issueKey: issue.issueKey,
-      projectId: issue.projectId,
-      status: "stopped",
-      summary: "Operator stopped the run",
-    });
-
-    return { stopped: true };
+    return result.status === "stopped"
+      ? { stopped: true }
+      : { error: `Could not confirm stop: ${result.reason ?? "Codex interrupt failed"}` };
   }
 
   retryIssue(issueKey: string): { issueKey: string; runType: string } | { error: string } | undefined {

@@ -248,7 +248,7 @@ test("progress reporter emits verification and publishing history alongside acti
   }
 });
 
-test("progress reporter surfaces generic active plan steps as 'Working on' updates", async () => {
+test("progress reporter surfaces generic active plan steps ephemerally without duplicating plan history", async () => {
   const { baseDir, db } = createDatabase();
   try {
     const issue = db.upsertIssue({
@@ -274,7 +274,8 @@ test("progress reporter surfaces generic active plan steps as 'Working on' updat
       },
     );
 
-    // First step becomes active → one ephemeral + one durable update.
+    // First step becomes active → one ephemeral update; the Agent Plan is the
+    // durable history surface.
     reporter.maybeEmitProgress({
       method: "turn/plan/updated",
       params: {
@@ -294,7 +295,7 @@ test("progress reporter surfaces generic active plan steps as 'Working on' updat
         ],
       },
     }, run);
-    // Second step becomes active → another ephemeral + durable pair.
+    // Second step becomes active → another ephemeral update.
     reporter.maybeEmitProgress({
       method: "turn/plan/updated",
       params: {
@@ -307,9 +308,7 @@ test("progress reporter surfaces generic active plan steps as 'Working on' updat
 
     assert.deepEqual(emitted, [
       { content: { type: "action", action: "Working on", parameter: "Add the issues workflow_outcome index" }, options: { ephemeral: true } },
-      { content: { type: "action", action: "Working on", parameter: "Add the issues workflow_outcome index" }, options: undefined },
       { content: { type: "action", action: "Working on", parameter: "Wire the reconciler to the new query" }, options: { ephemeral: true } },
-      { content: { type: "action", action: "Working on", parameter: "Wire the reconciler to the new query" }, options: undefined },
     ]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

@@ -8,6 +8,7 @@ import type { RunContext } from "../run-context.ts";
 import type { PatchRelayPromptingConfig, PromptCustomizationLayer } from "../types.ts";
 
 const WORKFLOW_FILES: Record<RunType, string> = {
+  collaboration: "IMPLEMENTATION_WORKFLOW.md",
   implementation: "IMPLEMENTATION_WORKFLOW.md",
   review_fix: "REVIEW_WORKFLOW.md",
   branch_upkeep: "REVIEW_WORKFLOW.md",

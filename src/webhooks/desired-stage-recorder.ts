@@ -36,6 +36,7 @@ export class DesiredStageRecorder {
     normalized: NormalizedEvent;
     peekRunnableWorkflowTaskRunType: (projectId: string, issueId: string) => RunType | undefined;
     stopActiveRun: (run: NonNullable<ReturnType<PatchRelayDatabase["runs"]["getRunById"]>>, input: string) => Promise<void>;
+    steerActiveRun: (run: NonNullable<ReturnType<PatchRelayDatabase["runs"]["getRunById"]>>, input: string) => Promise<void>;
   }): Promise<{
     issue: TrackedIssueRecord | undefined;
     runnableTaskRunType: RunType | undefined;
@@ -109,6 +110,31 @@ export class DesiredStageRecorder {
         : workflowPlan.effectiveRunRelease.reason
       : undefined;
     const dirtyWorktreePayload = releaseWorktreeStatus ? dirtyWorktreeEventPayload(releaseWorktreeStatus) : undefined;
+    let releaseConfirmed = true;
+    let releaseFailure: string | undefined;
+    if (workflowPlan.effectiveRunRelease.release && activeRun?.threadId && activeRun.turnId) {
+      try {
+        await params.stopActiveRun(
+          activeRun,
+          workflowPlan.undelegation.paused
+            ? "The issue was un-delegated from PatchRelay."
+            : "The active workflow is no longer allowed to continue.",
+        );
+      } catch (error) {
+        releaseConfirmed = false;
+        releaseFailure = error instanceof Error ? error.message : String(error);
+        this.feed?.publish({
+          level: "error",
+          kind: "stage",
+          issueKey: existingIssue?.issueKey,
+          projectId: params.project.id,
+          stage: activeRun.runType,
+          status: "stop_failed",
+          summary: "Could not confirm that the active run stopped",
+          detail: releaseFailure,
+        });
+      }
+    }
 
     const activeLease = this.db.issueSessions.getActiveIssueSessionLease(params.project.id, normalizedIssue.id);
     // Webhook intake projection: the fields are facts carried by the webhook
@@ -134,13 +160,20 @@ export class DesiredStageRecorder {
         ...(hydratedIssue.stateType ? { currentLinearStateType: hydratedIssue.stateType } : {}),
         ...linkedPrAdoption?.issueUpdates,
         delegatedToPatchRelay: delegated,
-        ...workflowPlan.resolvedIssueUpdate,
+        ...(
+          releaseConfirmed
+            ? workflowPlan.resolvedIssueUpdate
+            : Object.fromEntries(
+                Object.entries(workflowPlan.resolvedIssueUpdate)
+                  .filter(([key]) => key !== "activeRunId" && key !== "agentSessionId"),
+              )
+        ),
       },
     });
     let issue: IssueRecord;
     if (issueCommit.outcome === "applied") {
       issue = issueCommit.issue;
-      if (workflowPlan.effectiveRunRelease.release && activeRun && releaseReason) {
+      if (workflowPlan.effectiveRunRelease.release && releaseConfirmed && activeRun && releaseReason) {
         this.db.runs.finishRun(activeRun.id, { status: "released", failureReason: releaseReason });
       }
     } else if (existingIssue) {
@@ -165,12 +198,29 @@ export class DesiredStageRecorder {
     const wasResolved = isResolvedLinearState(existingIssue?.currentLinearStateType, existingIssue?.currentLinearState);
     const isResolved = isResolvedLinearState(issue.currentLinearStateType, issue.currentLinearState);
 
+    if (workflowPlan.collaborationHandoff && activeRun?.threadId && activeRun.turnId) {
+      await params.steerActiveRun(
+        activeRun,
+        [
+          "The Linear issue has now been delegated to PatchRelay for delivery.",
+          "Finish the current collaboration turn at the next safe checkpoint and summarize the current work.",
+          "Do not force delivery inside this collaboration turn; PatchRelay will start a fresh delivery run in the same worktree after this turn ends.",
+        ].join(" "),
+      );
+      this.feed?.publish({
+        level: "info",
+        kind: "stage",
+        issueKey: issue.issueKey,
+        projectId: params.project.id,
+        stage: "collaboration",
+        status: "delivery_handoff",
+        summary: "Collaboration will hand off to delivery after the current turn",
+      });
+    }
+
     if (workflowPlan.undelegation.paused) {
-      if (activeRun && releaseReason) {
+      if (releaseConfirmed && activeRun && releaseReason) {
         this.db.runs.revokeRunLease(activeRun.id, { reason: releaseReason });
-      }
-      if (activeRun?.threadId && activeRun.turnId) {
-        await params.stopActiveRun(activeRun, "STOP: The issue was un-delegated from PatchRelay. Stop working immediately and exit.");
       }
       this.db.issueSessions.appendIssueSessionEvent({
         projectId: params.project.id,
@@ -183,33 +233,40 @@ export class DesiredStageRecorder {
           : {}),
         dedupeKey: `undelegated:${normalizedIssue.id}`,
       });
-      this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(params.project.id, normalizedIssue.id);
-      this.db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(params.project.id, normalizedIssue.id);
+      if (releaseConfirmed) {
+        this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(params.project.id, normalizedIssue.id);
+        this.db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(params.project.id, normalizedIssue.id);
+      }
       this.feed?.publish({
-        level: "warn",
+        level: releaseConfirmed ? "warn" : "error",
         kind: "stage",
         issueKey: issue.issueKey,
         projectId: params.project.id,
         stage: deriveIssuePhase(issue),
-        status: "un_delegated",
-        summary: releaseWorktreeStatus?.dirty && releaseWorktreeStatus.summary
-          ? `Issue un-delegated from PatchRelay with dirty worktree: ${releaseWorktreeStatus.summary}`
-          : "Issue un-delegated from PatchRelay; automation is now paused",
+        status: releaseConfirmed ? "un_delegated" : "stop_failed",
+        summary: releaseConfirmed
+          ? releaseWorktreeStatus?.dirty && releaseWorktreeStatus.summary
+            ? `Issue un-delegated from PatchRelay with dirty worktree: ${releaseWorktreeStatus.summary}`
+            : "Issue un-delegated from PatchRelay; automation is now paused"
+          : "Issue was un-delegated, but the active turn could not be interrupted",
+        ...(releaseFailure ? { detail: releaseFailure } : {}),
       });
     } else if (workflowPlan.blockerPausedImplementation) {
-      if (activeRun?.threadId && activeRun.turnId) {
-        await params.stopActiveRun(activeRun, "STOP: The issue is now blocked by another task. Stop working immediately and exit without publishing.");
+      if (releaseConfirmed) {
+        this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(params.project.id, normalizedIssue.id);
+        this.db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(params.project.id, normalizedIssue.id);
       }
-      this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(params.project.id, normalizedIssue.id);
-      this.db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(params.project.id, normalizedIssue.id);
       this.feed?.publish({
-        level: "warn",
+        level: releaseConfirmed ? "warn" : "error",
         kind: "stage",
         issueKey: issue.issueKey,
         projectId: params.project.id,
         stage: deriveIssuePhase(issue),
-        status: "blocked",
-        summary: `Implementation paused because ${issue.issueKey ?? normalizedIssue.id} is now blocked`,
+        status: releaseConfirmed ? "blocked" : "stop_failed",
+        summary: releaseConfirmed
+          ? `Implementation paused because ${issue.issueKey ?? normalizedIssue.id} is now blocked`
+          : `Issue became blocked, but the active implementation turn could not be interrupted`,
+        ...(releaseFailure ? { detail: releaseFailure } : {}),
       });
     } else if (workflowPlan.startupResume.workflowIntent) {
       // A branch_upkeep resume folds its run context into the durable

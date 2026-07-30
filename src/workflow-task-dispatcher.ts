@@ -216,7 +216,8 @@ export class WorkflowTaskDispatcher {
       return undefined;
     }
     const unresolvedBlockers = this.db.issues.countUnresolvedBlockers(projectId, linearIssueId);
-    if (unresolvedBlockers > 0) {
+    let dispatchable = this.resolveDispatchableWorkflowTaskDispatch(projectId, linearIssueId, issue);
+    if (unresolvedBlockers > 0 && dispatchable?.runType !== "collaboration") {
       const blockerKeys = this.unresolvedBlockerKeys(projectId, linearIssueId);
       emitTelemetry(this.telemetry, {
         type: "dispatch.suppressed",
@@ -242,7 +243,6 @@ export class WorkflowTaskDispatcher {
       }
       return undefined;
     }
-    const dispatchable = this.resolveDispatchableWorkflowTaskDispatch(projectId, linearIssueId, issue);
     if (!dispatchable) {
       emitTelemetry(this.telemetry, {
         type: "dispatch.suppressed",
@@ -341,7 +341,13 @@ export class WorkflowTaskDispatcher {
       runType: params.run.runType,
     });
     const issue = this.db.issues.getIssue(params.run.projectId, params.run.linearIssueId);
-    if (issue && isIssueTerminalProjection(issue)) {
+    const dispatchable = issue ? this.resolveDispatchableWorkflowTaskDispatch(
+      params.run.projectId,
+      params.run.linearIssueId,
+      issue,
+      { ignoreDetachedActiveRuns: true },
+    ) : undefined;
+    if (issue && isIssueTerminalProjection(issue) && dispatchable?.runType !== "collaboration") {
       emitTelemetry(this.telemetry, {
         type: "dispatch.suppressed",
         projectId: params.run.projectId,
@@ -351,12 +357,6 @@ export class WorkflowTaskDispatcher {
       });
       return undefined;
     }
-    const dispatchable = issue ? this.resolveDispatchableWorkflowTaskDispatch(
-      params.run.projectId,
-      params.run.linearIssueId,
-      issue,
-      { ignoreDetachedActiveRuns: true },
-    ) : undefined;
     if (!dispatchable) {
       emitTelemetry(this.telemetry, {
         type: "dispatch.suppressed",

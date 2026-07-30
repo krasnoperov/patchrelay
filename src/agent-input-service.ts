@@ -25,6 +25,7 @@ import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 import { deriveIssuePhase } from "./issue-phase.ts";
 import { isIssueDoneProjection } from "./issue-execution-state.ts";
 import { HUMAN_INPUT_OBSERVATION, SIGNAL_CONSUMED_OBSERVATION } from "./workflow-model.ts";
+import { listUnconsumedInboxObservationIds } from "./workflow-observation-context.ts";
 import { createHash } from "node:crypto";
 
 const WRITER = "agent-input-service";
@@ -40,6 +41,13 @@ export interface AgentInputDeliveryResult {
   status: "answered" | "ignored" | "queued" | "steered" | "delivery_failed" | "stopped";
   queuedRunType?: RunType | undefined;
   activeRunType?: RunType | undefined;
+}
+
+export interface AgentInputStopResult {
+  status: "stopped" | "failed";
+  activeRunType?: RunType | undefined;
+  reason?: string | undefined;
+  dirtySummary?: string | undefined;
 }
 
 export type AgentInputSource =
@@ -67,6 +75,7 @@ export class AgentInputService {
     author?: string | undefined;
     operatorSource?: string | undefined;
     directReply?: boolean | undefined;
+    collaborationStart?: boolean | undefined;
     emitActivity?: ((content: LinearAgentActivityContent, options?: { ephemeral?: boolean }) => Promise<void>) | undefined;
     peekRunnableWorkflowTaskRunType?: ((projectId: string, issueId: string) => RunType | undefined) | undefined;
   }): Promise<AgentInputDeliveryResult> {
@@ -75,7 +84,9 @@ export class AgentInputService {
 
     const issue = this.db.issues.getIssue(params.issue.projectId, params.issue.linearIssueId) ?? params.issue;
     const activeRun = issue.activeRunId ? this.db.runs.getRunById(issue.activeRunId) : undefined;
-    const intent = await this.classify(body, params.source, issue, activeRun, params.directReply === true);
+    const intent = params.collaborationStart
+      ? undefined
+      : await this.classify(body, params.source, issue, activeRun, params.directReply === true);
 
     if (intent?.intent === "status" && !params.directReply) {
       await params.emitActivity?.(
@@ -86,19 +97,25 @@ export class AgentInputService {
     }
 
     if (intent?.intent === "stop") {
-      if (activeRun) {
-        await this.stopActiveRun(issue, activeRun, body, params.source);
-      } else {
-        this.workflowTaskDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
-          eventType: "stop_requested",
-          eventJson: JSON.stringify({ body, source: params.source, ...(params.author ? { author: params.author } : {}) } satisfies StopRequestedEventPayload),
-        });
-        this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
-      }
-      return { status: "stopped", ...(activeRun?.runType ? { activeRunType: activeRun.runType } : {}) };
+      const stopped = await this.stopIssue({
+        issue,
+        body,
+        source: params.source,
+        ...(params.author ? { author: params.author } : {}),
+      });
+      return stopped.status === "stopped"
+        ? { status: "stopped", ...(stopped.activeRunType ? { activeRunType: stopped.activeRunType } : {}) }
+        : { status: "delivery_failed", ...(stopped.activeRunType ? { activeRunType: stopped.activeRunType } : {}) };
     }
 
-    if (!issue.delegatedToPatchRelay && !(activeRun && params.source === "patchrelay_operator_prompt")) {
+    const collaborationMode = !issue.delegatedToPatchRelay
+      && params.source !== "patchrelay_operator_prompt"
+      && (!activeRun || activeRun.runType === "collaboration");
+    if (
+      !issue.delegatedToPatchRelay
+      && !collaborationMode
+      && !(activeRun && params.source === "patchrelay_operator_prompt")
+    ) {
       await params.emitActivity?.({ type: "thought", body: "PatchRelay is paused because the issue is undelegated." }, { ephemeral: true });
       return { status: "ignored" };
     }
@@ -123,6 +140,7 @@ export class AgentInputService {
       author: params.author,
       operatorSource: params.operatorSource,
       directReply: params.directReply === true,
+      collaborationMode,
       emitActivity: params.emitActivity,
     });
   }
@@ -165,6 +183,7 @@ export class AgentInputService {
       issue,
       text: body,
       inputKind,
+      ...(activeRun.runType === "collaboration" ? { collaborationMode: true } : {}),
       ...(params.author ? { author: params.author } : {}),
       ...(params.operatorSource ? { operatorSource: params.operatorSource } : {}),
     });
@@ -249,11 +268,14 @@ export class AgentInputService {
     author?: string | undefined;
     operatorSource?: string | undefined;
     directReply: boolean;
+    collaborationMode: boolean;
     emitActivity?: ((content: LinearAgentActivityContent, options?: { ephemeral?: boolean }) => Promise<void>) | undefined;
   }): Promise<AgentInputDeliveryResult> {
     const originalIssue = params.issue;
     let issue = originalIssue;
-    const replacementPrRequired = isIssueDoneProjection(originalIssue) && originalIssue.prNumber !== undefined;
+    const replacementPrRequired = !params.collaborationMode
+      && isIssueDoneProjection(originalIssue)
+      && originalIssue.prNumber !== undefined;
     if (replacementPrRequired) {
       issue = this.prepareReplacementWork(params.project, originalIssue);
     }
@@ -269,6 +291,7 @@ export class AgentInputService {
       ...(params.author ? { author: params.author } : {}),
       ...(params.operatorSource ? { operatorSource: params.operatorSource } : {}),
       ...(replacementPrRequired ? { previousIssue: originalIssue } : {}),
+      ...(params.collaborationMode ? { collaborationMode: true } : {}),
     });
     reconcileWorkflowTasksForIssue(this.db, issue);
 
@@ -306,6 +329,7 @@ export class AgentInputService {
     author?: string | undefined;
     operatorSource?: string | undefined;
     previousIssue?: Pick<IssueRecord, "prNumber" | "prUrl" | "prState" | "prHeadSha"> | undefined;
+    collaborationMode?: boolean | undefined;
   }): number {
     const observation = this.db.workflowObservations.appendObservation({
       projectId: params.issue.projectId,
@@ -317,6 +341,7 @@ export class AgentInputService {
         inputKind: params.inputKind,
         ...(params.author ? { author: params.author } : {}),
         ...(params.operatorSource ? { operatorSource: params.operatorSource } : {}),
+        ...(params.collaborationMode ? { collaborationMode: true } : {}),
         ...(params.previousIssue?.prNumber !== undefined
           ? {
               replacementPrRequired: true,
@@ -406,55 +431,145 @@ export class AgentInputService {
     return commit.outcome === "applied" ? commit.issue : issue;
   }
 
-  private async stopActiveRun(
-    issue: IssueRecord,
-    run: ActiveRun,
-    body: string,
-    source: AgentInputSource,
-  ): Promise<void> {
+  async stopIssue(params: {
+    issue: IssueRecord;
+    body: string;
+    source: AgentInputSource | "linear_stop_signal" | "operator_stop";
+    author?: string | undefined;
+  }): Promise<AgentInputStopResult> {
+    const issue = this.db.issues.getIssue(params.issue.projectId, params.issue.linearIssueId) ?? params.issue;
+    const run = issue.activeRunId ? this.db.runs.getRunById(issue.activeRunId) : undefined;
     const worktreeStatus = issue.worktreePath ? inspectGitWorktreeStatus(issue.worktreePath) : undefined;
     const dirtyPayload = worktreeStatus ? dirtyWorktreeEventPayload(worktreeStatus) : undefined;
     const dirtySummary = typeof dirtyPayload?.summary === "string" ? dirtyPayload.summary : undefined;
 
-    if (run.threadId && run.turnId) {
+    if (run?.threadId && run.turnId) {
       try {
-        await this.codex.steerTurn({
+        await this.codex.interruptTurn({
           threadId: run.threadId,
           turnId: run.turnId,
-          input: "STOP: The user has requested you stop working immediately. Do not make further changes. Wrap up and exit.",
         });
       } catch (error) {
-        this.logger.warn({ issueKey: issue.issueKey, error: error instanceof Error ? error.message : String(error) }, "Failed to steer Codex turn for stop request");
+        const reason = error instanceof Error ? error.message : String(error);
+        this.logger.warn({ issueKey: issue.issueKey, runId: run.id, error: reason }, "Failed to interrupt Codex turn for stop request");
+        this.feed?.publish({
+          level: "error",
+          kind: "workflow",
+          projectId: issue.projectId,
+          issueKey: issue.issueKey,
+          stage: run.runType,
+          status: "stop_failed",
+          summary: "Could not confirm that the active Codex turn stopped",
+          detail: reason,
+        });
+        return { status: "failed", activeRunType: run.runType, reason };
       }
     }
 
-    // The stop is an operator fact: the issue slot clear and the run release
-    // ride in one transaction, with the run gated on the issue commit.
-    this.db.transaction(() => {
+    const stopCommit = this.db.transaction(() => {
       const commit = this.db.issueSessions.commitIssueState({
         writer: WRITER,
+        expectedVersion: issue.version,
         update: {
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           activeRunId: null,
           inputRequestKind: "paused_local_work",
         },
+        onConflict: (current) => (
+          current.activeRunId === run?.id || current.activeRunId === undefined
+            ? {
+                projectId: issue.projectId,
+                linearIssueId: issue.linearIssueId,
+                activeRunId: null,
+                inputRequestKind: "paused_local_work",
+              }
+            : undefined
+        ),
       });
-      if (commit.outcome === "applied" && run.threadId && run.turnId) {
+      if (commit.outcome !== "applied") {
+        return { applied: false, canceledObservationIds: [] };
+      }
+      if (run) {
         this.db.runs.finishRun(run.id, {
           status: "released",
-          threadId: run.threadId,
-          turnId: run.turnId,
-          failureReason: dirtySummary ? `Operator stopped run; ${dirtySummary}` : "Operator stopped run",
+          ...(run.threadId ? { threadId: run.threadId } : {}),
+          ...(run.turnId ? { turnId: run.turnId } : {}),
+          failureReason: dirtySummary ? `Stop requested; ${dirtySummary}` : "Stop requested",
         });
       }
+      const observations = this.db.workflowObservations.listObservations(issue.projectId, issue.linearIssueId);
+      const canceledObservationIds = listUnconsumedInboxObservationIds(observations);
+      if (canceledObservationIds.length > 0) {
+        this.db.workflowObservations.appendObservation({
+          projectId: issue.projectId,
+          subjectId: issue.linearIssueId,
+          source: "operator",
+          type: SIGNAL_CONSUMED_OBSERVATION,
+          payloadJson: JSON.stringify({
+            ...(run ? { runId: run.id } : {}),
+            consumedObservationIds: canceledObservationIds,
+            method: "stop",
+          }),
+          dedupeKey: `signal_consumed:stop:${canceledObservationIds.join(",")}`,
+        });
+      }
+      return { applied: true, canceledObservationIds };
     });
-    this.workflowTaskDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
+    if (!stopCommit.applied) {
+      const reason = "The active run changed while PatchRelay was confirming the stop";
+      this.feed?.publish({
+        level: "error",
+        kind: "workflow",
+        projectId: issue.projectId,
+        issueKey: issue.issueKey,
+        ...(run ? { stage: run.runType } : {}),
+        status: "stop_failed",
+        summary: "Could not safely apply the stop to the current run",
+        detail: reason,
+      });
+      return {
+        status: "failed",
+        ...(run?.runType ? { activeRunType: run.runType } : {}),
+        reason,
+      };
+    }
+    const { canceledObservationIds } = stopCommit;
+
+    this.db.issueSessions.appendIssueSessionEvent({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
       eventType: "stop_requested",
-      eventJson: JSON.stringify({ body, source, ...dirtyPayload } satisfies StopRequestedEventPayload),
+      eventJson: JSON.stringify({
+        body: params.body,
+        source: params.source,
+        ...(params.author ? { author: params.author } : {}),
+        ...dirtyPayload,
+      } satisfies StopRequestedEventPayload),
+      dedupeKey: `stop_requested:${issue.linearIssueId}:${run?.id ?? `idle:${canceledObservationIds.join(",") || "none"}`}`,
     });
     this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
     this.db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(issue.projectId, issue.linearIssueId);
+    const updatedIssue = this.db.issues.getIssue(issue.projectId, issue.linearIssueId);
+    if (updatedIssue) {
+      reconcileWorkflowTasksForIssue(this.db, updatedIssue);
+    }
+    this.feed?.publish({
+      level: "warn",
+      kind: "workflow",
+      projectId: issue.projectId,
+      issueKey: issue.issueKey,
+      ...(run ? { stage: run.runType } : {}),
+      status: "stopped",
+      summary: dirtySummary
+        ? `Stopped work with a dirty worktree: ${dirtySummary}`
+        : "Stopped work",
+    });
+    return {
+      status: "stopped",
+      ...(run?.runType ? { activeRunType: run.runType } : {}),
+      ...(dirtySummary ? { dirtySummary } : {}),
+    };
   }
 
   private buildStatusActivity(

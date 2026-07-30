@@ -44,7 +44,11 @@ export class LinearProgressReporter {
 
     const previous = this.publicationsByRun.get(run.id);
     const shouldEmitEphemeral = previous?.ephemeralMeaningKey !== fact.meaningKey;
-    const shouldEmitHistory = previous?.historyMeaningKey !== fact.meaningKey;
+    // The Agent Plan already provides durable plan-step history. Keep the
+    // current step ephemeral instead of duplicating every plan transition in
+    // the permanent activity timeline.
+    const shouldEmitHistory = fact.kind !== "plan_step"
+      && previous?.historyMeaningKey !== fact.meaningKey;
     if (!shouldEmitEphemeral && !shouldEmitHistory) {
       return;
     }

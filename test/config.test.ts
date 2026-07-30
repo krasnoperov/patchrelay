@@ -330,6 +330,11 @@ test("loadConfig injects default PatchRelay developer instructions and appends l
         assert.match(String(config.runner.codex.developerInstructions ?? ""), /For CI repair, do not change code or config until you either reproduce the failure on the exact failing head or can point to a concrete log signature that justifies the fix\./);
         assert.match(String(config.runner.codex.developerInstructions ?? ""), /## Local Developer Instructions/);
         assert.match(String(config.runner.codex.developerInstructions ?? ""), /Always preserve the repo's public API shape\./);
+        assert.match(String(config.runner.codex.collaborationDeveloperInstructions ?? ""), /general coding collaborator/);
+        assert.match(String(config.runner.codex.collaborationDeveloperInstructions ?? ""), /not have a preset delivery outcome/);
+        assert.match(String(config.runner.codex.collaborationDeveloperInstructions ?? ""), /## Local Developer Instructions/);
+        assert.match(String(config.runner.codex.collaborationDeveloperInstructions ?? ""), /Always preserve the repo's public API shape\./);
+        assert.doesNotMatch(String(config.runner.codex.collaborationDeveloperInstructions ?? ""), /publish before stopping/);
       },
     );
   } finally {

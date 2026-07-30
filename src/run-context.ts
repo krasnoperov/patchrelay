@@ -144,6 +144,9 @@ const runContextShape = {
    * (e.g. "main_repair"); consumers narrow via parseRunType and fall back to
    * "implementation". */
   runType: z.string().optional(),
+  /** True for an open-ended conversational run started by mentioning
+   * PatchRelay without entering the delivery workflow. */
+  collaborationMode: z.boolean().optional(),
   /** Producer tag ("operator_retry", "queue_health_monitor",
    * "idle_reconciliation", ...). Produced by operator-retry-event.ts,
    * queue-health-monitor.ts, idle-reconciliation.ts; diagnostic only. */

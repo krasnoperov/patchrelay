@@ -22,6 +22,7 @@ import { SIGNAL_CONSUMED_OBSERVATION } from "./workflow-model.ts";
 import type { AppConfig, LinearAgentActivityContent } from "./types.ts";
 import type { WorktreeManager } from "./worktree-manager.ts";
 import { sanitizeDiagnosticText } from "./utils.ts";
+import { buildCollaborationPrompt } from "./prompting/collaboration.ts";
 
 const WRITER = "run-launcher";
 const DEFAULT_PREPARE_WORKTREE_MAX_ATTEMPTS = 3;
@@ -110,6 +111,9 @@ export function shouldPreserveDirtyWorktreeBeforeLaunch(params: {
   runType: RunType;
   effectiveContext?: RunContext;
 }): boolean {
+  if (params.runType === "collaboration") {
+    return true;
+  }
   return params.effectiveContext?.preserveDirtyWorktree === true
     && (
       params.runType === "review_fix"
@@ -215,6 +219,22 @@ export class RunLauncher {
     runType: RunType;
     effectiveContext?: RunContext;
   }): { prompt: string; branchName: string; worktreePath: string } {
+    const issueRef = sanitizePathSegment(params.issue.issueKey ?? params.issue.linearIssueId);
+    const slug = params.issue.title ? slugify(params.issue.title) : "";
+    const branchSuffix = slug ? `${issueRef}-${slug}` : issueRef;
+    const branchName = params.issue.branchName ?? `${params.project.branchPrefix}/${branchSuffix}`;
+    const worktreePath = params.issue.worktreePath ?? `${params.project.worktreeRoot}/${issueRef}`;
+
+    if (params.runType === "collaboration") {
+      return {
+        prompt: buildCollaborationPrompt({
+          issue: params.issue,
+          ...(params.effectiveContext ? { context: params.effectiveContext } : {}),
+        }),
+        branchName,
+        worktreePath,
+      };
+    }
     const repoPrompting = loadPatchRelayRepoPrompting({
       repoRoot: params.project.repoPath,
       logger: this.logger,
@@ -245,12 +265,6 @@ export class RunLauncher {
       ...(params.effectiveContext ? { context: params.effectiveContext } : {}),
       ...(promptLayer ? { promptLayer } : {}),
     });
-
-    const issueRef = sanitizePathSegment(params.issue.issueKey ?? params.issue.linearIssueId);
-    const slug = params.issue.title ? slugify(params.issue.title) : "";
-    const branchSuffix = slug ? `${issueRef}-${slug}` : issueRef;
-    const branchName = params.issue.branchName ?? `${params.project.branchPrefix}/${branchSuffix}`;
-    const worktreePath = params.issue.worktreePath ?? `${params.project.worktreeRoot}/${issueRef}`;
 
     return { prompt, branchName, worktreePath };
   }
@@ -292,9 +306,13 @@ export class RunLauncher {
           activeRunId: created.id,
           branchName: params.branchName,
           worktreePath: params.worktreePath,
-          workflowOutcome: null,
-          workflowOutcomeReason: null,
-          inputRequestKind: null,
+          ...(params.runType === "collaboration"
+            ? {}
+            : {
+                workflowOutcome: null,
+                workflowOutcomeReason: null,
+                inputRequestKind: null,
+              }),
           ...((params.runType === "ci_repair" || params.runType === "queue_repair") && failureSignature
             ? {
                 lastAttemptedFailureSignature: failureSignature,
@@ -394,9 +412,14 @@ export class RunLauncher {
         ...(params.effectiveContext ? { effectiveContext: params.effectiveContext } : {}),
       });
       if (preserveDirtyWorktree) {
-        this.logger.warn(
+        const log = params.runType === "collaboration"
+          ? this.logger.debug.bind(this.logger)
+          : this.logger.warn.bind(this.logger);
+        log(
           { issueKey: params.issue.issueKey, runType: params.runType, worktreePath: params.worktreePath },
-          "Preserving dirty repair worktree for automatic publication continuation",
+          params.runType === "collaboration"
+            ? "Preserving collaboration workspace between turns"
+            : "Preserving dirty repair worktree for automatic publication continuation",
         );
       } else {
         await this.worktreeManager.resetWorktreeToTrackedBranch(params.worktreePath, params.branchName, params.issue, this.logger);
@@ -424,10 +447,20 @@ export class RunLauncher {
       if (compactThread && params.issue.threadId) {
         parentThreadId = params.issue.threadId;
       }
-      if (shouldReuseIssueThread({ existingThreadId: params.issue.threadId, compactThread, resumeThread: params.resumeThread })) {
+      const previousRun = params.runType === "collaboration"
+        ? this.db.runs.listRunsForIssue(params.project.id, params.issue.linearIssueId)
+          .filter((candidate) => candidate.id !== params.run.id)
+          .at(-1)
+        : undefined;
+      const resumeThread = params.runType === "collaboration"
+        ? params.resumeThread && previousRun?.runType === "collaboration"
+        : params.resumeThread;
+      if (shouldReuseIssueThread({ existingThreadId: params.issue.threadId, compactThread, resumeThread })) {
         threadId = params.issue.threadId!;
       } else {
-        const thread = await this.codex.startThread({ cwd: params.worktreePath });
+        const thread = params.runType === "collaboration"
+          ? await this.codex.startThreadForCollaboration(params.worktreePath)
+          : await this.codex.startThread({ cwd: params.worktreePath });
         threadId = thread.id;
         createdThreadForRun = true;
         this.db.issueSessions.commitIssueState({
@@ -451,7 +484,9 @@ export class RunLauncher {
         const msg = turnError instanceof Error ? turnError.message : String(turnError);
         if (msg.includes("thread not found") || msg.includes("not materialized")) {
           this.logger.info({ issueKey: params.issue.issueKey, staleThreadId: threadId }, "Thread is stale, retrying with fresh thread");
-          const thread = await this.codex.startThread({ cwd: params.worktreePath });
+          const thread = params.runType === "collaboration"
+            ? await this.codex.startThreadForCollaboration(params.worktreePath)
+            : await this.codex.startThread({ cwd: params.worktreePath });
           threadId = thread.id;
           createdThreadForRun = true;
           this.db.issueSessions.commitIssueState({
@@ -478,7 +513,9 @@ export class RunLauncher {
       const message = error instanceof Error ? error.message : String(error);
       const lostLease = error instanceof Error && error.name === "IssueSessionLeaseLostError";
       if (!lostLease) {
-        const workflowOutcome = resolveFailureOutcome(params.runType);
+        const workflowOutcome = params.runType === "collaboration"
+          ? undefined
+          : resolveFailureOutcome(params.runType);
         // Issue clear + run-terminal write ride in one transaction; the run
         // finish is gated on the issue commit so a lost lease skips both.
         this.db.transaction(() => {
@@ -489,8 +526,12 @@ export class RunLauncher {
               projectId: params.project.id,
               linearIssueId: params.issue.linearIssueId,
               activeRunId: null,
-              workflowOutcome,
-              workflowOutcomeReason: `run_launch_failed:${params.runType}`,
+              ...(workflowOutcome
+                ? {
+                    workflowOutcome,
+                    workflowOutcomeReason: `run_launch_failed:${params.runType}`,
+                  }
+                : {}),
             },
           });
           if (commit.outcome !== "applied") return;

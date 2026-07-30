@@ -57,19 +57,6 @@ export class CommentInputHandler {
       return;
     }
 
-    if (!issue.delegatedToPatchRelay) {
-      this.feed?.publish({
-        level: "info",
-        kind: "comment",
-        projectId: project.id,
-        issueKey: trackedIssue?.issueKey,
-        status: "ignored_undelegated",
-        summary: "Ignored comment because the issue is undelegated",
-        detail: trimmedBody.slice(0, 200),
-      });
-      return;
-    }
-
     const addressedText = extractPatchRelayAddressedText(trimmedBody);
     if (!addressedText) {
       this.feed?.publish({

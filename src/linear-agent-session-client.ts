@@ -140,11 +140,13 @@ export class LinearAgentSessionClient {
       return { content: step, status };
     });
 
-    const fullPlan = [
-      { content: "Prepare workspace", status: "completed" as const },
-      ...steps,
-      { content: "Merge", status: "pending" as const },
-    ];
+    const fullPlan = params.runType === "collaboration"
+      ? steps
+      : [
+          { content: "Prepare workspace", status: "completed" as const },
+          ...steps,
+          { content: "Merge", status: "pending" as const },
+        ];
 
     try {
       const linear = await this.linearProvider.forProject(syncedIssue.projectId);

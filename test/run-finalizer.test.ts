@@ -47,6 +47,7 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
 }) {
   const feedEvents: Array<Record<string, unknown>> = [];
   const activities: Array<Record<string, unknown>> = [];
+  const codexPlans: Array<Record<string, unknown>> = [];
   const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
   const lease = acquireLease(db, "usertold", "issue-1");
   const release = () => db.issueSessions.releaseIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId);
@@ -76,6 +77,9 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
         activities.push(content as unknown as Record<string, unknown>);
       },
       syncSession: async () => {},
+      syncCodexPlan: async (_issue, params) => {
+        codexPlans.push(params as Record<string, unknown>);
+      },
       clearProgress: () => {},
     } as never,
     dispatcher,
@@ -115,8 +119,149 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
     },
     sharedFeed as never,
   );
-  return { finalizer, feedEvents, activities, enqueueCalls };
+  return { finalizer, feedEvents, activities, codexPlans, enqueueCalls };
 }
+
+test("collaboration finalizer returns an elicitation without entering publication policy", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      issueKey: "USE-COLLAB",
+      title: "Explore a product direction",
+      delegatedToPatchRelay: false,
+      agentSessionId: "session-collaboration",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "collaboration",
+    });
+    db.runs.updateRunThread(run.id, {
+      threadId: "thread-collaboration",
+      turnId: "turn-collaboration",
+    });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+
+    const { finalizer, activities, codexPlans, enqueueCalls } = createFinalizer(
+      db,
+      { outcome: "done", summary: "unused" },
+    );
+    await finalizer.finalizeCompletedRun({
+      source: "notification",
+      run: db.runs.getRunById(run.id)!,
+      issue: db.getIssue(issue.projectId, issue.linearIssueId)!,
+      thread: {
+        id: "thread-collaboration",
+        preview: "",
+        cwd: baseDir,
+        status: "idle",
+        turns: [{
+          id: "turn-collaboration",
+          status: "completed",
+          items: [{
+            id: "message-1",
+            type: "agentMessage",
+            text: "I found two viable approaches. Which tradeoff should we optimize for?",
+          }],
+        }],
+      },
+      threadId: "thread-collaboration",
+      completedTurnId: "turn-collaboration",
+    });
+
+    assert.equal(db.runs.getRunById(run.id)?.status, "completed");
+    const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId);
+    assert.equal(updatedIssue?.activeRunId, undefined);
+    assert.equal(updatedIssue?.workflowOutcome, undefined);
+    assert.equal(activities.at(-1)?.type, "elicitation");
+    assert.match(String(activities.at(-1)?.body), /Which tradeoff/);
+    assert.equal(codexPlans.at(-1)?.runType, "collaboration");
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    db.close();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("delegated collaboration completion dispatches a fresh implementation run", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      issueKey: "USE-COLLAB-HANDOFF",
+      title: "Explore and then deliver",
+      delegatedToPatchRelay: false,
+      agentSessionId: "session-collaboration-handoff",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "collaboration",
+    });
+    db.runs.updateRunThread(run.id, {
+      threadId: "thread-collaboration-handoff",
+      turnId: "turn-collaboration-handoff",
+    });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+      delegatedToPatchRelay: true,
+    });
+
+    const { finalizer, activities, enqueueCalls } = createFinalizer(
+      db,
+      { outcome: "done", summary: "unused" },
+    );
+    await finalizer.finalizeCompletedRun({
+      source: "notification",
+      run: db.runs.getRunById(run.id)!,
+      issue: db.getIssue(issue.projectId, issue.linearIssueId)!,
+      thread: {
+        id: "thread-collaboration-handoff",
+        preview: "",
+        cwd: baseDir,
+        status: "idle",
+        turns: [{
+          id: "turn-collaboration-handoff",
+          status: "completed",
+          items: [{
+            id: "message-collaboration-handoff",
+            type: "agentMessage",
+            text: "The direction is clear; I have summarized the handoff.",
+          }],
+        }],
+      },
+      threadId: "thread-collaboration-handoff",
+      completedTurnId: "turn-collaboration-handoff",
+    });
+
+    assert.equal(db.runs.getRunById(run.id)?.status, "completed");
+    assert.equal(db.getIssue(issue.projectId, issue.linearIssueId)?.activeRunId, undefined);
+    assert.equal(activities.at(-1)?.type, "response");
+    assert.deepEqual(enqueueCalls, [{
+      projectId: issue.projectId,
+      issueId: issue.linearIssueId,
+    }]);
+    const task = db.workflowTasks
+      .listOpenTasks(issue.projectId, issue.linearIssueId)
+      .find((entry) => entry.taskType === "run");
+    assert.equal(task?.runType, "implementation");
+    assert.equal(task?.gateAction, "start");
+  } finally {
+    db.close();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
 
 test("repair run finalizer continues automatically with a preserved dirty worktree", async () => {
   const { baseDir, db } = createDb();

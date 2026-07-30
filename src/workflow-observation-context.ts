@@ -157,15 +157,24 @@ function consumedObservationIdSet(observations: WorkflowObservationRecord[]): Se
   return consumed;
 }
 
+export function listUnconsumedInboxObservationIds(
+  observations: WorkflowObservationRecord[],
+): number[] {
+  const consumed = consumedObservationIdSet(observations);
+  return observations
+    .filter((observation) => (
+      (observation.type === HUMAN_INPUT_OBSERVATION || observation.type === COMPLETION_CHECK_CONTINUE_OBSERVATION)
+      && !consumed.has(observation.id)
+    ))
+    .map((observation) => observation.id);
+}
+
 function deriveInputInboxContext(
   issue: Pick<IssueRecord, "prReviewState" | "prHeadSha" | "lastBlockingReviewHeadSha">,
   observations: WorkflowObservationRecord[],
 ): InboxInputContext | undefined {
-  const consumed = consumedObservationIdSet(observations);
-  const unconsumed = observations.filter((observation) => (
-    (observation.type === HUMAN_INPUT_OBSERVATION || observation.type === COMPLETION_CHECK_CONTINUE_OBSERVATION)
-    && !consumed.has(observation.id)
-  ));
+  const unconsumedIds = new Set(listUnconsumedInboxObservationIds(observations));
+  const unconsumed = observations.filter((observation) => unconsumedIds.has(observation.id));
   if (unconsumed.length === 0) return undefined;
 
   const currentHeadRequestedChanges = isCurrentHeadRequestedChanges({
@@ -198,9 +207,12 @@ function deriveInputInboxContext(
     } else {
       const inputKind = typeof payload.inputKind === "string" ? payload.inputKind : "followup_prompt";
       if (!runType) {
-        runType = currentHeadRequestedChanges ? "review_fix" : "implementation";
+        runType = payload.collaborationMode === true
+          ? "collaboration"
+          : currentHeadRequestedChanges ? "review_fix" : "implementation";
         workflowReason = inputKind;
       }
+      if (payload.collaborationMode === true) context.collaborationMode = true;
       const text = typeof payload.text === "string" ? payload.text
         : typeof payload.body === "string" ? payload.body : undefined;
       if (text) {

@@ -3,6 +3,18 @@ import type { WorkflowSnapshot, WorkflowTask } from "./workflow-model.ts";
 
 export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks">): WorkflowTask[] {
   const tasks: WorkflowTask[] = [];
+  const collaborationInput = snapshot.context.inputInboxContext?.runType === "collaboration"
+    ? snapshot.context.inputInboxContext
+    : undefined;
+  if (!snapshot.authority.delegated && collaborationInput) {
+    return [{
+      id: "run:collaboration",
+      type: "run",
+      runType: "collaboration",
+      reason: "A human asked PatchRelay to collaborate without entering the delivery workflow",
+      requirements: collaborationInput.requirements,
+    }];
+  }
   if (!snapshot.authority.delegated) {
     return [{
       id: "wait:authority",
@@ -67,12 +79,17 @@ export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks"
 
   const inputInbox = issue.inputInboxContext;
   if (inputInbox && !structuralRepairSignalled) {
+    const runType = inputInbox.runType === "collaboration"
+      ? "implementation"
+      : inputInbox.runType;
     tasks.push({
       id: "run:input",
       type: "run",
-      runType: inputInbox.runType,
+      runType,
       reason: "Unconsumed human input / completion-check continuation needs a run",
-      requirements: inputInbox.requirements,
+      requirements: runType === "implementation" && inputInbox.runType === "collaboration"
+        ? { ...inputInbox.requirements, collaborationMode: false, resumeThread: false }
+        : inputInbox.requirements,
     });
     return tasks;
   }

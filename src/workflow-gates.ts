@@ -1,7 +1,7 @@
 import type { GateDecision, WorkflowSnapshot, WorkflowTask } from "./workflow-model.ts";
 
 export function evaluateTaskStart(snapshot: WorkflowSnapshot, task: WorkflowTask): GateDecision {
-  if (!snapshot.authority.delegated) {
+  if (!snapshot.authority.delegated && task.runType !== "collaboration") {
     return { action: "wait", reason: "authority_not_delegated" };
   }
   if (snapshot.activeRun) {

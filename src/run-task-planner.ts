@@ -57,6 +57,10 @@ export class RunTaskPlanner {
 
   resolveRunTask(issue: IssueRecord): RunnableWorkflowIntent | undefined {
     const freshIssue = this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+    const existingWorkflowTask = this.resolveRunnableWorkflowTask(freshIssue);
+    if (existingWorkflowTask?.runType === "collaboration") {
+      return existingWorkflowTask;
+    }
     if (isIssueTerminalProjection(freshIssue)) {
       return undefined;
     }
@@ -64,7 +68,6 @@ export class RunTaskPlanner {
       return undefined;
     }
 
-    const existingWorkflowTask = this.resolveRunnableWorkflowTask(freshIssue);
     if (existingWorkflowTask) return existingWorkflowTask;
 
     this.reconcileWorkflowTasks(freshIssue);
@@ -156,6 +159,10 @@ export class RunTaskPlanner {
       case "implementation":
         eventType = "delegated";
         dedupeKey = `${dedupeScope ?? "workflow"}:implementation:${issue.linearIssueId}`;
+        break;
+      case "collaboration":
+        eventType = "followup_prompt";
+        dedupeKey = `${dedupeScope ?? "workflow"}:collaboration:${issue.linearIssueId}`;
         break;
       default:
         return assertNever(runType, "Unhandled run type in session event append");

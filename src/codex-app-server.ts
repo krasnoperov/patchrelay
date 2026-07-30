@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import type { Logger } from "pino";
 import type { CodexAppServerConfig, CodexThreadGoal, CodexThreadGoalStatus, CodexThreadItem, CodexThreadSummary } from "./types.ts";
 import { sanitizeDiagnosticText } from "./utils.ts";
+import { COLLABORATION_DEVELOPER_INSTRUCTIONS } from "./collaboration-developer-instructions.ts";
 
 interface JsonRpcSuccess {
   jsonrpc?: string;
@@ -220,6 +221,13 @@ export class CodexAppServerClient extends EventEmitter {
       reasoningEffort: "low",
       baseInstructions: null,
       developerInstructions: FOLLOWUP_INTENT_DEVELOPER_INSTRUCTIONS,
+    });
+  }
+
+  async startThreadForCollaboration(cwd: string): Promise<CodexThreadSummary> {
+    return await this.startThreadWithOverrides({ cwd }, {
+      developerInstructions: this.config.collaborationDeveloperInstructions
+        ?? COLLABORATION_DEVELOPER_INSTRUCTIONS,
     });
   }
 

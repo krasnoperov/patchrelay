@@ -75,7 +75,7 @@ export function buildBlockedDelegationActivity(blockedByKeys: string[] = []): Li
 export function buildPromptDeliveredThought(runType: RunType): LinearAgentActivityContent {
   return {
     type: "thought",
-    body: `PatchRelay routed your latest instructions into the active ${lowerRunTypeLabel(runType)} workflow; it will fold them in at the next checkpoint.`,
+    body: `PatchRelay routed your latest instructions to the ${lowerRunTypeLabel(runType)} workflow; it will fold them in at the next checkpoint.`,
   };
 }
 
@@ -133,6 +133,8 @@ export function buildNonActionableFollowupActivity(intent: "status" | "context_o
 
 export function buildRunStartedActivity(runType: RunType): LinearAgentActivityContent {
   switch (runType) {
+    case "collaboration":
+      return { type: "action", action: "Exploring", parameter: "the issue with you" };
     case "review_fix":
       return { type: "action", action: "Addressing", parameter: "review feedback" };
     case "branch_upkeep":
@@ -309,7 +311,7 @@ export function buildCompletionCheckActivity(
 export function buildStopConfirmationActivity(): LinearAgentActivityContent {
   return {
     type: "response",
-    body: "PatchRelay has stopped work as requested. Delegate the issue again or provide new instructions to resume.",
+    body: "PatchRelay stopped the current work as requested. Send new instructions to start another collaboration turn, or delegate the issue to enter delivery mode.",
   };
 }
 

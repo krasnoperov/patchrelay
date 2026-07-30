@@ -19,6 +19,9 @@ export function buildRunOutcomeSummary(params: {
   facts: RunOutcomeFacts;
 }): string {
   switch (params.runType) {
+    case "collaboration":
+      return sanitizeOperatorFacingText(params.facts.latestAssistantSummary)?.trim()
+        || "Collaboration turn completed.";
     case "implementation":
       return summarizeImplementation(params.facts);
     case "review_fix":

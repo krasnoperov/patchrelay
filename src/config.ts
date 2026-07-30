@@ -14,6 +14,7 @@ import {
 } from "./runtime-paths.ts";
 import { resolveSecretWithSource } from "./resolve-secret.ts";
 import { ensureAbsolutePath } from "./utils.ts";
+import { COLLABORATION_DEVELOPER_INSTRUCTIONS } from "./collaboration-developer-instructions.ts";
 
 const LINEAR_OAUTH_CALLBACK_PATH = "/oauth/linear/callback";
 const REPO_SETTINGS_DIRNAME = ".patchrelay";
@@ -316,6 +317,14 @@ function mergeDeveloperInstructions(custom: string | undefined): string {
     return DEFAULT_PATCHRELAY_DEVELOPER_INSTRUCTIONS;
   }
   return `${DEFAULT_PATCHRELAY_DEVELOPER_INSTRUCTIONS}\n\n## Local Developer Instructions\n\n${normalized}`;
+}
+
+function mergeCollaborationDeveloperInstructions(custom: string | undefined): string {
+  const normalized = custom?.trim();
+  if (!normalized) {
+    return COLLABORATION_DEVELOPER_INSTRUCTIONS;
+  }
+  return `${COLLABORATION_DEVELOPER_INSTRUCTIONS}\n\n## Local Developer Instructions\n\n${normalized}`;
 }
 
 function expandEnv(value: unknown, env: Record<string, string | undefined>): unknown {
@@ -701,6 +710,9 @@ export function loadConfig(
         ...(parsed.runner.codex.service_name ? { serviceName: parsed.runner.codex.service_name } : {}),
         ...(parsed.runner.codex.base_instructions ? { baseInstructions: parsed.runner.codex.base_instructions } : {}),
         developerInstructions: mergeDeveloperInstructions(parsed.runner.codex.developer_instructions),
+        collaborationDeveloperInstructions: mergeCollaborationDeveloperInstructions(
+          parsed.runner.codex.developer_instructions,
+        ),
         approvalPolicy: parsed.runner.codex.approval_policy,
         sandboxMode: parsed.runner.codex.sandbox_mode,
         experimentalRawEvents: parsed.runner.codex.experimental_raw_events,

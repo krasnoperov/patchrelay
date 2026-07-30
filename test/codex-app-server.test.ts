@@ -511,6 +511,43 @@ test("CodexAppServerClient starts issue triage threads with cheap read-only over
   }
 });
 
+test("CodexAppServerClient starts collaboration threads with normal permissions and a non-delivery contract", async () => {
+  const child = new FakeChildProcess("normal");
+  const client = new CodexAppServerClient(
+    {
+      bin: process.execPath,
+      args: ["unused"],
+      sourceBashrc: false,
+      requestTimeoutMs: 50,
+      approvalPolicy: "never",
+      sandboxMode: "danger-full-access",
+      serviceName: "patchrelay-test",
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      reasoningEffort: "high",
+      collaborationDeveloperInstructions: [
+        "You are a general coding collaborator.",
+        "Local repository rules still apply.",
+      ].join("\n"),
+    },
+    createCaptureLogger().logger,
+    (() => child) as never,
+  );
+
+  try {
+    await client.start();
+    await client.startThreadForCollaboration("/repo/worktree");
+
+    assert.equal(child.threadStartParams[0]?.cwd, "/repo/worktree");
+    assert.equal(child.threadStartParams[0]?.approvalPolicy, "never");
+    assert.equal(child.threadStartParams[0]?.sandbox, "danger-full-access");
+    assert.match(String(child.threadStartParams[0]?.developerInstructions), /general coding collaborator/);
+    assert.match(String(child.threadStartParams[0]?.developerInstructions), /Local repository rules still apply/);
+  } finally {
+    await client.stop();
+  }
+});
+
 test("resolveCodexAppServerLaunch can wrap codex in a shell that sources bashrc", () => {
   assert.deepEqual(
     resolveCodexAppServerLaunch({

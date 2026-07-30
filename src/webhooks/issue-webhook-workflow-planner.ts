@@ -40,6 +40,7 @@ export interface IssueWebhookWorkflowPlan {
   classification: ReturnType<typeof classifyIssue>;
   terminal: boolean;
   desiredStage: RunType | undefined;
+  collaborationHandoff: boolean;
   blockerPausedImplementation: boolean;
   undelegation: ReturnType<typeof decideUnDelegation>;
   startupResume: {
@@ -90,6 +91,9 @@ export function planIssueWebhookWorkflow(input: IssueWebhookWorkflowPlannerInput
   const blockerPausedImplementation = input.unresolvedBlockers > 0
     && input.activeRunType === "implementation"
     && !openPrExists;
+  const collaborationHandoff = input.existingIssue?.delegatedToPatchRelay === false
+    && input.delegated
+    && input.activeRunType === "collaboration";
 
   const desiredStage = input.linkedPrAdoption
     ? undefined
@@ -130,6 +134,8 @@ export function planIssueWebhookWorkflow(input: IssueWebhookWorkflowPlannerInput
     terminal,
     triggerEvent: input.triggerEvent,
     delegated: input.delegated,
+    previouslyDelegated: input.existingIssue?.delegatedToPatchRelay,
+    activeRunType: input.activeRunType,
   });
   const effectiveRunRelease = blockerPausedImplementation
     ? { release: true, reason: "Issue became blocked during implementation" }
@@ -138,6 +144,8 @@ export function planIssueWebhookWorkflow(input: IssueWebhookWorkflowPlannerInput
   const undelegation = decideUnDelegation({
     triggerEvent: input.triggerEvent,
     delegated: input.delegated,
+    previouslyDelegated: input.existingIssue?.delegatedToPatchRelay,
+    activeRunType: input.activeRunType,
     terminal,
     hasPr: input.existingIssue?.prNumber !== undefined && input.existingIssue?.prState !== "merged",
   });
@@ -148,6 +156,7 @@ export function planIssueWebhookWorkflow(input: IssueWebhookWorkflowPlannerInput
     sessionId: input.incomingAgentSessionId,
     triggerEvent: input.triggerEvent,
     delegated: input.delegated,
+    activeRunType: input.activeRunType,
   });
   const resolvedIssueUpdate = resolveIssueUpdatePlan({
     existingIssue: Boolean(input.existingIssue),
@@ -168,6 +177,7 @@ export function planIssueWebhookWorkflow(input: IssueWebhookWorkflowPlannerInput
     classification,
     terminal,
     desiredStage,
+    collaborationHandoff,
     blockerPausedImplementation,
     undelegation,
     startupResume,

@@ -4,7 +4,7 @@ import {
 } from "../agent-session-plan.ts";
 import { buildAgentSessionExternalUrls } from "../agent-session-presentation.ts";
 import type { CodexAppServerClient } from "../codex-app-server.ts";
-import type { AgentInputService } from "../agent-input-service.ts";
+import { AgentInputService } from "../agent-input-service.ts";
 import type { PatchRelayDatabase } from "../db.ts";
 import type { RunType } from "../run-type.ts";
 import { deriveIssuePhase } from "../issue-phase.ts";
@@ -15,7 +15,6 @@ import {
   buildDelegationThought,
   buildStopConfirmationActivity,
 } from "../linear-session-reporting.ts";
-import { dirtyWorktreeEventPayload, inspectGitWorktreeStatus } from "../git-worktree-status.ts";
 import type { OperatorEventFeed } from "../operator-feed.ts";
 import { resolveProject, triggerEventAllowed } from "../project-resolution.ts";
 import type {
@@ -41,6 +40,8 @@ const PATCHRELAY_AGENT_ACTIVITY_TYPES = new Set([
 ]);
 
 export class AgentSessionHandler {
+  private readonly agentInput: AgentInputService;
+
   constructor(
     private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
@@ -49,8 +50,11 @@ export class AgentSessionHandler {
     private readonly workflowTaskDispatcher: WorkflowTaskDispatcher,
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
-    private readonly agentInput?: AgentInputService,
-  ) {}
+    agentInput?: AgentInputService,
+  ) {
+    this.agentInput = agentInput
+      ?? new AgentInputService(db, codex, workflowTaskDispatcher, logger, feed);
+  }
 
   async acknowledgeCreated(normalized: NormalizedEvent): Promise<void> {
     if (normalized.triggerEvent !== "agentSessionCreated" || !normalized.agentSession?.id || !normalized.issue) {
@@ -106,7 +110,29 @@ export class AgentSessionHandler {
     if (normalized.triggerEvent === "agentSessionCreated") {
       if (!delegated) {
         const latestIssue = this.db.issues.getIssue(project.id, normalized.issue.id);
-        if (latestIssue ?? trackedIssue) {
+        const collaborationPrompt = normalized.agentSession.promptContext?.trim()
+          || normalized.agentSession.promptBody?.trim()
+          || normalized.issue.title?.trim();
+        if (latestIssue && collaborationPrompt) {
+          const result = await this.agentInput.deliverAgentInput({
+            project,
+            issue: latestIssue,
+            source: "linear_agent_session",
+            body: collaborationPrompt,
+            collaborationStart: true,
+            emitActivity: (content, options) =>
+              this.publishAgentActivity(linear, normalized.agentSession!.id, content, options),
+            peekRunnableWorkflowTaskRunType: params.peekRunnableWorkflowTaskRunType,
+          });
+          const refreshedIssue = this.db.issues.getIssue(project.id, normalized.issue.id);
+          await this.syncAgentSession(
+            linear,
+            normalized.agentSession.id,
+            refreshedIssue ?? latestIssue,
+            params.peekRunnableWorkflowTaskRunType,
+            result.queuedRunType ? { runnableTaskRunType: result.queuedRunType } : undefined,
+          );
+        } else if (latestIssue ?? trackedIssue) {
           await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, params.peekRunnableWorkflowTaskRunType);
         }
         return;
@@ -176,7 +202,7 @@ export class AgentSessionHandler {
 
     const promptBody = normalized.agentSession.promptBody?.trim();
     const directReply = promptBody && existingIssue ? params.isDirectReplyToOutstandingQuestion(existingIssue) : false;
-    if (promptBody && existingIssue && this.agentInput) {
+    if (promptBody && existingIssue) {
       const result = await this.agentInput.deliverAgentInput({
         project,
         issue: existingIssue,
@@ -224,68 +250,37 @@ export class AgentSessionHandler {
     const issueId = params.normalized.issue!.id;
     const sessionId = params.normalized.agentSession!.id;
     const storedIssue = this.db.issues.getIssue(params.project.id, issueId);
-    const worktreeStatus = storedIssue?.worktreePath
-      ? inspectGitWorktreeStatus(storedIssue.worktreePath)
-      : undefined;
-    const dirtyPayload = worktreeStatus ? dirtyWorktreeEventPayload(worktreeStatus) : undefined;
-    const dirtySummary = typeof dirtyPayload?.summary === "string" ? dirtyPayload.summary : undefined;
+    if (!storedIssue) return;
 
-    if (params.activeRun?.threadId && params.activeRun.turnId) {
-      try {
-        await this.codex.steerTurn({
-          threadId: params.activeRun.threadId,
-          turnId: params.activeRun.turnId,
-          input: "STOP: The user has requested you stop working immediately. Do not make further changes. Wrap up and exit.",
-        });
-      } catch (error) {
-        this.logger.warn({ issueKey: params.trackedIssue?.issueKey, error: error instanceof Error ? error.message : String(error) }, "Failed to steer Codex turn for stop signal");
-      }
+    const result = await this.agentInput.stopIssue({
+      issue: storedIssue,
+      body: "The user requested an immediate stop from the Linear agent session.",
+      source: "linear_stop_signal",
+    });
+    const updatedIssue = this.db.issues.getIssue(params.project.id, issueId) ?? storedIssue;
+    if (result.status === "failed") {
+      await this.publishAgentActivity(params.linear, sessionId, {
+        type: "error",
+        body: `PatchRelay could not confirm that the active turn stopped. ${result.reason ?? "Retry the stop request."}`,
+      });
+      await params.syncAgentSession(
+        sessionId,
+        updatedIssue,
+        result.activeRunType ? { activeRunType: result.activeRunType } : undefined,
+      );
+      return;
     }
 
-    // The stop signal is a user fact: the issue slot clear and the run
-    // release ride in one transaction, with the run gated on the issue commit.
-    this.db.transaction(() => {
-      const commit = this.db.issueSessions.commitIssueState({
-        writer: WRITER,
-        update: {
-          projectId: params.project.id,
-          linearIssueId: issueId,
-          activeRunId: null,
-          inputRequestKind: "paused_local_work",
-          agentSessionId: sessionId,
-        },
-      });
-      if (commit.outcome === "applied" && params.activeRun?.threadId && params.activeRun.turnId) {
-        this.db.runs.finishRun(params.activeRun.id, {
-          status: "released",
-          threadId: params.activeRun.threadId,
-          turnId: params.activeRun.turnId,
-          failureReason: dirtySummary ? `Stop signal received; ${dirtySummary}` : "Stop signal received",
-        });
-      }
+    this.db.issueSessions.commitIssueState({
+      writer: WRITER,
+      update: {
+        projectId: params.project.id,
+        linearIssueId: issueId,
+        agentSessionId: sessionId,
+      },
     });
-    this.db.issueSessions.appendIssueSessionEvent({
-      projectId: params.project.id,
-      linearIssueId: issueId,
-      eventType: "stop_requested",
-      ...(dirtyPayload ? { eventJson: JSON.stringify(dirtyPayload) } : {}),
-      dedupeKey: `stop_requested:${issueId}`,
-    });
-    this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(params.project.id, issueId);
-    this.db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(params.project.id, issueId);
-
-    this.feed?.publish({
-      level: "info",
-      kind: "agent",
-      projectId: params.project.id,
-      issueKey: params.trackedIssue?.issueKey,
-      status: "stopped",
-      summary: dirtySummary ? `Stop signal received - work halted with dirty worktree: ${dirtySummary}` : "Stop signal received - work halted",
-    });
-
-    const updatedIssue = this.db.issues.getIssue(params.project.id, issueId);
     await this.publishAgentActivity(params.linear, sessionId, buildStopConfirmationActivity());
-    await params.syncAgentSession(sessionId, updatedIssue ?? params.trackedIssue);
+    await params.syncAgentSession(sessionId, updatedIssue);
   }
 
   private async publishAgentActivity(

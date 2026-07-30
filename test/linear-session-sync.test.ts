@@ -1338,8 +1338,8 @@ test("maybeEmitProgress surfaces routine plan steps but keeps command chatter ou
       pino({ enabled: false }),
     );
 
-    // A routine in-progress plan step is now surfaced as a "Working on" action
-    // (ephemeral + durable) so the Linear trail shows what Codex is doing.
+    // A routine in-progress plan step is surfaced once as an ephemeral
+    // "Working on" action so it is visible without polluting session history.
     sync.maybeEmitProgress({
       method: "turn/plan/updated",
       params: { plan: [{ step: "Audit the mobile Study form controls", status: "inProgress" }] },
@@ -1352,7 +1352,8 @@ test("maybeEmitProgress surfaces routine plan steps but keeps command chatter ou
 
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    assert.equal(activities.length, 2, "the plan step surfaces; the command does not");
+    assert.equal(activities.length, 1, "the plan step surfaces once; the command does not");
+    assert.equal(activities[0]?.ephemeral, true);
     const serialized = JSON.stringify(activities);
     assert.ok(serialized.includes("Working on"), "plan step surfaces as a 'Working on' action");
     assert.ok(serialized.includes("Audit the mobile Study form controls"), "the step text is included verbatim");

@@ -88,6 +88,18 @@ export class RunNotificationHandler {
     if (status === "failed") {
       const turnErrorMessage = extractTurnErrorMessage(notification.params);
       const failureReason = buildFailedTurnFailureReason(turnErrorMessage);
+      if (run.runType === "collaboration") {
+        this.runFinalizer.finalizeFailedCollaborationRun({
+          run,
+          issue,
+          thread,
+          threadId,
+          ...(completedTurnId ? { completedTurnId } : {}),
+          failureReason,
+        });
+        this.activeThreadId = undefined;
+        return;
+      }
       // A capacity outage (usage limit / rate limit / quota) is not evidence
       // about the work: defer the same workflow task behind a backoff instead of
       // consuming an attempt budget or escalating. Only an actual error
@@ -298,7 +310,10 @@ export class RunNotificationHandler {
     if (!issue) return;
 
     try {
-      void this.linearSync.syncCodexPlan(issue, notification.params).catch((error) => {
+      void this.linearSync.syncCodexPlan(issue, {
+        ...notification.params,
+        runType: run.runType,
+      }).catch((error) => {
         this.logger.warn(
           { runId: run.id, issueKey: issue.issueKey, projectId: run.projectId, issueId: run.linearIssueId, method: notification.method, error: formatError(error) },
           "Linear plan sync failed",

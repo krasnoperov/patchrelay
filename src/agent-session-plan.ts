@@ -35,6 +35,15 @@ function implementationPlan(): AgentSessionPlanStep[] {
   ];
 }
 
+function collaborationPlan(): AgentSessionPlanStep[] {
+  return [
+    { content: "Understand the question", status: "completed" },
+    { content: "Investigate relevant context", status: "inProgress" },
+    { content: "Compare options or shape a draft", status: "pending" },
+    { content: "Continue the conversation", status: "pending" },
+  ];
+}
+
 function orchestrationPlan(): AgentSessionPlanStep[] {
   return [
     { content: "Review umbrella goal and child set", status: "pending" },
@@ -146,6 +155,9 @@ export function buildAgentSessionPlan(params: {
   prReviewState?: string;
   prCheckStatus?: string;
 }): AgentSessionPlanStep[] {
+  if (params.activeRunType === "collaboration" || params.runnableTaskRunType === "collaboration") {
+    return collaborationPlan();
+  }
   if (params.issueClass === "orchestration") {
     const settling = params.orchestrationSettleUntil
       ? Number.isFinite(Date.parse(params.orchestrationSettleUntil)) && Date.parse(params.orchestrationSettleUntil) > Date.now()
@@ -281,6 +293,8 @@ function planForRunType(
   },
 ): AgentSessionPlanStep[] {
   switch (runType) {
+    case "collaboration":
+      return collaborationPlan();
     case "review_fix":
       return reviewFixPlan();
     case "branch_upkeep":
@@ -333,6 +347,9 @@ export function buildAgentSessionPlanForIssue(
 }
 
 export function buildRunningSessionPlan(runType: string): AgentSessionPlanStep[] {
+  if (runType === "collaboration") {
+    return collaborationPlan();
+  }
   return buildAgentSessionPlan({
     phase: runType === "ci_repair" ? "repairing_ci"
       : runType === "main_repair" ? "implementing"

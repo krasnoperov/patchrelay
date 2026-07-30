@@ -26,6 +26,10 @@ import { settleRun } from "./run-settlement.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 import { COMPLETION_CHECK_CONTINUE_OBSERVATION } from "./workflow-model.ts";
 import { projectWorkflowSnapshot } from "./workflow-snapshot.ts";
+import {
+  finalizeCompletedCollaborationRun,
+  finalizeFailedCollaborationRun,
+} from "./collaboration-run-finalizer.ts";
 
 type StageReport = ReturnType<typeof buildStageReport>;
 
@@ -639,6 +643,26 @@ export class RunFinalizer {
     const { run, issue, thread, threadId } = params;
     const freshIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
 
+    if (run.runType === "collaboration") {
+      finalizeCompletedCollaborationRun(
+        {
+          db: this.db,
+          linearSync: this.linearSync,
+          withHeldLease: this.withHeldLease,
+          clearProgressAndRelease: (completedRun) => this.clearProgressAndRelease(completedRun),
+          publishTurnEvent: (event) => this.publishTurnEvent(event),
+        },
+        {
+          run,
+          issue: freshIssue,
+          thread,
+          threadId,
+          ...(params.completedTurnId ? { completedTurnId: params.completedTurnId } : {}),
+        },
+      );
+      return;
+    }
+
     // A run flagged shouldNotPublish, or whose authority epoch no
     // longer matches current truth, must not enter publication or
     // completion-verification paths. Those policies assume the run is
@@ -912,5 +936,25 @@ export class RunFinalizer {
       workflowTaskDispatcher: this.workflowTaskDispatcher,
     });
     return true;
+  }
+
+  finalizeFailedCollaborationRun(params: {
+    run: RunRecord;
+    issue: IssueRecord;
+    thread: CodexThreadSummary;
+    threadId: string;
+    completedTurnId?: string;
+    failureReason: string;
+  }): void {
+    finalizeFailedCollaborationRun(
+      {
+        db: this.db,
+        linearSync: this.linearSync,
+        withHeldLease: this.withHeldLease,
+        clearProgressAndRelease: (failedRun) => this.clearProgressAndRelease(failedRun),
+        publishTurnEvent: (event) => this.publishTurnEvent(event),
+      },
+      params,
+    );
   }
 }

@@ -827,7 +827,11 @@ export class RunOrchestrator {
           ...(typeof sourceHeadSha === "string" ? { headSha: sourceHeadSha } : {}),
         })
       : undefined;
-    void this.linearSync.emitActivity(freshIssue, reviewRoundActivity ?? buildRunStartedActivity(runType));
+    void this.linearSync.emitActivity(
+      freshIssue,
+      reviewRoundActivity ?? buildRunStartedActivity(runType),
+      runType === "collaboration" ? { ephemeral: true } : undefined,
+    );
     void this.linearSync.syncSession(freshIssue, { activeRunType: runType });
   }
 

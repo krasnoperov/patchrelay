@@ -32,20 +32,31 @@ export function decideActiveRunRelease(p: {
   terminal: boolean;
   triggerEvent: string;
   delegated: boolean;
+  previouslyDelegated?: boolean | undefined;
+  activeRunType?: RunType | undefined;
 }): { release: boolean; reason?: string } {
   if (!p.hasActiveRun) return { release: false };
   // External terminal state is a fact, not a handoff. The active Codex turn owns completion.
-  if (!p.delegated) return { release: true, reason: "Un-delegated from PatchRelay" };
+  if (
+    p.previouslyDelegated === true
+    && !p.delegated
+    && p.activeRunType !== "collaboration"
+  ) {
+    return { release: true, reason: "Un-delegated from PatchRelay" };
+  }
   return { release: false };
 }
 
 export function decideUnDelegation(p: {
   triggerEvent: string;
   delegated: boolean;
+  previouslyDelegated?: boolean | undefined;
+  activeRunType?: RunType | undefined;
   terminal: boolean;
   hasPr: boolean;
 }): { paused: boolean; clearPending: boolean } {
-  if (p.delegated) return { paused: false, clearPending: false };
+  if (p.delegated || p.previouslyDelegated !== true) return { paused: false, clearPending: false };
+  if (p.activeRunType === "collaboration") return { paused: false, clearPending: false };
   if (p.terminal) return { paused: false, clearPending: false };
   return { paused: true, clearPending: true };
 }
@@ -113,9 +124,14 @@ export function decideAgentSession(p: {
   sessionId?: string | undefined;
   triggerEvent: string;
   delegated: boolean;
+  activeRunType?: RunType | undefined;
 }): string | null | undefined {
   if (p.sessionId) return p.sessionId;
-  if (p.triggerEvent === "delegateChanged" && !p.delegated) return null;
+  if (
+    p.triggerEvent === "delegateChanged"
+    && !p.delegated
+    && p.activeRunType !== "collaboration"
+  ) return null;
   return undefined;
 }
 

@@ -176,6 +176,7 @@ export class WebhookHandler {
         normalized: hydrated,
         peekRunnableWorkflowTaskRunType: (projectId, issueId) => this.peekRunnableWorkflowTaskRunType(projectId, issueId),
         stopActiveRun: (run, input) => this.stopActiveRun(run, input),
+        steerActiveRun: (run, input) => this.steerActiveRun(run, input),
       });
       const trackedIssue = result.issue;
       this.db.workflowObservations.appendObservation({
@@ -309,13 +310,24 @@ export class WebhookHandler {
 
   private async stopActiveRun(
     run: NonNullable<ReturnType<PatchRelayDatabase["runs"]["getRunById"]>>,
+    _input: string,
+  ): Promise<void> {
+    if (!run.threadId || !run.turnId) return;
+    await this.codex.interruptTurn({ threadId: run.threadId, turnId: run.turnId });
+  }
+
+  private async steerActiveRun(
+    run: NonNullable<ReturnType<PatchRelayDatabase["runs"]["getRunById"]>>,
     input: string,
   ): Promise<void> {
     if (!run.threadId || !run.turnId) return;
     try {
       await this.codex.steerTurn({ threadId: run.threadId, turnId: run.turnId, input });
     } catch (error) {
-      this.logger.warn({ runId: run.id, error: error instanceof Error ? error.message : String(error) }, "Failed to steer active run during session shutdown");
+      this.logger.warn(
+        { runId: run.id, error: error instanceof Error ? error.message : String(error) },
+        "Failed to steer active collaboration during delivery handoff",
+      );
     }
   }
 
