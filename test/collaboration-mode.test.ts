@@ -481,3 +481,43 @@ test("collaboration plan sync does not move the Linear issue into delivery state
     cleanup();
   }
 });
+
+test("reused collaboration threads resolve notifications to the matching newest run", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "inventory",
+      linearIssueId: "issue-thread-reuse",
+      issueKey: "INV-THREAD",
+      title: "Continue one conversation",
+      delegatedToPatchRelay: false,
+    });
+    const first = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "collaboration",
+    });
+    db.runs.updateRunThread(first.id, {
+      threadId: "thread-shared",
+      turnId: "turn-first",
+    });
+    db.runs.finishRun(first.id, { status: "completed" });
+    const second = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "collaboration",
+    });
+    db.runs.updateRunThread(second.id, {
+      threadId: "thread-shared",
+      turnId: "turn-second",
+    });
+
+    assert.equal(db.runs.getRunByThreadId("thread-shared", "turn-first")?.id, first.id);
+    assert.equal(db.runs.getRunByThreadId("thread-shared", "turn-second")?.id, second.id);
+    assert.equal(db.runs.getRunByThreadId("thread-shared")?.id, second.id);
+  } finally {
+    cleanup();
+  }
+});

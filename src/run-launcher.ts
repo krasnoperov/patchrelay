@@ -116,7 +116,8 @@ export function shouldPreserveDirtyWorktreeBeforeLaunch(params: {
   }
   return params.effectiveContext?.preserveDirtyWorktree === true
     && (
-      params.runType === "review_fix"
+      params.runType === "implementation"
+      || params.runType === "review_fix"
       || params.runType === "branch_upkeep"
       || params.runType === "ci_repair"
       || params.runType === "queue_repair"

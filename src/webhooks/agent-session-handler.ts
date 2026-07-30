@@ -110,8 +110,8 @@ export class AgentSessionHandler {
     if (normalized.triggerEvent === "agentSessionCreated") {
       if (!delegated) {
         const latestIssue = this.db.issues.getIssue(project.id, normalized.issue.id);
-        const collaborationPrompt = normalized.agentSession.promptContext?.trim()
-          || normalized.agentSession.promptBody?.trim()
+        const collaborationPrompt = normalized.agentSession.promptBody?.trim()
+          || normalized.agentSession.promptContext?.trim()
           || normalized.issue.title?.trim();
         if (latestIssue && collaborationPrompt) {
           const result = await this.agentInput.deliverAgentInput({

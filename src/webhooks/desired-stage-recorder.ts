@@ -41,10 +41,11 @@ export class DesiredStageRecorder {
     issue: TrackedIssueRecord | undefined;
     runnableTaskRunType: RunType | undefined;
     delegated: boolean;
+    collaborationHandoff: boolean;
   }> {
     const normalizedIssue = params.normalized.issue;
     if (!normalizedIssue) {
-      return { issue: undefined, runnableTaskRunType: undefined, delegated: false };
+      return { issue: undefined, runnableTaskRunType: undefined, delegated: false, collaborationHandoff: false };
     }
 
     const existingIssue = this.db.issues.getIssue(params.project.id, normalizedIssue.id);
@@ -55,7 +56,7 @@ export class DesiredStageRecorder {
     const hasRunnableWorkflowTask = params.peekRunnableWorkflowTaskRunType(params.project.id, normalizedIssue.id) !== undefined;
 
     if (!existingIssue && !isDelegatedToPatchRelay(this.db, params.project, normalizedIssue) && !incomingAgentSessionId) {
-      return { issue: undefined, runnableTaskRunType: undefined, delegated: false };
+      return { issue: undefined, runnableTaskRunType: undefined, delegated: false, collaborationHandoff: false };
     }
 
     const syncResult = await syncIssueDependencies(this.db, this.linearProvider, params.project.id, normalizedIssue);
@@ -188,7 +189,7 @@ export class DesiredStageRecorder {
         },
       });
       if (fallbackCommit.outcome !== "applied") {
-        return { issue: undefined, runnableTaskRunType: undefined, delegated };
+        return { issue: undefined, runnableTaskRunType: undefined, delegated, collaborationHandoff: false };
       }
       issue = fallbackCommit.issue;
     }
@@ -354,6 +355,7 @@ export class DesiredStageRecorder {
       issue: this.db.issueToTrackedIssue(issue),
       runnableTaskRunType: params.peekRunnableWorkflowTaskRunType(params.project.id, normalizedIssue.id),
       delegated,
+      collaborationHandoff: workflowPlan.collaborationHandoff,
     };
   }
 

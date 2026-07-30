@@ -110,10 +110,7 @@ function latestDelegationContext(observations: WorkflowObservationRecord[]): Run
       continue;
     }
     const payload = parseObservationPayload(observation);
-    const context = tryParseRunContextValue({
-      ...(typeof payload?.promptContext === "string" ? { promptContext: payload.promptContext } : {}),
-      ...(typeof payload?.promptBody === "string" ? { promptBody: payload.promptBody } : {}),
-    });
+    const context = tryParseRunContextValue(payload ?? {});
     if (context && Object.keys(context).length > 0) {
       return context;
     }

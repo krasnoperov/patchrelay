@@ -493,6 +493,10 @@ test("plain review-fix runs stay on the live PR head instead of rebasing onto ma
   assert.equal(shouldPreserveDirtyWorktreeBeforeLaunch({
     runType: "implementation",
     effectiveContext: { preserveDirtyWorktree: true },
+  }), true);
+  assert.equal(shouldFreshenWorktreeBeforeLaunch({
+    runType: "implementation",
+    effectiveContext: { preserveDirtyWorktree: true },
   }), false);
 });
 

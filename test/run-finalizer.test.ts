@@ -217,6 +217,18 @@ test("delegated collaboration completion dispatches a fresh implementation run",
       activeRunId: run.id,
       delegatedToPatchRelay: true,
     });
+    db.workflowObservations.appendObservation({
+      projectId: issue.projectId,
+      subjectId: issue.linearIssueId,
+      source: "linear",
+      type: "linear.delegated",
+      payloadJson: JSON.stringify({
+        delegated: true,
+        preserveDirtyWorktree: true,
+        collaborationMode: false,
+      }),
+      dedupeKey: "collaboration-delivery-handoff",
+    });
 
     const { finalizer, activities, enqueueCalls } = createFinalizer(
       db,
@@ -257,6 +269,11 @@ test("delegated collaboration completion dispatches a fresh implementation run",
       .find((entry) => entry.taskType === "run");
     assert.equal(task?.runType, "implementation");
     assert.equal(task?.gateAction, "start");
+    assert.equal(
+      (JSON.parse(task?.requirementsJson ?? "{}") as { preserveDirtyWorktree?: boolean })
+        .preserveDirtyWorktree,
+      true,
+    );
   } finally {
     db.close();
     rmSync(baseDir, { recursive: true, force: true });

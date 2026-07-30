@@ -195,6 +195,13 @@ export class WebhookHandler {
           agentSessionId: hydrated.agentSession?.id,
           promptContext: hydrated.agentSession?.promptContext?.trim(),
           promptBody: hydrated.agentSession?.promptBody?.trim(),
+          ...(result.collaborationHandoff
+            ? {
+                preserveDirtyWorktree: true,
+                collaborationMode: false,
+                handoffFromRunType: "collaboration",
+              }
+            : {}),
           actorId: hydrated.actor?.id,
           actorName: hydrated.actor?.name,
         }),

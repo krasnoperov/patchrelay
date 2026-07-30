@@ -116,8 +116,24 @@ export class RunStore {
     return row ? this.mapRunRow(row) : undefined;
   }
 
-  getRunByThreadId(threadId: string): RunRecord | undefined {
-    const row = this.connection.prepare("SELECT * FROM runs WHERE thread_id = ?").get(threadId) as Record<string, unknown> | undefined;
+  getRunByThreadId(threadId: string, turnId?: string): RunRecord | undefined {
+    if (turnId) {
+      const exact = this.connection.prepare(`
+        SELECT * FROM runs
+        WHERE thread_id = ? AND turn_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+      `).get(threadId, turnId) as Record<string, unknown> | undefined;
+      if (exact) return this.mapRunRow(exact);
+    }
+    const row = this.connection.prepare(`
+      SELECT * FROM runs
+      WHERE thread_id = ?
+      ORDER BY
+        CASE WHEN status IN ('queued', 'running') THEN 0 ELSE 1 END,
+        id DESC
+      LIMIT 1
+    `).get(threadId) as Record<string, unknown> | undefined;
     return row ? this.mapRunRow(row) : undefined;
   }
 

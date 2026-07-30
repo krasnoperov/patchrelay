@@ -4241,6 +4241,14 @@ test("delegating active collaboration steers a turn-boundary handoff without int
     assert.deepEqual(interrupts, []);
     assert.equal(steers.length, 1);
     assert.match(steers[0] ?? "", /fresh delivery run/i);
+    const delegationObservation = db.workflowObservations
+      .listObservations(issueRecord.projectId, issueRecord.linearIssueId)
+      .find((observation) => observation.type === "linear.delegated");
+    assert.equal(
+      (JSON.parse(delegationObservation?.payloadJson ?? "{}") as { preserveDirtyWorktree?: boolean })
+        .preserveDirtyWorktree,
+      true,
+    );
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -5479,7 +5487,7 @@ test("agent mention starts collaboration and later delegation upgrades queued wo
         issueId: "issue-maf-session",
         comment: {
           id: "comment-94",
-          body: "This thread is for an agent session with patchrelay.",
+          body: "Compare the two cancellation UI approaches before we implement either one.",
           issueId: "issue-maf-session",
         },
         issue: {
@@ -5509,8 +5517,14 @@ test("agent mention starts collaboration and later delegation upgrades queued wo
     assert.equal(collaborationTask?.runType, "collaboration");
     const collaborationRequirements = JSON.parse(collaborationTask?.requirementsJson ?? "{}") as {
       collaborationMode?: boolean;
+      followUps?: Array<{ text?: string }>;
     };
     assert.equal(collaborationRequirements.collaborationMode, true);
+    assert.deepEqual(
+      collaborationRequirements.followUps?.map((followUp) => followUp.text),
+      ["Compare the two cancellation UI approaches before we implement either one."],
+    );
+    assert.doesNotMatch(JSON.stringify(collaborationRequirements), /<issue identifier=/);
     assert.deepEqual(
       activities.filter((entry) => entry.body?.includes("Delegate the issue to PatchRelay to start work.")),
       [],

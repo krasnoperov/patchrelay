@@ -54,7 +54,8 @@ export class RunNotificationHandler {
       this.activeThreadId = threadId;
     }
 
-    const run = this.db.runs.getRunByThreadId(threadId);
+    const turnId = typeof notification.params.turnId === "string" ? notification.params.turnId : undefined;
+    const run = this.db.runs.getRunByThreadId(threadId, turnId);
     if (!run) return;
     if (run.status !== "running") {
       this.logger.info({ runId: run.id, status: run.status, issueId: run.linearIssueId }, "Ignoring Codex notification for inactive run");
@@ -65,7 +66,6 @@ export class RunNotificationHandler {
       return;
     }
 
-    const turnId = typeof notification.params.turnId === "string" ? notification.params.turnId : undefined;
     this.observePublishCommand(notification, run, threadId, turnId ?? run.turnId);
     this.recordActivity(notification, run);
 
