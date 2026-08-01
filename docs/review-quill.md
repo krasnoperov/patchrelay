@@ -119,6 +119,8 @@ Default context path for each reviewable PR:
 4. Prior formal PR reviews from GitHub.
 5. Optional Linear issue context when issue keys appear in the PR metadata.
 
+Issue context is optional by design. Repository rules about initiating, tracking, assigning, or linking work guide the implementation agent and operator; they are not current-head review findings. Review Quill must not request changes or add a nit solely because a Linear issue, ticket link, assignment, or other pre-PR process artifact is absent.
+
 The built-in review scaffold lives in `packages/review-quill/src/prompt-builder/render.ts`. The always-on reviewer prompt stays small: output contract, review rules, PR metadata, diff, repo guidance, prior review claims. Install-level and repo-level prompt config can add one extra instructions file or replace the review-rubric section — see [prompting.md](./prompting.md).
 
 Diff context is intentionally filtered:

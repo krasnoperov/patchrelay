@@ -63,6 +63,8 @@ function appendGuidanceSections(sections: ReviewPromptSection[], context: Omit<R
       "## Repository guidance",
       "These documents are project-specific policy. If they conflict with generic review instincts or prior review claims, follow the repository guidance and explain only current-head violations of that guidance.",
       ...context.promptContext.guidanceDocs.flatMap((doc) => [`### ${doc.path}`, doc.text.slice(0, 8_000), ""]),
+      "### Review boundary for workflow guidance",
+      "Instructions about how work must be initiated, tracked, assigned, or linked govern the implementation agent and operator workflow; they are not defects in the current PR head. Never request changes or add a nit solely because a Linear issue, ticket, issue link, assignment, or other pre-PR process artifact is missing. Use linked issue context when it exists, but review the current head on the available code and evidence when it does not.",
     ].join("\n"),
   });
 }
@@ -140,6 +142,7 @@ Review the current PR head only.
 
 - Start by understanding the actual code and diff before deciding on a verdict.
 - Repository guidance is authoritative project policy. Apply it before general reviewer instincts or prior-review momentum; if guidance says a pattern is intentional, do not push the author in the opposite direction unless the current head violates a different explicit rule.
+- Apply repository guidance only to reviewable properties of the current head: code, tests, committed artifacts, documented contracts, and runtime behavior. Rules about starting work from an issue or other pre-PR workflow provenance belong to the implementation agent and operator; missing issue or ticket context is never a blocker or nit.
 - When reviewing domain content such as translations, curriculum, prompts, fixtures, policy docs, or generated artifacts, treat project-specific guidance, glossaries, samples, and PR-linked docs as the product spec for that content.
 - Every blocking concern must name (a) a concrete input, runtime state, or sequence that triggers it on the current head, and (b) the realistic usage pattern under which that state arises in this repository. Hypothetical failure modes that require unstated preconditions are not blockers — flag them as nits at most, or drop them.
 - Calibrate likelihood and impact from repository evidence. A conceivable failure mode is not automatically a bug: report it only when there is a plausible path for it to occur in real use of the current system. Do not manufacture blockers from theoretical concurrency, timing, scale, or adversarial assumptions that the repository does not support.
@@ -149,7 +152,7 @@ Review the current PR head only.
 - Only raise a new blocker when it is clearly independent from the previous blockers.
 - When several symptoms share one root cause, report them as one blocker instead of separate variants.
 - Report the complete set of independent merge-blocking concerns you can substantiate on the current head, up to 5 blockers. Group duplicate symptoms by root cause, but do not intentionally stop after the first blocker. Order blockers by severity, confidence, and likelihood of affecting normal use.
-- Flag only high-signal issues: real correctness bugs, definite regressions, or clear documented rule violations you can quote from repository guidance.
+- Flag only high-signal issues: real correctness bugs, definite regressions, or clear documented rule violations that govern the current code, committed artifacts, or runtime behavior.
 - Include nits only when they are high-confidence, directly tied to the diff, and useful to fix while touching this code. Do not let nits crowd out blockers.
 - Keep each \`finding.message\` under ~200 characters of prose. Put multi-line fix detail in the \`suggestion\` committable block (≤6 lines) instead of the message body.
 - Do not raise speculative issues, style debates, pre-existing problems, or linter/typechecker noise.

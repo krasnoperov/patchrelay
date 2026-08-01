@@ -121,6 +121,7 @@ test("renderReviewPrompt includes explicit guidance docs and suppressed summarie
   assert.match(prompt, /A conceivable failure mode is not automatically a bug/);
   assert.match(prompt, /theoretical concurrency, timing, scale, or adversarial assumptions/);
   assert.match(prompt, /Repository guidance is authoritative project policy/);
+  assert.match(prompt, /Rules about starting work from an issue or other pre-PR workflow provenance belong to the implementation agent and operator/);
   assert.match(prompt, /project-specific guidance, glossaries, samples, and PR-linked docs as the product spec/);
   assert.match(prompt, /These documents are project-specific policy/);
   assert.match(prompt, /previous blocking review concerns are now resolved, still blocking, or no longer relevant/);
@@ -141,6 +142,28 @@ test("renderReviewPrompt includes explicit guidance docs and suppressed summarie
   assert.match(prompt, /If a concern is real but mostly pre-existing or only weakly connected to the stated PR task, prefer a nit or drop it instead of blocking/);
   assert.match(prompt, /Verify these historical claims against the current head before reusing them/);
   assert.match(prompt, /make the continuity explicit: note what appears resolved since the prior review, what still blocks on this head, and what is genuinely new/);
+});
+
+test("renderReviewPrompt keeps missing issue provenance outside the review verdict", () => {
+  const context = baseContext();
+  context.pr.body = "No Linear issue: implemented from a direct owner request.";
+  context.promptContext.issueKeys = [];
+  context.promptContext.guidanceDocs = [{
+    path: "AGENTS.md",
+    text: "## Hard Rules\n- Start non-trivial work from a Linear issue.",
+  }];
+
+  const prompt = renderReviewPrompt(context);
+  const repoRuleIndex = prompt.indexOf("Start non-trivial work from a Linear issue.");
+  const reviewBoundaryIndex = prompt.indexOf("### Review boundary for workflow guidance");
+
+  assert.ok(repoRuleIndex >= 0);
+  assert.ok(reviewBoundaryIndex > repoRuleIndex);
+  assert.match(
+    prompt,
+    /Never request changes or add a nit solely because a Linear issue, ticket, issue link, assignment, or other pre-PR process artifact is missing/,
+  );
+  assert.match(prompt, /review the current head on the available code and evidence when it does not/);
 });
 
 test("renderFollowUpReviewPrompt carries policy and inventory without patch bodies", () => {
