@@ -120,6 +120,7 @@ export class MergedLinearCompletionReconciler {
       return;
     }
 
+    await this.commentOnCompletedIssueReopen(issue, linear);
     const updated = await linear.setIssueState(issue.linearIssueId, targetState);
     this.db.issueSessions.commitIssueState({
       writer: WRITER,
@@ -130,6 +131,23 @@ export class MergedLinearCompletionReconciler {
         ...(updated.stateType ? { currentLinearStateType: updated.stateType } : {}),
       },
     });
+  }
+
+  private async commentOnCompletedIssueReopen(
+    issue: IssueRecord,
+    linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>,
+  ): Promise<void> {
+    try {
+      await linear.upsertIssueComment({
+        issueId: issue.linearIssueId,
+        body: buildCompletedIssueReopenComment(issue),
+      });
+    } catch (error) {
+      this.logger.warn(
+        { issueKey: issue.issueKey, error: error instanceof Error ? error.message : String(error) },
+        "Failed to explain why reopening completed work does not start a new run",
+      );
+    }
   }
 
   private reopenStaleLocalDoneIssue(
@@ -296,4 +314,18 @@ function resolveOpenWorkflowState(
   }
 
   return undefined;
+}
+
+function buildCompletedIssueReopenComment(
+  issue: Pick<IssueRecord, "prNumber" | "prUrl">,
+): string {
+  const completedDelivery = issue.prNumber !== undefined
+    ? issue.prUrl
+      ? ` Its delivery PR [#${issue.prNumber}](${issue.prUrl}) is already merged.`
+      : ` Its delivery PR #${issue.prNumber} is already merged.`
+    : " PatchRelay has already completed this issue.";
+
+  return `PatchRelay did not start new work.${completedDelivery}
+
+Changing the status or delegating this completed issue to PatchRelay again only restores the completed state; it does not launch another run. Create a new Linear issue for the follow-up work and delegate that new issue to PatchRelay.`;
 }

@@ -196,6 +196,123 @@ test("reconciler keeps canceled issues buried instead of reopening stale local d
   }
 });
 
+test("reconciler explains that reopening a merged issue does not start new work", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-merged-complete",
+      issueKey: "USE-202B",
+      delegatedToPatchRelay: true,
+      workflowOutcome: "completed",
+      currentLinearState: "Todo",
+      currentLinearStateType: "unstarted",
+      prNumber: 202,
+      prUrl: "https://github.com/test/repo/pull/202",
+      prState: "merged",
+    });
+
+    let requestedState: string | undefined;
+    let commentBody: string | undefined;
+    const reconciler = new MergedLinearCompletionReconciler(
+      db,
+      {
+        forProject: async () => ({
+          getIssue: async () => buildLiveIssue({
+            id: "issue-merged-complete",
+            identifier: "USE-202B",
+            title: "Merged issue",
+            stateName: "Todo",
+            stateType: "unstarted",
+          }),
+          upsertIssueComment: async (params) => {
+            commentBody = params.body;
+            return { id: "comment-completed-reopen", body: params.body };
+          },
+          setIssueState: async (_issueId, state) => {
+            requestedState = state;
+            return buildLiveIssue({
+              id: "issue-merged-complete",
+              identifier: "USE-202B",
+              title: "Merged issue",
+              stateName: state,
+              stateType: "completed",
+            });
+          },
+        }) as LinearClient,
+      },
+      pino({ enabled: false }),
+    );
+
+    await reconciler.reconcile();
+
+    assert.equal(requestedState, "Done");
+    assert.match(commentBody ?? "", /did not start new work/);
+    assert.match(commentBody ?? "", /\[#202\]\(https:\/\/github\.com\/test\/repo\/pull\/202\) is already merged/);
+    assert.match(commentBody ?? "", /does not launch another run/);
+    assert.match(commentBody ?? "", /Create a new Linear issue/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("reconciler still restores Done when the completed-issue explanation fails", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-merged-comment-failure",
+      issueKey: "USE-202C",
+      delegatedToPatchRelay: true,
+      workflowOutcome: "completed",
+      currentLinearState: "Todo",
+      currentLinearStateType: "unstarted",
+      prNumber: 203,
+      prState: "merged",
+    });
+
+    let requestedState: string | undefined;
+    const reconciler = new MergedLinearCompletionReconciler(
+      db,
+      {
+        forProject: async () => ({
+          getIssue: async () => buildLiveIssue({
+            id: "issue-merged-comment-failure",
+            identifier: "USE-202C",
+            title: "Merged issue with comment failure",
+            stateName: "Todo",
+            stateType: "unstarted",
+          }),
+          upsertIssueComment: async () => {
+            throw new Error("Linear comment API unavailable");
+          },
+          setIssueState: async (_issueId, state) => {
+            requestedState = state;
+            return buildLiveIssue({
+              id: "issue-merged-comment-failure",
+              identifier: "USE-202C",
+              title: "Merged issue with comment failure",
+              stateName: state,
+              stateType: "completed",
+            });
+          },
+        }) as LinearClient,
+      },
+      pino({ enabled: false }),
+    );
+
+    await reconciler.reconcile();
+
+    assert.equal(requestedState, "Done");
+    assert.equal(
+      db.getIssue("usertold", "issue-merged-comment-failure")?.currentLinearState,
+      "Done",
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("reconciler completes trusted no-PR done issues in Linear instead of reopening them", async () => {
   const { baseDir, db } = createDb();
   try {
@@ -221,6 +338,7 @@ test("reconciler completes trusted no-PR done issues in Linear instead of reopen
     });
 
     let requestedState: string | undefined;
+    let commentBody: string | undefined;
     const reconciler = new MergedLinearCompletionReconciler(
       db,
       {
@@ -232,6 +350,10 @@ test("reconciler completes trusted no-PR done issues in Linear instead of reopen
             stateName: "In Progress",
             stateType: "started",
           }),
+          upsertIssueComment: async (params) => {
+            commentBody = params.body;
+            return { id: "comment-no-pr-completed-reopen", body: params.body };
+          },
           setIssueState: async (_issueId, state) => {
             requestedState = state;
             return { stateName: state, stateType: "completed" };
@@ -245,6 +367,8 @@ test("reconciler completes trusted no-PR done issues in Linear instead of reopen
 
     const refreshed = db.getIssue("usertold", "issue-no-pr-complete");
     assert.equal(requestedState, "Done");
+    assert.match(commentBody ?? "", /PatchRelay has already completed this issue/);
+    assert.match(commentBody ?? "", /Create a new Linear issue/);
     assertIssuePhase(refreshed, "done");
     assert.equal(refreshed?.currentLinearState, "Done");
     assert.equal(refreshed?.currentLinearStateType, "completed");
