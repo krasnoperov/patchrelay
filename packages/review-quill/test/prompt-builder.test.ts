@@ -200,6 +200,31 @@ test("renderFollowUpReviewPrompt carries policy and inventory without patch bodi
   assert.doesNotMatch(prompt, /```diff/);
 });
 
+test("review prompts keep the original task authoritative over a conflicting PR summary and prior review", () => {
+  const context = baseContext();
+  context.pr.body = "Retain the known 15-second validation.";
+  context.promptContext.taskContract = [
+    "Issue: INV-979",
+    "Title: Submit audio without duration preflight",
+    "",
+    "## Acceptance criteria",
+    "",
+    "- Known durations over 15 seconds are submitted unchanged.",
+  ].join("\n");
+  context.promptContext.priorReviewClaims = [{
+    authorLogin: "review-quill",
+    state: "CHANGES_REQUESTED",
+    excerpt: "Known durations over 15 seconds must still be rejected.",
+  }];
+
+  for (const prompt of [renderReviewPrompt(context), renderFollowUpReviewPrompt(context, "previous-sha")]) {
+    assert.match(prompt, /## Authoritative task/);
+    assert.match(prompt, /Known durations over 15 seconds are submitted unchanged\./);
+    assert.match(prompt, /override conflicting PR summaries, implementation assumptions, and prior review claims/);
+    assert.match(prompt, /Do not preserve an old implementation invariant or prior review claim that the task explicitly removes/);
+  }
+});
+
 test("renderReviewPrompt embeds renderDiffContextLines verbatim (CLI/LLM parity lock)", () => {
   // The `review-quill diff` CLI and the LLM prompt must render the diff
   // portion identically. They achieve this by both calling

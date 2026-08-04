@@ -3,6 +3,7 @@ import type { PromptContext, PullRequestSummary, ReviewWorkspace } from "../type
 import { buildGitHubPromptContext } from "./github-context.ts";
 import { detectIssueKeys } from "./issue-keys.ts";
 import { loadRepoGuidanceDocs } from "./repo-guidance.ts";
+import { extractPatchRelayTaskContract } from "./task-contract.ts";
 
 export async function buildPromptContext(
   github: GitHubClient,
@@ -15,10 +16,12 @@ export async function buildPromptContext(
 ): Promise<PromptContext> {
   const githubContext = await buildGitHubPromptContext(github, repoFullName, pr, selfLogin, priorAttemptCompletedAt);
   const guidanceDocs = await loadRepoGuidanceDocs(workspace.worktreePath, reviewDocs, [pr.title, pr.body ?? ""]);
+  const taskContract = extractPatchRelayTaskContract(pr.body);
   return {
     guidanceDocs,
     priorReviewClaims: githubContext.priorReviewClaims,
     followUpReviewClaims: githubContext.followUpReviewClaims,
     issueKeys: detectIssueKeys(pr),
+    ...(taskContract ? { taskContract } : {}),
   };
 }

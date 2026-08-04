@@ -6,6 +6,7 @@ export const REVIEW_QUILL_PROMPT_SECTION_IDS = [
   "output-contract",
   "review-rubric",
   "pull-request",
+  "authoritative-task",
   "diff-context",
   "repo-guidance",
   "prior-review-claims",
@@ -53,6 +54,24 @@ function pullRequestSection(context: Omit<ReviewContext, "prompt">, shaLines: st
         : "",
     ].filter(Boolean).join("\n"),
   };
+}
+
+function appendAuthoritativeTaskSection(
+  sections: ReviewPromptSection[],
+  context: Omit<ReviewContext, "prompt">,
+): void {
+  const task = context.promptContext.taskContract?.trim();
+  if (!task) return;
+  sections.push({
+    id: "authoritative-task",
+    content: [
+      "## Authoritative task",
+      "This is the original task carried unchanged by PatchRelay. Review the current head against it.",
+      "Its scope and acceptance criteria override conflicting PR summaries, implementation assumptions, and prior review claims.",
+      "",
+      task,
+    ].join("\n"),
+  });
 }
 
 function appendGuidanceSections(sections: ReviewPromptSection[], context: Omit<ReviewContext, "prompt">): void {
@@ -141,6 +160,7 @@ const REVIEW_RULES = `## Review rules
 Review the current PR head only.
 
 - Start by understanding the actual code and diff before deciding on a verdict.
+- When an Authoritative task section is present, use it as the source of truth for requested scope and acceptance. Do not preserve an old implementation invariant or prior review claim that the task explicitly removes.
 - Repository guidance is authoritative project policy. Apply it before general reviewer instincts or prior-review momentum; if guidance says a pattern is intentional, do not push the author in the opposite direction unless the current head violates a different explicit rule.
 - Apply repository guidance only to reviewable properties of the current head: code, tests, committed artifacts, documented contracts, and runtime behavior. Rules about starting work from an issue or other pre-PR workflow provenance belong to the implementation agent and operator; missing issue or ticket context is never a blocker or nit.
 - When reviewing domain content such as translations, curriculum, prompts, fixtures, policy docs, or generated artifacts, treat project-specific guidance, glossaries, samples, and PR-linked docs as the product spec for that content.
@@ -200,8 +220,10 @@ export function renderReviewPrompt(context: Omit<ReviewContext, "prompt">): stri
     outputContractSection(),
     { id: "review-rubric", content: REVIEW_RULES },
     pullRequestSection(context),
-    { id: "diff-context", content: renderDiffContextLines(context.diff).join("\n") },
   ];
+
+  appendAuthoritativeTaskSection(sections, context);
+  sections.push({ id: "diff-context", content: renderDiffContextLines(context.diff).join("\n") });
 
   appendGuidanceSections(sections, context);
 
@@ -243,7 +265,9 @@ export function renderFollowUpReviewPrompt(
     outputContractSection(),
     { id: "review-rubric", content: REVIEW_RULES },
     pullRequestSection(context, [`Previous reviewed head SHA: ${priorHeadSha}`, `Current head SHA: ${context.pr.headSha}`]),
-    {
+  ];
+  appendAuthoritativeTaskSection(sections, context);
+  sections.push({
       id: "diff-context",
       content: [
         "## Current-head review scope",
@@ -251,8 +275,7 @@ export function renderFollowUpReviewPrompt(
         "Re-validate earlier concerns against the current code. Prefer the underlying root cause over symptom-by-symptom findings, and report only realistic bugs aligned with this PR's goal and normal project usage.",
         ...renderDiffInventoryLines(context.diff),
       ].join("\n"),
-    },
-  ];
+    });
   appendGuidanceSections(sections, context);
   const claims = context.promptContext.followUpReviewClaims ?? [];
   if (claims.length > 0) {
