@@ -241,6 +241,7 @@ After validation is green, the steward revalidates before landing:
 2. The reviewer approval on the original PR head still holds.
 3. Current required-check policy is freshly loaded and green on the candidate SHA.
 4. The candidate SHA is still a fast-forward from current `main`.
+5. The candidate's merge base with every other open PR is already contained by current `main`.
 
 If these checks hold, the merge is a single command:
 
@@ -306,6 +307,7 @@ The real gate is:
 - configured required checks are green
 - the exact candidate passes current policy
 - current `main` is an ancestor of that candidate
+- the candidate's merge base with every other open PR is already contained by current `main`
 
 `review-quill/verdict` only matters if you choose to include it in the repo's required checks.
 

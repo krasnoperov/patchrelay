@@ -110,6 +110,12 @@ const queueIncidentContextShape = {
     conclusion: z.string().optional(),
     url: z.string().optional(),
   })).optional(),
+  openPrAncestors: z.array(z.object({
+    prNumber: z.number(),
+    branch: z.string(),
+    headSha: z.string(),
+    sharedAncestorSha: z.string(),
+  })).optional(),
   retryHistory: z.array(z.object({
     at: z.string().optional(),
     baseSha: z.string().optional(),

@@ -12,6 +12,7 @@ export interface QueueEvictionIncidentContext {
   issueKey?: string | null;
   conflictFiles?: string[];
   failedChecks?: Array<{ name: string; conclusion: string; url?: string }>;
+  openPrAncestors?: Array<{ prNumber: number; branch: string; headSha: string; sharedAncestorSha: string }>;
   retryHistory?: Array<{ at: string; baseSha: string; outcome: string }>;
 }
 
@@ -121,6 +122,26 @@ function normalizeIncidentContext(value: unknown): QueueEvictionIncidentContext 
   const conflictFiles = Array.isArray(record.conflictFiles)
     ? record.conflictFiles.filter((entry): entry is string => typeof entry === "string")
     : undefined;
+  const openPrAncestors = Array.isArray(record.openPrAncestors)
+    ? record.openPrAncestors
+      .filter((entry) => entry && typeof entry === "object")
+      .map((entry) => {
+        const blocker = entry as Record<string, unknown>;
+        if (
+          typeof blocker.prNumber !== "number"
+          || typeof blocker.branch !== "string"
+          || typeof blocker.headSha !== "string"
+          || typeof blocker.sharedAncestorSha !== "string"
+        ) return undefined;
+        return {
+          prNumber: blocker.prNumber,
+          branch: blocker.branch,
+          headSha: blocker.headSha,
+          sharedAncestorSha: blocker.sharedAncestorSha,
+        };
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+    : undefined;
 
   const normalized: QueueEvictionIncidentContext = {
     ...(typeof record.version === "number" ? { version: record.version } : {}),
@@ -133,6 +154,7 @@ function normalizeIncidentContext(value: unknown): QueueEvictionIncidentContext 
     ...(typeof record.issueKey === "string" || record.issueKey === null ? { issueKey: record.issueKey as string | null } : {}),
     ...(conflictFiles?.length ? { conflictFiles } : {}),
     ...(failedChecks?.length ? { failedChecks } : {}),
+    ...(openPrAncestors?.length ? { openPrAncestors } : {}),
     ...(retryHistory?.length ? { retryHistory } : {}),
   };
 

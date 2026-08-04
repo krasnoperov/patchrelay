@@ -124,9 +124,12 @@ export class GitHubPRClient implements GitHubPRApi {
       "--repo", this.repoFullName,
       "--state", "open",
       "--json", "number,headRefName,headRefOid",
+      "--limit", "1000",
     ], { allowNonZero: true, githubRepoFullName: this.repoFullName });
 
-    if (result.exitCode !== 0) return [];
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to list open PRs: ${result.stderr.trim() || `exit ${result.exitCode}`}`);
+    }
 
     try {
       const data = JSON.parse(result.stdout) as Array<{
@@ -135,8 +138,8 @@ export class GitHubPRClient implements GitHubPRApi {
         headRefOid: string;
       }>;
       return data.map((pr) => ({ number: pr.number, branch: pr.headRefName, headSha: pr.headRefOid }));
-    } catch {
-      return [];
+    } catch (error) {
+      throw new Error("GitHub returned malformed open PR data", { cause: error });
     }
   }
 
