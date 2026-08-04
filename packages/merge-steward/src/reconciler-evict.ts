@@ -26,7 +26,11 @@ export async function evictEntry(
   ctx: ReconcileContext,
   entry: QueueEntry,
   failureClass: FailureClass,
-  extra?: { conflictFiles?: string[]; failedChecks?: Array<{ name: string; conclusion: string; url?: string }> },
+  extra?: {
+    conflictFiles?: string[];
+    failedChecks?: Array<{ name: string; conclusion: string; url?: string }>;
+    openPrAncestors?: Array<{ prNumber: number; branch: string; headSha: string; sharedAncestorSha: string }>;
+  },
 ): Promise<void> {
   await cleanupCandidate(ctx, entry);
 
@@ -68,6 +72,7 @@ export async function evictEntry(
     queuePosition: entry.position,
     conflictFiles: extra?.conflictFiles,
     failedChecks: extra?.failedChecks,
+    openPrAncestors: extra?.openPrAncestors,
     baseBranch: ctx.baseBranch,
     branch: entry.branch,
     issueKey: entry.issueKey,

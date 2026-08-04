@@ -90,6 +90,19 @@ export class GitSim implements GitOperations {
     return git.resolveRef({ fs: this.vol, dir: this.dir, ref: branch });
   }
 
+  async mergeBase(left: string, right: string): Promise<string> {
+    const leftSha = await this.headSha(left).catch(() => left);
+    const rightSha = await this.headSha(right).catch(() => right);
+    const bases = await git.findMergeBase({
+      fs: this.vol,
+      dir: this.dir,
+      oids: [leftSha, rightSha],
+    });
+    const base = bases[0];
+    if (!base) throw new Error(`no merge base for ${left} and ${right}`);
+    return base;
+  }
+
   async isAncestor(ancestor: string, descendant: string): Promise<boolean> {
     if (ancestor === descendant) return true;
     return git.isDescendent({

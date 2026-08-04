@@ -6,178 +6,107 @@ import {
   type SequenceCandidate,
 } from "../src/pr-sequencing.ts";
 
-interface ProbeFixture {
-  files: Record<string, string[]>;
-  conflicts: Record<string, boolean>;
-}
-
-function makeProbe(fixture: ProbeFixture): GitProbe {
+function makeProbe(ancestors: string[], mergeBases: Record<string, string> = {}): GitProbe {
+  const relationships = new Set(ancestors);
   return {
-    async changedFiles(_baseRef, headSha) {
-      return fixture.files[headSha] ?? [];
+    async mergeBase(leftSha, rightSha) {
+      return mergeBases[`${leftSha}|${rightSha}`] ?? leftSha;
     },
-    async hasConflict(headSha, candidateHead) {
-      return Boolean(fixture.conflicts[`${headSha}|${candidateHead}`]);
+    async isAncestor(ancestorSha, descendantSha) {
+      return ancestorSha === descendantSha || relationships.has(`${ancestorSha}|${descendantSha}`);
     },
   };
 }
 
-test("returns open_pr_against_main when no candidates", async () => {
+test("opens against main when there are no in-flight PRs", async () => {
   const result = await detectStackingTarget({
     self: { branch: "feature", headSha: "self", baseRef: "origin/main" },
     candidates: [],
-    git: makeProbe({ files: { self: ["src/x.ts"] }, conflicts: {} }),
+    git: makeProbe([]),
   });
+
+  assert.deepEqual(result, {
+    recommendation: "open_pr_against_main",
+    reason: "all history shared with other open PRs is already present in origin/main",
+  });
+});
+
+test("does not turn a conflicting independent PR into a stack", async () => {
+  const candidates: SequenceCandidate[] = [
+    { prNumber: 1028, branch: "oauth-grants", headSha: "blocked-head" },
+  ];
+
+  const result = await detectStackingTarget({
+    self: { branch: "activation", headSha: "independent-head", baseRef: "origin/main" },
+    candidates,
+    git: makeProbe(["main|origin/main"], { "blocked-head|independent-head": "main" }),
+  });
+
   assert.equal(result.recommendation, "open_pr_against_main");
 });
 
-test("returns open_pr_against_main when files do not overlap", async () => {
-  const candidates: SequenceCandidate[] = [
-    { prNumber: 100, branch: "other", headSha: "cand", reviewState: "approved" },
-  ];
+test("does not block a parent because another open PR is its strict descendant", async () => {
   const result = await detectStackingTarget({
-    self: { branch: "feature", headSha: "self", baseRef: "origin/main" },
-    candidates,
-    git: makeProbe({
-      files: { self: ["src/x.ts"], cand: ["src/y.ts"] },
-      conflicts: {},
-    }),
+    self: { branch: "parent", headSha: "parent-head", baseRef: "origin/main" },
+    candidates: [{ prNumber: 1030, branch: "child", headSha: "child-head" }],
+    git: makeProbe(["parent-head|child-head"]),
   });
+
   assert.equal(result.recommendation, "open_pr_against_main");
 });
 
-test("returns open_pr_against_main when overlap exists but merge-tree clean", async () => {
+test("blocks publication when the branch shares unlanded history with another open PR", async () => {
   const candidates: SequenceCandidate[] = [
-    { prNumber: 100, branch: "other", headSha: "cand" },
+    { prNumber: 1028, branch: "oauth-grants", headSha: "blocked-head" },
   ];
-  const result = await detectStackingTarget({
-    self: { branch: "feature", headSha: "self", baseRef: "origin/main" },
-    candidates,
-    git: makeProbe({
-      files: { self: ["package.json"], cand: ["package.json"] },
-      conflicts: {},
-    }),
-  });
-  assert.equal(result.recommendation, "open_pr_against_main");
-});
 
-test("recommends rebase_onto when conflict detected", async () => {
-  const candidates: SequenceCandidate[] = [
-    {
-      prNumber: 509,
-      branch: "lsr-A",
-      headSha: "candA",
-      reviewState: "approved",
-      checkStatus: "success",
-    },
-  ];
   const result = await detectStackingTarget({
-    self: { branch: "feature", headSha: "self", baseRef: "origin/main" },
+    self: { branch: "activation", headSha: "stacked-head", baseRef: "origin/main" },
     candidates,
-    git: makeProbe({
-      files: { self: ["package.json", "pnpm-lock.yaml"], candA: ["package.json", "pnpm-lock.yaml"] },
-      conflicts: { "self|candA": true },
-    }),
+    git: makeProbe([], { "blocked-head|stacked-head": "shared-unlanded" }),
   });
-  assert.equal(result.recommendation, "rebase_onto");
-  if (result.recommendation === "rebase_onto") {
-    assert.equal(result.parentPr, 509);
-    assert.equal(result.parentBranch, "lsr-A");
-    assert.deepEqual(result.conflictingFiles, ["package.json", "pnpm-lock.yaml"]);
+
+  assert.equal(result.recommendation, "blocked_open_pr_ancestry");
+  if (result.recommendation === "blocked_open_pr_ancestry") {
+    assert.deepEqual(result.blockingPrs, [{
+      prNumber: 1028,
+      branch: "oauth-grants",
+      headSha: "blocked-head",
+      sharedAncestorSha: "shared-unlanded",
+    }]);
+    assert.match(result.reason, /#1028/);
+    assert.match(result.reason, /origin\/main/);
   }
 });
 
-test("scoring prefers approved+green over plain approved", async () => {
+test("reports every shared unlanded ancestry and excludes the current branch", async () => {
   const candidates: SequenceCandidate[] = [
-    { prNumber: 1, branch: "a", headSha: "candA", reviewState: "approved" },
-    {
-      prNumber: 2,
-      branch: "b",
-      headSha: "candB",
-      reviewState: "approved",
-      checkStatus: "success",
-    },
+    { prNumber: 1028, branch: "parent-a", headSha: "head-a" },
+    { prNumber: 1029, branch: "parent-b", headSha: "head-b" },
+    { prNumber: 1030, branch: "activation", headSha: "stacked-head" },
   ];
+
   const result = await detectStackingTarget({
-    self: { branch: "feature", headSha: "self", baseRef: "origin/main" },
+    self: { branch: "activation", headSha: "stacked-head", baseRef: "origin/main" },
     candidates,
-    git: makeProbe({
-      files: { self: ["x"], candA: ["x"], candB: ["x"] },
-      conflicts: { "self|candA": true, "self|candB": true },
+    git: makeProbe([], {
+      "head-a|stacked-head": "shared-a",
+      "head-b|stacked-head": "shared-b",
     }),
   });
-  assert.equal(result.recommendation, "rebase_onto");
-  if (result.recommendation === "rebase_onto") {
-    assert.equal(result.parentPr, 2, "approved+green should outrank plain approved");
+
+  assert.equal(result.recommendation, "blocked_open_pr_ancestry");
+  if (result.recommendation === "blocked_open_pr_ancestry") {
+    assert.deepEqual(result.blockingPrs.map((candidate) => candidate.prNumber), [1028, 1029]);
   }
 });
 
-test("scoring prefers a queue signal over plain approved", async () => {
-  const candidates: SequenceCandidate[] = [
-    { prNumber: 1, branch: "a", headSha: "candA", reviewState: "approved", checkStatus: "success" },
-    { prNumber: 2, branch: "b", headSha: "candB", queueSignalled: true },
-  ];
+test("blocks a duplicate open PR that points at the exact same head", async () => {
   const result = await detectStackingTarget({
-    self: { branch: "feature", headSha: "self", baseRef: "origin/main" },
-    candidates,
-    git: makeProbe({
-      files: { self: ["x"], candA: ["x"], candB: ["x"] },
-      conflicts: { "self|candA": true, "self|candB": true },
-    }),
+    self: { branch: "activation", headSha: "shared-head", baseRef: "origin/main" },
+    candidates: [{ prNumber: 1028, branch: "other-branch", headSha: "shared-head" }],
+    git: makeProbe([], { "shared-head|shared-head": "shared-head" }),
   });
-  if (result.recommendation === "rebase_onto") {
-    assert.equal(result.parentPr, 2, "a queue signal should outrank approved+green");
-  } else {
-    assert.fail("expected rebase_onto");
-  }
-});
 
-test("skips candidates with skip-labels", async () => {
-  const candidates: SequenceCandidate[] = [
-    { prNumber: 1, branch: "a", headSha: "candA", reviewState: "approved", labels: ["wip"] },
-  ];
-  const result = await detectStackingTarget({
-    self: { branch: "feature", headSha: "self", baseRef: "origin/main" },
-    candidates,
-    git: makeProbe({
-      files: { self: ["x"], candA: ["x"] },
-      conflicts: { "self|candA": true },
-    }),
-  });
-  assert.equal(result.recommendation, "open_pr_against_main");
-});
-
-test("ties broken by lowest PR number", async () => {
-  const candidates: SequenceCandidate[] = [
-    { prNumber: 200, branch: "a", headSha: "candA", reviewState: "approved" },
-    { prNumber: 100, branch: "b", headSha: "candB", reviewState: "approved" },
-  ];
-  const result = await detectStackingTarget({
-    self: { branch: "feature", headSha: "self", baseRef: "origin/main" },
-    candidates,
-    git: makeProbe({
-      files: { self: ["x"], candA: ["x"], candB: ["x"] },
-      conflicts: { "self|candA": true, "self|candB": true },
-    }),
-  });
-  if (result.recommendation === "rebase_onto") {
-    assert.equal(result.parentPr, 100);
-  } else {
-    assert.fail("expected rebase_onto");
-  }
-});
-
-test("excludes self from candidates by branch", async () => {
-  const candidates: SequenceCandidate[] = [
-    { prNumber: 5, branch: "feature", headSha: "self" },
-  ];
-  const result = await detectStackingTarget({
-    self: { branch: "feature", headSha: "self", baseRef: "origin/main" },
-    candidates,
-    git: makeProbe({
-      files: { self: ["x"] },
-      conflicts: { "self|self": true },
-    }),
-  });
-  assert.equal(result.recommendation, "open_pr_against_main");
+  assert.equal(result.recommendation, "blocked_open_pr_ancestry");
 });

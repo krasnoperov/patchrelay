@@ -12,93 +12,86 @@ import {
 import type { NormalizedGitHubEvent } from "../src/github-types.ts";
 import { OperatorEventFeed } from "../src/operator-feed.ts";
 
-function filesResponse(filenames: string[]): Response {
-  return new Response(JSON.stringify(filenames.map((filename) => ({ filename }))), {
+function compareResponse(status: "ahead" | "diverged" | "identical", mergeBase?: string): Response {
+  return new Response(JSON.stringify({
+    status,
+    ...(mergeBase ? { merge_base_commit: { sha: mergeBase } } : {}),
+  }), {
     status: 200,
     headers: { "Content-Type": "application/json" },
   });
 }
 
-test("sequence backstop dedupes the overlap alert per PR pair and caches file sets per head", async () => {
+function withCandidate(db: PatchRelayDatabase): void {
+  db.upsertIssue({
+    projectId: "owner/repo",
+    linearIssueId: "issue-candidate",
+    issueKey: "USE-1",
+    workflowOutcome: undefined,
+    branchName: "use/candidate",
+    prState: "open",
+    prNumber: 200,
+    prHeadSha: "candidate-head",
+  });
+}
+
+const openedEvent: NormalizedGitHubEvent = {
+  triggerEvent: "pr_opened",
+  repoFullName: "owner/repo",
+  branchName: "use/new",
+  headSha: "new-head",
+  prNumber: 100,
+  prBaseRef: "main",
+};
+
+test("sequence backstop alerts only on shared unlanded history within the same repository", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-sequence-backstop-"));
   const previousToken = process.env.GITHUB_TOKEN;
   process.env.GITHUB_TOKEN = "test-token";
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), false);
     db.runMigrations();
+    withCandidate(db);
     db.upsertIssue({
       projectId: "owner/repo",
-      linearIssueId: "issue-candidate",
-      issueKey: "USE-1",
+      linearIssueId: "issue-opened",
+      issueKey: "USE-NEW",
       workflowOutcome: undefined,
-      branchName: "use/candidate",
-      prNumber: 200,
-      prHeadSha: "candidate-head",
+      branchName: "use/new",
+      prState: "open",
+      prNumber: 100,
+      prHeadSha: "new-head",
+    });
+    db.upsertIssue({
+      projectId: "other/repo",
+      linearIssueId: "foreign-opened",
+      issueKey: "OTHER-100",
+      workflowOutcome: undefined,
+      branchName: "other/new",
+      prState: "open",
+      prNumber: 100,
+      prHeadSha: "foreign-new-head",
+    });
+    db.upsertIssue({
+      projectId: "other/repo",
+      linearIssueId: "foreign-candidate",
+      issueKey: "OTHER-300",
+      workflowOutcome: undefined,
+      branchName: "other/candidate",
+      prState: "open",
+      prNumber: 300,
+      prHeadSha: "foreign-candidate-head",
     });
 
     const fetchedUrls: string[] = [];
     const fetchImpl: typeof fetch = (input) => {
-      const url = String(input);
-      fetchedUrls.push(url);
-      return Promise.resolve(filesResponse(url.includes("/pulls/100/") ? ["src/a.ts", "src/b.ts"] : ["src/b.ts"]));
+      fetchedUrls.push(String(input));
+      return Promise.resolve(
+        fetchedUrls.length === 1
+          ? compareResponse("diverged", "shared-unlanded")
+          : compareResponse("diverged"),
+      );
     };
-
-    const event: NormalizedGitHubEvent = {
-      triggerEvent: "pr_opened",
-      repoFullName: "owner/repo",
-      branchName: "use/new",
-      headSha: "new-head",
-      prNumber: 100,
-    };
-
-    const caches = createSequenceBackstopCaches();
-    const feed = new OperatorEventFeed();
-    const logger = pino({ enabled: false });
-
-    await maybeRunSequenceBackstop({ db, logger, feed, event, fetchImpl, caches });
-    assert.equal(feed.list().length, 1);
-    assert.equal(fetchedUrls.length, 2);
-    assert.ok(caches.changedFilesByHead.has("owner/repo@new-head"));
-    assert.ok(caches.changedFilesByHead.has("owner/repo@candidate-head"));
-    assert.ok(caches.alertedPrPairs.has("owner/repo#100->#200"));
-
-    // A redelivery of the same pr_opened neither refetches (file sets are
-    // cached per head) nor re-alerts (the pair already fired).
-    await maybeRunSequenceBackstop({ db, logger, feed, event, fetchImpl, caches });
-    assert.equal(feed.list().length, 1);
-    assert.equal(fetchedUrls.length, 2);
-
-    db.close();
-  } finally {
-    if (previousToken === undefined) {
-      delete process.env.GITHUB_TOKEN;
-    } else {
-      process.env.GITHUB_TOKEN = previousToken;
-    }
-    rmSync(baseDir, { recursive: true, force: true });
-  }
-});
-
-test("sequence backstop stays quiet without overlapping files", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-sequence-backstop-quiet-"));
-  const previousToken = process.env.GITHUB_TOKEN;
-  process.env.GITHUB_TOKEN = "test-token";
-  try {
-    const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), false);
-    db.runMigrations();
-    db.upsertIssue({
-      projectId: "owner/repo",
-      linearIssueId: "issue-candidate",
-      issueKey: "USE-2",
-      workflowOutcome: undefined,
-      branchName: "use/candidate",
-      prNumber: 200,
-      prHeadSha: "candidate-head",
-    });
-
-    const fetchImpl: typeof fetch = (input) =>
-      Promise.resolve(filesResponse(String(input).includes("/pulls/100/") ? ["src/a.ts"] : ["src/z.ts"]));
-
     const caches = createSequenceBackstopCaches();
     const feed = new OperatorEventFeed();
 
@@ -106,26 +99,66 @@ test("sequence backstop stays quiet without overlapping files", async () => {
       db,
       logger: pino({ enabled: false }),
       feed,
-      event: {
-        triggerEvent: "pr_opened",
-        repoFullName: "owner/repo",
-        branchName: "use/new",
-        headSha: "new-head",
-        prNumber: 100,
-      },
+      event: openedEvent,
       fetchImpl,
       caches,
     });
-    assert.equal(feed.list().length, 0);
-    assert.equal(caches.alertedPrPairs.size, 0);
+
+    assert.equal(feed.list().length, 1);
+    assert.match(feed.list()[0]!.summary, /shares unlanded history with open PR #200/);
+    assert.equal(feed.list()[0]!.issueKey, "USE-NEW");
+    assert.equal(fetchedUrls.length, 2);
+    assert.match(fetchedUrls[0]!, /compare\/candidate-head\.\.\.new-head/);
+    assert.match(fetchedUrls[1]!, /compare\/shared-unlanded\.\.\.main/);
+    assert.equal(caches.ancestryByHeadPair.get("owner/repo@candidate-head...new-head@main"), true);
+
+    await maybeRunSequenceBackstop({
+      db,
+      logger: pino({ enabled: false }),
+      feed,
+      event: openedEvent,
+      fetchImpl,
+      caches,
+    });
+    assert.equal(feed.list().length, 1);
+    assert.equal(fetchedUrls.length, 2);
 
     db.close();
   } finally {
-    if (previousToken === undefined) {
-      delete process.env.GITHUB_TOKEN;
-    } else {
-      process.env.GITHUB_TOKEN = previousToken;
-    }
+    if (previousToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = previousToken;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("sequence backstop ignores overlapping but independent PR histories", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-sequence-backstop-quiet-"));
+  const previousToken = process.env.GITHUB_TOKEN;
+  process.env.GITHUB_TOKEN = "test-token";
+  try {
+    const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), false);
+    db.runMigrations();
+    withCandidate(db);
+    const feed = new OperatorEventFeed();
+
+    await maybeRunSequenceBackstop({
+      db,
+      logger: pino({ enabled: false }),
+      feed,
+      event: openedEvent,
+      fetchImpl: (input) => Promise.resolve(
+        String(input).includes("candidate-head...new-head")
+          ? compareResponse("diverged", "shared-main")
+          : compareResponse("ahead"),
+      ),
+      caches: createSequenceBackstopCaches(),
+    });
+
+    assert.equal(feed.list().length, 0);
+    db.close();
+  } finally {
+    if (previousToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = previousToken;
     rmSync(baseDir, { recursive: true, force: true });
   }
 });

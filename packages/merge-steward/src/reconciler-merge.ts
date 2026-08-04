@@ -4,6 +4,7 @@ import { CLEAN_CANDIDATE_REF, CLEAN_CI, CLEAR_CANDIDATE, emit, isBudgetExhausted
 import { cleanupCandidate, evictEntry, invalidateDownstream } from "./reconciler-evict.ts";
 import { verifyPostMergeStatus } from "./reconciler-post-merge.ts";
 import { evaluateCheckPolicy, formatRequiredCheck } from "./check-policy.ts";
+import { describeOpenPrAncestors, findUnlandedOpenPrAncestors } from "./open-pr-ancestry.ts";
 
 const DEFAULT_PR_MERGED_POLL_ATTEMPTS = 6;
 const DEFAULT_PR_MERGED_POLL_DELAY_MS = 2_000;
@@ -345,6 +346,38 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
       ctx.store.transition(entry.id, "merging", {
         candidatePolicyFingerprint: currentPolicyFingerprint,
       }, `candidate revalidated under policy ${currentPolicyFingerprint.slice(0, 12)}`);
+    }
+
+    // Ancestry is the last remote truth read before the immutable push. Fetch
+    // main again because check and PR revalidation above can take long enough
+    // for either main or the open-PR set to change.
+    await ctx.git.fetch();
+    currentBase = await ctx.git.headSha(ref(ctx, ctx.baseBranch));
+    if (!await ctx.git.isAncestor(currentBase, landingSha)) {
+      emit(ctx, entry, "branch_mismatch", {
+        detail: `candidate is not a fast-forward from final main (${currentBase.slice(0, 8)})`,
+      });
+      const allActive = ctx.store.listActive(ctx.repoId);
+      ctx.store.transition(entry.id, "preparing_head", { ...CLEAN_CI, ...CLEAR_CANDIDATE }, "main changed during landing, re-prepare");
+      await invalidateDownstream(ctx, allActive, 0);
+      return;
+    }
+    const ancestryBlockers = await findUnlandedOpenPrAncestors({
+      github: ctx.github,
+      git: ctx.git,
+      currentPrNumber: entry.prNumber,
+      prHeadSha: entry.headSha,
+      candidateSha: landingSha,
+      baseSha: currentBase,
+    });
+    if (ancestryBlockers.length > 0) {
+      const detail = describeOpenPrAncestors(ancestryBlockers);
+      emit(ctx, entry, "open_pr_ancestry_blocked", { baseSha: currentBase, detail });
+      const allActive = ctx.store.listActive(ctx.repoId);
+      const entryIndex = allActive.findIndex((candidate) => candidate.id === entry.id);
+      await evictEntry(ctx, entry, "policy_blocked", { openPrAncestors: ancestryBlockers });
+      if (entryIndex >= 0) await invalidateDownstream(ctx, allActive, entryIndex);
+      return;
     }
   } catch (error) {
     const detail = `candidate revalidation unavailable: ${describeError(error)}`;

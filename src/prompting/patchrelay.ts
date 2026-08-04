@@ -417,6 +417,15 @@ function appendQueueRepairContext(lines: string[], context?: RunContext): void {
 function buildQueueRepairContext(context?: RunContext): string {
   const lines: string[] = [];
   appendQueueRepairContext(lines, context);
+  if (context?.incidentTitle) lines.push(`Queue incident: ${context.incidentTitle}`);
+  if (context?.incidentSummary) lines.push(context.incidentSummary);
+  const openPrAncestors = context?.incidentContext?.openPrAncestors ?? [];
+  if (openPrAncestors.length > 0) {
+    lines.push("Unlanded open PR ancestry that must be removed from this branch:");
+    for (const blocker of openPrAncestors) {
+      lines.push(`- PR #${blocker.prNumber}: ${blocker.branch} at ${blocker.headSha}; shared unlanded ancestor ${blocker.sharedAncestorSha}`);
+    }
+  }
   lines.push(
     "Merge queue rejection on the existing PR branch.",
     "Goal: restore a mergeable branch, verify the queue-blocking fix, and push the existing PR branch.",
@@ -645,9 +654,9 @@ function buildPublicationContract(
       "If the issue explicitly allows a non-PR outcome, complete that outcome clearly instead of inventing a PR.",
       "Write an accurate PR title and description for reviewers: state the intended behavior, scope boundaries, and relevant verification represented by the current head.",
       "",
+      "Keep this issue branch independent: do not merge, rebase onto, or cherry-pick another open PR into it. Conflicts between independent PRs are resolved only after one of them lands on the default branch.",
       "Right before `gh pr create`, run `patchrelay sequence-check` from the worktree.",
-      "If the JSON recommendation is `rebase_onto`, rebase the branch onto the named parent and pass `--base <parent_branch>` to `gh pr create`. Include the recommendation's reason in the PR body under a `Stacked on #NNN` header.",
-      "If the recommendation is `open_pr_against_main`, proceed with `gh pr create` against the default base.",
+      "Proceed against the default base only when the JSON recommendation is `open_pr_against_main`. If it is `blocked_open_pr_ancestry`, rebuild this issue's commits on the named base and rerun the check before publishing.",
       "",
       ...buildPrePushSelfReviewSection("new_pr", runType),
     ].join("\n");
@@ -659,6 +668,7 @@ function buildPublicationContract(
     "## Publish",
     "",
     "Restore and publish on the existing PR branch: commit and push the same branch.",
+    "Keep this issue branch independent: do not merge, rebase onto, or cherry-pick another open PR into it. Before pushing, run `patchrelay sequence-check`; if it reports `blocked_open_pr_ancestry`, rebuild this issue's commits on the default base first.",
     "Do not open a new PR.",
     "A PR-less stop is not a successful outcome for a repair run unless a genuine external blocker prevents any correct push.",
     "After pushing a new head, stop and report the pushed commit. Do not poll or watch GitHub for CI, review, mergeability, review-quill, merge-steward, approval, or merge completion.",

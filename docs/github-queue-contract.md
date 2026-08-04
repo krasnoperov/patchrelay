@@ -54,6 +54,7 @@ The Lander never touches any other label, so the admission label (`queue`), prio
 
 - PatchRelay owns:
   - branch implementation
+  - keeping each issue branch independent from other open PR heads
   - review fixes
   - branch-local CI repair
   - queue repair after steward eviction
@@ -101,6 +102,7 @@ The Lander never touches any other label, so the admission label (`queue`), prio
   - PatchRelay routes to `queue_repair`
   - PatchRelay persists queue-failure provenance so reconciliation can preserve the distinction after webhook delivery
   - the eviction check run should carry structured incident detail in `output.text` plus an incident details URL so PatchRelay can preserve richer repair context
+  - an exact candidate sharing ancestry with another open PR outside `main` is a policy eviction; the repair removes that ancestry before a new head can re-enter review and queue
 
 ## Observability Contract
 

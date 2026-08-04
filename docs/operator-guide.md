@@ -24,7 +24,7 @@ starts**. PatchRelay already honors `blockedBy` (the `IssueRecord.blockedByCount
 field gates start). When A reaches Done, B starts on a main that already
 contains A's changes, so there is no conflict to resolve.
 
-This is Tier 1 of the three-tier sequencing model — see [concepts.md](./concepts.md#sequencing--three-tiers-for-predictable-conflicts) for the full picture.
+See [concepts.md](./concepts.md#sequencing--dependencies-first-independent-prs-otherwise) for the full model.
 
 Heuristics for when to set `blockedBy` at planning:
 
@@ -35,10 +35,11 @@ Heuristics for when to set `blockedBy` at planning:
 - both issues edit the same normalization or compatibility shim
 - one issue establishes a new convention the other must follow
 
-The cost is latency — B waits for A. The cost is worth paying when the
-conflict is genuinely predictable. If the conflict is only visible at
-handoff (after the diff is in hand), the runtime `sequence-check` path
-(see plan §8.2) covers it without `blockedBy`.
+The cost is latency — B waits for A. If the tasks are independent, do not add a
+dependency merely because their diffs may conflict. Both PRs target the default
+branch and the later branch is repaired after the first lands. The runtime
+`sequence-check` only prevents a branch from sharing unlanded history with
+another open PR; it never recommends stacking.
 
 ## Command cheatsheet
 

@@ -99,6 +99,13 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
     return result.stdout.trim();
   }
 
+  async mergeBase(left: string, right: string): Promise<string> {
+    const result = await this.git(["merge-base", left, right]);
+    const sha = result.stdout.trim();
+    if (!sha) throw new Error(`git merge-base returned no commit for ${left} and ${right}`);
+    return sha;
+  }
+
   async isAncestor(ancestor: string, descendant: string): Promise<boolean> {
     const result = await this.git(["merge-base", "--is-ancestor", ancestor, descendant], { allowNonZero: true });
     if (result.exitCode === 0) return true;

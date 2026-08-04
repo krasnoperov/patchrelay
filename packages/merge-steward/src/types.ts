@@ -118,6 +118,7 @@ export interface EvictionContext {
   failureClass: FailureClass;
   conflictFiles?: string[] | undefined;
   failedChecks?: Array<{ name: string; conclusion: string; url?: string }> | undefined;
+  openPrAncestors?: Array<{ prNumber: number; branch: string; headSha: string; sharedAncestorSha: string }> | undefined;
   baseSha: string;
   prHeadSha: string;
   queuePosition: number;
@@ -294,6 +295,7 @@ export type ReconcileAction =
   | "retry_gated"         // non-spinning, waiting for base change
   | "budget_exhausted"
   | "merge_waiting_approval" // approval withdrawn, waiting for re-approval
+  | "open_pr_ancestry_blocked" // candidate shares PR history not yet present in main
   | "stack_dependency_waiting"
   | "merge_waiting_recognition" // PR head already reaches main; wait for GitHub to classify the merge
   | "merge_waiting_main"     // main still verifying post-merge; keep spec + CI and retry

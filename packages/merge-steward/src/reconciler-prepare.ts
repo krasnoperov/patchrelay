@@ -2,6 +2,7 @@ import type { MergeResult, QueueEntry } from "./types.ts";
 import type { ReconcileContext } from "./reconciler-core.ts";
 import { CLEAN_CI, CLEAR_CANDIDATE, emit, isRetryGated, ref, candidateRefName } from "./reconciler-core.ts";
 import { evictEntry } from "./reconciler-evict.ts";
+import { describeOpenPrAncestors, findUnlandedOpenPrAncestors } from "./open-pr-ancestry.ts";
 
 export async function prepareEntry(
   ctx: ReconcileContext,
@@ -22,6 +23,23 @@ export async function prepareEntry(
     emit(ctx, entry, "branch_mismatch", { detail: `expected ${entry.headSha.slice(0, 8)}, got ${currentRef.slice(0, 8)}` });
     ctx.store.updateHead(entry.id, currentRef);
     return;
+  }
+
+  if (isHead) {
+    const blockers = await findUnlandedOpenPrAncestors({
+      github: ctx.github,
+      git: ctx.git,
+      currentPrNumber: entry.prNumber,
+      prHeadSha: entry.headSha,
+      candidateSha: entry.headSha,
+      baseSha,
+    });
+    if (blockers.length > 0) {
+      const detail = describeOpenPrAncestors(blockers);
+      emit(ctx, entry, "open_pr_ancestry_blocked", { baseSha, detail });
+      await evictEntry(ctx, entry, "policy_blocked", { openPrAncestors: blockers });
+      return;
+    }
   }
 
   // Preparing/validating the head never waits on main's CI. The exact

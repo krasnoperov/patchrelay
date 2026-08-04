@@ -199,6 +199,14 @@ non-force push, the lander refreshes main, PR head, approval, required policy,
 check producer identity, check results, and ancestry. Any uncertainty stops the
 landing.
 
+The ancestry refresh also enumerates every other open PR. Strict descendants
+of the candidate do not block their parent. For every other PR, if the merge
+base contains history not already in `main`, the candidate is evicted. Looking
+only for the other PR's current head is insufficient because a blocked parent
+may have advanced after the child copied an earlier head. This prevents an
+approved child from landing a blocked parent as an unreviewed fast-forward side
+effect.
+
 ## The eviction rule — the only signal that returns In Merge Queue to Implementing
 
 Once an issue is **In Merge Queue**, branch CI on the PR head is *metadata*. The lander is testing a different SHA. The Author does not react to red branch CI in this window — it might be a flake the spec doesn't hit, or a real failure the spec also hits.
@@ -212,41 +220,37 @@ The only signal that returns the issue to Implementing is the eviction `check_ru
 
 This rule is enforced both at the state-machine table (`failureSource === "branch_ci" && state !== "awaiting_queue"`) and in workflow-task derivation. See [architecture.md](./architecture.md#failure-taxonomy).
 
-## Sequencing — three tiers for predictable conflicts
+## Sequencing — dependencies first, independent PRs otherwise
 
-Two PRs that touch the same lock file, the same migration, or the same shared helper will conflict at integration time. The eviction loop catches it, but every cycle costs a fresh review and a queue restart. For predictable conflicts, the cleaner answer is to **never let them race**.
+Two PRs that touch the same lock file, migration, or shared helper may conflict
+at integration time. If one task truly depends on the other, record that fact
+as `B blockedBy A` in Linear so B starts only after A is Done. Otherwise the PRs
+remain independent and both target the default branch; a conflict is repaired
+only after one change actually lands.
 
 ```mermaid
-flowchart TD
-    Plan[Planning time]
-    Hand[Handoff: gh pr create]
-    Land[Integration time]
-
-    Plan -->|Tier 1: blockedBy| Sequenced
-    Hand -->|Tier 2: sequence-check| Stacked
-    Land -->|Tier 3: eviction loop| Repaired
-
-    Sequenced[Serialised before either starts<br/>cost: latency]
-    Stacked[Child rebased onto parent<br/>--base parent_branch]
-    Repaired[Eviction signal → patchrelay regenerates → re-admit<br/>cost: a fresh review + queue restart]
+flowchart LR
+    Dependency[Real task dependency] -->|Linear blockedBy| Serial[Start after parent is Done]
+    Independent[Independent tasks] -->|PRs target main| Queue[Exact-candidate queue]
+    Queue -->|integration conflict| Repair[Evict and repair on new main]
+    Guard[sequence-check] -->|shared history absent from main| Rebuild[Rebuild issue commits on main]
 ```
 
-| Tier | When | Mechanism | Cost |
-|-|-|-|-|
-| 1 | Planning | `B blockedBy A` in Linear; PatchRelay won't start B until A is Done | Latency |
-| 2 | Handoff (`gh pr create`) | `patchrelay sequence-check` runs `git merge-tree` against in-flight PRs, recommends rebasing onto the most-likely-to-land-first conflicting parent | One probe per candidate |
-| 3 | Integration | Lander hits a real conflict, evicts via `merge-steward/queue` check_run; PatchRelay's `queue_repair` regenerates and re-submits | One eviction cycle |
-
-The three tiers are not mutually exclusive. Tier 1 is cheapest when the conflict is predictable. Tier 2 covers the cases only visible at run-end. Tier 3 is the safety net.
+`patchrelay sequence-check` is a publication guard, not a topology planner. It
+never recommends a parent PR. It fails when the issue branch shares history
+with another open PR outside the default branch and requires the issue's own
+commits to be rebuilt on that branch.
 
 ## Stacks, not a "Stack object"
 
-Once we sequence PRs, stacked PRs exist in the factory. They are *not* a new first-class concept. The chain is expressed through two artifacts that already exist:
+Externally created stacked PRs may still enter the factory. They are *not* a new first-class concept. The chain is expressed through two artifacts that already exist:
 
 - A Linear `blockedBy` edge — declares the dependency at planning time.
 - A PR's `base` ref — declares it at the GitHub layer (`B.base = A.branch`).
 
-That's the whole contract. Every actor reads the chain from those two places. No parallel lifecycle, no "stack id," no new CLI verbs.
+PatchRelay does not invent that chain to avoid a conflict. Every actor reads an
+explicit chain from those two places; there is no parallel lifecycle or
+implicit stack inferred from commit overlap.
 
 For a stacked PR, the review diff base is the parent PR's captured head, not
 main. The lander separately treats that base ref as a dependency edge:
@@ -271,7 +275,7 @@ Five waste classes were directly observed in production transcripts (LSR-272 / L
 | Chase-rebase loop on already-approved PRs | The Author rule: no patch-id-equivalent push originated by the agent |
 | `ci_repair` fired during In Merge Queue on flaky branch CI | The eviction rule: branch CI is metadata while In Merge Queue |
 | Cosmetic re-push dismisses a fresh approval mid-run | Mid-run approval cancellation: when an approval lands on the run's source SHA, the run is superseded and `shouldNotPublish` blocks the finalizer |
-| Lock-file conflicts caught only at integration time | Tier 1 (`blockedBy`) and Tier 2 (`sequence-check`) |
+| Lock-file conflicts caught only at integration time | Explicit `blockedBy`, otherwise exact-candidate eviction and repair |
 
 ## Where to read next
 

@@ -1,9 +1,7 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import type { PatchRelayDatabase } from "../../db.ts";
 import type { GitProbe, SequenceCandidate, SequenceRecommendation } from "../../pr-sequencing.ts";
 import { detectStackingTarget } from "../../pr-sequencing.ts";
-import { isIssuePublishedOrDownstreamProjection } from "../../issue-execution-state.ts";
 import type { CliDataAccess } from "../data.ts";
 import { CliUsageError } from "../errors.ts";
 import { formatJson } from "../formatters/json.ts";
@@ -47,16 +45,45 @@ export async function handleSequenceCheckCommand(params: SequenceCheckParams): P
     return 2;
   }
 
-  const candidates = params.candidatesProvider
-    ? params.candidatesProvider()
-    : collectCandidates(params.data.db, self.branch);
+  let candidates: SequenceCandidate[];
+  try {
+    candidates = params.candidatesProvider
+      ? params.candidatesProvider()
+      : collectCandidates(cwd, self.branch);
+  } catch (error) {
+    writeOutput(
+      params.stderr,
+      `sequence-check: unable to read live open PRs for this repository: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    return 2;
+  }
+
+  if (!params.gitProbe) {
+    const fetchResult = spawnSync("git", ["fetch", "origin", "--prune"], { cwd, encoding: "utf8" });
+    if (fetchResult.status !== 0) {
+      writeOutput(
+        params.stderr,
+        `sequence-check: unable to refresh repository refs: ${fetchResult.stderr.trim() || "git fetch failed"}\n`,
+      );
+      return 2;
+    }
+  }
 
   const probe = params.gitProbe ?? cliGitProbe(cwd);
-  const recommendation = await detectStackingTarget({
-    self,
-    candidates,
-    git: probe,
-  });
+  let recommendation: SequenceRecommendation;
+  try {
+    recommendation = await detectStackingTarget({
+      self,
+      candidates,
+      git: probe,
+    });
+  } catch (error) {
+    writeOutput(
+      params.stderr,
+      `sequence-check: unable to prove independent PR ancestry: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    return 2;
+  }
 
   if (params.json) {
     writeOutput(params.stdout, formatJson(recommendation));
@@ -65,7 +92,7 @@ export async function handleSequenceCheckCommand(params: SequenceCheckParams): P
   }
 
   writeOutput(params.stderr, formatHumanSummary(recommendation));
-  return 0;
+  return recommendation.recommendation === "blocked_open_pr_ancestry" ? 1 : 0;
 }
 
 function resolveSelf(
@@ -111,56 +138,53 @@ function resolveDefaultBranchRef(cwd: string): string {
   return "origin/main";
 }
 
-function collectCandidates(db: PatchRelayDatabase, selfBranch: string): SequenceCandidate[] {
-  const issues = db.issues.listIssues();
-  const candidates: SequenceCandidate[] = [];
-  const now = Date.now();
-  for (const issue of issues) {
-    if (!isIssuePublishedOrDownstreamProjection(issue)) continue;
-    if (!issue.branchName || !issue.prHeadSha || !issue.prNumber) continue;
-    if (issue.branchName === selfBranch) continue;
-    const queueAgeMs = issue.updatedAt
-      ? Math.max(0, now - Date.parse(issue.updatedAt))
-      : undefined;
-    candidates.push({
-      prNumber: issue.prNumber,
-      branch: issue.branchName,
-      headSha: issue.prHeadSha,
-      ...(issue.prReviewState ? { reviewState: issue.prReviewState } : {}),
-      ...(issue.prCheckStatus ? { checkStatus: issue.prCheckStatus } : {}),
-      queueSignalled: issue.lastQueueSignalAt !== undefined,
-      ...(queueAgeMs !== undefined ? { queueAgeMs } : {}),
-    });
+function collectCandidates(cwd: string, selfBranch: string): SequenceCandidate[] {
+  const result = spawnSync(
+    "gh",
+    ["pr", "list", "--state", "open", "--limit", "1000", "--json", "number,headRefName,headRefOid"],
+    { cwd, encoding: "utf8" },
+  );
+  if (result.status !== 0) {
+    throw new Error(result.stderr.trim() || "gh pr list failed");
   }
-  return candidates;
+  const payload = JSON.parse(result.stdout) as Array<{
+    number?: unknown;
+    headRefName?: unknown;
+    headRefOid?: unknown;
+  }>;
+  if (!Array.isArray(payload)) throw new Error("gh pr list returned malformed data");
+  return payload.flatMap((candidate) =>
+    typeof candidate.number === "number"
+      && typeof candidate.headRefName === "string"
+      && typeof candidate.headRefOid === "string"
+      && candidate.headRefName !== selfBranch
+      ? [{
+          prNumber: candidate.number,
+          branch: candidate.headRefName,
+          headSha: candidate.headRefOid,
+        }]
+      : []
+  );
 }
 
 function cliGitProbe(cwd: string): GitProbe {
   return {
-    async changedFiles(baseRef: string, headSha: string): Promise<string[]> {
-      const result = spawnSync(
-        "git",
-        ["diff", "--name-only", `${baseRef}...${headSha}`],
-        { cwd, encoding: "utf8" },
-      );
-      if (result.status !== 0) {
-        return [];
+    async mergeBase(leftSha: string, rightSha: string): Promise<string> {
+      const result = spawnSync("git", ["merge-base", leftSha, rightSha], { cwd, encoding: "utf8" });
+      if (result.status !== 0 || !result.stdout.trim()) {
+        throw new Error(result.stderr.trim() || "git merge-base failed");
       }
-      return result.stdout
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean);
+      return result.stdout.trim();
     },
-    async hasConflict(headSha: string, candidateHeadSha: string): Promise<boolean> {
-      // `git merge-tree --write-tree` exits non-zero on conflict in
-      // modern git; with `--no-messages` it suppresses commit-msg
-      // suggestions. Use the auto-merge-base form (two operands).
+    async isAncestor(ancestorSha: string, descendantSha: string): Promise<boolean> {
       const result = spawnSync(
         "git",
-        ["merge-tree", "--write-tree", "--no-messages", headSha, candidateHeadSha],
+        ["merge-base", "--is-ancestor", ancestorSha, descendantSha],
         { cwd, encoding: "utf8" },
       );
-      return result.status !== 0;
+      if (result.status === 0) return true;
+      if (result.status === 1) return false;
+      throw new Error(result.stderr.trim() || "git merge-base --is-ancestor failed");
     },
   };
 }
@@ -169,12 +193,7 @@ function formatHumanSummary(recommendation: SequenceRecommendation): string {
   if (recommendation.recommendation === "open_pr_against_main") {
     return `sequence-check: open PR against main — ${recommendation.reason}\n`;
   }
-  return [
-    `sequence-check: rebase onto PR #${recommendation.parentPr} (${recommendation.parentBranch})`,
-    `  reason: ${recommendation.reason}`,
-    `  parent head: ${recommendation.parentHead}`,
-    "",
-  ].join("\n");
+  return `sequence-check: blocked — ${recommendation.reason}\n`;
 }
 
 // Re-export type-level helpers so callers can mock them.

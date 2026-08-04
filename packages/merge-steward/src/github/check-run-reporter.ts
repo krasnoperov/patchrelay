@@ -86,7 +86,9 @@ function formatTitle(incident: IncidentRecord): string {
     case "main_broken":
       return "Queue eviction: main branch CI failing";
     case "policy_blocked":
-      return "Queue eviction: approval withdrawn";
+      return incident.context.openPrAncestors?.length
+        ? "Queue eviction: candidate shares unlanded history with another open PR"
+        : "Queue eviction: approval withdrawn";
     default:
       return "Queue eviction";
   }
@@ -113,6 +115,13 @@ function formatSummary(entry: QueueEntry, incident: IncidentRecord): string {
     lines.push(``, `**Failed checks:**`);
     for (const c of incident.context.failedChecks) {
       lines.push(`- ${c.name} (${c.conclusion})`);
+    }
+  }
+
+  if (incident.context.openPrAncestors?.length) {
+    lines.push(``, `**Unlanded open PR ancestry:**`);
+    for (const blocker of incident.context.openPrAncestors) {
+      lines.push(`- #${blocker.prNumber} ${blocker.branch} (head ${blocker.headSha}; shared unlanded ancestor ${blocker.sharedAncestorSha})`);
     }
   }
 
