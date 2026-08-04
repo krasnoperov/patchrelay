@@ -6,7 +6,6 @@ export const REVIEW_QUILL_PROMPT_SECTION_IDS = [
   "output-contract",
   "review-rubric",
   "pull-request",
-  "authoritative-task",
   "diff-context",
   "repo-guidance",
   "prior-review-claims",
@@ -56,24 +55,6 @@ function pullRequestSection(context: Omit<ReviewContext, "prompt">, shaLines: st
   };
 }
 
-function appendAuthoritativeTaskSection(
-  sections: ReviewPromptSection[],
-  context: Omit<ReviewContext, "prompt">,
-): void {
-  const task = context.promptContext.taskContract?.trim();
-  if (!task) return;
-  sections.push({
-    id: "authoritative-task",
-    content: [
-      "## Authoritative task",
-      "This is the original task carried unchanged by PatchRelay. Review the current head against it.",
-      "Its scope and acceptance criteria override conflicting PR summaries, implementation assumptions, and prior review claims.",
-      "",
-      task,
-    ].join("\n"),
-  });
-}
-
 function appendGuidanceSections(sections: ReviewPromptSection[], context: Omit<ReviewContext, "prompt">): void {
   if (context.promptContext.guidanceDocs.length === 0) return;
   sections.push({
@@ -83,7 +64,7 @@ function appendGuidanceSections(sections: ReviewPromptSection[], context: Omit<R
       "These documents are project-specific policy. If they conflict with generic review instincts or prior review claims, follow the repository guidance and explain only current-head violations of that guidance.",
       ...context.promptContext.guidanceDocs.flatMap((doc) => [`### ${doc.path}`, doc.text.slice(0, 8_000), ""]),
       "### Review boundary for workflow guidance",
-      "Instructions about how work must be initiated, tracked, assigned, or linked govern the implementation agent and operator workflow; they are not defects in the current PR head. Never request changes or add a nit solely because a Linear issue, ticket, issue link, assignment, or other pre-PR process artifact is missing. Use linked issue context when it exists, but review the current head on the available code and evidence when it does not.",
+      "Instructions about how work must be initiated, tracked, assigned, or linked govern the implementation and operator workflow; they are not defects in the current PR head. Never request changes or add a nit solely because a ticket, issue link, assignment, or other pre-PR process artifact is missing. Review the current head from the PR, code, and available evidence.",
     ].join("\n"),
   });
 }
@@ -160,7 +141,7 @@ const REVIEW_RULES = `## Review rules
 Review the current PR head only.
 
 - Start by understanding the actual code and diff before deciding on a verdict.
-- When an Authoritative task section is present, use it as the source of truth for requested scope and acceptance. Do not preserve an old implementation invariant or prior review claim that the task explicitly removes.
+- Treat the current PR title and description as the authoritative statement of intended behavior, requested scope, and acceptance criteria. Do not preserve an old implementation invariant or prior review claim that the PR explicitly removes.
 - Repository guidance is authoritative project policy. Apply it before general reviewer instincts or prior-review momentum; if guidance says a pattern is intentional, do not push the author in the opposite direction unless the current head violates a different explicit rule.
 - Apply repository guidance only to reviewable properties of the current head: code, tests, committed artifacts, documented contracts, and runtime behavior. Rules about starting work from an issue or other pre-PR workflow provenance belong to the implementation agent and operator; missing issue or ticket context is never a blocker or nit.
 - When reviewing domain content such as translations, curriculum, prompts, fixtures, policy docs, or generated artifacts, treat project-specific guidance, glossaries, samples, and PR-linked docs as the product spec for that content.
@@ -183,12 +164,12 @@ Review the current PR head only.
 - Do not post the review yourself with \`gh\` or other tools. Return JSON only; review-quill will publish it.
 - The changed-files inventory and patch set below define this PR's scope on the current head.
 - Use the checked-out repository for surrounding context, but do not expand the claimed PR scope beyond the diff inventory.
-- Start by identifying the PR's primary task from the title, body, and diff. Treat the PR body as orientation for understanding the diff, not as a completeness checklist that every acceptable change must satisfy.
+- Start by identifying the PR's primary task from its title and description, then verify the current diff against that stated intent.
 - Treat explicit scope notes, out-of-scope notes, supersedes notes, and threat-model notes in the PR body as evidence of author intent, not automatic waivers.
 - Do not let the PR description waive direct regressions or correctness issues introduced by the diff.
 - Do not request changes solely because a coherent diff hunk, file, or behavior change is missing from, underexplained by, or only briefly mentioned in the PR description. If you can understand from the diff that the change is logical, cohesive, and does not introduce a concrete blocker, approve it.
 - For scope-drift concerns, substantiate that the change is actually unnecessary, incoherent with the PR, risky, or forbidden by repository guidance. "The PR body did not justify this" is not by itself a blocker.
-- Do not silently widen the delegated task. A broader inconsistency is blocking only when the current diff introduces it, materially worsens it, the repository guidance explicitly treats the changed surfaces as one flow, or the stated PR task depends on it being correct.
+- Do not silently widen the stated PR task. A broader inconsistency is blocking only when the current diff introduces it, materially worsens it, the repository guidance explicitly treats the changed surfaces as one flow, or the stated PR task depends on it being correct.
 - When a PR introduces or rewires stored enums, schema vocabulary, normalization helpers, or compatibility mappings, inspect untouched read/write paths that can bypass the new abstraction — especially webhooks, background jobs, DAO update methods, and auth/session sync.
 - If a concern is real but mostly pre-existing or only weakly connected to the stated PR task, prefer a nit or drop it instead of blocking.
 - Previous reviews are historical claims to verify, not facts to repeat. Re-check them against the current head, current diff, and current behavior before reusing them.`;
@@ -222,7 +203,6 @@ export function renderReviewPrompt(context: Omit<ReviewContext, "prompt">): stri
     pullRequestSection(context),
   ];
 
-  appendAuthoritativeTaskSection(sections, context);
   sections.push({ id: "diff-context", content: renderDiffContextLines(context.diff).join("\n") });
 
   appendGuidanceSections(sections, context);
@@ -266,7 +246,6 @@ export function renderFollowUpReviewPrompt(
     { id: "review-rubric", content: REVIEW_RULES },
     pullRequestSection(context, [`Previous reviewed head SHA: ${priorHeadSha}`, `Current head SHA: ${context.pr.headSha}`]),
   ];
-  appendAuthoritativeTaskSection(sections, context);
   sections.push({
       id: "diff-context",
       content: [

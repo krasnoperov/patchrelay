@@ -58,11 +58,6 @@ function shouldCompactThread(issue: IssueRecord, threadGeneration: number | unde
     && followUpCount >= 4;
 }
 
-function compactGoalText(value: string, maxLength = 600): string {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength - 3).trimEnd()}...`;
-}
-
 function extractIssueSection(description: string | undefined, heading: string): string | undefined {
   if (!description) return undefined;
   const headingLine = `## ${heading}`.toLowerCase();
@@ -74,12 +69,30 @@ function extractIssueSection(description: string | undefined, heading: string): 
   return body && body.length > 0 ? body : undefined;
 }
 
-export function buildInitialImplementationGoal(issue: IssueRecord): string {
-  const title = issue.title?.trim() || `Complete ${issue.issueKey ?? issue.linearIssueId}`;
+export function buildInitialImplementationGoal(issue: IssueRecord): string | undefined {
   const description = issue.description?.trim();
-  const goal = extractIssueSection(description, "Goal");
+  return extractIssueSection(description, "Goal");
+}
 
-  return compactGoalText(goal ? `${title}. ${goal}` : title);
+export async function startTurnAfterInitialGoal(params: {
+  codex: Pick<CodexAppServerClient, "setThreadGoal" | "startTurn">;
+  threadId: string;
+  cwd: string;
+  input: string;
+  initialGoal?: string | undefined;
+}): Promise<{ threadId: string; turnId: string; status: string }> {
+  if (params.initialGoal) {
+    await params.codex.setThreadGoal({
+      threadId: params.threadId,
+      objective: params.initialGoal,
+      status: "active",
+    });
+  }
+  return await params.codex.startTurn({
+    threadId: params.threadId,
+    cwd: params.cwd,
+    input: params.input,
+  });
 }
 
 export function shouldReuseIssueThread(params: {
@@ -394,7 +407,6 @@ export class RunLauncher {
     let turnId: string;
     let parentThreadId: string | undefined;
     let createdThreadForRun = false;
-    const firstThreadForIssue = !params.issue.threadId;
     try {
       await this.worktreeManager.ensureIssueWorktree(
         params.project.repoPath,
@@ -478,7 +490,15 @@ export class RunLauncher {
       this.db.runs.updateLaunchPhase(params.run.id, "thread_started");
 
       try {
-        const turn = await this.codex.startTurn({ threadId, cwd: params.worktreePath, input: params.prompt });
+        const turn = await startTurnAfterInitialGoal({
+          codex: this.codex,
+          threadId,
+          cwd: params.worktreePath,
+          input: params.prompt,
+          ...(createdThreadForRun && params.runType === "implementation"
+            ? { initialGoal: buildInitialImplementationGoal(params.issue) }
+            : {}),
+        });
         turnId = turn.turnId;
         this.db.runs.updateLaunchPhase(params.run.id, "turn_started");
       } catch (turnError) {
@@ -498,15 +518,20 @@ export class RunLauncher {
           // Plan §B5: re-point the run row at the fresh thread before the
           // retried startTurn, for the same notification race.
           this.recordRunThread(params, threadId, parentThreadId);
-          const turn = await this.codex.startTurn({ threadId, cwd: params.worktreePath, input: params.prompt });
+          const turn = await startTurnAfterInitialGoal({
+            codex: this.codex,
+            threadId,
+            cwd: params.worktreePath,
+            input: params.prompt,
+            ...(params.runType === "implementation"
+              ? { initialGoal: buildInitialImplementationGoal(params.issue) }
+              : {}),
+          });
           turnId = turn.turnId;
           this.db.runs.updateLaunchPhase(params.run.id, "turn_started");
         } else {
           throw turnError;
         }
-      }
-      if (createdThreadForRun && firstThreadForIssue && params.runType === "implementation") {
-        await this.setInitialImplementationGoal(threadId, params.issue);
       }
       params.assertLaunchLease(params.run, "after starting the Codex turn");
       return { threadId, turnId, ...(parentThreadId ? { parentThreadId } : {}) };
@@ -580,27 +605,4 @@ export class RunLauncher {
     throw error;
   }
 
-  private async setInitialImplementationGoal(threadId: string, issue: IssueRecord): Promise<void> {
-    const goalSetter = (this.codex as unknown as {
-      setThreadGoal?: (options: { threadId: string; objective: string; status: "active" }) => Promise<unknown>;
-    }).setThreadGoal;
-    if (typeof goalSetter !== "function") {
-      return;
-    }
-
-    const objective = buildInitialImplementationGoal(issue);
-    try {
-      await goalSetter.call(this.codex, { threadId, objective, status: "active" });
-      this.logger.info({ issueKey: issue.issueKey, threadId }, "Set Codex thread goal for implementation run");
-    } catch (error) {
-      this.logger.warn(
-        {
-          issueKey: issue.issueKey,
-          threadId,
-          error: sanitizeDiagnosticText(error instanceof Error ? error.message : String(error)),
-        },
-        "Failed to set Codex thread goal for implementation run",
-      );
-    }
-  }
 }

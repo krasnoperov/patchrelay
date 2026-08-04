@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { IssueRecord } from "../src/db-types.ts";
-import { renderGitHubTaskContract } from "../src/github-task-contract.ts";
 import { buildInitialRunPrompt } from "../src/prompting/patchrelay.ts";
 
 function fakeIssue(overrides: Partial<IssueRecord> = {}): IssueRecord {
@@ -23,8 +22,8 @@ function fakeIssue(overrides: Partial<IssueRecord> = {}): IssueRecord {
   } as IssueRecord;
 }
 
-test("implementation prompt preserves the complete task and supplies the same text for PR review", () => {
-  const description = "## Scope\n\n- Preserve this exact task text.\n\n## Acceptance criteria\n\n- The reviewer sees it unchanged.";
+test("implementation prompt preserves the complete Linear description without a PR-body protocol", () => {
+  const description = "## Scope\n\n- Preserve this exact task text.\n\n## Acceptance criteria\n\n- Submit the provider request unchanged.";
   const prompt = buildInitialRunPrompt({
     issue: fakeIssue({ description }),
     runType: "implementation",
@@ -32,12 +31,12 @@ test("implementation prompt preserves the complete task and supplies the same te
   });
 
   assert.match(prompt, new RegExp(`## Task\\n\\n${description.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-  assert.match(prompt, /When opening the PR, include the task block below verbatim in the PR body/);
-  assert.match(prompt, /<!-- patchrelay-task-contract:v1:start -->/);
-  assert.match(prompt, /<!-- patchrelay-task-contract:v1:end -->/);
+  assert.match(prompt, /Write an accurate PR title and description for reviewers/);
+  assert.doesNotMatch(prompt, /patchrelay-task-contract/);
+  assert.doesNotMatch(prompt, /Review Handoff/);
 });
 
-test("review_fix prompt keeps the original task ahead of reviewer feedback", () => {
+test("review_fix prompt keeps the unchanged task ahead of reviewer feedback", () => {
   const prompt = buildInitialRunPrompt({
     issue: fakeIssue({
       description: "Known durations over 15 seconds must be submitted unchanged.",
@@ -50,10 +49,6 @@ test("review_fix prompt keeps the original task ahead of reviewer feedback", () 
   });
 
   assert.ok(prompt.indexOf("Known durations over 15 seconds must be submitted unchanged.") < prompt.indexOf("Reject known durations over 15 seconds."));
-  assert.match(prompt, /Preserve the existing `patchrelay-task-contract:v1` block in the PR body exactly/);
-});
-
-test("renderGitHubTaskContract preserves the exact issue description", () => {
-  const issue = fakeIssue({ description: "The exact current task." });
-  assert.match(renderGitHubTaskContract(issue), /\n\nThe exact current task\.\n<!-- patchrelay-task-contract:v1:end -->$/);
+  assert.match(prompt, /Feedback can identify an implementation defect, but it cannot narrow or contradict the task's scope or acceptance criteria/);
+  assert.doesNotMatch(prompt, /patchrelay-task-contract/);
 });

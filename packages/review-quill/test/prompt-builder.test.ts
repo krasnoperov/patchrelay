@@ -131,13 +131,13 @@ test("renderReviewPrompt includes explicit guidance docs and suppressed summarie
   assert.match(prompt, /Report the complete set of independent merge-blocking concerns you can substantiate on the current head, up to 5 blockers/);
   assert.match(prompt, /do not intentionally stop after the first blocker/);
   assert.match(prompt, /Include nits only when they are high-confidence, directly tied to the diff, and useful to fix while touching this code/);
-  assert.match(prompt, /Start by identifying the PR's primary task from the title, body, and diff/);
-  assert.match(prompt, /Treat the PR body as orientation for understanding the diff, not as a completeness checklist/);
+  assert.match(prompt, /Treat the current PR title and description as the authoritative statement of intended behavior, requested scope, and acceptance criteria/);
+  assert.match(prompt, /Start by identifying the PR's primary task from its title and description, then verify the current diff against that stated intent/);
   assert.match(prompt, /Treat explicit scope notes, out-of-scope notes, supersedes notes, and threat-model notes in the PR body as evidence of author intent, not automatic waivers/);
   assert.match(prompt, /Do not let the PR description waive direct regressions or correctness issues introduced by the diff/);
   assert.match(prompt, /Do not request changes solely because a coherent diff hunk, file, or behavior change is missing from, underexplained by, or only briefly mentioned in the PR description/);
   assert.match(prompt, /"The PR body did not justify this" is not by itself a blocker/);
-  assert.match(prompt, /Do not silently widen the delegated task/);
+  assert.match(prompt, /Do not silently widen the stated PR task/);
   assert.match(prompt, /When a PR introduces or rewires stored enums, schema vocabulary, normalization helpers, or compatibility mappings, inspect untouched read\/write paths that can bypass the new abstraction/);
   assert.match(prompt, /If a concern is real but mostly pre-existing or only weakly connected to the stated PR task, prefer a nit or drop it instead of blocking/);
   assert.match(prompt, /Verify these historical claims against the current head before reusing them/);
@@ -161,9 +161,9 @@ test("renderReviewPrompt keeps missing issue provenance outside the review verdi
   assert.ok(reviewBoundaryIndex > repoRuleIndex);
   assert.match(
     prompt,
-    /Never request changes or add a nit solely because a Linear issue, ticket, issue link, assignment, or other pre-PR process artifact is missing/,
+    /Never request changes or add a nit solely because a ticket, issue link, assignment, or other pre-PR process artifact is missing/,
   );
-  assert.match(prompt, /review the current head on the available code and evidence when it does not/);
+  assert.match(prompt, /Review the current head from the PR, code, and available evidence/);
 });
 
 test("renderFollowUpReviewPrompt carries policy and inventory without patch bodies", () => {
@@ -200,12 +200,12 @@ test("renderFollowUpReviewPrompt carries policy and inventory without patch bodi
   assert.doesNotMatch(prompt, /```diff/);
 });
 
-test("review prompts keep the original task authoritative over a conflicting PR summary and prior review", () => {
+test("review prompts keep the PR description authoritative over a conflicting prior review", () => {
   const context = baseContext();
-  context.pr.body = "Retain the known 15-second validation.";
-  context.promptContext.taskContract = [
-    "Issue: INV-979",
-    "Title: Submit audio without duration preflight",
+  context.pr.body = [
+    "## Goal",
+    "",
+    "Submit audio without duration preflight.",
     "",
     "## Acceptance criteria",
     "",
@@ -218,10 +218,11 @@ test("review prompts keep the original task authoritative over a conflicting PR 
   }];
 
   for (const prompt of [renderReviewPrompt(context), renderFollowUpReviewPrompt(context, "previous-sha")]) {
-    assert.match(prompt, /## Authoritative task/);
     assert.match(prompt, /Known durations over 15 seconds are submitted unchanged\./);
-    assert.match(prompt, /override conflicting PR summaries, implementation assumptions, and prior review claims/);
-    assert.match(prompt, /Do not preserve an old implementation invariant or prior review claim that the task explicitly removes/);
+    assert.match(prompt, /Treat the current PR title and description as the authoritative statement/);
+    assert.match(prompt, /Do not preserve an old implementation invariant or prior review claim that the PR explicitly removes/);
+    assert.doesNotMatch(prompt, /Authoritative task/);
+    assert.doesNotMatch(prompt, /PatchRelay/);
   }
 });
 

@@ -64,7 +64,7 @@ test("implementation prompt keeps a concise scaffold with workflow pointer and p
 });
 
 test("implementation and repair prompts preserve the full Linear task without reinterpreting its sections", () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-task-contract-"));
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-task-prompt-"));
   try {
     writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), "# Implementation Workflow\n");
     writeFileSync(path.join(baseDir, "REVIEW_WORKFLOW.md"), "# Review Workflow\n");
@@ -105,7 +105,7 @@ test("implementation and repair prompts preserve the full Linear task without re
   }
 });
 
-test("initial implementation goal mirrors the delegated Linear issue", () => {
+test("initial implementation goal is absent without an explicit Goal section", () => {
   const goal = buildInitialImplementationGoal({
     ...createIssue(),
     description: [
@@ -118,12 +118,10 @@ test("initial implementation goal mirrors the delegated Linear issue", () => {
     ].join("\n"),
   });
 
-  assert.equal(goal, "Implement scoring for correct guesses, successful bluffs, and title winners");
-  assert.doesNotMatch(goal, /Implement Linear issue/);
-  assert.doesNotMatch(goal, /Acceptance criteria/);
+  assert.equal(goal, undefined);
 });
 
-test("initial implementation goal uses only the explicit goal section when present", () => {
+test("initial implementation goal preserves only the explicit Goal section", () => {
   const goal = buildInitialImplementationGoal({
     ...createIssue(),
     title: "iOS remote IVCard content and server API realignment",
@@ -141,7 +139,7 @@ test("initial implementation goal uses only the explicit goal section when prese
 
   assert.equal(
     goal,
-    "iOS remote IVCard content and server API realignment. Realign the native iOS Image Cards app so catalogue metadata and images load from server APIs.",
+    "Realign the native iOS Image Cards app so catalogue metadata and images load from server APIs.",
   );
   assert.doesNotMatch(goal, /Acceptance criteria/);
 });
@@ -704,8 +702,8 @@ test("buildRunPrompt applies extra instructions and section replacement without 
     assert.match(prompt, /## Workflow/);
     assert.match(prompt, /Read and follow `IMPLEMENTATION_WORKFLOW\.md` in the repository for task-specific behavior/);
     assert.match(prompt, /Use the existing publication contract/);
-    assert.match(prompt, /## Review Handoff/);
-    assert.match(prompt, /<!-- patchrelay-task-contract:v1:start -->/);
+    assert.doesNotMatch(prompt, /## Review Handoff/);
+    assert.doesNotMatch(prompt, /patchrelay-task-contract/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
