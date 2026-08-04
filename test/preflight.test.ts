@@ -96,7 +96,7 @@ test("runPreflight reports a healthy local setup", async () => {
   }
 });
 
-test("runPreflight can validate a live database without running destructive migrations", async () => {
+test("runPreflight can validate a live database without initializing schema objects", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-preflight-readonly-"));
   const config = createConfig(baseDir);
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
@@ -115,7 +115,7 @@ test("runPreflight can validate a live database without running destructive migr
 
     assert.equal(report.ok, true);
     const columns = raw.prepare("PRAGMA table_info(issues)").all().map((row) => row.name);
-    assert.ok(columns.includes("pending_run_type"), "read-only preflight must not rebuild the live issues table");
+    assert.ok(columns.includes("pending_run_type"), "read-only preflight must not alter the live issues table");
   } finally {
     db.close();
     rmSync(baseDir, { recursive: true, force: true });

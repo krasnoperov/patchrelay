@@ -1,11 +1,9 @@
 import { z } from "zod";
 
 // Plan §D1: the one typed schema for the run context object — the bag that is
-// (a) stored in `issues.pending_run_context_json` only in pre-cutover DB rows
-//     handled by migrations,
-// (b) carried in session-event `event_json` payloads for workflow-intent events and
+// (a) carried in session-event `event_json` payloads for workflow-intent events and
 //     merged into the input plan by deriveSessionInputPlan, and
-// (c) passed around in memory as `context` / `effectiveContext` /
+// (b) passed around in memory as `context` / `effectiveContext` /
 //     `workflowContext` until it reaches the prompt builder and launcher.
 //
 // Every known field is typed strictly so a mistyped field fails loudly at the
