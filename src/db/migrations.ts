@@ -135,7 +135,7 @@ CREATE TABLE IF NOT EXISTS issue_sessions (
   queue_repair_attempts INTEGER NOT NULL DEFAULT 0,
   review_fix_attempts INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
-  display_updated_at TEXT NOT NULL,
+  display_updated_at TEXT,
   updated_at TEXT NOT NULL,
   UNIQUE(project_id, linear_issue_id)
 );
