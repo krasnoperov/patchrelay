@@ -43,7 +43,7 @@ test("implementation prompt keeps a concise scaffold with workflow pointer and p
 
     const prompt = buildInitialRunPrompt({ issue: createIssue(), runType: "implementation", repoPath: baseDir });
 
-    assert.match(prompt, /## Task Objective/);
+    assert.match(prompt, /## Task/);
     assert.match(prompt, /## Constraints/);
     assert.match(prompt, /Stay inside the delegated task/);
     assert.match(prompt, /## Workflow/);
@@ -58,6 +58,48 @@ test("implementation prompt keeps a concise scaffold with workflow pointer and p
     assert.match(prompt, /If the issue explicitly allows a non-PR outcome, complete that outcome clearly; otherwise publish before stopping\./);
     assert.doesNotMatch(prompt, /## PR Body Contract/);
     assert.doesNotMatch(prompt, /## Follow-up Turn/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("implementation and repair prompts preserve the full Linear task without reinterpreting its sections", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-task-contract-"));
+  try {
+    writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), "# Implementation Workflow\n");
+    writeFileSync(path.join(baseDir, "REVIEW_WORKFLOW.md"), "# Review Workflow\n");
+    const description = [
+      "## Goal",
+      "",
+      "Let the provider own duration validation.",
+      "",
+      "## Scope",
+      "",
+      "- Remove the local combined-duration validation.",
+      "- Submit known durations over 15 seconds unchanged.",
+      "",
+      "## Acceptance criteria",
+      "",
+      "- A locally known duration over 15 seconds is not rejected before submission.",
+    ].join("\n");
+    const issue = { ...createIssue(), description, prNumber: 12 };
+
+    const implementationPrompt = buildInitialRunPrompt({ issue, runType: "implementation", repoPath: baseDir });
+    const repairPrompt = buildFollowUpRunPrompt({
+      issue,
+      runType: "review_fix",
+      repoPath: baseDir,
+      context: { reviewBody: "Keep rejecting known durations over 15 seconds." },
+    });
+
+    for (const prompt of [implementationPrompt, repairPrompt]) {
+      assert.ok(prompt.includes(description), "the original Linear description must stay intact");
+      assert.match(prompt, /## Goal\n\nLet the provider own duration validation\./);
+      assert.doesNotMatch(prompt, /### In Scope/);
+      assert.doesNotMatch(prompt, /### Acceptance \/ Done/);
+    }
+    assert.ok(repairPrompt.indexOf(description) < repairPrompt.indexOf("Keep rejecting known durations over 15 seconds."));
+    assert.match(repairPrompt, /Feedback can identify an implementation defect, but it cannot narrow or contradict the task's scope or acceptance criteria\./);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -657,11 +699,13 @@ test("buildRunPrompt applies extra instructions and section replacement without 
 
     assert.match(prompt, /## Extra Instructions/);
     assert.match(prompt, /Use the repo's rollout checklist\./);
-    assert.match(prompt, /## Task Objective/);
+    assert.match(prompt, /## Task/);
     assert.match(prompt, /## Constraints/);
     assert.match(prompt, /## Workflow/);
     assert.match(prompt, /Read and follow `IMPLEMENTATION_WORKFLOW\.md` in the repository for task-specific behavior/);
     assert.match(prompt, /Use the existing publication contract/);
+    assert.match(prompt, /## Review Handoff/);
+    assert.match(prompt, /<!-- patchrelay-task-contract:v1:start -->/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

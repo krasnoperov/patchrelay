@@ -25,6 +25,8 @@ For each eligible PR head:
 
 The review runs against the real working tree at that SHA, not the GitHub files API.
 
+When a pushed PR body contains PatchRelay's versioned `patchrelay-task-contract:v1` block, Review Quill includes the unchanged original task in its prompt and treats its scope and acceptance criteria as authoritative over conflicting implementation summaries or prior review claims. Repository guidance remains project policy. This does not change the existing push/check review trigger lifecycle.
+
 Repository guidance applies to reviewable properties of that head: code, tests, committed artifacts, documented contracts, and runtime behavior. Pre-PR workflow provenance stays with the implementation agent and operator, so Review Quill does not request changes or add a nit merely because a Linear issue, ticket link, or assignment is absent. Linked issue context is useful when available, but optional for review.
 
 The default Codex sandbox mode is `danger-full-access` because many systemd hosts cannot run Codex's bubblewrap networking inside `read-only` / `workspace-write` modes. The reviewer still works in a throwaway checkout and review-quill publishes only through the GitHub App; it does not commit or push.

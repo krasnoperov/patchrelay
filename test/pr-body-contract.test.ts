@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildInitialRunPrompt } from "../src/prompting/patchrelay.ts";
 import type { IssueRecord } from "../src/db-types.ts";
+import { renderGitHubTaskContract } from "../src/github-task-contract.ts";
+import { buildInitialRunPrompt } from "../src/prompting/patchrelay.ts";
 
 function fakeIssue(overrides: Partial<IssueRecord> = {}): IssueRecord {
   return {
@@ -22,26 +23,37 @@ function fakeIssue(overrides: Partial<IssueRecord> = {}): IssueRecord {
   } as IssueRecord;
 }
 
-test("implementation prompt uses publish guidance instead of a built-in PR body contract", () => {
+test("implementation prompt preserves the complete task and supplies the same text for PR review", () => {
+  const description = "## Scope\n\n- Preserve this exact task text.\n\n## Acceptance criteria\n\n- The reviewer sees it unchanged.";
   const prompt = buildInitialRunPrompt({
-    issue: fakeIssue(),
+    issue: fakeIssue({ description }),
     runType: "implementation",
     repoPath: "/nonexistent",
   });
 
-  assert.match(prompt, /## Publish/, "expected Publish section");
-  assert.match(prompt, /open or update the PR/, "expected publish guidance for implementation runs");
-  assert.ok(!/## PR Body Contract/.test(prompt), "built-in prompt should no longer carry a PR body contract");
+  assert.match(prompt, new RegExp(`## Task\\n\\n${description.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.match(prompt, /When opening the PR, include the task block below verbatim in the PR body/);
+  assert.match(prompt, /<!-- patchrelay-task-contract:v1:start -->/);
+  assert.match(prompt, /<!-- patchrelay-task-contract:v1:end -->/);
 });
 
-test("review_fix prompt publishes to the existing PR branch without a PR body contract", () => {
+test("review_fix prompt keeps the original task ahead of reviewer feedback", () => {
   const prompt = buildInitialRunPrompt({
-    issue: fakeIssue({ prNumber: 42, branchName: "krasnoperov-example/EX-1-wire-up-a-feature" }),
+    issue: fakeIssue({
+      description: "Known durations over 15 seconds must be submitted unchanged.",
+      prNumber: 42,
+      branchName: "example/EX-1",
+    }),
     runType: "review_fix",
     repoPath: "/nonexistent",
+    context: { reviewBody: "Reject known durations over 15 seconds." },
   });
 
-  assert.match(prompt, /## Publish/, "review_fix should still carry publish guidance");
-  assert.match(prompt, /existing PR branch/, "review_fix should target the existing PR branch");
-  assert.ok(!/## PR Body Contract/.test(prompt), "review_fix should not carry the PR Body Contract");
+  assert.ok(prompt.indexOf("Known durations over 15 seconds must be submitted unchanged.") < prompt.indexOf("Reject known durations over 15 seconds."));
+  assert.match(prompt, /Preserve the existing `patchrelay-task-contract:v1` block in the PR body exactly/);
+});
+
+test("renderGitHubTaskContract preserves the exact issue description", () => {
+  const issue = fakeIssue({ description: "The exact current task." });
+  assert.match(renderGitHubTaskContract(issue), /\n\nThe exact current task\.\n<!-- patchrelay-task-contract:v1:end -->$/);
 });

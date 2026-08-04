@@ -3,6 +3,7 @@ import path from "node:path";
 import type { IssueRecord } from "../db-types.ts";
 import type { RunType } from "../run-type.ts";
 import type { IssueClass } from "../issue-class.ts";
+import { renderGitHubTaskContract } from "../github-task-contract.ts";
 import { derivePrDisplayContext } from "../pr-display-context.ts";
 import type { RunContext } from "../run-context.ts";
 import type { PatchRelayPromptingConfig, PromptCustomizationLayer } from "../types.ts";
@@ -21,6 +22,7 @@ export const PATCHRELAY_PROMPT_SECTION_IDS = [
   "follow-up-turn",
   "task-objective",
   "scope-discipline",
+  "review-task-contract",
   "human-context",
   "reactive-context",
   "workflow-guidance",
@@ -82,31 +84,14 @@ function buildPromptHeader(issue: IssueRecord): string {
   ].filter(Boolean).join("\n");
 }
 
-function extractIssueSection(description: string | undefined, heading: string): string | undefined {
-  if (!description) return undefined;
-  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(`^## ${escaped}\\s*$([\\s\\S]*?)(?=^##\\s+|$)`, "im");
-  const match = description.match(pattern);
-  const body = match?.[1]?.trim();
-  return body && body.length > 0 ? body : undefined;
-}
-
-function extractIssueIntroText(description: string | undefined): string | undefined {
-  if (!description) return undefined;
-  const trimmed = description.trim();
-  if (!trimmed) return undefined;
-  const firstSectionIndex = trimmed.search(/^##\s+/m);
-  const intro = firstSectionIndex === -1 ? trimmed : trimmed.slice(0, firstSectionIndex).trim();
-  return intro.length > 0 ? intro : undefined;
-}
-
 function buildTaskObjective(issue: IssueRecord): string {
-  const intro = extractIssueIntroText(issue.description);
+  const task = issue.description?.trim()
+    ? issue.description
+    : issue.title || `Complete ${issue.issueKey ?? issue.linearIssueId}.`;
   return [
-    "## Task Objective",
+    "## Task",
     "",
-    issue.title || `Complete ${issue.issueKey ?? issue.linearIssueId}.`,
-    ...(intro ? ["", intro] : []),
+    task,
   ].join("\n");
 }
 
@@ -177,12 +162,7 @@ function buildIssueTopology(context?: RunContext): string[] {
   return lines;
 }
 
-function buildConstraints(issue: IssueRecord, context?: RunContext): string {
-  const description = issue.description?.trim();
-  const scope = extractIssueSection(description, "Scope");
-  const acceptance = extractIssueSection(description, "Acceptance criteria")
-    ?? extractIssueSection(description, "Success criteria");
-  const relevantCode = extractIssueSection(description, "Relevant code");
+function buildConstraints(context?: RunContext): string {
   const topology = buildIssueTopology(context);
 
   return [
@@ -190,9 +170,6 @@ function buildConstraints(issue: IssueRecord, context?: RunContext): string {
     "",
     "Stay inside the delegated task. Do not widen scope into unrelated cleanup or optional polish.",
     "",
-    ...(scope ? ["### In Scope", "", scope, ""] : []),
-    ...(acceptance ? ["### Acceptance / Done", "", acceptance, ""] : []),
-    ...(relevantCode ? ["### Relevant Code", "", relevantCode, ""] : []),
     ...topology,
   ].join("\n");
 }
@@ -365,6 +342,7 @@ function buildRequestedChangesContext(runType: RunType, context?: RunContext): s
       "Requested changes on the existing PR branch.",
       "Goal: restore review readiness on the current PR branch. Push a newer head only when the fix actually changes the diff; if the reviewer-pass produces only comments, test wording, or PR-body changes, edit the PR body via `gh pr edit` instead.",
       "Address the real concern behind the feedback and verify nearby invariants in the touched flow before you publish.",
+      "Evaluate review feedback against the original task above. Feedback can identify an implementation defect, but it cannot narrow or contradict the task's scope or acceptance criteria.",
       "For each review comment, identify the resource, epoch, or token it touches (e.g. session, capture, route, persistence handle, in-flight turn id), enumerate the other transitions that share that same resource, and verify each one before pushing — not just the exact path called out. If you find an adjacent transition that violates the same invariant, fix it in this iteration rather than waiting for the reviewer to surface it next round.",
       reviewer ? `Reviewer: ${reviewer}` : "",
       reviewBody ? `Review summary:\n${reviewBody}` : "",
@@ -706,6 +684,24 @@ function buildPublicationContract(
   ].join("\n");
 }
 
+function buildReviewTaskContract(issue: IssueRecord, runType: RunType): string {
+  if (runType !== "implementation") {
+    return [
+      "## Review Handoff",
+      "",
+      "Preserve the existing `patchrelay-task-contract:v1` block in the PR body exactly. It carries the original task to the reviewer on the next pushed head.",
+    ].join("\n");
+  }
+  return [
+    "## Review Handoff",
+    "",
+    "When opening the PR, include the task block below verbatim in the PR body.",
+    "Write the implementation summary outside the markers. Do not rewrite, shorten, or reinterpret the task between them.",
+    "",
+    renderGitHubTaskContract(issue),
+  ].join("\n");
+}
+
 function buildSections(
   issue: IssueRecord,
   runType: RunType,
@@ -724,8 +720,9 @@ function buildSections(
     { id: "task-objective", content: buildTaskObjective(issue) },
     {
       id: "scope-discipline",
-      content: issueClass === "orchestration" ? buildOrchestrationConstraints(context) : buildConstraints(issue, context),
+      content: issueClass === "orchestration" ? buildOrchestrationConstraints(context) : buildConstraints(context),
     },
+    { id: "review-task-contract", content: buildReviewTaskContract(issue, runType) },
   );
 
   if (currentContext) {
