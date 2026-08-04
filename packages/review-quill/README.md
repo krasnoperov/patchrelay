@@ -25,9 +25,9 @@ For each eligible PR head:
 
 The review runs against the real working tree at that SHA, not the GitHub files API.
 
-When a pushed PR body contains PatchRelay's versioned `patchrelay-task-contract:v1` block, Review Quill includes the unchanged original task in its prompt and treats its scope and acceptance criteria as authoritative over conflicting implementation summaries or prior review claims. Repository guidance remains project policy. This does not change the existing push/check review trigger lifecycle.
+Review Quill treats the current PR title and description as the authoritative statement of intended behavior, requested scope, and acceptance criteria. It reviews only the PR's pushed head, checked-out code, diff, repository guidance, and GitHub review history; it does not load external tracker context. Prior review claims are revalidated instead of overriding the current PR description. A PR description cannot waive a concrete regression introduced by the diff. The existing push/check review trigger lifecycle is unchanged.
 
-Repository guidance applies to reviewable properties of that head: code, tests, committed artifacts, documented contracts, and runtime behavior. Pre-PR workflow provenance stays with the implementation agent and operator, so Review Quill does not request changes or add a nit merely because a Linear issue, ticket link, or assignment is absent. Linked issue context is useful when available, but optional for review.
+Repository guidance applies to reviewable properties of that head: code, tests, committed artifacts, documented contracts, and runtime behavior. Pre-PR workflow provenance stays with the implementation agent and operator, so Review Quill does not request changes or add a nit merely because a ticket link, assignment, or other external process artifact is absent.
 
 The default Codex sandbox mode is `danger-full-access` because many systemd hosts cannot run Codex's bubblewrap networking inside `read-only` / `workspace-write` modes. The reviewer still works in a throwaway checkout and review-quill publishes only through the GitHub App; it does not commit or push.
 

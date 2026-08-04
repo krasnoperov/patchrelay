@@ -3,7 +3,6 @@ import path from "node:path";
 import type { IssueRecord } from "../db-types.ts";
 import type { RunType } from "../run-type.ts";
 import type { IssueClass } from "../issue-class.ts";
-import { renderGitHubTaskContract } from "../github-task-contract.ts";
 import { derivePrDisplayContext } from "../pr-display-context.ts";
 import type { RunContext } from "../run-context.ts";
 import type { PatchRelayPromptingConfig, PromptCustomizationLayer } from "../types.ts";
@@ -22,7 +21,6 @@ export const PATCHRELAY_PROMPT_SECTION_IDS = [
   "follow-up-turn",
   "task-objective",
   "scope-discipline",
-  "review-task-contract",
   "human-context",
   "reactive-context",
   "workflow-guidance",
@@ -645,6 +643,7 @@ function buildPublicationContract(
       "",
       "If this is code-delivery work, publish before stopping: commit, push the issue branch, and open or update the PR.",
       "If the issue explicitly allows a non-PR outcome, complete that outcome clearly instead of inventing a PR.",
+      "Write an accurate PR title and description for reviewers: state the intended behavior, scope boundaries, and relevant verification represented by the current head.",
       "",
       "Right before `gh pr create`, run `patchrelay sequence-check` from the worktree.",
       "If the JSON recommendation is `rebase_onto`, rebase the branch onto the named parent and pass `--base <parent_branch>` to `gh pr create`. Include the recommendation's reason in the PR body under a `Stacked on #NNN` header.",
@@ -684,24 +683,6 @@ function buildPublicationContract(
   ].join("\n");
 }
 
-function buildReviewTaskContract(issue: IssueRecord, runType: RunType): string {
-  if (runType !== "implementation") {
-    return [
-      "## Review Handoff",
-      "",
-      "Preserve the existing `patchrelay-task-contract:v1` block in the PR body exactly. It carries the original task to the reviewer on the next pushed head.",
-    ].join("\n");
-  }
-  return [
-    "## Review Handoff",
-    "",
-    "When opening the PR, include the task block below verbatim in the PR body.",
-    "Write the implementation summary outside the markers. Do not rewrite, shorten, or reinterpret the task between them.",
-    "",
-    renderGitHubTaskContract(issue),
-  ].join("\n");
-}
-
 function buildSections(
   issue: IssueRecord,
   runType: RunType,
@@ -722,7 +703,6 @@ function buildSections(
       id: "scope-discipline",
       content: issueClass === "orchestration" ? buildOrchestrationConstraints(context) : buildConstraints(context),
     },
-    { id: "review-task-contract", content: buildReviewTaskContract(issue, runType) },
   );
 
   if (currentContext) {

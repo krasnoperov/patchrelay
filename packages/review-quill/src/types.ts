@@ -197,7 +197,6 @@ export interface PromptContext {
   priorReviewClaims: PriorReviewClaim[];
   followUpReviewClaims?: PriorReviewClaim[];
   issueKeys: string[];
-  taskContract?: string;
 }
 
 export interface ReviewContext {

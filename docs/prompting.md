@@ -94,9 +94,9 @@ The per-turn PatchRelay prompt is intentionally lean and usually contains only:
 
 Workflow docs are referenced, not inlined. The built-in prompt points the agent at `IMPLEMENTATION_WORKFLOW.md` or `REVIEW_WORKFLOW.md` instead of copying those files into every turn.
 
-PatchRelay does not reinterpret issue headings into a new task shape. Scope, acceptance criteria, relevant-code notes, and any other sections remain in `## Task` exactly as written. Reactive repair prompts carry the same task before CI or review feedback, so later automation cannot accidentally replace the original acceptance criteria. The Codex thread goal is still set separately from an explicit Linear `Goal` section when present; it supplements the task and never replaces it.
+PatchRelay does not reinterpret issue headings into a new task shape. Scope, acceptance criteria, relevant-code notes, and any other sections remain in `## Task` exactly as written. Reactive repair prompts carry the same task before CI or review feedback, so later automation cannot accidentally replace the original acceptance criteria. When an explicit Linear `## Goal` section is present, PatchRelay also sets that text as the Codex thread goal before the first implementation turn. Issues without that section do not receive a synthetic goal.
 
-For code-delivery work, the implementation prompt also supplies a versioned `patchrelay-task-contract:v1` block containing the same unchanged task for the PR body. Review Quill reads that block when a pushed head is reviewed and treats it as the task specification instead of deriving scope from the implementation summary. This is prompt context only; it does not add webhook types or change when review runs.
+The PR description is a separate, trusted review artifact. PatchRelay asks the implementation agent to describe the current head accurately, including intended behavior, scope boundaries, and relevant verification. It does not add a hidden PR-body protocol or carry Linear-specific context into Review Quill.
 
 ## Install-Level Customization
 
