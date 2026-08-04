@@ -57,8 +57,12 @@ export class CommentInputHandler {
       return;
     }
 
+    const directReply = params.isDirectReplyToOutstandingQuestion(issue);
+    const humanAuthored = normalized.actor?.type?.trim().toLowerCase() === "user";
     const addressedText = extractPatchRelayAddressedText(trimmedBody);
-    if (!addressedText) {
+    const routedText = addressedText
+      ?? (humanAuthored && issue.delegatedToPatchRelay && directReply ? trimmedBody : undefined);
+    if (!routedText) {
       this.feed?.publish({
         level: "info",
         kind: "comment",
@@ -75,9 +79,9 @@ export class CommentInputHandler {
       project,
       issue,
       source: "linear_addressed_comment",
-      body: addressedText,
+      body: routedText,
       author: normalized.comment.userName,
-      directReply: params.isDirectReplyToOutstandingQuestion(issue),
+      directReply,
       emitActivity: this.emitLinearActivity
         ? (content, options) => this.emitLinearActivity!(issue, content, options)
         : undefined,
@@ -90,7 +94,7 @@ export class CommentInputHandler {
         issueKey: trackedIssue?.issueKey,
         status: "enqueued",
         summary: `Comment enqueued ${result.queuedRunType} run`,
-        detail: addressedText.slice(0, 200),
+        detail: routedText.slice(0, 200),
       });
     }
   }

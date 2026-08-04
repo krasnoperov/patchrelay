@@ -3206,8 +3206,8 @@ test("idle delegated comments with PatchRelay status intent do not queue impleme
   }
 });
 
-test("awaiting_input issue comments without explicit PatchRelay address are ignored", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-comment-awaiting-input-ignored-"));
+test("plain human comments on awaiting_input resume work as direct replies on the same thread", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-comment-awaiting-input-reply-"));
   try {
     const config = createConfig(baseDir);
     config.projects[0] = {
@@ -3225,13 +3225,14 @@ test("awaiting_input issue comments without explicit PatchRelay address are igno
     db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
     db.upsertIssue({
       projectId: "krasnoperov/mafia",
-      linearIssueId: "issue-maf-awaiting-input-ignored",
+      linearIssueId: "issue-maf-awaiting-input-reply",
+      delegatedToPatchRelay: true,
       issueKey: "MAF-91F",
       title: "Awaiting input issue",
       currentLinearState: "Needs input",
       currentLinearStateType: "unstarted",
       inputRequestKind: "completion_check_question",
-      threadId: "thread-awaiting-input-ignored",
+      threadId: "thread-awaiting-input-reply",
     });
 
     const enqueued: Array<{ projectId: string; issueId: string }> = [];
@@ -3256,11 +3257,11 @@ test("awaiting_input issue comments without explicit PatchRelay address are igno
         type: "User",
       } as unknown as Record<string, unknown>,
       data: {
-        id: "comment-awaiting-input-ignored",
-        body: "Please keep the current API surface intact.",
+        id: "comment-awaiting-input-reply",
+        body: "Approve",
         user: { name: "Jordan Reviewer" },
         issue: {
-          id: "issue-maf-awaiting-input-ignored",
+          id: "issue-maf-awaiting-input-reply",
           identifier: "MAF-91F",
           title: "Awaiting input issue",
           team: { id: "team-maf", key: "MAF" },
@@ -3271,19 +3272,117 @@ test("awaiting_input issue comments without explicit PatchRelay address are igno
     };
 
     const stored = db.webhookEvents.insertFullWebhookEvent({
-      webhookId: "delivery-awaiting-input-comment-ignored",
+      webhookId: "delivery-awaiting-input-comment-reply",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
     });
     await handler.processWebhookEvent(stored.id);
 
-    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-awaiting-input-ignored");
-    const events = db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-awaiting-input-ignored");
-    assert.equal(workflowTask, undefined);
-    assert.deepEqual(
-      events.map((event) => event.eventType).filter((eventType) => eventType === "followup_comment" || eventType === "direct_reply"),
-      [],
+    const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-awaiting-input-reply");
+    assert.equal(workflowTask?.runType, "implementation");
+    assert.equal(workflowTask?.resumeThread, true);
+    assert.equal(workflowTask?.workflowReason, "direct_reply");
+    assert.equal(workflowTask?.context.directReplyMode, true);
+    assert.equal(workflowTask?.context.followUps?.[0]?.text, "Approve");
+    assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-awaiting-input-reply" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("plain comments cannot resume awaiting_input when the actor is non-human or the issue is undelegated", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-comment-awaiting-input-guard-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: [...config.projects[0]!.triggerEvents, "commentCreated", "commentUpdated"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    for (const issue of [
+      { id: "issue-maf-awaiting-input-application", delegated: true },
+      { id: "issue-maf-awaiting-input-undelegated", delegated: false },
+    ]) {
+      db.upsertIssue({
+        projectId: "krasnoperov/mafia",
+        linearIssueId: issue.id,
+        delegatedToPatchRelay: issue.delegated,
+        issueKey: issue.delegated ? "MAF-91H" : "MAF-91I",
+        title: "Awaiting input guard",
+        currentLinearState: "Needs input",
+        currentLinearStateType: "unstarted",
+        inputRequestKind: "completion_check_question",
+        threadId: `thread-${issue.id}`,
+      });
+    }
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
     );
+
+    for (const comment of [
+      {
+        webhookId: "delivery-awaiting-input-application-comment",
+        commentId: "comment-awaiting-input-application",
+        issueId: "issue-maf-awaiting-input-application",
+        issueKey: "MAF-91H",
+        actor: { id: "integration-actor", name: "Integration Bot", type: "Application" },
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+      },
+      {
+        webhookId: "delivery-awaiting-input-undelegated-comment",
+        commentId: "comment-awaiting-input-undelegated",
+        issueId: "issue-maf-awaiting-input-undelegated",
+        issueKey: "MAF-91I",
+        actor: { id: "user-guard", name: "Human Operator", type: "User" },
+        delegate: undefined,
+      },
+    ]) {
+      const payload: LinearWebhookPayload = {
+        action: "create",
+        type: "Comment",
+        createdAt: "2026-04-01T02:11:00.000Z",
+        webhookTimestamp: Date.now(),
+        actor: comment.actor as unknown as Record<string, unknown>,
+        data: {
+          id: comment.commentId,
+          body: "Approve",
+          user: { name: comment.actor.name },
+          issue: {
+            id: comment.issueId,
+            identifier: comment.issueKey,
+            title: "Awaiting input guard",
+            team: { id: "team-maf", key: "MAF" },
+            state: { id: "state-input", name: "Needs input", type: "unstarted" },
+            ...(comment.delegate ? { delegate: comment.delegate } : {}),
+          },
+        },
+      };
+      const stored = db.webhookEvents.insertFullWebhookEvent({
+        webhookId: comment.webhookId,
+        receivedAt: new Date().toISOString(),
+        payloadJson: JSON.stringify(payload),
+      });
+      await handler.processWebhookEvent(stored.id);
+    }
+
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-awaiting-input-application"), undefined);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("krasnoperov/mafia", "issue-maf-awaiting-input-undelegated"), undefined);
     assert.deepEqual(enqueued, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

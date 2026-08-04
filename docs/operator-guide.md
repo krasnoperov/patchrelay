@@ -177,7 +177,7 @@ PatchRelay, use the existing billing helper instead.
 @PatchRelay please continue with option B.
 ```
 
-Plain issue discussion, even on an awaiting-input issue, is ignored by PatchRelay unless it is addressed that way. This keeps teammate discussion from accidentally steering the agent.
+Plain issue discussion is ignored by PatchRelay unless it is addressed that way. The exception is a delegated issue already waiting for operator input: the next non-self human comment is the direct reply to that outstanding question, so it resumes the same thread without requiring an `@PatchRelay` prefix.
 
 PatchRelay classifies accepted follow-up text with a structured intent classifier, not a magic phrase list. Status questions during active work get a lightweight ephemeral thought; real instructions are delivered or queued. Delivery attempts are recorded as `prompt_delivered` session events. If delivery fails, the operator feed and Linear session activity call that out instead of silently losing the prompt, and final run summaries report delivered or failed steering attempts.
 
