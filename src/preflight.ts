@@ -1,6 +1,6 @@
 import { accessSync, constants, existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
-import { runPatchRelayMigrations } from "./db/migrations.ts";
+import { initializePatchRelaySchema } from "./db/migrations.ts";
 import { assertPatchRelaySchemaReady } from "./db/schema-guard.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
 import { SqliteConnection } from "./db/shared.ts";
@@ -175,11 +175,10 @@ function checkDatabaseHealth(config: AppConfig, migrateDatabase: boolean): Prefl
       connection.pragma("journal_mode = WAL");
     }
 
-    // Operator diagnostics may run while the service owns this database. Some
-    // migrations rebuild tables, so doctor must validate the live schema
-    // without mutating it or invalidating the service's prepared statements.
+    // Operator diagnostics may run while the service owns this database, so
+    // doctor validates the live schema without creating any missing objects.
     if (migrateDatabase) {
-      runPatchRelayMigrations(connection);
+      initializePatchRelaySchema(connection);
     }
     assertPatchRelaySchemaReady(connection, config.database.path);
 
@@ -203,11 +202,11 @@ function checkDatabaseHealth(config: AppConfig, migrateDatabase: boolean): Prefl
       .get();
     const objectCount = Number(schemaStats?.object_count ?? 0);
     if (objectCount < 1) {
-      checks.push(fail("database_schema", "Database schema is empty after migrations"));
+      checks.push(fail("database_schema", "Database schema is empty after initialization"));
       return checks;
     }
 
-    checks.push(pass("database_schema", `Database opened, schema is readable (${objectCount} objects)${migrateDatabase ? ", and migrations are applied" : ""}`));
+    checks.push(pass("database_schema", `Database opened, schema is readable (${objectCount} objects)${migrateDatabase ? ", and the final schema is initialized" : ""}`));
   } catch (error) {
     checks.push(fail("database_schema", `Unable to open or validate database schema at ${config.database.path}: ${formatError(error)}`));
   } finally {

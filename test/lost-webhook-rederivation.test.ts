@@ -64,7 +64,7 @@ function createConfig(baseDir: string, dbFileName: string): AppConfig {
     },
     database: {
       path: path.join(baseDir, dbFileName),
-      // WAL keeps the per-world migrations fast (~2s each in rollback mode).
+      // WAL keeps the per-world database fixtures fast (~2s each in rollback mode).
       wal: true,
     },
     linear: {

@@ -80,7 +80,7 @@ The codebase uses focused top-level modules with small subdirectories where a re
 - `github-webhook-handler.ts` — GitHub webhook processing, reactive run triggers
 - `service.ts` — top-level service wiring
 - `service-runtime.ts` — async queues, background reconciliation
-- `db.ts`, `db/*` — SQLite persistence stores and migrations
+- `db.ts`, `db/*` — SQLite persistence stores and the final schema bootstrap
 - `http.ts` — Fastify HTTP server and routes
 
 ## Core responsibilities
