@@ -22,7 +22,7 @@ import { RunStore } from "./db/run-store.ts";
 import { WebhookEventStore } from "./db/webhook-event-store.ts";
 import { WorkflowObservationStore } from "./db/workflow-observation-store.ts";
 import { WorkflowTaskStore } from "./db/workflow-task-store.ts";
-import { initializePatchRelaySchema } from "./db/migrations.ts";
+import { initializePatchRelaySchemaIfEmpty } from "./db/migrations.ts";
 import { assertPatchRelaySchemaReady } from "./db/schema-guard.ts";
 import { SqliteConnection, type DatabaseConnection } from "./db/shared.ts";
 import { ImmediateIssueSessionProjectionInvalidator } from "./issue-session-projection-invalidator.ts";
@@ -110,7 +110,7 @@ export class PatchRelayDatabase {
   }
 
   runMigrations(): void {
-    initializePatchRelaySchema(this.connection);
+    initializePatchRelaySchemaIfEmpty(this.connection);
     this.assertSchemaReady();
   }
 

@@ -1,6 +1,6 @@
 import { accessSync, constants, existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
-import { initializePatchRelaySchema } from "./db/migrations.ts";
+import { initializePatchRelaySchemaIfEmpty } from "./db/migrations.ts";
 import { assertPatchRelaySchemaReady } from "./db/schema-guard.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
 import { SqliteConnection } from "./db/shared.ts";
@@ -178,7 +178,7 @@ function checkDatabaseHealth(config: AppConfig, migrateDatabase: boolean): Prefl
     // Operator diagnostics may run while the service owns this database, so
     // doctor validates the live schema without creating any missing objects.
     if (migrateDatabase) {
-      initializePatchRelaySchema(connection);
+      initializePatchRelaySchemaIfEmpty(connection);
     }
     assertPatchRelaySchemaReady(connection, config.database.path);
 
@@ -206,7 +206,7 @@ function checkDatabaseHealth(config: AppConfig, migrateDatabase: boolean): Prefl
       return checks;
     }
 
-    checks.push(pass("database_schema", `Database opened, schema is readable (${objectCount} objects)${migrateDatabase ? ", and the final schema is initialized" : ""}`));
+    checks.push(pass("database_schema", `Database opened, schema is readable (${objectCount} objects)${migrateDatabase ? ", and the final schema is ready" : ""}`));
   } catch (error) {
     checks.push(fail("database_schema", `Unable to open or validate database schema at ${config.database.path}: ${formatError(error)}`));
   } finally {

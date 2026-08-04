@@ -350,6 +350,15 @@ CREATE INDEX IF NOT EXISTS idx_workflow_tasks_subject ON workflow_tasks(project_
 CREATE INDEX IF NOT EXISTS idx_workflow_tasks_open ON workflow_tasks(status, project_id, updated_at);
 `;
 
-export function initializePatchRelaySchema(connection: DatabaseConnection): void {
+export function initializePatchRelaySchemaIfEmpty(connection: DatabaseConnection): boolean {
+  const existingTable = connection.prepare(`
+    SELECT 1
+    FROM sqlite_master
+    WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+    LIMIT 1
+  `).get();
+  if (existingTable) return false;
+
   connection.exec(schema);
+  return true;
 }
