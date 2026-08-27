@@ -8,4 +8,5 @@ config/patchrelay.json
 *.sqlite-wal
 logs/
 *.tgz
+packages/review-quill/eval/results/
 .claude/

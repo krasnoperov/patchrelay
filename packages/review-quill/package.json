@@ -37,6 +37,7 @@
     "dev": "node --watch --experimental-transform-types src/index.ts",
     "prepack": "pnpm build",
     "build": "rm -rf dist && tsgo -p tsconfig.json && chmod +x dist/index.js",
+    "eval": "node --experimental-transform-types src/eval/cli.ts",
     "start": "node dist/index.js serve",
     "typecheck": "tsgo -p tsconfig.json --noEmit",
     "test": "node --experimental-transform-types --test 'test/**/*.test.ts'"
