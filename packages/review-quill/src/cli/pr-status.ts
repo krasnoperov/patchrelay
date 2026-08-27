@@ -34,12 +34,14 @@ export interface PrReviewReport {
   prNumber: number;
   kind: PrReviewKind;
   terminal: boolean;
+  retryable: boolean;
   exitCode: number;
   currentHeadSha?: string;
   attempt?: ReviewAttemptRecord & { stale?: boolean; staleReason?: string };
   summaryFirstLine?: string;
   checkedAt: string;
   reason?: string;
+  nextAction?: string;
   failureDetails?: PrReviewFailureDetails;
 }
 
@@ -119,6 +121,10 @@ function isTerminalKind(kind: PrReviewKind): boolean {
   return exitCodeForKind(kind) !== 3;
 }
 
+export function isRetryableAttempt(attempt: ReviewAttemptRecord | undefined): boolean {
+  return attempt?.status === "failed";
+}
+
 function firstLine(summary: string | undefined): string | undefined {
   if (!summary) return undefined;
   const line = summary.split(/\r?\n/, 1)[0]?.trim();
@@ -137,18 +143,23 @@ export interface BuildReviewReportOptions {
 export function buildPrReviewReport(options: BuildReviewReportOptions): PrReviewReport {
   const checkedAt = new Date().toISOString();
   const { kind, reason } = classifyAttempt(options.attempt);
+  const retryable = isRetryableAttempt(options.attempt);
   const summaryLine = firstLine(options.attempt?.summary);
   return {
     repoId: options.repoId,
     repoFullName: options.repoFullName,
     prNumber: options.prNumber,
     kind,
-    terminal: isTerminalKind(kind),
+    terminal: isTerminalKind(kind) && !retryable,
+    retryable,
     exitCode: exitCodeForKind(kind),
     ...(options.currentHeadSha ? { currentHeadSha: options.currentHeadSha } : {}),
     ...(options.attempt ? { attempt: options.attempt } : {}),
     ...(summaryLine ? { summaryFirstLine: summaryLine } : {}),
     ...(reason ? { reason } : {}),
+    ...(retryable ? {
+      nextAction: "Review Quill will retry automatically; keep --wait running, or inspect `review-quill service logs` if the attempt does not advance.",
+    } : {}),
     ...(options.failureDetails ? { failureDetails: options.failureDetails } : {}),
     checkedAt,
   };
@@ -181,8 +192,10 @@ function formatReportText(report: PrReviewReport): string {
     `State: ${report.kind}`,
     `Terminal: ${report.terminal ? "yes" : "no"}`,
   ];
+  if (report.retryable) lines.push("Retryable: yes");
   if (report.currentHeadSha) lines.push(`Current head SHA: ${report.currentHeadSha}`);
   if (report.reason) lines.push(`Reason: ${report.reason}`);
+  if (report.nextAction) lines.push(`Next action: ${report.nextAction}`);
   if (report.attempt) {
     lines.push(`Attempt: #${report.attempt.id}`);
     lines.push(`Status: ${report.attempt.status}${report.attempt.conclusion ? ` (${report.attempt.conclusion})` : ""}`);
@@ -484,7 +497,7 @@ export async function handlePrStatus(options: HandlePrStatusOptions): Promise<nu
       );
       const selected = selectAttemptForCurrentHead(attempts, currentHeadSha);
       const { kind } = classifyAttempt(selected);
-      const failureDetails = selected && exitCodeForKind(kind) === 2
+      const failureDetails = selected && exitCodeForKind(kind) === 2 && !isRetryableAttempt(selected)
         ? await (options.inspectFailureDetails ?? loadFailureDetailsFromGitHub)({
           repoFullName: repo.repoFullName,
           prNumber: resolvedPr.prNumber,

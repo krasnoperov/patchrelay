@@ -9,6 +9,7 @@ import {
   buildPrReviewReport,
   classifyAttempt,
   exitCodeForKind,
+  isRetryableAttempt,
 } from "../src/cli/pr-status.ts";
 import type { ReviewAttemptRecord } from "../src/types.ts";
 
@@ -77,6 +78,11 @@ test("classifyAttempt no_attempt when undefined", () => {
   assert.equal(classifyAttempt(undefined).kind, "no_attempt");
 });
 
+test("failed attempts are retryable but completed error outcomes are not", () => {
+  assert.equal(isRetryableAttempt(makeAttempt({ status: "failed", conclusion: "error" })), true);
+  assert.equal(isRetryableAttempt(makeAttempt({ status: "completed", conclusion: "error" })), false);
+});
+
 test("exitCodeForKind maps kinds to exit codes", () => {
   assert.equal(exitCodeForKind("approved"), 0);
   assert.equal(exitCodeForKind("skipped"), 0);
@@ -98,7 +104,23 @@ test("buildPrReviewReport sets summaryFirstLine", () => {
   assert.equal(report.kind, "approved");
   assert.equal(report.exitCode, 0);
   assert.equal(report.terminal, true);
+  assert.equal(report.retryable, false);
   assert.equal(report.summaryFirstLine, "LGTM");
+});
+
+test("buildPrReviewReport marks failed attempts retryable and actionable", () => {
+  const report = buildPrReviewReport({
+    repoId: "app",
+    repoFullName: "owner/app",
+    prNumber: 42,
+    attempt: makeAttempt({ status: "failed", conclusion: "error", summary: "Review turn was interrupted." }),
+  });
+  assert.equal(report.kind, "errored");
+  assert.equal(report.exitCode, 2);
+  assert.equal(report.terminal, false);
+  assert.equal(report.retryable, true);
+  assert.match(report.nextAction ?? "", /retry automatically/);
+  assert.match(report.nextAction ?? "", /service logs/);
 });
 
 test("buildPrReviewReport carries failure details", () => {
@@ -273,6 +295,50 @@ test("review-quill pr status exits 2 when latest attempt requested changes", asy
       assert.equal(payload.failureDetails.reviewRequest.inlineComments[0].path, "src/bootstrap.ts");
       assert.equal(payload.failureDetails.failedChecks[0].name, "Tests");
       assert.match(payload.failureDetails.failedChecks[0].outputSummary, /bootstrap handles missing config/);
+    },
+  );
+});
+
+test("review-quill pr status exposes retry guidance for failed attempts", async () => {
+  await withConfig(
+    (configPath, dbPath) => {
+      writeConfig(configPath, dbPath);
+      const store = new SqliteStore(dbPath);
+      const attempt = store.createAttempt({
+        repoFullName: "owner/app",
+        prNumber: 42,
+        headSha: "abc",
+        status: "running",
+      });
+      store.updateAttempt(attempt.id, {
+        status: "failed",
+        conclusion: "error",
+        summary: "Review turn was interrupted.",
+        completedAt: "2026-04-17T00:05:00Z",
+      });
+      store.close();
+    },
+    async () => {
+      const stdout = createBufferStream();
+      let failureDetailCalls = 0;
+      const code = await runPrStatusCli(
+        ["pr", "status", "--repo", "app", "--pr", "42", "--json"],
+        {
+          stdout: stdout.stream,
+          stderr: createBufferStream().stream,
+          inspectFailureDetails: async () => {
+            failureDetailCalls += 1;
+            return undefined;
+          },
+        },
+      );
+      assert.equal(code, 2);
+      assert.equal(failureDetailCalls, 0);
+      const payload = JSON.parse(stdout.read());
+      assert.equal(payload.kind, "errored");
+      assert.equal(payload.terminal, false);
+      assert.equal(payload.retryable, true);
+      assert.match(payload.nextAction, /service logs/);
     },
   );
 });
@@ -556,6 +622,74 @@ test("review-quill pr status --wait loops until a terminal conclusion is recorde
       assert.ok(sleeps >= 1);
       const payload = JSON.parse(stdout.read());
       assert.equal(payload.kind, "approved");
+    },
+  );
+});
+
+test("review-quill pr status --wait survives a retryable failed attempt", async () => {
+  let sharedDbPath = "";
+  await withConfig(
+    (configPath, dbPath) => {
+      sharedDbPath = dbPath;
+      writeConfig(configPath, dbPath);
+      const store = new SqliteStore(dbPath);
+      const attempt = store.createAttempt({
+        repoFullName: "owner/app",
+        prNumber: 42,
+        headSha: "abc",
+        status: "running",
+      });
+      store.updateAttempt(attempt.id, {
+        status: "failed",
+        conclusion: "error",
+        summary: "Review turn was interrupted.",
+        completedAt: "2026-04-17T00:05:00Z",
+      });
+      store.close();
+    },
+    async () => {
+      const stdout = createBufferStream();
+      let sleeps = 0;
+      let timeMs = 1_000;
+      const code = await runPrStatusCli(
+        ["pr", "status", "--repo", "app", "--pr", "42", "--wait", "--poll", "1", "--json"],
+        {
+          stdout: stdout.stream,
+          stderr: createBufferStream().stream,
+          now: () => timeMs,
+          sleep: async (ms: number) => {
+            sleeps += 1;
+            timeMs += ms;
+            const store = new SqliteStore(sharedDbPath);
+            try {
+              const attempt = store.getAttempt("owner/app", 42, "abc");
+              if (!attempt) return;
+              if (sleeps === 1) {
+                store.updateAttempt(attempt.id, {
+                  status: "running",
+                  conclusion: null,
+                  summary: "Retrying previous failed review attempt",
+                  completedAt: null,
+                });
+              } else if (sleeps === 2) {
+                store.updateAttempt(attempt.id, {
+                  status: "completed",
+                  conclusion: "approved",
+                  summary: "LGTM after retry.",
+                  completedAt: "2026-04-17T00:10:00Z",
+                });
+              }
+            } finally {
+              store.close();
+            }
+          },
+        },
+      );
+      assert.equal(code, 0);
+      assert.equal(sleeps, 2);
+      const payload = JSON.parse(stdout.read());
+      assert.equal(payload.kind, "approved");
+      assert.equal(payload.retryable, false);
     },
   );
 });

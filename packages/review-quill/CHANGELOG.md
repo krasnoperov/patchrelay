@@ -8,6 +8,10 @@
 * **cli:** `attempts`, `transcript`, and `transcript-source` now accept `--repo`/`--pr` flags and also auto-resolve `<repo>` and `<pr-number>` from the current git checkout when both positional arguments are omitted. `--cwd <path>` overrides the resolution directory.
 * **cli:** `pr status` supports `--wait`, `--timeout <seconds>`, and `--poll <seconds>` polling so agents can block until a terminal state is reached.
 
+### Bug Fixes
+
+* **cli:** `pr status --wait` now continues through failed attempts that Review Quill will retry, while plain status marks the snapshot retryable and prints an operational next action.
+
 ## [0.2.1](https://github.com/krasnoperov/patchrelay/compare/review-quill-v0.2.0...review-quill-v0.2.1) (2026-04-07)
 
 

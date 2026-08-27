@@ -35,7 +35,7 @@ function rootHelpText(): string {
   "  transcript-source [<repo>] [<pr-number>] [--repo <id>] [--pr <num>] [--cwd <path>] [--attempt <id>] [--json]",
   "                                                          Show the raw Codex session file for one review attempt",
   "  pr status [--repo <id>] [--pr <num>] [--wait] [--timeout <s>] [--poll <s>] [--silent] [--json]",
-  "                                                          Classify a single PR; by default includes review/check failure detail, 0 terminal ok, 2 terminal failure, 3 still in flight, 4 --wait timeout",
+  "                                                          Classify a single PR; --wait continues through retryable failures; 0 terminal ok, 2 failure snapshot, 3 still in flight, 4 --wait timeout",
   "  doctor [--repo <id>] [--json]                          Validate config, secrets, binaries, and service reachability",
   "  service status [--json]                                Show systemd state and local health",
   "  service codex-status [--json]                          Show Codex account and usage snapshot from this service",
