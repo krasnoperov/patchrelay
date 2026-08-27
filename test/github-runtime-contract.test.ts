@@ -1405,6 +1405,7 @@ test("GitHub PR comments on idle PatchRelay-owned PRs queue follow-up session wo
     const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-pr-comment");
     assert.equal(workflowTask?.runType, "implementation");
     assert.equal(Array.isArray(workflowTask?.context.followUps), true);
+    assert.equal(workflowTask?.context.followUps?.[0]?.text, "Please tighten the naming here.");
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-pr-comment" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

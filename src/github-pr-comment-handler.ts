@@ -70,7 +70,7 @@ export class GitHubPrCommentHandler {
       source: "github",
       type: HUMAN_INPUT_OBSERVATION,
       payloadJson: JSON.stringify({
-        body,
+        text: body,
         inputKind: "followup_comment",
         author,
       }),
