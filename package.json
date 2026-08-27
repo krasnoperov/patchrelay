@@ -52,16 +52,16 @@
   "dependencies": {
     "fastify": "^5.12.1",
     "fastify-raw-body": "^6.0.1",
-    "ink": "^7.1.0",
+    "ink": "^7.1.1",
     "pino": "^10.3.1",
-    "pino-logfmt": "^1.1.4",
-    "react": "^19.2.7",
+    "pino-logfmt": "^1.1.5",
+    "react": "^19.2.8",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
-    "@types/react": "^19.2.17",
+    "@types/react": "^19.2.18",
     "@typescript/native-preview": "7.0.0-dev.20260527.1",
-    "oxlint": "^1.73.0"
+    "oxlint": "^1.80.0"
   }
 }
