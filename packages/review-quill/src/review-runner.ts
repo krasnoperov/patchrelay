@@ -466,22 +466,31 @@ export class ReviewRunner {
     const threadId = priorThread.id;
     this.throwIfReviewRunInterrupted(options.signal, threadId);
     const reviewCompletion = this.subscribeToNativeReviewCompletion(threadId);
+    const turnCompletion = this.subscribeToTurnCompletion(threadId);
     try {
       const started = await this.startNativeReviewWithMaterializationRetry(threadId, instructions);
       if (started.reviewThreadId !== threadId) {
         throw new Error(`Inline review unexpectedly started on detached thread ${started.reviewThreadId}`);
       }
       reviewCompletion?.expectTurn(started.turnId);
+      turnCompletion?.expectTurn(started.turnId);
       this.emitThreadProgress(options.onThreadProgress, { threadId, turnId: started.turnId });
       let rawReview: string | undefined;
       let completedThread = priorThread;
       if (reviewCompletion) {
-        rawReview = await this.waitForNativeReviewNotification(
+        const completion = await this.waitForNativeReviewNotification(
           reviewCompletion.completion,
+          turnCompletion?.completion,
           threadId,
           started.turnId,
           options.signal,
         );
+        if (completion.kind === "review") {
+          rawReview = completion.review;
+        } else {
+          completedThread = await this.codex.readThread(threadId);
+          rawReview = collectNativeReview(completedThread, started.turnId);
+        }
       } else {
         completedThread = await this.waitForTurnCompletion(threadId, started.turnId, options);
         rawReview = collectNativeReview(completedThread, started.turnId);
@@ -499,6 +508,7 @@ export class ReviewRunner {
       return { rawReview, turnId: started.turnId, thread: completedThread };
     } finally {
       reviewCompletion?.unsubscribe();
+      turnCompletion?.unsubscribe();
     }
   }
 
@@ -555,15 +565,19 @@ export class ReviewRunner {
 
   private async waitForNativeReviewNotification(
     completion: Promise<string>,
+    turnCompletion: Promise<void> | undefined,
     threadId: string,
     turnId: string,
     signal?: AbortSignal,
-  ): Promise<string> {
+  ): Promise<{ kind: "review"; review: string } | { kind: "turn_completed" }> {
     let timeout: NodeJS.Timeout | undefined;
     let abortListener: (() => void) | undefined;
     try {
       const result = await Promise.race([
         completion.then((review) => ({ kind: "completed" as const, review })),
+        ...(turnCompletion
+          ? [turnCompletion.then(() => ({ kind: "turn_completed" as const }))]
+          : []),
         new Promise<{ kind: "timeout" }>((resolve) => {
           timeout = setTimeout(() => resolve({ kind: "timeout" }), 15 * 60_000);
           timeout.unref?.();
@@ -575,7 +589,8 @@ export class ReviewRunner {
             })]
           : []),
       ]);
-      if (result.kind === "completed") return result.review;
+      if (result.kind === "completed") return { kind: "review", review: result.review };
+      if (result.kind === "turn_completed") return result;
       if (result.kind === "aborted") {
         if (this.codex.interruptTurn) {
           try {

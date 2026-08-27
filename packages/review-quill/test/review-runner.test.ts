@@ -237,6 +237,60 @@ test("ReviewRunner correlates native review completion emitted from the reviewer
   assert.equal(notifications.listenerCount(), 0);
 });
 
+test("ReviewRunner classifies a failed native review as soon as its turn completes", async () => {
+  const config = minimalConfig();
+  config.codex.reviewMode = "native-two-pass";
+  const notifications = notificationHarness();
+  let normalizationStarted = false;
+  const fakeCodex = {
+    start: async () => {},
+    stop: async () => {},
+    startThread: async () => ({ id: "native-thread", turns: [] }),
+    startReview: async () => {
+      queueMicrotask(() => notifications.emit({
+        method: "turn/completed",
+        params: { threadId: "native-thread", turn: { id: "review-turn" } },
+      }));
+      return { turnId: "review-turn", status: "running", reviewThreadId: "native-thread" };
+    },
+    startTurn: async () => {
+      normalizationStarted = true;
+      return { turnId: "normalization-turn", status: "running" };
+    },
+    readThread: async () => ({
+      id: "native-thread",
+      turns: [{
+        id: "review-turn",
+        status: "failed",
+        items: [],
+        error: { message: USAGE_LIMIT_MESSAGE },
+      }],
+    }),
+    subscribeNotifications: notifications.subscribeNotifications,
+  };
+  const runner = new ReviewRunner(
+    config,
+    { warn() {}, info() {}, child: () => ({}) } as never,
+    fakeCodex as never,
+    async () => {},
+  );
+
+  await assert.rejects(
+    () => runner.review({
+      prompt: "legacy",
+      developerInstructions: "policy",
+      nativeReviewPrompt: "review",
+      workspace: { worktreePath: "/tmp/native-review" },
+      pr: { headSha: "head" },
+      diff: { inventory: [], patches: [] },
+      promptContext: { guidanceDocs: [] },
+    } as never),
+    (error: unknown) => error instanceof CodexCapacityError,
+  );
+  assert.equal(normalizationStarted, false);
+  assert.equal(notifications.listenerCount(), 0);
+});
+
 test("ReviewRunner forks once, sends the bounded follow-up prompt, and keeps a corrective turn on the fork", async () => {
   const config = minimalConfig();
   config.codex.forkPriorReviewThread = true;
