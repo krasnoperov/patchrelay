@@ -6,7 +6,8 @@
   "packageManager": "pnpm@10.34.5",
   "pnpm": {
     "overrides": {
-      "fast-uri": "3.1.3"
+      "fast-uri": "3.1.6",
+      "find-my-way": "9.9.0"
     }
   },
   "repository": {
@@ -49,8 +50,8 @@
     "ci": "pnpm lint && pnpm check && pnpm test && pnpm build"
   },
   "dependencies": {
-    "fastify": "^5.10.0",
-    "fastify-raw-body": "^5.0.0",
+    "fastify": "^5.12.1",
+    "fastify-raw-body": "^6.0.1",
     "ink": "^7.1.0",
     "pino": "^10.3.1",
     "pino-logfmt": "^1.1.4",
