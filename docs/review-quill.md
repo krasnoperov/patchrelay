@@ -97,6 +97,8 @@ If you want machine review to count toward merge admission, include `review-quil
 
 `pr status`, `attempts`, `transcript`, and `transcript-source` accept explicit flags but auto-resolve when run inside a git checkout. `review-quill` reads `origin`'s remote URL, matches it to an attached `repoId`, and uses `gh pr view` to find the PR for the current branch. Pass `--cwd <path>` to resolve from a different directory.
 
+With `--wait`, a failed attempt remains non-terminal while Review Quill can retry it on the same PR head. Plain status still exits 2 for that failed snapshot and includes an automatic-retry hint plus the service-log command to use if it does not advance.
+
 ### Exit codes for `pr status`
 
 | Code | Meaning |

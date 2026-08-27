@@ -81,7 +81,7 @@ review-quill service logs --lines 100
 
 Codex owns the full review transcript. Review Quill stores only thread/turn identifiers and bounded attempt outcomes in SQLite; `review-quill transcript` asks the local Review Quill daemon to read its Codex thread. Interrupted webhook receipts are abandoned for reconciliation after 15 minutes, and processed receipts are retained for seven days.
 
-`pr status`, `attempts`, `transcript`, and `transcript-source` auto-resolve `--repo` and `--pr` from the current git checkout. `pr status` supports `--wait --timeout <s> --poll <s>` for blocking until a review attempt terminates. Exit codes:
+`pr status`, `attempts`, `transcript`, and `transcript-source` auto-resolve `--repo` and `--pr` from the current git checkout. `pr status` supports `--wait --timeout <s> --poll <s>` for blocking until a review attempt terminates. `--wait` continues through failed attempts that the service will retry automatically; plain status reports those attempts as retryable and points to service logs if recovery does not advance. Exit codes:
 
 | Code | Meaning |
 |-|-|
