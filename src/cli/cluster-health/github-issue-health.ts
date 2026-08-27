@@ -147,11 +147,7 @@ export async function evaluateGitHubIssueHealth(
     && issue.activeRunId === undefined
     && ageMs >= RECONCILIATION_GRACE_MS
   ) {
-    // Plan §6.1: when the PR is also approved, this is the
-    // "In Review · stuck at admission" condition — the lander would
-    // accept the verdict but branch CI is red and (post-§4.3) we no
-    // longer auto-repair. Keep the same scope/status pair so existing
-    // dashboards continue to surface it; just sharpen the message.
+    // An approved PR with red CI is stuck before queue admission.
     if (reviewDecision === "APPROVED") {
       return {
         ciEntry,

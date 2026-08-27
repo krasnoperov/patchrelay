@@ -52,14 +52,8 @@ export async function syncActiveWorkflowState(params: {
 
   const executionState = deriveLinearExecutionState(db, issue);
 
-  // Plan §4.6: keep the queued-for-deploy label in sync UNCONDITIONALLY,
-  // before the state-equality early-return. When a project lacks an
-  // In Deploy state the deploying-Linear-state collapses to the same
-  // value as In Review — meaning when an awaiting_queue issue is sitting
-  // in the In Review state, the early-return below skips the state
-  // write but the label still needs to be added/removed to reflect
-  // the rendered execution state. Running first guarantees the label tracks reality
-  // even when the state name doesn't change.
+  // Sync the label first: projects without an In Deploy state may keep the
+  // same Linear state while their queue/deploy signal changes.
   await syncQueuedForDeployLabel({ issue, executionState, liveIssue, linear, project }).catch(() => undefined);
 
   const targetState = resolveDesiredActiveWorkflowState(issue, executionState, options, liveIssue);
@@ -75,15 +69,8 @@ export async function syncActiveWorkflowState(params: {
   refreshCachedLinearState(db, issue, updated.stateName, updated.stateType);
 }
 
-// Plan §4.6: when the rendered execution state says the issue is waiting on
-// landing/deploy automation but the project's Linear workflow has no
-// In Deploy-equivalent state, we want
-// the dashboard to be able to distinguish "in review, awaiting verdict"
-// from "in review, queued for landing". A configurable PR/Linear label
-// (`queuedForDeployLabel`, default `queued-for-deploy`) carries that
-// signal idempotently. The helper computes the desired present/absent
-// state and only calls the API when there's a delta — safe to run on
-// every sync invocation.
+// A label distinguishes queued/deploying work when Linear has no equivalent
+// state. Only write when its desired presence changes.
 async function syncQueuedForDeployLabel(params: {
   issue: Pick<IssueRecord, "linearIssueId">;
   executionState: IssueExecutionState;

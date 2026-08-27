@@ -482,10 +482,8 @@ export class RunLauncher {
           update: { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, threadId },
         });
       }
-      // Plan §B5: persist the thread id on the run row BEFORE startTurn is
-      // awaited, so a turn/completed notification arriving while the turn is
-      // starting can already resolve the run by thread id. The orchestrator
-      // re-records it (with the turn id) after the launch returns.
+      // Persist the thread before awaiting startTurn so an early completion
+      // notification can resolve the run. Record the turn id after launch.
       this.recordRunThread(params, threadId, parentThreadId);
       this.db.runs.updateLaunchPhase(params.run.id, "thread_started");
 
@@ -515,7 +513,7 @@ export class RunLauncher {
             lease: { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, leaseId: params.leaseId },
             update: { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, threadId },
           });
-          // Plan §B5: re-point the run row at the fresh thread before the
+          // Re-point the run row at the fresh thread before the
           // retried startTurn, for the same notification race.
           this.recordRunThread(params, threadId, parentThreadId);
           const turn = await startTurnAfterInitialGoal({

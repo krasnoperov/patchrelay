@@ -40,11 +40,7 @@ export class MergeStewardQueueCommands {
     issueKey?: string;
     priority?: number;
     prTitle?: string;
-    /**
-     * Plan §8.4: PR's base ref. When this matches another open PR's
-     * `branch` (head ref), the entry is stacked and admission orders
-     * it immediately behind the parent.
-     */
+    /** A matching parent head branch makes this a stacked queue entry. */
     baseRefName?: string;
   }): QueueEntry | undefined {
     const existing = this.store.getEntryByPR(this.config.repoId, params.prNumber);
@@ -228,17 +224,8 @@ export class MergeStewardQueueCommands {
         }
       }
 
-      // Plan §8.4: stack-aware admission. When the PR's base ref
-      // names another open PR's branch (head ref), the entry is
-      // stacked. Enqueue it only when the parent is already in the
-      // queue — otherwise the child's spec would build against the
-      // unmerged parent's pre-spec content. Positions are monotonic
-      // (`nextPosition`), so the child's position is always greater
-      // than the parent's; sibling PRs admitted between the parent's
-      // enqueue and the child's tryAdmit can sit between them. That's
-      // fine: queue head selection orders by (priority, position), so
-      // the parent is still processed before the child. The functional
-      // guarantee is "parent before child", not strict adjacency.
+      // A stacked PR waits for its parent queue entry. Monotonic positions
+      // guarantee parent-before-child ordering, not strict adjacency.
       const baseRefName = status.baseRefName ?? null;
       if (baseRefName && baseRefName !== this.config.baseBranch) {
         const parentEntry = this.findActiveEntryByBranch(baseRefName);
@@ -381,9 +368,7 @@ export class MergeStewardQueueCommands {
     return next;
   }
 
-  // Plan §8.4: lookup helper used by stack-aware admission. Returns
-  // the active queue entry whose `branch` (head ref) matches `name`,
-  // or undefined when no such entry is in the queue.
+  // Find the active entry whose head branch matches `name`.
   private findActiveEntryByBranch(name: string): QueueEntry | undefined {
     return this.store.listActive(this.config.repoId).find((entry) => entry.branch === name);
   }

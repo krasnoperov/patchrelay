@@ -3,10 +3,9 @@ import { isCanceledLinearState, isCompletedLinearState } from "./linear-state.ts
 import { hasOpenPr } from "./pr-lifecycle.ts";
 
 /**
- * D3 (core simplification plan): the single derived answer to "why is this
- * issue not moving". Computed from issue-row facts (`delegatedToPatchRelay`,
+ * Derived answer to "why is this issue not moving". Computed from issue-row facts (`delegatedToPatchRelay`,
  * outcomes, input requests, `activeRunId`, PR metadata) plus optional run facts —
- * never stored. `waitingReason` (see waiting-reason.ts) is a pure function
+ * never stored. `waitingReason` is a pure function
  * of this union.
  *
  * Illegal fact combinations that the row can still express — they are

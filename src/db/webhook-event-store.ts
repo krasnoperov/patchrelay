@@ -65,10 +65,7 @@ export class WebhookEventStore {
   }
 
   /**
-   * Startup maintenance (core simplification plan, phase C2): mark rows stuck
-   * at `pending` since before the cutoff as `abandoned` so the retention pass
-   * can archive them. Returns the number of rows marked — each one is a
-   * crash-interrupted processing attempt worth surfacing to the operator.
+   * Mark stale `pending` rows as `abandoned` for retention and diagnostics.
    */
   markAbandonedPendingEventsBefore(cutoffIso: string): number {
     const result = this.connection.prepare(`

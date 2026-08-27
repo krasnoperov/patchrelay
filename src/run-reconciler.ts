@@ -78,9 +78,8 @@ export class RunReconciler {
           { issueKey: effectiveIssue.issueKey, runId: run.id, runType: run.runType },
           "Reattached detached active run during reconciliation",
         );
-        // Plan §B5: with settleRun idempotent and the launcher persisting the
-        // thread id before startTurn, this reattachment should never fire.
-        // Telemetry observes it for one release before the block is deleted.
+        // Thread-first persistence should make this exceptional; keep it
+        // observable in telemetry.
         emitTelemetry(this.telemetry, {
           type: "health.invariant",
           invariant: "detached_active_run",
@@ -128,8 +127,7 @@ export class RunReconciler {
       { issueKey: effectiveIssue.issueKey, runId: run.id, runType: run.runType },
       "Zombie run detected (no thread)",
     );
-      // Detection only — the failure policy settles the run and decides
-      // retry vs escalate (plan §B4).
+      // The failure policy owns settlement and retry versus escalation.
       this.failurePolicy.settleStrandedRunAndRecover({
         run,
         issue: effectiveIssue,
@@ -162,8 +160,7 @@ export class RunReconciler {
         { issueKey: effectiveIssue.issueKey, runId: run.id, runType: run.runType, threadId: run.threadId },
         "Stale thread during reconciliation",
       );
-      // Detection only — the failure policy settles the run and decides
-      // retry vs escalate (plan §B4).
+      // The failure policy owns settlement and retry versus escalation.
       this.failurePolicy.settleStrandedRunAndRecover({
         run,
         issue: effectiveIssue,

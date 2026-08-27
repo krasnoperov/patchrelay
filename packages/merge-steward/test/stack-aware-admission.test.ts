@@ -66,7 +66,7 @@ const config: StewardConfig = {
   priorityQueueLabel: "priority",
 } as unknown as StewardConfig;
 
-describe("plan §8.4 stack-aware admission", () => {
+describe("stack-aware admission", () => {
   it("admits a PR opened against the repo default branch immediately", async () => {
     const store = new MemoryStore();
     const queue = new MergeStewardQueueCommands(

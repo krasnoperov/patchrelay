@@ -1,10 +1,7 @@
 import { z } from "zod";
 
-// Plan §D1: the one typed schema for the run context object — the bag that is
-// (a) carried in session-event `event_json` payloads for workflow-intent events and
-//     merged into the input plan by deriveSessionInputPlan, and
-// (b) passed around in memory as `context` / `effectiveContext` /
-//     `workflowContext` until it reaches the prompt builder and launcher.
+// Typed schema for context carried through durable events, input planning,
+// prompt construction, and launch.
 //
 // Every known field is typed so a mistyped field fails loudly at the parse
 // boundary. Unknown keys are stripped: current producers may assemble context
@@ -78,8 +75,7 @@ const ciSnapshotShape = {
   checks: z.array(z.object(ciSnapshotCheckShape)).optional(),
 };
 
-/** Queue-eviction incident detail (merge-queue-incident.ts
- * QueueEvictionIncidentContext), parsed from the steward's check-run output. */
+/** Queue-eviction detail parsed from merge-steward check output. */
 const queueIncidentContextShape = {
   version: z.number().optional(),
   failureClass: z.string().optional(),
@@ -211,11 +207,7 @@ const runContextShape = {
   currentPrHeadSha: z.string().optional(),
 
   // ── Failure provenance (CI / queue repair) ────────────────────────
-  /** Free-form failure tag: "queue_eviction" (merge-queue-incident.ts),
-   * GitHubFailureSource values (idle-reconciliation-helpers.ts
-   * buildFailureContext), "queue_eviction_missed" / "preemptive_conflict"
-   * (queue-health-monitor.ts), "merge_conflict_detected"
-   * (idle-reconciliation.ts); consumed by prompting/patchrelay.ts. */
+  /** Failure classification consumed by repair prompting. */
   failureReason: z.string().optional(),
   failureSignature: z.string().optional(),
   failureHeadSha: z.string().optional(),
@@ -242,7 +234,7 @@ const runContextShape = {
   /** See ciSnapshotShape. */
   ciSnapshot: z.object(ciSnapshotShape).optional(),
 
-  // ── Queue repair (merge-queue-incident.ts QueueRepairContext) ─────
+  // ── Queue repair ──────────────────────────────────────────────────
   incidentId: z.string().optional(),
   incidentUrl: z.string().optional(),
   incidentTitle: z.string().optional(),

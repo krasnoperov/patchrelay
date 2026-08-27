@@ -13,7 +13,7 @@ const WRITER = "queue-health-monitor";
 
 const QUEUE_HEALTH_GRACE_MS = 120_000;
 const QUEUE_HEALTH_PROBE_FAILURE_COOLDOWN_MS = 300_000;
-// Plan §6.2: an approved PR with red branch CI for >= this long is
+// An approved PR with red branch CI for at least this long is
 // stuck at admission — operator notice is needed before the issue
 // goes silent for hours.
 const IN_REVIEW_STUCK_THRESHOLD_MS = 30 * 60 * 1000;
@@ -65,10 +65,8 @@ export class QueueHealthMonitor {
     }
   }
 
-  // Plan §6.2: emit IN_REVIEW_STUCK when an approved PR has a red gate
-  // for more than 30 minutes. Consequence of plan §4.3 — branch CI
-  // failures while approved no longer trigger ci_repair, so the
-  // condition is otherwise invisible to the operator.
+  // Surface an approved PR whose red gate has blocked admission long enough
+  // to require operator attention.
   private probeInReviewStuckIssue(issue: IssueRecord): void {
     if (!issue.prNumber) return;
     const project = this.config.projects.find((p) => p.id === issue.projectId);

@@ -57,9 +57,8 @@ type FailureProvenanceCurrent = Pick<
 >;
 
 /**
- * The single rule for clearing failure provenance (core simplification plan,
- * phase C1): provenance may be cleared only when the observed evidence is
- * NEWER than the recorded failure —
+ * Failure provenance may be cleared only when observed evidence is newer than
+ * the recorded failure:
  *
  * 1. the PR merged or closed (nothing left to repair), or
  * 2. the PR's current head differs from `lastGitHubFailureHeadSha` (the

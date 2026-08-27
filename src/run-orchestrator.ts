@@ -442,10 +442,8 @@ export class RunOrchestrator {
       return;
     }
 
-    // Each early-return below logs `{ issueKey, reason }` so the
-    // operator-feed and log streams can explain why an issue with a
-    // runnable workflow task didn't actually run. The original incident
-    // (LSR-495) was undiagnosable because these guards were silent.
+    // Log every early return so operators can explain why a runnable task
+    // did not start.
     if (this.leaseService.hasLocalLease(item.projectId, item.issueId)) {
       this.emitRunSkipped(item, "lease_held_locally");
       this.logger.info(
@@ -905,7 +903,7 @@ export class RunOrchestrator {
     await this.mergedLinearCompletionReconciler.reconcile();
   }
 
-  // advanceIdleIssue is now on IdleIssueReconciler — delegate for internal callers
+  // Delegate idle transitions to their owning reconciler.
   private advanceIdleIssue(
     issue: IssueRecord,
     options?: {

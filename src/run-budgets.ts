@@ -1,9 +1,6 @@
 import type { ProjectConfig } from "./workflow-types.ts";
 
-// Plan §B4: the single budget table. Every retry/attempt budget in the
-// system lives here — the per-runType repair budgets consulted by the
-// input planner before a launch, and the zombie-recovery budget consulted
-// by the RunFailurePolicy when a run dies without doing its work.
+// Single source for repair and zombie-recovery limits.
 export interface RunBudgetTable {
   ciRepair: number;
   queueRepair: number;
@@ -46,7 +43,7 @@ export function getZombieRecoveryBudget(project: ProjectConfig | undefined): num
   return resolveRunBudgets(project).zombieRecovery;
 }
 
-// ─── Zombie-recovery backoff schedule (formerly zombie-recovery.ts) ──
+// ─── Zombie-recovery backoff schedule ───────────────────────────────
 //
 // Exponential backoff between retries of a run that died without doing
 // its work. Owned here with the budgets so the whole retry discipline

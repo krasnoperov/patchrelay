@@ -404,12 +404,9 @@ export class PatchRelayService {
     return this.runtime.getReadiness();
   }
 
-  // Core simplification plan §C2: webhook_events is a dedupe + forensics log,
-  // not a replay queue. A row stuck at 'pending' means a crash or restart
-  // interrupted processing; the event will never be replayed (recovery is
-  // re-derivation from GitHub/Linear via reconciliation), so mark it
-  // 'abandoned' — making it archiveable — and surface the count to the
-  // operator, because every abandoned row is a crash worth seeing.
+  // Webhook events are dedupe and forensics records, not a replay queue.
+  // Reconciliation re-derives truth, so stale pending rows become visible,
+  // archiveable crash evidence.
   private sweepAbandonedWebhookEvents(): void {
     const cutoffIso = new Date(Date.now() - ABANDONED_PENDING_WEBHOOK_AGE_MS).toISOString();
     const abandoned = this.db.webhookEvents.markAbandonedPendingEventsBefore(cutoffIso);

@@ -54,11 +54,7 @@ export async function projectGitHubWebhookState(
   const ciSnapshotResolver = deps.ciSnapshotResolver ?? createGitHubCiSnapshotResolver();
   const immediateCheckStatus = deriveImmediatePrCheckStatus(issue, event, project);
 
-  // Plan §8.3: when a PR's base ref differs from the repo default,
-  // it's stacked on another open PR. Cache the parent branch so we
-  // can fan child-rebase workflow signals on parent's `pr_synchronize`. Clear
-  // the field when a base ref reverts to the default (e.g. parent
-  // landed and GitHub auto-retargeted) or when the PR closes.
+  // Cache a stacked PR's parent branch; clear it after retargeting or close.
   const parentPrBranch = computeParentPrBranchUpdate(event, project);
 
   // Unconditional commit: every field below is a fact carried by the webhook
@@ -129,7 +125,7 @@ export async function projectGitHubWebhookState(
   if (event.triggerEvent === "pr_synchronize" && !freshIssue.activeRunId) {
     // A push always resets the repair budgets and the CI snapshot for the new
     // head; failure provenance is only cleared when the pushed head actually
-    // supersedes the recorded failure (mayClearFailureProvenance — phase C1).
+    // supersedes the recorded failure (`mayClearFailureProvenance`).
     deps.db.issueSessions.commitIssueState({
       writer: WRITER,
       update: {
@@ -166,10 +162,7 @@ export async function projectGitHubWebhookState(
   return freshIssue;
 }
 
-// Plan §8.3: derive the cached parent-PR-branch state from a webhook
-// event. Returns `undefined` to mean "no change" (event isn't a
-// PR-shape event with a base ref); returns `null` to mean "clear the
-// field" (PR closed, or base ref is now the repo default).
+// `undefined` preserves the cached parent; `null` clears it.
 function computeParentPrBranchUpdate(
   event: NormalizedGitHubEvent,
   project: ProjectConfig | undefined,
@@ -187,11 +180,7 @@ function computeParentPrBranchUpdate(
   return event.prBaseRef;
 }
 
-// Plan §4.4: when the mid-run-approval transition fires, the active
-// review_fix run's premise no longer holds — there is no fix to
-// publish. Mark it superseded and set the publication-suppression
-// flag. The Codex turn may have produced output already; the
-// finalizer reads `shouldNotPublish` and refuses to push.
+// Approval invalidates an active review fix; suppress any late publication.
 function maybeSupersedeActiveRun(params: {
   db: PatchRelayDatabase;
   logger: Logger;

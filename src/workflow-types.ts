@@ -51,9 +51,7 @@ export interface ProjectConfig {
     mergeQueueCheckName?: string;
     /** GitHub label that puts a PR into the priority queue lane (default: "queue:priority"). */
     priorityQueueLabel?: string;
-    /** Linear sub-label applied while a project's workflow lacks an
-     * In Deploy state and the issue is queued for landing (default:
-     * "queued-for-deploy"). See plan §4.6. */
+    /** Linear sub-label used for queued work when no In Deploy state exists. */
     queuedForDeployLabel?: string;
     /** Name of the GitHub Actions workflow that deploys `main` after a
      * merge. When set, a merged issue enters the `deploying` factory

@@ -38,8 +38,7 @@ export type GetHeldIssueSessionLease = (projectId: string, linearIssueId: string
 /**
  * Issue-session lease coordination over the `issue_session_leases` table.
  * The lease row (`lease_id`, `worker_id`, `leased_until`) is the only truth —
- * there is no in-memory mirror, so a restarted process loses no lease state
- * (D4, core simplification plan). "Held by us" means the row carries this
+ * there is no in-memory mirror. "Held by us" means the row carries this
  * service's `workerId` with an unexpired `leased_until`.
  */
 export class IssueSessionLeaseService {

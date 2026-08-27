@@ -41,12 +41,11 @@ export interface IssueSessionEventRecord {
   consumedByRunId?: number | undefined;
 }
 
-// ─── Typed session-event payloads (plan §D2) ──────────────────────────
+// ─── Typed session-event payloads ────────────────────────────────────
 //
 // Each eventType gets a typed payload; `parseIssueSessionEvent` is the parse
 // boundary over the stringly DB storage (event_json stays JSON text). The
-// same doctrine as D1 applies: malformed payloads fail loudly at parse, and
-// boundary callers can report malformed persisted data through
+// parser rejects malformed payloads, and boundary callers can report them through
 // `parseIssueSessionEventOrWarn`. Typed payloads keep only their current fields.
 
 /** Human input payload for direct_reply / followup_prompt / followup_comment

@@ -4,11 +4,8 @@ import type { RunType } from "./run-type.ts";
 import type { IssueClass, IssueClassSource } from "./issue-class.ts";
 import type { CompletionCheckOutcome } from "./completion-check-types.ts";
 
-// Plan §4.4: `superseded` — the run was cancelled mid-flight because
-// its premise no longer holds (e.g. the PR was approved on the same
-// head while a `review_fix` run was still producing output). Combined
-// with `shouldNotPublish` on the run row, this stops the next
-// finalizer step from emitting a no-op republish.
+// `superseded` means the run lost its premise mid-flight. Together with
+// `shouldNotPublish`, it prevents late publication.
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "released" | "superseded";
 export type RunLaunchPhase = "claimed" | "worktree_prepared" | "thread_started" | "turn_started" | "running";
 export type GitHubFailureSource = "branch_ci" | "queue_eviction";
@@ -90,12 +87,7 @@ export interface IssueRecord {
   // this to avoid pushing a patch-equivalent head for cosmetic reasons.
   lastPublishedPatchId?: string | undefined;
   lastPublishedHeadSha?: string | undefined;
-  // Plan §8.3: parent-of-child index for stacked PRs. Set when
-  // patchrelay observes a PR with a base ref that is *not* the repo
-  // default branch — that base ref names another PR's head branch.
-  // Lookups by `parentPrBranch === <branch>` give us the inverse
-  // index "given this PR's branch, who is stacked on me?" which is
-  // what `pr_synchronize` needs to fan child-rebase workflow signals.
+  // Non-default base branch used to find child PRs stacked on this issue.
   parentPrBranch?: string | undefined;
   ciRepairAttempts: number;
   queueRepairAttempts: number;
@@ -177,10 +169,7 @@ export interface RunRecord {
   lastCodexActivityAt?: string | undefined;
   lastCodexActivityKind?: string | undefined;
   lastCodexActivitySummary?: string | undefined;
-  // Plan §4.4: hard publication-suppression flag. Even if the Codex
-  // turn races ahead and produces output before its lease is
-  // released, the run-finalizer reads this flag and refuses to
-  // invoke `git push` / `gh pr create` / `gh pr edit`.
+  // Hard guard against publication after this run loses authority.
   shouldNotPublish?: boolean | undefined;
   authorityEpoch: number;
   leaseRevokedAt?: string | undefined;

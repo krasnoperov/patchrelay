@@ -247,11 +247,7 @@ export interface PRStatus {
   branch: string;
   headSha: string;
   title?: string | undefined;
-  /**
-   * Plan §8.4: PR's base ref. When this names another open PR's
-   * `branch` (head ref), the PR is stacked and admission must defer
-   * until the parent is in the queue.
-   */
+  /** Base ref used to recognize and order stacked PRs. */
   baseRefName?: string | undefined;
   mergeable: boolean;
   mergeStateStatus?: string | undefined;

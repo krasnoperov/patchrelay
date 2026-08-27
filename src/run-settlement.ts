@@ -44,13 +44,8 @@ export interface SettleRunResult {
   issue: IssueRecord | undefined;
 }
 
-// Phase B1 (core simplification plan): the fast, transactional, idempotent
-// half of run finalization. One transaction marks the run terminal and
-// clears the issue's active slot — the two writes whose separation caused
-// the dangling-active-run freeze (PR #566): a restart landing between them
-// left `activeRunId` pointing at a terminal run forever, hiding the issue
-// from every idle/recovery pass. Safe to call from both the notification
-// finalizer and reconciliation at any time:
+// Transactionally finish a run and clear its active issue slot. Safe from
+// notification finalization and reconciliation:
 //   - already-terminal run → finishRun skipped;
 //   - slot already cleared or re-pointed at another run → issue untouched;
 //   - non-terminal run with no `finish` outcome → full no-op.

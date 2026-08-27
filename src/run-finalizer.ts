@@ -277,11 +277,7 @@ export class RunFinalizer {
     });
   }
 
-  // Plan §4.2(c): record the identity of the head we just published
-  // so subsequent runs can recognize a patch-id-equivalent re-push.
-  // Only fires when the current head SHA is observably different from
-  // the run's starting sourceHeadSha — a no-op publish would not
-  // advance the head.
+  // Record a changed head so later runs can detect patch-equivalent pushes.
   private maybeUpdateLastPublishedIdentity(
     run: RunRecord,
     issue: IssueRecord,
@@ -315,14 +311,8 @@ export class RunFinalizer {
     );
   }
 
-  // Single owner of "clear Linear progress + release lease + dispatch pending
-  // workflow task". Every run-end path goes through here. Routes the release through
-  // the WorkflowTaskDispatcher so a task that landed during the run is picked up
-  // even on failure paths (the previous implementation only drained on the
-  // success path). Failure and completion-check paths publish their own
-  // more-specific operator-feed event before getting here, so the
-  // dispatcher's "deferred_follow_up_queued" notification is opt-in via
-  // `publishDeferredFollowUp` and used only by the success path.
+  // Single run-end boundary for progress cleanup, lease release, and pending
+  // task dispatch. Only the success path publishes the deferred-follow-up event.
   private clearProgressAndRelease(
     run: Pick<RunRecord, "id" | "projectId" | "linearIssueId" | "runType">,
     options?: { issueKey?: string | undefined; publishDeferredFollowUp?: boolean },
@@ -454,10 +444,7 @@ export class RunFinalizer {
     });
     void this.linearSync.emitActivity(issue, params.activity, { ephemeral: true });
     void this.linearSync.syncSession(issue);
-    // releaseRunAndDispatch always dispatches any pending workflow task — the
-    // explicit `params.enqueue` flag is no longer needed because the
-    // dispatcher peeks the task itself and only enqueues when one
-    // exists. Keeping the parameter would be redundant.
+    // The dispatcher enqueues only when a pending task exists.
     this.clearProgressAndRelease(params.run);
   }
 
@@ -773,11 +760,7 @@ export class RunFinalizer {
     }
 
     const refreshedIssue = await this.completionPolicy.refreshIssueAfterReactivePublish(run, freshIssue);
-    // Plan §4.2(c): post-hoc change-identity detection. When the run
-    // produced a new head SHA, compute and persist the patch-id so the next
-    // run's prompt rule can recognize
-    // a patch-id-equivalent re-push and skip the publish. Best-effort:
-    // any git error returns undefined and we leave the cache as-is.
+    // Best-effort identity refresh for detecting patch-equivalent re-pushes.
     this.maybeUpdateLastPublishedIdentity(run, refreshedIssue);
     const postRunFollowUp = await this.completionPolicy.resolvePostRunFollowUp(run, refreshedIssue);
     const initialFactUpdate = resolvePostRunFactUpdate(refreshedIssue, run);
@@ -795,12 +778,8 @@ export class RunFinalizer {
       latestAssistantSummary: report.latestAssistantMessage,
     });
 
-    // `refreshedIssue` was read before several async policy checks; a webhook
-    // may have landed mid-finalize. settleRun re-reads the row inside its
-    // transaction and resolves the post-run state from that fresh truth, so
-    // we never regress it (e.g. the PR merged while we were verifying the
-    // publish). settleRun also owns the slot clear (plan §B1): it refuses to
-    // touch a slot that no longer points at this run.
+    // settleRun re-reads issue truth after async checks and clears only a slot
+    // that still belongs to this run.
     const buildCompletionUpdate = (record: IssueRecord) => {
       const factUpdate = resolvePostRunFactUpdate(record, run);
       return {

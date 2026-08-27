@@ -6,11 +6,8 @@ import type { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
 import { appendBranchUpkeepObservation } from "./branch-upkeep-signal.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
-// Plan §8.3-8.4: when a parent PR's head moves (review-fix push,
-// eviction repair, base-branch update), child PRs stacked on it
-// become stale. Patchrelay treats this as a workflow signal for each
-// matching child and enqueues a `branch_upkeep` run to rebase the
-// child onto the new parent head.
+// A moved parent head makes stacked children stale; enqueue branch upkeep
+// for each child.
 export function maybeFanChildRebaseDispatches(params: {
   db: PatchRelayDatabase;
   logger: Logger;

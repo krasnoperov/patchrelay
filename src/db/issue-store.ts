@@ -380,10 +380,7 @@ export class IssueStore {
     return rows.map(mapIssueRow);
   }
 
-  // Plan §8.3: parent-of-child index. Given a parent's branch name,
-  // list every issue whose `parent_pr_branch` matches — i.e. PRs
-  // stacked on that parent. The index is hit on every
-  // `pr_synchronize` for a parent so it must stay cheap.
+  // Find PRs stacked on a parent branch during synchronization.
   listIssuesWithParentBranch(branchName: string): IssueRecord[] {
     const rows = this.connection
       .prepare(`SELECT * FROM issues WHERE parent_pr_branch = ? AND workflow_outcome IS NULL`)
@@ -391,10 +388,7 @@ export class IssueStore {
     return rows.map(mapIssueRow);
   }
 
-  // Issues that are approved by review-quill but stuck in In Review
-  // because branch CI is failing — the merge-steward never admits them.
-  // Plan §6.2: surface this as IN_REVIEW_STUCK so an operator notices
-  // before the issue goes silent for hours.
+  // Approved PRs whose red branch CI prevents queue admission.
   listApprovedRedCiIssues(): IssueRecord[] {
     const rows = this.connection
       .prepare(

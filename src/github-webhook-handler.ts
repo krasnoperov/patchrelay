@@ -251,7 +251,7 @@ export class GitHubWebhookHandler {
       });
     }
 
-    // Plan §8.3: parent-moved trigger. When a PR's head advances,
+    // When a parent PR's head advances,
     // any child PR stacked on it becomes stale relative to its
     // declared base — enqueue a `branch_upkeep` run on each child
     // so it rebases onto the new parent head.

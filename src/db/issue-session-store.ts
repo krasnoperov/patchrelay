@@ -442,8 +442,7 @@ export class IssueSessionStore {
   }
 
   /**
-   * The single door for issue-state writes (core simplification plan, phase
-   * A): one transaction wrapping lease validity, an optimistic version check
+   * The single door for issue-state writes: one transaction wrapping lease validity, an optimistic version check
    * against the row the update was derived from, and the write itself. A
    * version mismatch means another writer landed between the caller's read
    * and this commit — emitted as `state.write_conflict` telemetry and either

@@ -14,14 +14,13 @@ import { MemoryPatchRelayTelemetry } from "../src/telemetry.ts";
 import { reconcileWorkflowTasksForIssue } from "../src/workflow-task-reconciler.ts";
 import type { AppConfig, CodexThreadSummary } from "../src/types.ts";
 
-// Crash-injection suite (core simplification plan, "Ordering, risk,
-// verification"): simulate "the process was killed between two writes of a
+// Simulate the process being killed between writes of a
 // multi-step path, then restarted". The crash is simulated by performing only
 // the FIRST write(s) of the sequence against a real SQLite file and closing
 // the connection; the restart is simulated by opening a FRESH
 // PatchRelayDatabase over the same file and constructing fresh service
-// objects (D4 made the DB lease row the only lease truth, so this is
-// faithful). Each scenario then runs exactly ONE pass of the production
+// objects. The DB lease row is the only lease truth. Each scenario then runs
+// exactly one pass of the production
 // recovery entry point (`RunOrchestrator.reconcileActiveRuns`, which chains
 // run reconciliation → dangling-slot settlement → queue health → idle
 // reconciliation) and asserts the state converged:
@@ -483,8 +482,7 @@ test("workflowTask appended but dispatch lost: restart dispatches exactly once w
 });
 
 test("finalizer seam: run already terminal but slot not cleared - settle and route in one pass", { concurrency: false }, async () => {
-  // Multi-step path: settleRun itself is one transaction (plan B1), so the
-  // remaining crash seam is a run row that reached a terminal status through
+  // settleRun is transactional; the remaining seam is a run row that reached a terminal status through
   // another writer (notification handler, supersedure observer) while the
   // crash prevented the slot-clearing settle from ever running. This is the
   // USE-364 / PR #566 freeze shape; recovery is settleDanglingActiveRuns +

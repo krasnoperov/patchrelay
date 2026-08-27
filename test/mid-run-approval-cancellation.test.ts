@@ -5,11 +5,8 @@ import path from "node:path";
 import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
 
-// Plan §4.4: end-to-end smoke test for the mid-run approval
-// cancellation primitive. The transition rule is exercised in
-// `issue-phase.test.ts`; this test covers the run-store side
-// (markSuperseded + shouldNotPublish flag) and verifies the round
-// trip through the row mapper.
+// Covers persistence of superseded runs and their publication guard; phase
+// transitions are tested separately.
 
 function withDb<T>(fn: (db: PatchRelayDatabase) => T): T {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-supersede-"));

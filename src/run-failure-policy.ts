@@ -95,17 +95,9 @@ function resolveRetryRunType(runType: RunType, context: RunContext | undefined):
     : "review_fix";
 }
 
-// Plan §B4: the one run-failure policy. Merges the former
-// RunRecoveryService (zombie retry/escalate + backoff) and
-// InterruptedRunRecovery (interrupted-turn handling, counter decrements,
-// re-enqueue) into a single module that answers: given a stranded or
-// failed run + its issue — retry (with which backoff/budget), re-enqueue
-// (which runType/context), or escalate?
-//
-// Ownership: run-reconciler and service-startup-recovery only DETECT
-// stranded states and hand them here; this policy DECIDES; execution of
-// the run/slot writes goes through settleRun, and dispatch of follow-up
-// work goes through the WorkflowTaskDispatcher.
+// Decides whether stranded, interrupted, and capacity-limited runs retry,
+// re-enqueue, or escalate. Detection stays in reconciliation; durable writes
+// and dispatch stay behind their dedicated boundaries.
 export class RunFailurePolicy {
   constructor(
     private readonly db: PatchRelayDatabase,
@@ -489,7 +481,7 @@ export class RunFailurePolicy {
     this.releaseLease(run.projectId, run.linearIssueId);
   }
 
-  // ─── Interrupted turns (formerly InterruptedRunRecovery) ─────────
+  // ─── Interrupted turns ────────────────────────────────────────────
 
   async handleInterruptedRun(run: RunRecord, issue: IssueRecord): Promise<void> {
     this.logger.warn(

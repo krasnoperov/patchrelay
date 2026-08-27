@@ -19,9 +19,8 @@ import type { UpsertIssueParams } from "../src/db/issue-store.ts";
 import type { AppConfig } from "../src/types.ts";
 import { WorkflowTaskDispatcher } from "../src/workflow-task-dispatcher.ts";
 
-// Lost-webhook re-derivation suite (core simplification plan, phase C exit
-// criteria; docs/architecture.md "Recovery doctrine: re-derivation, not
-// replay"). For each GitHub trigger event the projector handles, two worlds
+// Lost-webhook re-derivation suite. For each GitHub trigger event the projector
+// handles, two worlds
 // run over identical seed state:
 //
 //   - world A (delivered): the normalized webhook goes through the real
@@ -938,8 +937,7 @@ test("lost pr_synchronize: poll with the advanced head clears provenance and res
     assert.equal(pair.lost.db.getIssue(PROJECT, ISSUE)?.prHeadSha, "sha-new");
     assert.deepEqual(b, a, "issue-phase facts and provenance must converge");
 
-    // Doctrine (plan §C1): head-advance evidence "clears provenance + resets
-    // repair budgets equivalently". The webhook path resets the budgets on
+    // Head-advance evidence clears provenance and resets repair budgets. The webhook path resets the budgets on
     // every push; the reconciler's facts commit resets them when the polled
     // head differs from the recorded one, so a fresh head never inherits the
     // old head's consumed budget.

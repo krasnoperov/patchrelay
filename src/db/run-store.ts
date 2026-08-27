@@ -270,7 +270,7 @@ export class RunStore {
     this.appendRunnerObservation("runner.run_finished", run);
   }
 
-  // Plan §4.4: flag a still-running run as superseded. We deliberately
+  // Flag a still-running run as superseded. Deliberately
   // do NOT change `status` here — the Codex turn must finish naturally
   // so the notification handler can deliver `turn/completed` to the
   // run-finalizer (run-notification-handler ignores any run whose status

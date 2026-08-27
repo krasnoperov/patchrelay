@@ -137,10 +137,9 @@ export function safeJsonParse<T>(value: string): T | undefined {
 }
 
 /**
- * Exhaustiveness guard for discriminated-union switches (plan §D2): the call
- * only typechecks when every union member is handled, so adding a new variant
- * fails compilation at every consumer. At runtime it throws — reaching it
- * means a value outside the union leaked past a parse boundary.
+ * Exhaustiveness guard for discriminated unions. New variants fail compilation
+ * at every incomplete switch; reaching this at runtime means invalid input
+ * crossed a parse boundary.
  */
 export function assertNever(value: never, message = "Unexpected value"): never {
   throw new Error(`${message}: ${JSON.stringify(value)}`);

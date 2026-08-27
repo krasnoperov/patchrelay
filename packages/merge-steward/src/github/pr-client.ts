@@ -27,8 +27,7 @@ export class GitHubPRClient implements GitHubPRApi {
     const result = await exec("gh", [
       "pr", "view", String(prNumber),
       "--repo", this.repoFullName,
-      // Plan §8.4 change 3a: include baseRefName so the queue can
-      // detect stacked PRs at admission time.
+      // The base ref lets admission detect stacked PRs.
       "--json", "number,title,headRefName,headRefOid,baseRefName,reviewDecision,state,mergeStateStatus",
     ], { githubRepoFullName: this.repoFullName });
 

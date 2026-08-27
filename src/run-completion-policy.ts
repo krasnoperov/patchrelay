@@ -15,7 +15,7 @@ export interface PostRunFollowUp {
   summary: string;
 }
 
-/** Which question the post-run resolver is answering (plan §B3). */
+/** Whether the run completed normally or is being recovered. */
 export type PostRunOutcome = "completed" | "recovered";
 
 export type PostRunStateIssue = Pick<
@@ -36,29 +36,22 @@ export interface PostRunFactUpdate {
   inputRequestKind?: null;
 }
 
-// Plan §B3: the one post-run fact resolver. Unifies the former
-// `resolveCompletedRunState` (run-completion-policy) and
-// `resolveRecoverablePostRunState` (interrupted-run-recovery).
-//
-// Shared rule (both old functions agreed):
+// Shared post-run fact resolver:
 //   - no PR on the issue → undefined (nothing to resolve from PR truth);
 //   - approved open/closed PR → awaiting_queue; otherwise pr_open;
 //   - merged PR (while the issue still points at this run) → done.
 //
-// The two old functions genuinely disagreed in two places, and the
-// disagreement is semantic, so it survives as the `outcome` option rather
-// than being averaged away:
-//   - outcome "completed" (the run did its work, default): gate every write
+// The outcome controls authority:
+//   - "completed": gate every write
 //     on the issue still pointing at this exact active run so a state advanced
 //     concurrently by webhooks/finalizers is never clobbered, and never
 //     re-derive a reactive repair state — the stale GitHub verdict
 //     (changes_requested / red CI) refers to the head the run just
 //     replaced, and routing it again would loop the fix forever.
-//   - outcome "recovered" (the run died without doing its work): GitHub
+//   - "recovered": GitHub
 //     truth is authoritative regardless of the derived display phase —
 //     merged → done unconditionally, and an open PR re-derives the
-//     reactive intent (repairing_ci / repairing_queue / changes_requested)
-//     so the original problem is routed again.
+//     reactive intent so unfinished work is routed again.
 export function resolvePostRunFactUpdate(
   issue: PostRunStateIssue,
   run: Pick<RunRecord, "id" | "runType">,

@@ -19,8 +19,6 @@ function parseRepo(repoFullName: string): { owner: string; repo: string } | unde
 }
 
 /**
- * Late-publication guard (core simplification plan, phase C3).
- *
  * Detects a PatchRelay-authored `pr_opened` for an issue with no recorded PR
  * while the latest implementation run is already settled — settleRun owns
  * settlement, so a terminal run can no longer claim this PR as its own

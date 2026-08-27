@@ -67,7 +67,7 @@ function buildPromptHeader(issue: IssueRecord): string {
           : prContext.kind === "closed_pr_paused"
             ? `Previous PR: #${prContext.prNumber} (closed; redelegate to replace it)`
             : undefined;
-  // Plan §4.2(b): surface the patch-id of the last patchrelay-attributed
+  // Surface the patch-id of the last PatchRelay-attributed
   // publish so the agent can compute its own diff's patch-id pre-push
   // and skip the publish if the result is patch-id-equivalent.
   const patchIdLine = issue.lastPublishedPatchId

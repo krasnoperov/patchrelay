@@ -19,13 +19,8 @@ import { deriveIssuePhase, type IssuePhase } from "./issue-phase.ts";
 
 const WRITER = "linear-status-comment-sync";
 
-// Idempotence guard: skip the Linear write when the target comment already
-// carries the body we are about to write. Without this, every sync re-updates
-// the comment, Linear echoes a commentUpdated webhook, and any webhook-driven
-// sync path turns into a self-sustaining update loop (observed live: USE-478
-// collapsed its placeholder every ~30-60s for two hours, ~90 comment writes).
-// Process-lifetime cache keyed by comment id; a restart costs at most one
-// redundant write per comment, which the cache then absorbs.
+// Avoid webhook feedback loops by skipping unchanged Linear comment writes.
+// The process cache may allow one redundant write after restart.
 const lastWrittenCommentBody = new Map<string, string>();
 
 function shouldSkipCommentWrite(commentId: string | undefined, body: string): boolean {

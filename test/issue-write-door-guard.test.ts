@@ -3,8 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-// Architecture guardrail (core simplification plan, phase A): every
-// production issue-state write must go through
+// Every production issue-state write must go through
 // `IssueSessionStore.commitIssueState` — the single door that wraps lease
 // validity, the optimistic version check, and conflict telemetry. Raw
 // `.upsertIssue(` calls outside the allowlist below bypass all three.
