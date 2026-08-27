@@ -41,7 +41,7 @@ function makeEntry(id: string, prNumber: number, position: number): QueueEntry {
 }
 
 describe("SQLite crash recovery", () => {
-  it("migrates active legacy candidate state and drops every obsolete column", () => {
+  it("rejects a database that is not on the current schema", () => {
     const dbPath = tempDbPath();
     after(() => { try { unlinkSync(dbPath); } catch {} });
     const connection = new SqliteConnection(dbPath);
@@ -71,34 +71,19 @@ describe("SQLite crash recovery", () => {
         enqueued_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
-      INSERT INTO queue_entries VALUES (
-        'legacy-entry', 'test-repo', 77, 'feature/legacy', 'head-77', 'base-77',
-        'validating', 1, 0, 0, 'ci-77', 0, 0, 2, NULL, NULL,
-        'mq-spec-legacy', 'candidate-77', 'parent-entry',
-        'obsolete-patch', 'obsolete-tree',
-        '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z'
-      );
     `);
 
-    ensureSchema(connection);
-    const migrated = connection.prepare("SELECT * FROM queue_entries WHERE id = ?").get("legacy-entry")!;
-    assert.equal(migrated.candidate_kind, "integration");
-    assert.equal(migrated.candidate_ref, "mq-spec-legacy");
-    assert.equal(migrated.candidate_sha, "candidate-77");
-    assert.equal(migrated.candidate_based_on, "parent-entry");
-    const columns = new Set(
-      connection.prepare("PRAGMA table_info(queue_entries)").all().map((row) => String(row.name)),
+    assert.throws(
+      () => ensureSchema(connection),
+      /Merge Steward database schema is incompatible.*missing:/,
     );
-    for (const obsolete of ["spec_branch", "spec_sha", "spec_based_on", "head_patch_id", "spec_tree_id"]) {
-      assert.equal(columns.has(obsolete), false, `${obsolete} must be removed`);
-    }
+    const objects = connection.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE name NOT LIKE 'sqlite_%'
+      ORDER BY name
+    `).all().map((row) => String(row.name));
+    assert.deepEqual(objects, ["queue_entries"]);
     connection.close();
-
-    const reopened = new SqliteStore(dbPath);
-    const entry = reopened.getEntry("legacy-entry")!;
-    assert.equal(entry.candidateKind, "integration");
-    assert.equal(entry.candidateSha, "candidate-77");
-    reopened.close();
   });
 
   it("state survives store destruction and reconstruction", async () => {

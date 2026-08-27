@@ -2,10 +2,8 @@ import type { IssueRecord } from "./db-types.ts";
 import { buildRequestedChangesWorkflowIdentity } from "./reactive-workflow-keys.ts";
 import { tryParseRunContextValue, type RunContext } from "./run-context.ts";
 
-// Boundary over the stored failure/incident columns: malformed JSON or a
-// schema-rejected legacy shape degrades to "no context" (pre-existing
-// behavior of the old parseObjectJson for malformed JSON; this pure module
-// has no logger to warn through).
+// Boundary over stored failure/incident columns: malformed or schema-rejected
+// JSON degrades to "no context" because this pure module has no logger.
 function parseRunContextColumn(value: string | undefined): RunContext | undefined {
   if (!value) return undefined;
   let parsed: unknown;

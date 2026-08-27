@@ -15,7 +15,6 @@ function config(): AppConfig {
         issueKeyPrefixes: ["LSR"],
         linearTeamIds: [],
         linearProjectIds: [],
-        allowLabels: [],
         reviewChecks: [],
         gateChecks: [],
         repairBudgets: { ciRepair: 10, queueRepair: 10, reviewFix: 10 },

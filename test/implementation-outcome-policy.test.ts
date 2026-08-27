@@ -63,7 +63,6 @@ function createConfig(baseDir: string): AppConfig {
         worktreeRoot: path.join(baseDir, "worktrees"),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
-        allowLabels: [],
         triggerEvents: ["statusChanged"],
         branchPrefix: "use",
         github: {
@@ -126,7 +125,7 @@ test("failed implementation recovery does not resume when GitHub already has an 
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const repoDir = createDirtyRepo(baseDir);
     const fakeBin = writeGhListScript(baseDir, '[{"number":42,"url":"https://github.com/owner/repo/pull/42","state":"OPEN","author":{"login":"patchrelay"},"headRefOid":"sha-open"}]');
     process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;

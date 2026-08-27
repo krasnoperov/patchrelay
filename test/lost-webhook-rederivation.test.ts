@@ -98,7 +98,6 @@ function createConfig(baseDir: string, dbFileName: string): AppConfig {
         worktreeRoot: path.join(baseDir, "worktrees"),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
-        allowLabels: [],
         reviewChecks: [],
         gateChecks: ["verify"],
         triggerEvents: ["statusChanged"],
@@ -161,7 +160,7 @@ interface World {
 function createWorld(baseDir: string, name: string): World {
   const config = createConfig(baseDir, `${name}.sqlite`);
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const logger = pino({ enabled: false });
   const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
   const workflowTask = new WorkflowTaskDispatcher(

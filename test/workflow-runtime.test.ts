@@ -19,7 +19,7 @@ import { dispatchOrchestrationParentsForChildEvent } from "../src/orchestration-
 function createDb(): { db: PatchRelayDatabase; cleanup: () => void } {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-v2-runtime-"));
   const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-  db.runMigrations();
+  db.initializeSchema();
   return {
     db,
     cleanup: () => {

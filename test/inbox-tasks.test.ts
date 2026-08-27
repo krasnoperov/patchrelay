@@ -15,7 +15,7 @@ import { reconcileWorkflowTasksForIssue } from "../src/workflow-task-reconciler.
 function createDb(): { db: PatchRelayDatabase; cleanup: () => void } {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-s5-inbox-"));
   const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-  db.runMigrations();
+  db.initializeSchema();
   return {
     db,
     cleanup: () => {

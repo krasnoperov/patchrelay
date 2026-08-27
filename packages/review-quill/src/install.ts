@@ -63,7 +63,6 @@ function defaultConfigDocument(publicBaseUrl: string, databasePath: string): Rec
       args: ["app-server"],
       sourceBashrc: true,
       requestTimeoutMs: 30000,
-      outputSchema: true,
       forkPriorReviewThread: false,
       serviceName: "review-quill",
       approvalPolicy: "never",

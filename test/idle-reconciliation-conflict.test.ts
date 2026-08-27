@@ -15,7 +15,7 @@ function createHarness() {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-conflict-"));
   const telemetry = new MemoryPatchRelayTelemetry();
   const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true, telemetry);
-  db.runMigrations();
+  db.initializeSchema();
   const logger = pino({ enabled: false });
   const workflowTask = new WorkflowTaskDispatcher(db, () => undefined, () => undefined, logger);
   const config = {

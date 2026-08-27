@@ -12,7 +12,7 @@ function deriveRepoId(repoFullName: string): string {
     .replace(/^[^a-z0-9]+/, "")
     .replace(/[^a-z0-9]+$/, "");
   if (!normalized) {
-    throw new UsageError(`Could not derive a repo id from ${repoFullName}. Pass an explicit <id>.`, "repos");
+    throw new UsageError(`Could not derive a repo id from ${repoFullName}. Pass an explicit <id>.`, "repo");
   }
   return normalized;
 }
@@ -21,13 +21,13 @@ function parseAttachTarget(parsed: ParsedArgs): { repoId: string; repoFullName: 
   const first = parsed.positionals[1];
   const second = parsed.positionals[2];
   if (!first) {
-    throw new UsageError("merge-steward attach requires <owner/repo> or <id> <owner/repo>.", "repos");
+    throw new UsageError("merge-steward repo attach requires <owner/repo> or <id> <owner/repo>.", "repo");
   }
   if (second) {
     return { repoId: first, repoFullName: second };
   }
   if (!first.includes("/")) {
-    throw new UsageError("merge-steward attach requires <owner/repo> or <id> <owner/repo>.", "repos");
+    throw new UsageError("merge-steward repo attach requires <owner/repo> or <id> <owner/repo>.", "repo");
   }
 
   const existing = listRepoConfigs().find((repo) => repo.repoFullName === first);
@@ -38,7 +38,7 @@ function parseAttachTarget(parsed: ParsedArgs): { repoId: string; repoFullName: 
   const repoId = deriveRepoId(first);
   const conflict = listRepoConfigs().find((repo) => repo.repoId === repoId && repo.repoFullName !== first);
   if (conflict) {
-    throw new UsageError(`Derived repo id '${repoId}' is already used by ${conflict.repoFullName}. Pass an explicit <id>.`, "repos");
+    throw new UsageError(`Derived repo id '${repoId}' is already used by ${conflict.repoFullName}. Pass an explicit <id>.`, "repo");
   }
   return { repoId, repoFullName: first };
 }

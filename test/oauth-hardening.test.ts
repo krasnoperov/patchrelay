@@ -66,7 +66,6 @@ function buildConfig(baseDir: string): AppConfig {
         worktreeRoot: path.join(baseDir, "worktrees"),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
-        allowLabels: [],
         triggerEvents: ["statusChanged"],
         branchPrefix: "use",
       },
@@ -80,7 +79,7 @@ test("completeLinearOAuth rejects expired OAuth states and marks them failed", a
   try {
     const config = buildConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const oauthState = db.linearInstallations.createOAuthState({
       provider: "linear",

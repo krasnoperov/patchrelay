@@ -7,7 +7,6 @@ export interface GitHubFailurePromptContext {
   source?: "branch_ci" | "queue_eviction" | undefined;
   repoFullName?: string | undefined;
   capturedAt?: string | undefined;
-  headSha?: string | undefined;
   failureHeadSha?: string | undefined;
   failureSignature?: string | undefined;
   checkName?: string | undefined;
@@ -60,9 +59,10 @@ export async function resolveGitHubBranchFailureContext(params: {
         }
       : params.event,
   });
+  const { headSha, ...details } = context ?? {};
   return {
-    ...(context ? context : {}),
-    ...(context?.headSha || params.event.headSha ? { failureHeadSha: context?.headSha ?? params.event.headSha } : {}),
+    ...details,
+    ...(headSha || params.event.headSha ? { failureHeadSha: headSha ?? params.event.headSha } : {}),
     ...(context?.failureSignature ? { failureSignature: context.failureSignature } : {}),
   };
 }
@@ -89,7 +89,7 @@ export function buildGitHubQueueFailureContext(
     source: "queue_eviction",
     repoFullName,
     capturedAt: new Date().toISOString(),
-    ...(failureHeadSha ? { headSha: failureHeadSha, failureHeadSha } : {}),
+    ...(failureHeadSha ? { failureHeadSha } : {}),
     ...(event.checkName ? { checkName: event.checkName } : {}),
     ...(event.checkUrl ? { checkUrl: event.checkUrl } : {}),
     ...(event.checkDetailsUrl ? { checkDetailsUrl: event.checkDetailsUrl } : {}),

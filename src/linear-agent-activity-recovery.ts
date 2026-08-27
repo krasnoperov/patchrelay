@@ -18,7 +18,7 @@ function hasRecoveredContext(context?: RunContext): boolean {
 
 function hasLocalHumanContext(context?: RunContext): boolean {
   if (hasRecoveredContext(context)) return true;
-  for (const value of [context?.promptContext, context?.promptBody, context?.operatorPrompt, context?.userComment]) {
+  for (const value of [context?.promptContext, context?.promptBody]) {
     if (typeof value === "string" && value.trim().length > 0) return true;
   }
   if (!Array.isArray(context?.followUps)) return false;

@@ -31,7 +31,7 @@ Repository guidance applies to reviewable properties of that head: code, tests, 
 
 The default Codex sandbox mode is `danger-full-access` because many systemd hosts cannot run Codex's bubblewrap networking inside `read-only` / `workspace-write` modes. The reviewer still works in a throwaway checkout and review-quill publishes only through the GitHub App; it does not commit or push.
 
-Review Quill requests native structured verdict output by default. Set `codex.outputSchema` to `false` for a reversible compatibility rollback with older Codex app-server versions.
+Review Quill requires native structured verdict output from the current Codex app-server.
 
 Review threads start fresh by default. Set `codex.forkPriorReviewThread` to `true` to let a newer PR head fork the immediately preceding completed review thread when its diff base, prompt fingerprint, and live terminal Codex thread all match. A successful fork receives a bounded follow-up prompt and inspects the current checkout instead of receiving patch bodies again; fresh starts and fork fallbacks keep the full prompt. Set the option back to `false` for an immediate rollback to always-fresh review threads.
 

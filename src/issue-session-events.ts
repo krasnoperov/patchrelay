@@ -46,18 +46,15 @@ export interface IssueSessionEventRecord {
 // Each eventType gets a typed payload; `parseIssueSessionEvent` is the parse
 // boundary over the stringly DB storage (event_json stays JSON text). The
 // same doctrine as D1 applies: malformed payloads fail loudly at parse, and
-// boundary callers that iterate possibly-old DB rows degrade gracefully via
-// `parseIssueSessionEventOrWarn`. All payload schemas are loose objects:
-// legacy rows carry fields newer code no longer writes, and workflow-intent payloads are
-// merged wholesale into the run context (which tolerates unknown keys too).
+// boundary callers can report malformed persisted data through
+// `parseIssueSessionEventOrWarn`. Typed payloads keep only their current fields.
 
 /** Human input payload for direct_reply / followup_prompt / followup_comment
  * / operator_prompt. Produced by agent-input-service.ts,
  * github-pr-comment-handler.ts and webhooks/agent-session-handler.ts;
  * consumed by deriveSessionInputPlan (followUps + replacement-PR facts). */
-const inputMessagePayloadSchema = z.looseObject({
+const inputMessagePayloadSchema = z.object({
   text: z.string().optional(),
-  body: z.string().optional(),
   author: z.string().optional(),
   source: z.string().optional(),
   operatorSource: z.string().optional(),
@@ -71,7 +68,7 @@ export type InputMessageEventPayload = z.infer<typeof inputMessagePayloadSchema>
 
 /** Produced by agent-input-service.ts after steering a running turn;
  * consumed by run-finalizer.ts summarizePromptDeliveryEvents. */
-const promptDeliveredPayloadSchema = z.looseObject({
+const promptDeliveredPayloadSchema = z.object({
   source: z.string().optional(),
   runId: z.number().optional(),
   runType: z.string().optional(),
@@ -86,7 +83,7 @@ export type PromptDeliveredEventPayload = z.infer<typeof promptDeliveredPayloadS
 
 /** Produced by agent-input-service.ts / service-issue-actions.ts /
  * webhooks/agent-session-handler.ts; consumed by status-note.ts. */
-const stopRequestedPayloadSchema = z.looseObject({
+const stopRequestedPayloadSchema = z.object({
   body: z.string().optional(),
   source: z.string().optional(),
   author: z.string().optional(),
@@ -100,7 +97,7 @@ const stopRequestedPayloadSchema = z.looseObject({
 export type StopRequestedEventPayload = z.infer<typeof stopRequestedPayloadSchema>;
 
 /** Produced by webhooks/desired-stage-recorder.ts; consumed by status-note.ts. */
-const undelegatedPayloadSchema = z.looseObject({
+const undelegatedPayloadSchema = z.object({
   // Dirty-worktree facts from git-worktree-status.ts dirtyWorktreeEventPayload.
   summary: z.string().optional(),
   dirtyWorktree: z.boolean().optional(),
@@ -112,7 +109,7 @@ export type UndelegatedEventPayload = z.infer<typeof undelegatedPayloadSchema>;
 
 /** Produced by service-issue-actions.ts / cli/data.ts when an operator
  * force-closes an issue. */
-const operatorClosedPayloadSchema = z.looseObject({
+const operatorClosedPayloadSchema = z.object({
   terminalState: z.enum(["done", "failed"]).optional(),
   reason: z.string().optional(),
 });
@@ -239,8 +236,6 @@ export function parseIssueSessionEvent(
     case "run_released_authority":
       return { eventType, payload: parseWithSchema(event, freeFormPayloadSchema) };
     default:
-      // Also reached at runtime for event_type values written by versions
-      // that no longer exist in the union; the OrWarn boundary degrades them.
       return assertNever(eventType, "Unknown issue session event type");
   }
 }
@@ -290,10 +285,7 @@ export const NON_ACTIONABLE_SESSION_EVENTS = new Set<IssueSessionEventType>([
   "run_released_authority",
 ]);
 
-// "main_repair" was removed as a run type; old payloads carrying it
-// are not in this set, so parseRunType returns undefined and callers fall back to
-// "implementation" (see deriveSessionInputPlan below).
-const RUN_TYPES = new Set<RunType>(["implementation", "review_fix", "branch_upkeep", "ci_repair", "queue_repair"]);
+const RUN_TYPES = new Set<RunType>(["implementation", "collaboration", "review_fix", "branch_upkeep", "ci_repair", "queue_repair"]);
 
 function parseRunType(value: unknown): RunType | undefined {
   return typeof value === "string" && RUN_TYPES.has(value as RunType) ? value as RunType : undefined;
@@ -339,9 +331,8 @@ export function deriveSessionInputPlan(
   let resumeThread = false;
 
   for (const event of actionableEvents) {
-    // Boundary over DB rows: a payload written by an older version that no
-    // longer matches the schema degrades to "no payload" instead of wedging
-    // workflow task derivation for the whole issue.
+    // Boundary over persisted rows: report malformed payloads and ignore their
+    // content without preventing newer actionable events from being derived.
     const typed = parseIssueSessionEventOrWarn(
       event,
       onPayloadError ? (message) => onPayloadError(event, message) : undefined,
@@ -404,7 +395,7 @@ export function deriveSessionInputPlan(
         } else {
           eventIds.push(event.id);
         }
-        const text = typed.payload?.text ?? typed.payload?.body;
+        const text = typed.payload?.text;
         if (text) {
           followUps.push({
             type: typed.eventType,
@@ -430,8 +421,8 @@ export function deriveSessionInputPlan(
           eventIds.push(event.id);
         }
         Object.assign(context, typed.payload ?? {});
-        if (typed.payload?.summary?.trim()) {
-          context.completionCheckSummary = typed.payload.summary.trim();
+        if (typed.payload?.completionCheckSummary?.trim()) {
+          context.completionCheckSummary = typed.payload.completionCheckSummary.trim();
         }
         context.completionCheckMode = true;
         resumeThread = true;
@@ -447,7 +438,7 @@ export function deriveSessionInputPlan(
         } else {
           eventIds.push(event.id);
         }
-        const text = typed.payload?.text ?? typed.payload?.body;
+        const text = typed.payload?.text;
         if (text) {
           followUps.push({
             type: typed.eventType,

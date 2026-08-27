@@ -6,7 +6,7 @@ PatchRelay resolves secrets through a three-level fallback so that the applicati
 
 1. **`$CREDENTIALS_DIRECTORY/<name>`** — systemd-creds, Docker secrets, or any mount-based provider
 2. **`${ENV_VAR}_FILE`** — reads the secret from a file path (any file-based encryption tool)
-3. **`$ENV_VAR`** — direct environment variable (dev, `op run`, `sops exec-env`, or legacy `service.env`)
+3. **`$ENV_VAR`** — direct environment variable (dev, `op run`, `sops exec-env`, or `service.env`)
 
 In production the recommended provider is **systemd-creds** — secrets are encrypted at rest on disk and decrypted into a private ramfs namespace visible only to the PatchRelay service process.
 
@@ -199,4 +199,4 @@ After credstore:
   └── decrypted at service start → $CREDENTIALS_DIRECTORY/linear-webhook-secret
 ```
 
-The service.env file can still be used for backwards compatibility — if `$CREDENTIALS_DIRECTORY` is not set (dev mode without credstore), PatchRelay falls through to the env var layer. To complete the migration, remove the plaintext file after verifying credstore works.
+The `service.env` installation mode resolves through the environment layer when `$CREDENTIALS_DIRECTORY` is not set. Prefer systemd credentials for encrypted production storage.

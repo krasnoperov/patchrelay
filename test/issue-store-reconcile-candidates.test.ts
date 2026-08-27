@@ -13,7 +13,7 @@ function withDb(fn: (db: PatchRelayDatabase) => void): void {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-candidates-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
     fn(db);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

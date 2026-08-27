@@ -6,23 +6,10 @@ import { z } from "zod";
 // (b) passed around in memory as `context` / `effectiveContext` /
 //     `workflowContext` until it reaches the prompt builder and launcher.
 //
-// Every known field is typed strictly so a mistyped field fails loudly at the
-// parse boundary. Unknown keys are deliberately TOLERATED (loose object), not
-// rejected, because:
-// - existing DB rows contain contexts written by older PatchRelay versions
-//   whose field sets we no longer produce (e.g. `mergeQueueContext`,
-//   `userComment`, `operatorPrompt` below survive only as legacy reads), and
-// - deriveSessionInputPlan merges whole event payloads into the context via
-//   Object.assign, so producer-side extra keys flow through by design.
-// The static `RunContext` type intentionally has NO index signature (it is
-// inferred from a non-loose mirror of the same shape), so compile-time access
-// to undeclared fields is an error even though runtime parsing passes unknown
-// keys through. NESTED objects (ciSnapshot, incidentContext, reviewComments
-// entries, ...) use plain z.object — unknown nested keys are stripped at the
-// boundary instead of passed through: they are leaf display data, every field
-// any consumer reads is declared here, and a single definition keeps the
-// static type free of index signatures so producer-side `satisfies RunContext`
-// checks stay sound.
+// Every known field is typed so a mistyped field fails loudly at the parse
+// boundary. Unknown keys are stripped: current producers may assemble context
+// from broader workflow records, but only this canonical shape is persisted or
+// consumed.
 
 /** Entry of `followUps`, assembled by deriveSessionInputPlan from
  * direct_reply / followup_prompt / followup_comment / operator_prompt event
@@ -121,33 +108,15 @@ const queueIncidentContextShape = {
   })).optional(),
 };
 
-/** LEGACY: merge-queue context block read by prompting/patchrelay.ts
- * appendQueueRepairContext. No current producer writes this field — it only
- * appears in contexts persisted by older versions, so it stays in the schema
- * for legacy-row compatibility. */
-const mergeQueueContextShape = {
-  baseBranch: z.string().optional(),
-  baseSha: z.string().optional(),
-  mergeCommitSha: z.string().optional(),
-  checkRunUrl: z.string().optional(),
-  incidentSummary: z.string().optional(),
-  conflictingFiles: z.array(z.string()).optional(),
-  operatorHints: z.array(z.string()).optional(),
-};
-
 const runContextShape = {
   // -- Workflow intent framing ---------------------------------------
   /** Why this workflow task exists. Produced by deriveSessionInputPlan (and by
    * branch-upkeep context builders, operator-retry-event); consumed by
    * prompting/patchrelay.ts (turn reason, follow-up prompt selection). Kept a
-   * free string: the value set spans workflow reasons and event types and legacy
-   * rows carry values we no longer emit. */
+   * free string: the value set spans workflow reasons and event types. */
   workflowReason: z.string().optional(),
-  /** Requested run type inside a `delegated` / `completion_check_continue`
-   * payload. Free string because legacy payloads carry removed run types
-   * (e.g. "main_repair"); consumers narrow via parseRunType and fall back to
-   * "implementation". */
-  runType: z.string().optional(),
+  /** Requested run type inside a `delegated` / `completion_check_continue` payload. */
+  runType: z.enum(["implementation", "collaboration", "review_fix", "branch_upkeep", "ci_repair", "queue_repair"]).optional(),
   /** True for an open-ended conversational run started by mentioning
    * PatchRelay without entering the delivery workflow. */
   collaborationMode: z.boolean().optional(),
@@ -165,12 +134,6 @@ const runContextShape = {
   /** Latest human instruction body, from `delegated` payloads
    * (webhooks/desired-stage-recorder.ts); consumed by buildHumanContextLines. */
   promptBody: z.string().optional(),
-  /** LEGACY: read by prompting/patchrelay.ts and
-   * linear-agent-activity-recovery.ts; no current producer. */
-  operatorPrompt: z.string().optional(),
-  /** LEGACY: read by prompting/patchrelay.ts and
-   * linear-agent-activity-recovery.ts; no current producer. */
-  userComment: z.string().optional(),
   /** Recovered Linear agent-activity transcript. Produced by
    * linear-agent-activity-recovery.ts summarizeLinearAgentActivities; consumed
    * by prompting/patchrelay.ts buildHumanContextLines. */
@@ -256,11 +219,6 @@ const runContextShape = {
   failureReason: z.string().optional(),
   failureSignature: z.string().optional(),
   failureHeadSha: z.string().optional(),
-  /** Legacy alias for failureHeadSha still consulted by run-launcher.ts,
-   * run-orchestrator.ts and idle-reconciliation-helpers.ts
-   * isDuplicateRepairAttempt; also set by reactive-run-policy.ts
-   * hydrateRequestedChangesContext (current PR head). */
-  headSha: z.string().optional(),
   /** Produced by buildBranchUpkeepContext / buildReviewFixBranchUpkeepContext
    * (head that was failing/dirty at workflow-intent time). */
   failingHeadSha: z.string().optional(),
@@ -290,8 +248,6 @@ const runContextShape = {
   incidentTitle: z.string().optional(),
   incidentSummary: z.string().optional(),
   incidentContext: z.object(queueIncidentContextShape).optional(),
-  /** LEGACY (see mergeQueueContextShape). */
-  mergeQueueContext: z.object(mergeQueueContextShape).optional(),
   queuePosition: z.number().optional(),
   /** Force a fresh PR head SHA on queue repair. Produced by
    * queue-health-monitor.ts and operator-retry-event.ts; consumed by
@@ -313,8 +269,6 @@ const runContextShape = {
    * prompting/patchrelay.ts buildIssueTopology / orchestration constraints. */
   unresolvedBlockers: z.array(z.object(relatedIssueShape)).optional(),
   childIssues: z.array(z.object(relatedIssueShape)).optional(),
-  /** LEGACY alias of childIssues, still read by prompting/patchrelay.ts. */
-  trackedDependents: z.array(z.object(relatedIssueShape)).optional(),
 
   // ── Child-event facts (orchestration-parent-dispatch.ts payloads merged by
   //    deriveSessionInputPlan for child_changed / child_delivered /
@@ -334,9 +288,9 @@ const runContextShape = {
 const runContextTypeSchema = z.object(runContextShape);
 export type RunContext = z.infer<typeof runContextTypeSchema>;
 
-// Parse source: tolerates unknown keys (legacy rows / merged event payloads —
-// see module comment) while still failing loudly on mistyped known fields.
-export const runContextSchema = z.looseObject(runContextShape);
+// Broader workflow records may be supplied at producer boundaries; z.object
+// strips fields outside the current context contract.
+export const runContextSchema = z.object(runContextShape);
 
 export class RunContextParseError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
@@ -348,11 +302,11 @@ export class RunContextParseError extends Error {
 /**
  * Validate an already-parsed value as a run context. FAILS LOUDLY
  * (RunContextParseError) on non-object values or mistyped known fields —
- * that is the point of D1; callers at legacy-row boundaries may catch,
+ * that is the point of D1; callers at persistence boundaries may catch,
  * warn, and treat the context as absent.
  */
 export function parseRunContextValue(value: unknown, where = "run context"): RunContext {
-  const result = runContextSchema.safeParse(normalizeRunContextValue(value));
+  const result = runContextSchema.safeParse(value);
   if (!result.success) {
     throw new RunContextParseError(
       `Invalid ${where}: ${result.error.issues
@@ -405,12 +359,12 @@ export function parseRunContextOrWarn(
  * Non-throwing variant for boundaries inside the persistence layer where no
  * logger is plumbed (assembling run contexts from reconciliation columns):
  * a value the schema rejects degrades to
- * "no context", which was already the legacy behavior for malformed JSON in
- * those columns. Everywhere a logger exists, prefer parseRunContextOrWarn so
+ * "no context" for malformed JSON in those columns. Everywhere a logger
+ * exists, prefer parseRunContextOrWarn so
  * the failure is at least observable.
  */
 export function tryParseRunContextValue(value: unknown): RunContext | undefined {
-  const result = runContextSchema.safeParse(normalizeRunContextValue(value));
+  const result = runContextSchema.safeParse(value);
   return result.success ? result.data as RunContext : undefined;
 }
 
@@ -420,15 +374,4 @@ export function tryParseRunContextValue(value: unknown): RunContext | undefined 
  */
 export function serializeRunContext(context: RunContext, where = "run context"): string {
   return JSON.stringify(parseRunContextValue(context, where));
-}
-
-function normalizeRunContextValue(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-  const record = value as Record<string, unknown>;
-  if (record.workflowReason !== undefined || record.wakeReason === undefined) return value;
-  // Deprecated payload alias from pre-workflow-task session events.
-  return {
-    ...record,
-    workflowReason: record.wakeReason,
-  };
 }

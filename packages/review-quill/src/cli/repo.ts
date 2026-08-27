@@ -56,7 +56,7 @@ export async function handleInit(parsed: ParsedArgs, stdout: Output, runCommand:
       "Next steps:",
       `1. Put REVIEW_QUILL_GITHUB_APP_ID into ${home.serviceEnvPath}`,
       "2. Install the webhook secret and GitHub App private key via systemd-creds",
-      "3. Run `review-quill attach <owner/repo>`",
+      "3. Run `review-quill repo attach <owner/repo>`",
       "4. Configure your GitHub App webhook URL to the webhook URL above",
       "5. Run `review-quill doctor --repo <id>`",
     ].join("\n") + "\n",
@@ -146,7 +146,7 @@ export async function handleRepos(parsed: ParsedArgs, stdout: Output): Promise<n
       return 0;
     }
     if (repos.length === 0) {
-      writeOutput(stdout, "No watched repositories yet. Run `review-quill attach <owner/repo>`.\n");
+      writeOutput(stdout, "No watched repositories yet. Run `review-quill repo attach <owner/repo>`.\n");
       return 0;
     }
     writeOutput(

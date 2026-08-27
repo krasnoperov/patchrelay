@@ -139,20 +139,14 @@ test("review-quill init installs an always-restarting service unit", async () =>
   }
 });
 
-test("repo help and alias help both describe the repo command surface", async () => {
+test("repo help describes the current repo command surface", async () => {
   const repoHelp = createBufferStream();
   assert.equal(await runCli(["repo", "--help"], {
     stdout: repoHelp.stream,
     stderr: createBufferStream().stream,
   }), 0);
   assert.match(repoHelp.read(), /review-quill repo attach <owner\/repo>/);
-
-  const aliasHelp = createBufferStream();
-  assert.equal(await runCli(["attach", "--help"], {
-    stdout: aliasHelp.stream,
-    stderr: createBufferStream().stream,
-  }), 0);
-  assert.match(aliasHelp.read(), /review-quill repo attach <owner\/repo>/);
+  assert.doesNotMatch(repoHelp.read(), /Compatibility aliases/);
 });
 
 test("service status --json reports systemd state and normalized local health", async () => {

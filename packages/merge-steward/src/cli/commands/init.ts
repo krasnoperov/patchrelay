@@ -54,7 +54,7 @@ export async function handleInit(parsed: ParsedArgs, stdout: Output, runCommand:
       "",
       "Next steps:",
       `1. Put the webhook secret and GitHub App credentials into ${home.serviceEnvPath} for dev or systemd-creds for prod`,
-      "2. Run `merge-steward attach <owner/repo>`",
+      "2. Run `merge-steward repo attach <owner/repo>`",
       "3. Configure your GitHub App webhook URL to the webhook URL above",
       "4. Run `merge-steward doctor --repo <id>`",
     ].join("\n") + "\n",

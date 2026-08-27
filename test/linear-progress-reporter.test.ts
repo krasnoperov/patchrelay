@@ -10,7 +10,7 @@ import type { LinearAgentActivityContent } from "../src/types.ts";
 function createDatabase(): { baseDir: string; db: PatchRelayDatabase } {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-progress-"));
   const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-  db.runMigrations();
+  db.initializeSchema();
   return { baseDir, db };
 }
 

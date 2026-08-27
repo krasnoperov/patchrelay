@@ -20,7 +20,6 @@
     "args": ["app-server"],
     "sourceBashrc": true,
     "requestTimeoutMs": 30000,
-    "outputSchema": true,
     "forkPriorReviewThread": false,
     "model": "gpt-5.5",
     "serviceName": "review-quill",

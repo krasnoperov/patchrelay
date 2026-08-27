@@ -1,11 +1,15 @@
 import type { DatabaseConnection } from "./shared.ts";
 
-/**
- * Create and upgrade the steward's SQLite schema. Idempotent — safe to call
- * on every startup. Migrations preserve active queue state, then remove
- * obsolete columns so the runtime has one candidate model.
- */
+/** Create the current steward schema and reject any other schema version. */
 export function ensureSchema(connection: DatabaseConnection): void {
+  const existingTables = connection.prepare(`
+    SELECT name FROM sqlite_master
+    WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+  `).all();
+  if (existingTables.length > 0) {
+    assertCurrentSchema(connection);
+    return;
+  }
   connection.exec(`
     CREATE TABLE IF NOT EXISTS queue_entries (
       id TEXT PRIMARY KEY,
@@ -24,11 +28,13 @@ export function ensureSchema(connection: DatabaseConnection): void {
       max_retries INTEGER NOT NULL DEFAULT 3,
       last_failed_base_sha TEXT,
       issue_key TEXT,
+      pr_title TEXT,
       candidate_kind TEXT,
       candidate_policy_fingerprint TEXT,
       candidate_ref TEXT,
       candidate_sha TEXT,
       candidate_based_on TEXT,
+      base_ref_name TEXT,
       wait_detail TEXT,
       post_merge_status TEXT,
       post_merge_sha TEXT,
@@ -79,117 +85,67 @@ export function ensureSchema(connection: DatabaseConnection): void {
     CREATE INDEX IF NOT EXISTS idx_queue_events_entry
       ON queue_events(entry_id, id)
   `);
-  ensureColumn(connection, "queue_entries", "post_merge_status", "TEXT");
-  ensureColumn(connection, "queue_entries", "post_merge_sha", "TEXT");
-  ensureColumn(connection, "queue_entries", "post_merge_summary", "TEXT");
-  ensureColumn(connection, "queue_entries", "post_merge_checked_at", "TEXT");
-  ensureColumn(connection, "queue_entries", "wait_detail", "TEXT");
-  ensureColumn(connection, "queue_entries", "pr_title", "TEXT");
-  ensureColumn(connection, "queue_entries", "candidate_kind", "TEXT");
-  ensureColumn(connection, "queue_entries", "candidate_policy_fingerprint", "TEXT");
-  ensureColumn(connection, "queue_entries", "candidate_ref", "TEXT");
-  ensureColumn(connection, "queue_entries", "candidate_sha", "TEXT");
-  ensureColumn(connection, "queue_entries", "candidate_based_on", "TEXT");
-  ensureColumn(connection, "queue_entries", "base_ref_name", "TEXT");
-  ensureColumn(connection, "queue_entries", "decided_at", "TEXT");
-  migrateLegacyCandidateColumns(connection);
-  // Retire patch-equivalence caches from older installations. Candidate
-  // validity is SHA-bound; preserving these columns would imply otherwise.
-  dropColumnIfPresent(connection, "queue_entries", "head_patch_id");
-  dropColumnIfPresent(connection, "queue_entries", "spec_tree_id");
-  connection.exec(`
-    UPDATE queue_entries
-       SET candidate_kind = 'integration'
-     WHERE candidate_kind IS NULL
-       AND candidate_sha IS NOT NULL
-       AND candidate_ref IS NOT NULL
-  `);
-  connection.exec(`
-    UPDATE queue_entries
-       SET post_merge_status = 'pending'
-     WHERE status = 'merged'
-       AND post_merge_status IS NULL
-  `);
-  // Backfill decided_at for already-terminal rows so historic entries show a
-  // sensible duration/age; updated_at is the best estimate we have for them.
-  connection.exec(`
-    UPDATE queue_entries
-       SET decided_at = updated_at
-     WHERE decided_at IS NULL
-       AND status IN ('merged', 'evicted', 'dequeued')
-  `);
-
   // Must match TERMINAL_STATUSES in types.ts: merged, evicted, dequeued
   connection.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_per_pr
       ON queue_entries(repo_id, pr_number)
       WHERE status NOT IN ('merged', 'evicted', 'dequeued')
   `);
+  assertCurrentSchema(connection);
 }
 
-function migrateLegacyCandidateColumns(connection: DatabaseConnection): void {
-  const legacyColumns = [
-    ["spec_branch", "candidate_ref"],
-    ["spec_sha", "candidate_sha"],
-    ["spec_based_on", "candidate_based_on"],
-  ] as const;
+const QUEUE_ENTRY_COLUMNS = [
+  "id", "repo_id", "pr_number", "branch", "head_sha", "base_sha", "status",
+  "position", "priority", "generation", "ci_run_id", "ci_retries",
+  "retry_attempts", "max_retries", "last_failed_base_sha", "issue_key",
+  "pr_title", "candidate_kind", "candidate_policy_fingerprint", "candidate_ref",
+  "candidate_sha", "candidate_based_on", "base_ref_name", "wait_detail",
+  "post_merge_status", "post_merge_sha", "post_merge_summary",
+  "post_merge_checked_at", "decided_at", "enqueued_at", "updated_at",
+] as const;
 
-  for (const [legacy, candidate] of legacyColumns) {
-    if (!hasColumn(connection, "queue_entries", legacy)) continue;
-    connection.exec(`
-      UPDATE queue_entries
-         SET ${candidate} = ${legacy}
-       WHERE ${candidate} IS NULL
-         AND ${legacy} IS NOT NULL
-    `);
-  }
+const QUEUE_INCIDENT_COLUMNS = [
+  "id", "entry_id", "at", "failure_class", "context_json", "outcome",
+] as const;
 
-  // Derive kind while the legacy ref is still available, then remove all
-  // old candidate representations in this same startup migration.
-  connection.exec(`
-    UPDATE queue_entries
-       SET candidate_kind = CASE
-         WHEN candidate_sha = head_sha AND candidate_ref IS NULL THEN 'head'
-         WHEN candidate_sha IS NOT NULL THEN 'integration'
-         ELSE NULL
-       END
-     WHERE candidate_kind IS NULL
-  `);
+const QUEUE_EVENT_COLUMNS = [
+  "id", "entry_id", "at", "from_status", "to_status", "detail", "base_sha",
+] as const;
 
-  for (const [legacy] of legacyColumns) {
-    dropColumnIfPresent(connection, "queue_entries", legacy);
+const REQUIRED_INDEXES = [
+  "idx_queue_entries_repo_status",
+  "idx_queue_entries_repo_position",
+  "idx_queue_incidents_entry",
+  "idx_queue_events_entry",
+  "idx_one_active_per_pr",
+] as const;
+
+function assertCurrentSchema(connection: DatabaseConnection): void {
+  assertExactColumns(connection, "queue_entries", QUEUE_ENTRY_COLUMNS);
+  assertExactColumns(connection, "queue_incidents", QUEUE_INCIDENT_COLUMNS);
+  assertExactColumns(connection, "queue_events", QUEUE_EVENT_COLUMNS);
+  const indexes = new Set(connection.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all()
+    .map((row) => String(row.name)));
+  const missing = REQUIRED_INDEXES.filter((index) => !indexes.has(index));
+  if (missing.length > 0) {
+    throw new Error(`Merge Steward database schema is incompatible (missing indexes: ${missing.join(", ")})`);
   }
 }
 
-function hasColumn(connection: DatabaseConnection, table: string, column: string): boolean {
-  const rows = connection.prepare(`PRAGMA table_info(${table})`).all();
-  for (const row of rows) {
-    if (String((row as Record<string, unknown>).name) === column) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function ensureColumn(
+function assertExactColumns(
   connection: DatabaseConnection,
   table: string,
-  column: string,
-  type: string,
+  expected: readonly string[],
 ): void {
-  if (hasColumn(connection, table, column)) {
-    return;
-  }
-  connection.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
-}
+  const actual = connection.prepare(`PRAGMA table_info(${table})`).all()
+    .map((row) => String(row.name));
+  const missing = expected.filter((column) => !actual.includes(column));
+  const unexpected = actual.filter((column) => !expected.includes(column));
+  if (missing.length === 0 && unexpected.length === 0) return;
 
-function dropColumnIfPresent(
-  connection: DatabaseConnection,
-  table: string,
-  column: string,
-): void {
-  if (!hasColumn(connection, table, column)) {
-    return;
-  }
-  connection.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+  const details = [
+    ...(missing.length > 0 ? [`missing: ${missing.join(", ")}`] : []),
+    ...(unexpected.length > 0 ? [`unexpected: ${unexpected.join(", ")}`] : []),
+  ].join("; ");
+  throw new Error(`Merge Steward database schema is incompatible (${table}: ${details})`);
 }

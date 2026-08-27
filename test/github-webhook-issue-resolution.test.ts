@@ -61,7 +61,6 @@ function createConfig(baseDir: string): AppConfig {
         worktreeRoot: path.join(baseDir, "worktrees"),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
-        allowLabels: [],
         triggerEvents: ["statusChanged"],
         branchPrefix: "use",
         github: {
@@ -78,7 +77,7 @@ test("resolveGitHubWebhookIssue prefers PR, then branch, then issue key", () => 
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     db.upsertIssue({
       projectId: "owner/repo",
       linearIssueId: "issue-pr",

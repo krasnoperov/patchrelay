@@ -12,7 +12,7 @@ import type { LinearClient } from "../src/types.ts";
 function createDb(): { baseDir: string; db: PatchRelayDatabase } {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-completion-"));
   const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-  db.runMigrations();
+  db.initializeSchema();
   return { baseDir, db };
 }
 

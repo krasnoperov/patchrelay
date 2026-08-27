@@ -10,7 +10,7 @@ function makeDb(): { db: PatchRelayDatabase; telemetry: MemoryPatchRelayTelemetr
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-issue-state-commit-"));
   const telemetry = new MemoryPatchRelayTelemetry();
   const db = new PatchRelayDatabase(path.join(baseDir, "test.sqlite"), false, telemetry);
-  db.runMigrations();
+  db.initializeSchema();
   return { db, telemetry, cleanup: () => rmSync(baseDir, { recursive: true, force: true }) };
 }
 

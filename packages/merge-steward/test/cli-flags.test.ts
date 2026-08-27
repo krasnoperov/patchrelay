@@ -32,9 +32,9 @@ test("unknown flag on init exits 1 with error", async () => {
   assert.match(stderr.read(), /Unknown flag.*--bogus/);
 });
 
-test("unknown flag on repos exits 1 with error", async () => {
+test("unknown flag on repo list exits 1 with error", async () => {
   const stderr = createBufferStream();
-  const code = await runCli(["repos", "--bogus"], {
+  const code = await runCli(["repo", "list", "--bogus"], {
     stdout: createBufferStream().stream,
     stderr: stderr.stream,
   });
@@ -42,9 +42,9 @@ test("unknown flag on repos exits 1 with error", async () => {
   assert.match(stderr.read(), /Unknown flag.*--bogus/);
 });
 
-test("unknown flag on attach exits 1 with error", async () => {
+test("unknown flag on repo attach exits 1 with error", async () => {
   const stderr = createBufferStream();
-  const code = await runCli(["attach", "app", "owner/repo", "--bogus"], {
+  const code = await runCli(["repo", "attach", "app", "owner/repo", "--bogus"], {
     stdout: createBufferStream().stream,
     stderr: stderr.stream,
     runCommand: noop,
@@ -128,9 +128,9 @@ test("multiple unknown flags are reported together", async () => {
 
 // --- per-command --help flag ---
 
-test("repos --help shows repos usage", async () => {
+test("repo list --help shows repo usage", async () => {
   const stdout = createBufferStream();
-  const code = await runCli(["repos", "--help"], {
+  const code = await runCli(["repo", "list", "--help"], {
     stdout: stdout.stream,
     stderr: createBufferStream().stream,
   });
@@ -138,9 +138,9 @@ test("repos --help shows repos usage", async () => {
   assert.match(stdout.read(), /merge-steward repo attach <owner\/repo>/);
 });
 
-test("attach --help shows repos usage", async () => {
+test("repo attach --help shows repo usage", async () => {
   const stdout = createBufferStream();
-  const code = await runCli(["attach", "--help"], {
+  const code = await runCli(["repo", "attach", "--help"], {
     stdout: stdout.stream,
     stderr: createBufferStream().stream,
   });
@@ -201,9 +201,9 @@ test("doctor --help shows root usage", async () => {
 
 // --- help <topic> subcommand ---
 
-test("help repos shows repos usage", async () => {
+test("help repo shows repo usage", async () => {
   const stdout = createBufferStream();
-  const code = await runCli(["help", "repos"], {
+  const code = await runCli(["help", "repo"], {
     stdout: stdout.stream,
     stderr: createBufferStream().stream,
   });
@@ -211,7 +211,7 @@ test("help repos shows repos usage", async () => {
   assert.match(stdout.read(), /merge-steward repo attach <owner\/repo>/);
 });
 
-test("help repo shows repo usage", async () => {
+test("repo help remains canonical", async () => {
   const stdout = createBufferStream();
   const code = await runCli(["help", "repo"], {
     stdout: stdout.stream,
@@ -241,14 +241,14 @@ test("help queue shows queue usage", async () => {
   assert.match(stdout.read(), /merge-steward queue <command>/);
 });
 
-test("help attach shows repos usage (alias)", async () => {
-  const stdout = createBufferStream();
+test("removed help topic is rejected", async () => {
+  const stderr = createBufferStream();
   const code = await runCli(["help", "attach"], {
-    stdout: stdout.stream,
-    stderr: createBufferStream().stream,
+    stdout: createBufferStream().stream,
+    stderr: stderr.stream,
   });
-  assert.equal(code, 0);
-  assert.match(stdout.read(), /merge-steward repo attach <owner\/repo>/);
+  assert.equal(code, 1);
+  assert.match(stderr.read(), /Unknown help topic/);
 });
 
 test("help unknown exits 1 with error", async () => {

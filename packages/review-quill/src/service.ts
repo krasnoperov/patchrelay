@@ -235,13 +235,10 @@ export class ReviewQuillService {
    * Multiple passes can run concurrently — discovery is read-only against
    * the world (GitHub list calls + DB lookups + cheap eligibility math)
    * and the dispatch itself is dedupe'd by `inFlightReviews`. There's no
-   * global lock to wait on, so this method always returns `true` once the
-   * discovery completes; the boolean is kept for backward compat with the
-   * earlier `false = queued, will run later` semantics.
+   * global lock to wait on, so completion means this discovery pass finished.
    */
-  async triggerReconcile(repoFullName?: string): Promise<boolean> {
+  async triggerReconcile(repoFullName?: string): Promise<void> {
     await (repoFullName ? this.discoverRepoByName(repoFullName) : this.reconcileAll());
-    return true;
   }
 
   /**

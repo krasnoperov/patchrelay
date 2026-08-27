@@ -38,6 +38,6 @@ export async function fetchAttemptDetail(baseUrl: string, attemptId: number): Pr
   return await requestJson<ReviewAttemptDetail>(buildUrl(baseUrl, `/attempts/${attemptId}`));
 }
 
-export async function triggerReconcile(baseUrl: string): Promise<{ ok: true; started: boolean }> {
-  return await requestJson<{ ok: true; started: boolean }>(buildUrl(baseUrl, "/admin/reconcile"), { method: "POST" });
+export async function triggerReconcile(baseUrl: string): Promise<{ ok: true }> {
+  return await requestJson<{ ok: true }>(buildUrl(baseUrl, "/admin/reconcile"), { method: "POST" });
 }

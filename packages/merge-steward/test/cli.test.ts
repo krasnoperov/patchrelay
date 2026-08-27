@@ -143,7 +143,7 @@ test("merge-steward init and repo commands manage bootstrap state with explicit 
         assert.equal(inspected.mergeQueueCheckName, "custom/queue-eviction");
 
         const inspectByFullNameOut = createBufferStream();
-        assert.equal(await runCli(["repos", "owner/repo", "--json"], { stdout: inspectByFullNameOut.stream, stderr: createBufferStream().stream }), 0);
+        assert.equal(await runCli(["repo", "show", "owner/repo", "--json"], { stdout: inspectByFullNameOut.stream, stderr: createBufferStream().stream }), 0);
         const inspectedByFullName = JSON.parse(inspectByFullNameOut.read()) as Record<string, unknown>;
         assert.equal(inspectedByFullName.repoId, "app");
         assert.equal(inspectedByFullName.repoFullName, "owner/repo");
@@ -188,7 +188,7 @@ test("merge-steward init and repo commands manage bootstrap state with explicit 
   }
 });
 
-test("merge-steward attach fails cleanly before init", async () => {
+test("merge-steward repo attach fails cleanly before init", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "merge-steward-cli-no-init-"));
   try {
     await withEnv(
@@ -201,7 +201,7 @@ test("merge-steward attach fails cleanly before init", async () => {
       async () => {
         const stderr = createBufferStream();
         assert.equal(
-          await runCli(["attach", "app", "owner/repo"], {
+          await runCli(["repo", "attach", "app", "owner/repo"], {
             stdout: createBufferStream().stream,
             stderr: stderr.stream,
             runCommand: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
@@ -233,7 +233,7 @@ test("merge-steward queue commands inspect the local database when the service i
       async () => {
         const runCommand = async () => ({ exitCode: 0, stdout: "", stderr: "" });
         assert.equal(await runCli(["init", "queue.example.com"], { stdout: createBufferStream().stream, stderr: createBufferStream().stream, runCommand }), 0);
-        assert.equal(await runCli(["attach", "app", "owner/repo"], { stdout: createBufferStream().stream, stderr: createBufferStream().stream, runCommand }), 0);
+        assert.equal(await runCli(["repo", "attach", "app", "owner/repo"], { stdout: createBufferStream().stream, stderr: createBufferStream().stream, runCommand }), 0);
 
         const store = new SqliteStore(path.join(stateHome, "merge-steward", "app.sqlite"));
         const entry: QueueEntry = {
@@ -304,7 +304,7 @@ test("merge-steward queue show --pr prefers the latest active entry over histori
       async () => {
         const runCommand = async () => ({ exitCode: 0, stdout: "", stderr: "" });
         assert.equal(await runCli(["init", "queue.example.com"], { stdout: createBufferStream().stream, stderr: createBufferStream().stream, runCommand }), 0);
-        assert.equal(await runCli(["attach", "app", "owner/repo"], { stdout: createBufferStream().stream, stderr: createBufferStream().stream, runCommand }), 0);
+        assert.equal(await runCli(["repo", "attach", "app", "owner/repo"], { stdout: createBufferStream().stream, stderr: createBufferStream().stream, runCommand }), 0);
 
         const store = new SqliteStore(path.join(stateHome, "merge-steward", "app.sqlite"));
         store.insert({

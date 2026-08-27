@@ -11,7 +11,7 @@ test("repairing_ci issues with an unseen failure signature become ready without 
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-db-ready-workflowTask-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "usertold",
@@ -65,7 +65,7 @@ test("idle sweep re-enqueues issues whose workflowTask exists only as a runnable
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-db-ready-workflowTask-task-only-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "usertold",
@@ -102,7 +102,7 @@ test("terminal issues with only a session-event workflowTask are not ready for e
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-db-ready-workflowTask-terminal-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
 
     db.upsertIssue({
       projectId: "usertold",

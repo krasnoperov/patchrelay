@@ -91,16 +91,10 @@ test("loadConfig expands env vars, resolves paths, and honors runtime overrides"
         enabled: true,
         bearer_token_env: "PATCHRELAY_OPERATOR_TOKEN",
       },
-      projects: [
+      repositories: [
         {
-          id: "usertold",
-          repo_path: "./repo",
-          worktree_root: "./worktrees",
-          trusted_actors: {
-            ids: ["user_123"],
-            emails: ["owner@example.com"],
-            email_domains: ["example.com"],
-          },
+          github_repo: "usertold",
+          local_path: "./repo",
           trigger_events: ["statusChanged"],
           branch_prefix: "use",
         },
@@ -143,17 +137,10 @@ test("loadConfig expands env vars, resolves paths, and honors runtime overrides"
         assert.equal(config.operatorApi.enabled, true);
         assert.equal(config.operatorApi.bearerToken, "operator-secret");
         assert.equal(config.projects[0]?.repoPath, path.join(baseDir, "repo"));
-        assert.equal(config.projects[0]?.worktreeRoot, path.join(baseDir, "worktrees"));
         assert.deepEqual(config.projects[0]?.repairBudgets, {
           ciRepair: 10,
           queueRepair: 10,
           reviewFix: 3,
-        });
-        assert.deepEqual(config.projects[0]?.trustedActors, {
-          ids: ["user_123"],
-          names: [],
-          emails: ["owner@example.com"],
-          emailDomains: ["example.com"],
         });
         assert.equal(config.runner.codex.shellBin, "/bin/bash");
         assert.equal(config.runner.codex.sourceBashrc, true);
@@ -197,11 +184,10 @@ test("loadConfig defaults to the XDG config path when PATCHRELAY_CONFIG is unset
         webhook_secret_env: "REQUIRED_SECRET",
         ...oauthConfig,
       },
-      projects: [
+      repositories: [
         {
-          id: "usertold",
-          repo_path: repoPath,
-          worktree_root: worktreeRoot,
+          github_repo: "usertold",
+          local_path: repoPath,
           trigger_events: ["statusChanged"],
           branch_prefix: "use",
         },
@@ -253,11 +239,10 @@ test("loadConfig resolves installation prompt files relative to the config file"
           },
         },
       },
-      projects: [
+      repositories: [
         {
-          id: "usertold",
-          repo_path: repoPath,
-          worktree_root: worktreeRoot,
+          github_repo: "usertold",
+          local_path: repoPath,
           trigger_events: ["statusChanged"],
           branch_prefix: "use",
         },
@@ -305,11 +290,10 @@ test("loadConfig injects default PatchRelay developer instructions and appends l
           developer_instructions: "Always preserve the repo's public API shape.",
         },
       },
-      projects: [
+      repositories: [
         {
-          id: "usertold",
-          repo_path: repoPath,
-          worktree_root: worktreeRoot,
+          github_repo: "usertold",
+          local_path: repoPath,
           trigger_events: ["statusChanged"],
           branch_prefix: "use",
         },
@@ -326,7 +310,7 @@ test("loadConfig injects default PatchRelay developer instructions and appends l
         const config = loadConfig();
         assert.match(String(config.runner.codex.developerInstructions ?? ""), /You are PatchRelay's coding agent\./);
         assert.match(String(config.runner.codex.developerInstructions ?? ""), /For repair runs, work on the existing PR branch and do not open a new PR\./);
-        assert.match(String(config.runner.codex.developerInstructions ?? ""), /If you change schema, enums, shared vocabulary, normalization helpers, or compatibility mappings, inspect the main read\/write paths that can bypass the new abstraction and fix or cover any mismatch before publishing\./);
+        assert.match(String(config.runner.codex.developerInstructions ?? ""), /If you change schema, enums, shared vocabulary, or normalization helpers, inspect the main read\/write paths that can bypass the new abstraction and fix or cover any mismatch before publishing\./);
         assert.match(String(config.runner.codex.developerInstructions ?? ""), /For CI repair, do not change code or config until you either reproduce the failure on the exact failing head or can point to a concrete log signature that justifies the fix\./);
         assert.match(String(config.runner.codex.developerInstructions ?? ""), /## Local Developer Instructions/);
         assert.match(String(config.runner.codex.developerInstructions ?? ""), /Always preserve the repo's public API shape\./);
@@ -363,11 +347,10 @@ test("loadConfig reads service secrets from the default adjacent service.env fil
         webhook_secret_env: "REQUIRED_SECRET",
         ...oauthConfig,
       },
-      projects: [
+      repositories: [
         {
-          id: "usertold",
-          repo_path: repoPath,
-          worktree_root: worktreeRoot,
+          github_repo: "usertold",
+          local_path: repoPath,
           trigger_events: ["statusChanged"],
           branch_prefix: "use",
         },
@@ -428,11 +411,10 @@ test("loadConfig keeps local cli profile from reading service.env secrets", () =
         webhook_secret_env: "REQUIRED_SECRET",
         ...oauthConfig,
       },
-      projects: [
+      repositories: [
         {
-          id: "usertold",
-          repo_path: repoPath,
-          worktree_root: worktreeRoot,
+          github_repo: "usertold",
+          local_path: repoPath,
           trigger_events: ["statusChanged"],
           branch_prefix: "use",
         },
@@ -533,11 +515,10 @@ test("loadConfig derives the OAuth redirect URI from server.public_base_url when
         webhook_secret_env: "REQUIRED_SECRET",
         ...oauthConfigWithoutRedirect,
       },
-      projects: [
+      repositories: [
         {
-          id: "usertold",
-          repo_path: repoPath,
-          worktree_root: worktreeRoot,
+          github_repo: "usertold",
+          local_path: repoPath,
           trigger_events: ["statusChanged"],
           branch_prefix: "use",
         },
@@ -589,11 +570,10 @@ test("loadConfig derives the OAuth redirect URI from the local bind and port whe
         webhook_secret_env: "REQUIRED_SECRET",
         ...oauthConfigWithoutRedirect,
       },
-      projects: [
+      repositories: [
         {
-          id: "usertold",
-          repo_path: repoPath,
-          worktree_root: worktreeRoot,
+          github_repo: "usertold",
+          local_path: repoPath,
           trigger_events: ["statusChanged"],
           branch_prefix: "use",
         },
@@ -650,11 +630,10 @@ test("loadConfig applies default app-mode trigger events when trigger_events is 
           actor: "app",
         },
       },
-      projects: [
+      repositories: [
         {
-          id: "usertold",
-          repo_path: repoPath,
-          worktree_root: worktreeRoot,
+          github_repo: "usertold",
+          local_path: repoPath,
           branch_prefix: "use",
         },
       ],
@@ -691,10 +670,10 @@ test("loadConfig derives project worktree_root and branch_prefix when omitted", 
         webhook_secret_env: "REQUIRED_SECRET",
         ...oauthConfigWithoutRedirect,
       },
-      projects: [
+      repositories: [
         {
-          id: "Usertold App",
-          repo_path: repoPath,
+          github_repo: "Usertold App",
+          local_path: repoPath,
         },
       ],
     });
@@ -937,11 +916,10 @@ test("loadConfig rejects OAuth redirect URIs with a nonstandard callback path", 
           actor: "app",
         },
       },
-      projects: [
+      repositories: [
         {
-          id: "usertold",
-          repo_path: "./repo",
-          worktree_root: "./worktrees",
+          github_repo: "usertold",
+          local_path: "./repo",
           trigger_events: ["statusChanged"],
           branch_prefix: "use",
         },
@@ -996,19 +974,17 @@ test("loadConfig rejects overlapping project routing and unsafe operator API exp
       operator_api: {
         enabled: true,
       },
-      projects: [
+      repositories: [
         {
-          id: "one",
-          repo_path: "./repo-one",
-          worktree_root: "./worktrees-one",
+          github_repo: "one",
+          local_path: "./repo-one",
           issue_key_prefixes: ["USE"],
           trigger_events: ["statusChanged"],
           branch_prefix: "use",
         },
         {
-          id: "two",
-          repo_path: "./repo-two",
-          worktree_root: "./worktrees-two",
+          github_repo: "two",
+          local_path: "./repo-two",
           issue_key_prefixes: ["USE"],
           trigger_events: ["statusChanged"],
           branch_prefix: "use2",
@@ -1059,11 +1035,10 @@ test("loadConfig rejects operator API exposure without a bearer token outside lo
       operator_api: {
         enabled: true,
       },
-      projects: [
+      repositories: [
         {
-          id: "usertold",
-          repo_path: "./repo",
-          worktree_root: "./worktrees",
+          github_repo: "usertold",
+          local_path: "./repo",
           trigger_events: ["statusChanged"],
           branch_prefix: "use",
         },
@@ -1090,7 +1065,7 @@ test("loadConfig rejects operator API exposure without a bearer token outside lo
   }
 });
 
-test("loadConfig supports trusted actor names and domains", () => {
+test("loadConfig preserves trusted actor configuration on repositories", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-trust-"));
 
   try {
@@ -1115,11 +1090,10 @@ test("loadConfig supports trusted actor names and domains", () => {
         webhook_secret_env: "REQUIRED_SECRET",
         ...oauthConfig,
       },
-      projects: [
+      repositories: [
         {
-          id: "one",
-          repo_path: "./repo",
-          worktree_root: "./worktrees",
+          github_repo: "one",
+          local_path: "./repo",
           trusted_actors: {
             names: ["Owner Name"],
             email_domains: ["trusted.example"],
@@ -1176,11 +1150,10 @@ test("loadConfig only requires service secrets in the service profile", () => {
         webhook_secret_env: "REQUIRED_SECRET",
         ...oauthConfig,
       },
-      projects: [
+      repositories: [
         {
-          id: "usertold",
-          repo_path: "./repo",
-          worktree_root: "./worktrees",
+          github_repo: "usertold",
+          local_path: "./repo",
           trigger_events: ["statusChanged"],
           branch_prefix: "use",
         },

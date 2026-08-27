@@ -53,24 +53,17 @@ test("parseRunContext parses a CI-repair failure context with nested snapshot", 
   assert.equal(context?.ciSnapshot?.failedChecks?.[0]?.name, "verify");
 });
 
-test("parseRunContext accepts legacy shapes with fields no current code writes", () => {
-  // Older versions persisted contexts with fields like mergeQueueContext and
-  // userComment, plus producer-specific extra keys. Those rows must still parse.
+test("parseRunContext keeps only the current context shape", () => {
   const context = parseRunContext(JSON.stringify({
-    userComment: "please fix",
-    mergeQueueContext: {
-      baseBranch: "main",
-      conflictingFiles: ["src/a.ts"],
-      operatorHints: ["rebase first"],
-    },
-    runType: "main_repair", // removed run type — must survive as a plain string
+    workflowReason: "delegated",
     someFieldFromAnOlderVersion: { nested: true },
   }));
-  assert.equal(context?.userComment, "please fix");
-  assert.deepEqual(context?.mergeQueueContext?.conflictingFiles, ["src/a.ts"]);
-  assert.equal(context?.runType, "main_repair");
-  // Unknown top-level keys pass through at runtime (loose object).
-  assert.deepEqual((context as Record<string, unknown>).someFieldFromAnOlderVersion, { nested: true });
+  assert.equal(context?.workflowReason, "delegated");
+  assert.equal("someFieldFromAnOlderVersion" in (context ?? {}), false);
+  assert.throws(
+    () => parseRunContext(JSON.stringify({ runType: "main_repair" })),
+    /runType/,
+  );
 });
 
 test("parseRunContext throws RunContextParseError on malformed JSON", () => {
@@ -134,14 +127,14 @@ test("serializeRunContext rejects shapes the parser would reject", () => {
 });
 
 test("parseRunContextValue validates already-parsed values", () => {
-  assert.equal(parseRunContextValue({ headSha: "abc" }).headSha, "abc");
+  assert.equal(parseRunContextValue({ failureHeadSha: "abc" }).failureHeadSha, "abc");
   assert.throws(() => parseRunContextValue("not an object"), RunContextParseError);
-  assert.throws(() => parseRunContextValue({ headSha: 42 }), RunContextParseError);
+  assert.throws(() => parseRunContextValue({ failureHeadSha: 42 }), RunContextParseError);
 });
 
 test("tryParseRunContextValue returns undefined instead of throwing", () => {
-  assert.equal(tryParseRunContextValue({ headSha: 42 }), undefined);
-  assert.equal(tryParseRunContextValue({ headSha: "abc" })?.headSha, "abc");
+  assert.equal(tryParseRunContextValue({ failureHeadSha: 42 }), undefined);
+  assert.equal(tryParseRunContextValue({ failureHeadSha: "abc" })?.failureHeadSha, "abc");
 });
 
 test("nested objects strip unknown keys instead of passing them through", () => {

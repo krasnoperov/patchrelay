@@ -59,7 +59,7 @@ test("webhook event retention dry-run counts old processed events without deleti
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const old = "2026-01-01T00:00:00.000Z";
     const stored = db.webhookEvents.insertFullWebhookEvent({ webhookId: "old-1", receivedAt: old, payloadJson: "{\"ok\":true}" });
     db.webhookEvents.markWebhookProcessed(stored.id, "processed");
@@ -84,7 +84,7 @@ test("webhook event retention archives processed events and preserves pending ev
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const old = "2026-01-01T00:00:00.000Z";
     const processed = db.webhookEvents.insertFullWebhookEvent({ webhookId: "old-processed", receivedAt: old, payloadJson: "{\"processed\":true}" });
     db.webhookEvents.markWebhookProcessed(processed.id, "processed");

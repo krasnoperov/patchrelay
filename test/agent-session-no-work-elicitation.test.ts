@@ -15,7 +15,7 @@ async function run(active: boolean): Promise<Array<{ content: { type: string; bo
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-no-work-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), false);
-    db.runMigrations();
+    db.initializeSchema();
     const issue = db.upsertIssue({
       projectId: PROJECT,
       linearIssueId: "issue-1",

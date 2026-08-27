@@ -67,7 +67,6 @@ function createConfig(baseDir: string): AppConfig {
         worktreeRoot: path.join(baseDir, "worktrees"),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
-        allowLabels: [],
         triggerEvents: ["statusChanged"],
         branchPrefix: "use",
       },
@@ -96,24 +95,25 @@ test("runPreflight reports a healthy local setup", async () => {
   }
 });
 
-test("runPreflight can validate a live database without initializing schema objects", async () => {
+test("runPreflight rejects an incompatible live database without mutating it", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-preflight-readonly-"));
   const config = createConfig(baseDir);
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
   mkdirSync(path.dirname(config.database.path), { recursive: true });
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
   try {
-    db.runMigrations();
+    db.initializeSchema();
     const raw = db.unsafeRawConnectionForTests();
     raw.exec("ALTER TABLE issues ADD COLUMN pending_run_type TEXT");
 
     const report = await runPreflight(config, {
       connectivity: false,
       skipServiceCheck: true,
-      migrateDatabase: false,
+      initializeDatabase: false,
     });
 
-    assert.equal(report.ok, true);
+    assert.equal(report.ok, false);
+    assert.ok(report.checks.some((check) => check.scope === "database_schema" && check.status === "fail"));
     const columns = raw.prepare("PRAGMA table_info(issues)").all().map((row) => row.name);
     assert.ok(columns.includes("pending_run_type"), "read-only preflight must not alter the live issues table");
   } finally {

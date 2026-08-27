@@ -7,6 +7,7 @@ import test from "node:test";
 import { assertIssuePhase } from "./assert-issue-phase.ts";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { RunOrchestrator } from "../src/run-orchestrator.ts";
+import { createTestRunOrchestrator } from "./helpers/workflow-task-dispatcher.ts";
 import type { CodexTurnSummary } from "../src/codex-types.ts";
 import type { RunRecord } from "../src/db-types.ts";
 import type { AppConfig } from "../src/types.ts";
@@ -72,7 +73,6 @@ function createConfig(baseDir: string): AppConfig {
         worktreeRoot: path.join(baseDir, "worktrees"),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
-        allowLabels: [],
         triggerEvents: ["statusChanged"],
         branchPrefix: "use",
         github: {
@@ -87,9 +87,9 @@ function createConfig(baseDir: string): AppConfig {
 function createHarness(baseDir: string, latestTurn: CodexTurnSummary, threadId: string) {
   const config = createConfig(baseDir);
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
-  const orchestrator = new RunOrchestrator(
+  const orchestrator = createTestRunOrchestrator(
     config,
     db,
     {

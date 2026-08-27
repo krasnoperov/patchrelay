@@ -198,7 +198,7 @@ function deriveInputInboxContext(
       Object.assign(context, payload);
       const summary = typeof payload.completionCheckSummary === "string"
         ? payload.completionCheckSummary
-        : typeof payload.summary === "string" ? payload.summary : undefined;
+        : undefined;
       if (summary?.trim()) context.completionCheckSummary = summary.trim();
       context.completionCheckMode = true;
     } else {
@@ -210,8 +210,7 @@ function deriveInputInboxContext(
         workflowReason = inputKind;
       }
       if (payload.collaborationMode === true) context.collaborationMode = true;
-      const text = typeof payload.text === "string" ? payload.text
-        : typeof payload.body === "string" ? payload.body : undefined;
+      const text = typeof payload.text === "string" ? payload.text : undefined;
       if (text) {
         followUps.push({
           type: inputKind,

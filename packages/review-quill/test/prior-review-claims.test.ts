@@ -76,7 +76,7 @@ test("buildPriorReviewClaims tolerates [bot] suffix on selfLogin (github apps)",
   assert.equal(claims.length, 0, "bot suffix should match so fresh-start still triggers");
 });
 
-test("buildPriorReviewClaims without selfLogin falls back to the legacy behavior", () => {
+test("buildPriorReviewClaims without selfLogin uses the unfiltered ordering", () => {
   const reviews = [
     review({ id: 1, body: "**Verdict: 🛑 Request changes** — One." }),
     review({ id: 2, body: "**Verdict: 🛑 Request changes** — Two." }),
@@ -84,7 +84,7 @@ test("buildPriorReviewClaims without selfLogin falls back to the legacy behavior
     review({ id: 4, body: "**Verdict: 🛑 Request changes** — Four." }),
   ];
   const claims = buildPriorReviewClaims(reviews);
-  // Legacy: sorted by decisive-first then newest, capped at 3. No fresh-start.
+  // Without bot identity, claims are sorted decisive-first then newest and capped at 3.
   assert.equal(claims.length, 3);
 });
 

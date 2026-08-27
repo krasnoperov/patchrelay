@@ -111,7 +111,7 @@ export async function startMultiServer(): Promise<void> {
   setRuntimeGitHubAuthProvider(undefined);
 
   if (configs.length === 0) {
-    logger.warn("No repo configs found. Run `merge-steward attach <owner/repo>` to add repos.");
+    logger.warn("No repo configs found. Run `merge-steward repo attach <owner/repo>` to add repos.");
   }
 
   if (githubAuth.mode === "app") {

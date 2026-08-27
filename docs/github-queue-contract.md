@@ -148,7 +148,7 @@ does not synthesize or review Merge Steward's integration commit.
 
 A PR carrying the configured no-cache label (default `review:no-cache`) is always re-reviewed even when the patch is unchanged.
 
-Carry-forward only fires for stored verdicts that include the rendered review body and event. Rows from before the carry-forward migration have NULL bodies and naturally fall through to a fresh review (rollout safety).
+Carry-forward only fires for stored verdicts that include the rendered review body and event.
 
 ## Configurable names per service
 

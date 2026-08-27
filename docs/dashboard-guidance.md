@@ -5,7 +5,7 @@ Dashboard views should show what the operator needs to do next without exposing 
 This applies to:
 
 - PatchRelay issue dashboard and detail views
-- review-quill watch/dashboard views
+- review-quill dashboard views
 - merge-steward queue dashboard and detail views
 
 ## Core Rules

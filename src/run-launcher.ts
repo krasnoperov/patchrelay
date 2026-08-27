@@ -312,7 +312,7 @@ export class RunLauncher {
           ...(params.authorityEpoch !== undefined ? { authorityEpoch: params.authorityEpoch } : {}),
           promptText: params.prompt,
         });
-        const failureHeadSha = params.effectiveContext?.failureHeadSha ?? params.effectiveContext?.headSha;
+        const failureHeadSha = params.effectiveContext?.failureHeadSha;
         const failureSignature = params.effectiveContext?.failureSignature;
         const claimUpdate = {
           projectId: params.item.projectId,

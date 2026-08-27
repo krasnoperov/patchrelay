@@ -180,7 +180,7 @@ test("doctor with --repo validates repo config", async () => {
           stderr: createBufferStream().stream,
           runCommand: noop,
         });
-        await runCli(["attach", "app", "owner/repo"], {
+        await runCli(["repo", "attach", "app", "owner/repo"], {
           stdout: createBufferStream().stream,
           stderr: createBufferStream().stream,
           runCommand: noop,
@@ -219,7 +219,7 @@ test("doctor reports the configured queue eviction check", async () => {
           stderr: createBufferStream().stream,
           runCommand: noop,
         });
-        await runCli(["attach", "app", "owner/repo", "--merge-queue-check-name", "custom/queue-eviction"], {
+        await runCli(["repo", "attach", "app", "owner/repo", "--merge-queue-check-name", "custom/queue-eviction"], {
           stdout: createBufferStream().stream,
           stderr: createBufferStream().stream,
           runCommand: noop,
@@ -431,7 +431,7 @@ test("doctor reports GitHub base branch and required checks truthfully", async (
           stderr: createBufferStream().stream,
           runCommand: noop,
         });
-        await runCli(["attach", "app", "owner/repo", "--base-branch", "release"], {
+        await runCli(["repo", "attach", "app", "owner/repo", "--base-branch", "release"], {
           stdout: createBufferStream().stream,
           stderr: createBufferStream().stream,
           runCommand: noop,

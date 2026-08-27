@@ -64,7 +64,6 @@ function createConfig(baseDir: string): AppConfig {
         worktreeRoot: path.join(baseDir, "worktrees"),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
-        allowLabels: [],
         triggerEvents: ["statusChanged"],
         branchPrefix: "use",
         github: {
@@ -81,7 +80,7 @@ test("startup recovery repairs re-delegated paused local work even without an ag
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -156,7 +155,7 @@ test("startup recovery discovers delegated Linear issues missing from the local 
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -242,7 +241,7 @@ test("startup recovery re-queues delegated requested-changes work after a restar
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -319,7 +318,7 @@ test("startup recovery does not resync idle paused issues just because they stil
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     db.upsertIssue({
       projectId: "usertold",
@@ -362,7 +361,7 @@ test("startup recovery does not scan webhook history for idle issues without act
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     db.upsertIssue({
       projectId: "usertold",
@@ -402,7 +401,7 @@ test("startup recovery still resyncs active runs with agent sessions", async () 
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "usertold",
@@ -456,7 +455,7 @@ test("startup recovery reconciles PR facts into durable workflow tasks", () => {
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     db.upsertIssue({
       projectId: "usertold",

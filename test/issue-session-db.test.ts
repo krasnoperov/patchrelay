@@ -11,7 +11,7 @@ test("issue sessions retain operational pointers and summaries without lifecycle
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-dual-write-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "usertold",
@@ -85,7 +85,7 @@ test("issue session keeps the last published summary when a later stale repair f
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-summary-fallback-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "usertold",
@@ -118,6 +118,7 @@ test("issue session keeps the last published summary when a later stale repair f
       activeRunId: null,
       workflowOutcome: undefined,
       prNumber: 42,
+      prState: "open",
       prHeadSha: "sha-42",
       prAuthorLogin: "patchrelay[bot]",
     });
@@ -159,7 +160,7 @@ test("issue session leases can be acquired, renewed, and reclaimed after expiry"
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-lease-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-lease",
@@ -222,7 +223,7 @@ test("lease-guarded writes reject stale issue-session leases", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-lease-guards-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
     const issue = db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-lease-guards",
@@ -311,7 +312,7 @@ test("startup lease cleanup expires only stale issue-session leases", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-expire-leases-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-stale-lease",
@@ -362,7 +363,7 @@ test("active-lease-aware helpers use the current live lease for control writes",
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-active-lease-helpers-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-active-lease",
@@ -373,7 +374,7 @@ test("active-lease-aware helpers use the current live lease for control writes",
       projectId: "usertold",
       linearIssueId: "issue-active-lease",
       eventType: "followup_comment",
-      eventJson: JSON.stringify({ body: "hello" }),
+      eventJson: JSON.stringify({ text: "hello" }),
     });
 
     assert.equal(
@@ -433,7 +434,7 @@ test("issue session input derives follow-up mode and thread reuse from queued ev
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-events-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-followup",
@@ -453,7 +454,7 @@ test("issue session input derives follow-up mode and thread reuse from queued ev
       projectId: "usertold",
       linearIssueId: "issue-followup",
       eventType: "followup_comment",
-      eventJson: JSON.stringify({ body: "And keep the API stable.", author: "bob" }),
+      eventJson: JSON.stringify({ text: "And keep the API stable.", author: "bob" }),
     });
 
     const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-followup");
@@ -472,7 +473,7 @@ test("followup_comment alone reuses the main thread for the next turn", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-comment-followup-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-comment-followup",
@@ -486,7 +487,7 @@ test("followup_comment alone reuses the main thread for the next turn", () => {
       projectId: "usertold",
       linearIssueId: "issue-comment-followup",
       eventType: "followup_comment",
-      eventJson: JSON.stringify({ body: "Please keep the current copy.", author: "alice" }),
+      eventJson: JSON.stringify({ text: "Please keep the current copy.", author: "alice" }),
     });
 
     const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-comment-followup");
@@ -503,7 +504,7 @@ test("orchestration child delivery queues workflow tasks the next turn on the sa
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-child-delivered-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-parent",
@@ -536,7 +537,7 @@ test("canonical child issues exclude duplicate and canceled Linear children", ()
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-canonical-children-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-parent",
@@ -610,7 +611,7 @@ test("direct_reply queues workflow tasks the next turn in direct-reply mode on t
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-direct-reply-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-direct-reply",
@@ -622,7 +623,7 @@ test("direct_reply queues workflow tasks the next turn in direct-reply mode on t
       projectId: "usertold",
       linearIssueId: "issue-direct-reply",
       eventType: "direct_reply",
-      eventJson: JSON.stringify({ body: "Use the staged rollout copy.", author: "alice" }),
+      eventJson: JSON.stringify({ text: "Use the staged rollout copy.", author: "alice" }),
     });
 
     const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-direct-reply");
@@ -640,7 +641,7 @@ test("terminal session events suppress queued follow-up workflow tasks", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-terminal-events-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-terminal",
@@ -653,7 +654,7 @@ test("terminal session events suppress queued follow-up workflow tasks", () => {
       projectId: "usertold",
       linearIssueId: "issue-terminal",
       eventType: "followup_comment",
-      eventJson: JSON.stringify({ body: "Please adjust the copy." }),
+      eventJson: JSON.stringify({ text: "Please adjust the copy." }),
     });
     db.issueSessions.appendIssueSessionEvent({
       projectId: "usertold",
@@ -673,7 +674,7 @@ test("self comments are not treated as pending actionable workflow tasks", () =>
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-self-comment-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-self-comment",
@@ -699,7 +700,7 @@ test("same-head requested-changes events coalesce and keep the richer payload", 
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-review-coalesce-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-review-coalesce",
@@ -759,7 +760,7 @@ test("updateRunThread does not resurrect a run that already ended", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-ended-run-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
     const issue = db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-ended-run",

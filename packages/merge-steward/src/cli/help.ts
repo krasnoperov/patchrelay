@@ -81,10 +81,6 @@ function repoHelpText(): string {
     "  --refresh                    Re-discover the base branch from GitHub",
     "  --json                       Emit structured JSON",
     "",
-    "Compatibility aliases:",
-    "  merge-steward attach ...     Alias for `merge-steward repo attach ...`",
-    "  merge-steward repos ...      Alias for `merge-steward repo list/show ...`",
-    "",
     "Examples:",
     "  merge-steward repo attach owner/repo",
     "  merge-steward repo attach owner/repo --refresh",
@@ -126,7 +122,6 @@ function queueHelpText(): string {
 export function helpTextFor(topic: HelpTopic): string {
   switch (topic) {
     case "repo":
-    case "repos":
       return repoHelpText();
     case "service":
       return serviceHelpText();

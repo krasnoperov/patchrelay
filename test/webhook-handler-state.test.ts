@@ -78,7 +78,6 @@ function createConfig(baseDir: string): AppConfig {
         worktreeRoot: path.join(baseDir, "worktrees"),
         issueKeyPrefixes: ["MAF"],
         linearTeamIds: ["team-maf"],
-        allowLabels: [],
         triggerEvents: ["issueCreated", "statusChanged", "assignmentChanged", "delegateChanged"],
         branchPrefix: "maf",
         github: {
@@ -142,7 +141,7 @@ test("non-delegated backlog issue webhooks do not create tracked issues", async 
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const handler = new WebhookHandler(
       config,
@@ -186,7 +185,7 @@ test("delegated blocked issue is tracked but does not queue implementation until
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -332,7 +331,7 @@ test("delegated issue with only completed blockers queues implementation immedia
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -424,7 +423,7 @@ test("delegated blocked agent session is acknowledged without queueing implement
       triggerEvents: ["delegateChanged", "statusChanged", "agentSessionCreated", "agentPrompted", "commentCreated", "commentUpdated"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -551,7 +550,7 @@ test("agent session acknowledgement failures do not block later session sync", a
       triggerEvents: ["delegateChanged", "statusChanged", "agentSessionCreated", "agentPrompted", "commentCreated", "commentUpdated"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -639,7 +638,7 @@ test("external blocker completion releases delegated dependents without tracking
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -782,7 +781,7 @@ test("delegated issue webhooks enqueue implementation workflowTask immediately w
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -861,7 +860,7 @@ test("issue becoming blocked during implementation releases the active run and p
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -984,7 +983,7 @@ test("completed blocker added during implementation does not release the active 
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -1105,7 +1104,7 @@ test("delegated issue is tracked via repository-link installation fallback", asy
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -1167,7 +1166,7 @@ test("delegated issue is tracked via single-installation fallback", async () => 
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -1222,7 +1221,7 @@ test("incomplete webhook relations do not clear existing blockers when live hydr
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -1290,7 +1289,7 @@ test("done delegated issue does not requeue implementation after merged status e
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -1359,7 +1358,7 @@ test("in-review status echo keeps an undecided open PR in review without requeue
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -1428,7 +1427,7 @@ test("un-delegation during active run releases the run and derives a paused phas
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -1537,7 +1536,7 @@ test("un-delegation webhook syncs the issue back to a queued Linear state immedi
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -1656,7 +1655,7 @@ test("terminal Linear completion during active run records Linear state but keep
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -1742,7 +1741,7 @@ test("un-delegation preserves downstream PR facts while deriving a paused phase"
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -1810,7 +1809,7 @@ test("status webhook preserves previous delegation when live Linear hydration fa
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -1881,7 +1880,7 @@ test("re-delegation resumes requested-changes issue from PR state instead of res
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -1970,7 +1969,7 @@ test("delegateChanged adopts an attached same-repo PR without requiring hidden o
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -2065,7 +2064,7 @@ test("statusChanged adopts a linked same-repo PR before starting implementation"
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -2158,7 +2157,7 @@ test("delegateChanged adopts a linked same-repo PR with failing CI", { concurren
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -2247,7 +2246,7 @@ test("delegateChanged adopts a linked draft PR as implementation work", { concur
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -2342,7 +2341,7 @@ test("delegateChanged adopts a linked closed same-repo PR as replacement impleme
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -2432,7 +2431,7 @@ test("delegateChanged moves linked cross-repo PR adoption to awaiting_input", { 
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -2504,7 +2503,7 @@ test("delegateChanged rejects ambiguous multiple PR attachments instead of guess
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -2578,7 +2577,7 @@ test("later issue webhooks recover missed re-delegation from live Linear delegat
       triggerEvents: [...config.projects[0]!.triggerEvents, "commentUpdated"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -2679,7 +2678,7 @@ test("re-delegation preserves completion-check questions instead of restarting i
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -2764,7 +2763,7 @@ test("re-delegation resumes paused local work from implementing state", async ()
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -2832,7 +2831,7 @@ test("issueRemoved releases active run and transitions to failed", async () => {
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -2908,7 +2907,7 @@ test("issueRemoved without an active run marks the issue failed and clears pendi
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -2974,7 +2973,7 @@ test("idle delegated comments with explicit PatchRelay intent queue a follow-up 
       triggerEvents: [...config.projects[0]!.triggerEvents, "commentCreated", "commentUpdated"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -3055,7 +3054,7 @@ test("idle comments without explicit PatchRelay intent are ignored", async () =>
       triggerEvents: [...config.projects[0]!.triggerEvents, "commentCreated", "commentUpdated"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -3134,7 +3133,7 @@ test("idle delegated comments with PatchRelay status intent do not queue impleme
       triggerEvents: [...config.projects[0]!.triggerEvents, "commentCreated", "commentUpdated"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -3215,7 +3214,7 @@ test("plain human comments on awaiting_input resume work as direct replies on th
       triggerEvents: [...config.projects[0]!.triggerEvents, "commentCreated", "commentUpdated"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -3299,7 +3298,7 @@ test("plain comments cannot resume awaiting_input when the actor is non-human or
       triggerEvents: [...config.projects[0]!.triggerEvents, "commentCreated", "commentUpdated"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -3398,7 +3397,7 @@ test("explicit PatchRelay comments on awaiting_input resume work as direct repli
       triggerEvents: [...config.projects[0]!.triggerEvents, "commentCreated", "commentUpdated"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -3481,7 +3480,7 @@ test("explicit PatchRelay answers to outstanding questions are classified as dir
       triggerEvents: [...config.projects[0]!.triggerEvents, "commentCreated", "commentUpdated"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -3574,7 +3573,7 @@ test("PatchRelay-authored comments are recorded as inert session events without 
       triggerEvents: [...config.projects[0]!.triggerEvents, "commentCreated", "commentUpdated"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -3655,7 +3654,7 @@ test("PatchRelay managed status comment updates stay inert even when the webhook
       triggerEvents: [...config.projects[0]!.triggerEvents, "commentCreated", "commentUpdated"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -3743,7 +3742,7 @@ test("PatchRelay-generated escalation activity comments stay inert even when Lin
       triggerEvents: [...config.projects[0]!.triggerEvents, "commentCreated", "commentUpdated"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -3825,7 +3824,7 @@ test("PatchRelay agent activity echoes do not steer active runs or queue follow-
       triggerEvents: [...config.projects[0]!.triggerEvents, "agentPrompted"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -3937,7 +3936,7 @@ test("real agent prompt events still steer active runs", async () => {
       triggerEvents: [...config.projects[0]!.triggerEvents, "agentPrompted"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -4049,7 +4048,7 @@ test("active collaboration follow-ups steer the same turn without triggering und
       triggerEvents: [...config.projects[0]!.triggerEvents, "agentPrompted"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -4165,7 +4164,7 @@ test("queued collaboration follow-ups remain runnable while the issue is undeleg
       triggerEvents: [...config.projects[0]!.triggerEvents, "agentPrompted"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -4257,7 +4256,7 @@ test("delegating active collaboration steers a turn-boundary handoff without int
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -4358,7 +4357,7 @@ test("hydrated delegation after collaboration completion preserves the draft for
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -4471,7 +4470,7 @@ test("un-delegating active collaboration preserves the conversation and session"
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -4574,7 +4573,7 @@ test("active delegated agent status prompts answer as thoughts without steering 
       triggerEvents: [...config.projects[0]!.triggerEvents, "agentPrompted"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -4688,7 +4687,7 @@ test("active agent prompt delivery failure records diagnostics and Linear-visibl
       triggerEvents: [...config.projects[0]!.triggerEvents, "agentPrompted"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -4807,7 +4806,7 @@ test("idle delegated agent status prompts respond without queueing implementatio
       triggerEvents: [...config.projects[0]!.triggerEvents, "agentPrompted"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -4911,7 +4910,7 @@ test("idle delegated agent retry prompts queue follow-up implementation", async 
       triggerEvents: [...config.projects[0]!.triggerEvents, "agentPrompted"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -5007,7 +5006,7 @@ test("agent prompts on completed PRs reopen work as replacement PR runs with pri
       triggerEvents: [...config.projects[0]!.triggerEvents, "agentPrompted"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -5123,7 +5122,7 @@ test("agent signal stop requests halt the active run and emit a stop_requested s
       triggerEvents: [...config.projects[0]!.triggerEvents, "agentSignal"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -5253,7 +5252,7 @@ test("agent signal stop does not claim success when Codex interrupt times out", 
       triggerEvents: [...config.projects[0]!.triggerEvents, "agentSignal"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -5360,7 +5359,7 @@ test("stop before collaboration launch cancels inbox work so reconciliation cann
       triggerEvents: [...config.projects[0]!.triggerEvents, "agentSignal"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -5460,7 +5459,7 @@ test("agent session id survives follow-up webhooks that do not carry a session i
       triggerEvents: [...config.projects[0]!.triggerEvents, "agentSessionCreated"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -5548,7 +5547,7 @@ test("agent session creation does not post a delegate prompt when Linear already
       triggerEvents: [...config.projects[0]!.triggerEvents, "agentSessionCreated"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -5639,7 +5638,7 @@ test("agent mention starts collaboration and later delegation upgrades queued wo
       triggerEvents: [...config.projects[0]!.triggerEvents, "agentSessionCreated", "delegateChanged"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -5784,7 +5783,7 @@ test("issueCreated recovers delegated startup after an early agent session left 
       triggerEvents: ["delegateChanged", "statusChanged", "agentSessionCreated", "agentPrompted", "commentCreated", "commentUpdated"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -5907,7 +5906,7 @@ test("issueCreated recovers delegated blocked startup without queueing implement
       triggerEvents: ["delegateChanged", "statusChanged", "agentSessionCreated", "agentPrompted", "commentCreated", "commentUpdated"],
     };
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -6027,7 +6026,7 @@ test("orchestration parents do not dispatch workflow tasks on non-terminal child
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",

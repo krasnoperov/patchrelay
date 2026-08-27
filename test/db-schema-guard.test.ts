@@ -23,10 +23,10 @@ test("PatchRelayDatabase rejects a database missing a final-schema column", () =
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-schema-column-guard-"));
   const db = new PatchRelayDatabase(path.join(baseDir, "incomplete.sqlite"), true);
   try {
-    db.runMigrations();
+    db.initializeSchema();
     db.unsafeRawConnectionForTests().exec("ALTER TABLE operator_feed_events DROP COLUMN workflow_id");
     assert.throws(
-      () => db.runMigrations(),
+      () => db.initializeSchema(),
       /Missing required column\(s\): operator_feed_events\.workflow_id/,
     );
     const columns = db.unsafeRawConnectionForTests().prepare("PRAGMA table_info(operator_feed_events)").all();
@@ -41,10 +41,10 @@ test("PatchRelayDatabase rejects a database missing a final-schema index", () =>
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-schema-index-guard-"));
   const db = new PatchRelayDatabase(path.join(baseDir, "incomplete.sqlite"), true);
   try {
-    db.runMigrations();
+    db.initializeSchema();
     db.unsafeRawConnectionForTests().exec("DROP INDEX idx_issues_pr_number");
     assert.throws(
-      () => db.runMigrations(),
+      () => db.initializeSchema(),
       /Missing required index\(es\): idx_issues_pr_number/,
     );
     const index = db.unsafeRawConnectionForTests()
@@ -57,14 +57,30 @@ test("PatchRelayDatabase rejects a database missing a final-schema index", () =>
   }
 });
 
+test("PatchRelayDatabase rejects obsolete schema columns", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-schema-obsolete-column-"));
+  const db = new PatchRelayDatabase(path.join(baseDir, "obsolete.sqlite"), true);
+  try {
+    db.initializeSchema();
+    db.unsafeRawConnectionForTests().exec("ALTER TABLE issues ADD COLUMN legacy_stage TEXT");
+    assert.throws(
+      () => db.initializeSchema(),
+      /Obsolete column\(s\): issues\.legacy_stage/,
+    );
+  } finally {
+    db.close();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("PatchRelayDatabase rejects an existing database missing a final-schema table", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-schema-table-guard-"));
   const db = new PatchRelayDatabase(path.join(baseDir, "incomplete.sqlite"), true);
   try {
-    db.runMigrations();
+    db.initializeSchema();
     db.unsafeRawConnectionForTests().exec("DROP TABLE workflow_tasks");
     assert.throws(
-      () => db.runMigrations(),
+      () => db.initializeSchema(),
       /Missing required table\(s\): workflow_tasks/,
     );
     const table = db.unsafeRawConnectionForTests()

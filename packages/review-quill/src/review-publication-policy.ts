@@ -162,37 +162,19 @@ export function findStaleDecisiveReviews(params: {
       && isDecisiveReviewState(review.state));
 }
 
-// Decide whether we should skip posting the new review because the
-// existing one (from us, on the same head SHA) is already equivalent.
-//
-// Equivalence means BOTH:
-//   - the review state matches (APPROVED / CHANGES_REQUESTED / COMMENTED)
-//   - the rendered body is byte-identical
-//
-// The body comparison closes the gap where two runs on the same head
-// produce the same verdict but different walkthroughs / findings - we
-// want the new content visible to the author instead of silently
-// keeping the stale content. Inline comments are deterministic from
-// the body (both are derived from the same findings array), so body
-// equality is a sufficient proxy; we don't need to diff comments too.
 export function hasMatchingLatestReviewForHead(
   reviews: PullRequestReviewRecord[],
   reviewerLogin: string | undefined,
   headSha: string,
   event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT",
-  newBody?: string,
+  newBody: string,
 ): boolean {
   if (!reviewerLogin) return false;
   const desiredState = reviewStateForEvent(event);
   const latest = [...reviews]
     .reverse()
     .find((review) => matchesReviewerLogin(review.authorLogin, reviewerLogin) && review.commitId === headSha);
-  if (latest?.state !== desiredState) return false;
-  // State matches. If we were given a newBody to compare, require
-  // byte-equality too. If not (backward compat), the state match is
-  // enough.
-  if (newBody !== undefined && latest.body !== newBody) return false;
-  return true;
+  return latest?.state === desiredState && latest.body === newBody;
 }
 
 export function classifyPublicationDisposition(

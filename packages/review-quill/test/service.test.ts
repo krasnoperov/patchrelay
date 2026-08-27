@@ -14,8 +14,8 @@ test("normalizeVerdict accepts the rich schema and passes it through", () => {
       { severity: "nit", category: "convention", message: "Inconsistent error handling across the new admission code." },
     ],
     findings: [
-      { path: "src/admission.ts", line: 142, severity: "blocking", message: "Missing mutex release on error path", confidence: 90 },
-      { path: "src/admission.ts", line: 198, severity: "nit", message: "Consider renaming for clarity", confidence: 60 },
+      { path: "src/admission.ts", line: 142, severity: "blocking", message: "Missing mutex release on error path", confidence: 90, suggestion: null },
+      { path: "src/admission.ts", line: 198, severity: "nit", message: "Consider renaming for clarity", confidence: 60, suggestion: null },
     ],
     verdict: "request_changes",
     verdict_reason: "One blocking finding on the error path.",
@@ -29,23 +29,12 @@ test("normalizeVerdict accepts the rich schema and passes it through", () => {
   assert.equal(result.verdict_reason, "One blocking finding on the error path.");
 });
 
-test("normalizeVerdict falls back to legacy `summary` when `walkthrough` is absent", () => {
-  const raw = {
-    summary: "Legacy single-field summary.",
-    findings: [],
-    verdict: "approve",
-  };
-  const result = normalizeVerdict(raw);
-  assert.equal(result.walkthrough, "Legacy single-field summary.");
-  assert.equal(result.verdict, "approve");
-});
-
 test("normalizeVerdict demotes request_changes to approve when no blocking findings exist", () => {
   // Model asked for request_changes but only has nit findings. The
   // normalizer enforces the binary merge-gate rule.
   const raw = {
     walkthrough: "Walkthrough.",
-    findings: [{ path: "a.ts", line: 1, severity: "nit", message: "naming" }],
+    findings: [{ path: "a.ts", line: 1, severity: "nit", message: "naming", confidence: null, suggestion: null }],
     architectural_concerns: [],
     verdict: "request_changes",
     verdict_reason: "Model thought this was blocking but it is not.",
@@ -1544,104 +1533,32 @@ test("extractFirstJsonObject skips a malformed first attempt and finds a valid l
   assert.equal(parsed.walkthrough, "recovery");
 });
 
-test("normalizeVerdict accepts case-variant severity values", () => {
-  const raw = {
-    walkthrough: "x",
-    verdict: "request_changes",
-    findings: [
-      { path: "a.ts", line: 1, severity: "BLOCKING", message: "upper" },
-      { path: "b.ts", line: 1, severity: "Blocking", message: "title" },
-      { path: "c.ts", line: 1, severity: "critical", message: "synonym" },
-      { path: "d.ts", line: 1, severity: "NIT", message: "upper nit" },
-    ],
-  };
-  const result = normalizeVerdict(raw);
-  assert.equal(result.findings.length, 4);
-  assert.equal(result.findings[0]?.severity, "blocking");
-  assert.equal(result.findings[1]?.severity, "blocking");
-  assert.equal(result.findings[2]?.severity, "blocking"); // "critical" → blocking
-  assert.equal(result.findings[3]?.severity, "nit");
+test("normalizeVerdict rejects non-canonical fields and values", () => {
+  assert.throws(() => normalizeVerdict({
+    summary: "old field",
+    architectural_concerns: [],
+    findings: [],
+    verdict: "LGTM",
+    verdict_reason: "old vocabulary",
+  }), /walkthrough|summary|verdict/);
 });
 
-test("normalizeVerdict accepts string-numeric or L-prefixed line numbers", () => {
-  const raw = {
-    walkthrough: "x",
-    verdict: "request_changes",
-    findings: [
-      { path: "a.ts", line: "42", severity: "blocking", message: "string number" },
-      { path: "b.ts", line: "L107", severity: "nit", message: "L-prefix" },
-    ],
-  };
-  const result = normalizeVerdict(raw);
-  assert.equal(result.findings.length, 2);
-  assert.equal(result.findings[0]?.line, 42);
-  assert.equal(result.findings[1]?.line, 107);
-});
-
-test("normalizeVerdict accepts verdict synonyms and case variations", () => {
-  // "LGTM" → approve
-  assert.equal(normalizeVerdict({ walkthrough: "x", verdict: "LGTM", findings: [] }).verdict, "approve");
-  // "changes_requested" → request_changes (when blocking findings exist)
-  assert.equal(
-    normalizeVerdict({
-      walkthrough: "x",
-      verdict: "CHANGES_REQUESTED",
-      findings: [{ path: "a.ts", line: 1, severity: "blocking", message: "bug" }],
-    }).verdict,
-    "request_changes",
-  );
-  // "reject" → request_changes
-  assert.equal(
-    normalizeVerdict({
-      walkthrough: "x",
-      verdict: "reject",
-      findings: [{ path: "a.ts", line: 1, severity: "blocking", message: "bug" }],
-    }).verdict,
-    "request_changes",
-  );
-  // Non-binary verdicts are rejected so the corrective retry can demand
-  // an explicit deploy decision.
-  assert.throws(
-    () => normalizeVerdict({ walkthrough: "x", verdict: "observation", findings: [] }),
-    /explicit binary verdict/i,
-  );
-});
-
-test("normalizeVerdict accepts alternate field names (file, description, fix)", () => {
-  const raw = {
-    overview: "Fallback walkthrough field",
-    findings: [
-      {
-        file: "src/foo.ts",           // "file" instead of "path"
-        line: 10,
-        severity: "blocking",
-        description: "wrong",          // "description" instead of "message"
-        fix: "if (x) return;",         // "fix" instead of "suggestion"
-      },
-    ],
-    verdict: "request_changes",
-  };
-  const result = normalizeVerdict(raw);
-  assert.equal(result.walkthrough, "Fallback walkthrough field");
-  assert.equal(result.findings.length, 1);
-  assert.equal(result.findings[0]?.path, "src/foo.ts");
-  assert.equal(result.findings[0]?.message, "wrong");
-  assert.equal(result.findings[0]?.suggestion, "if (x) return;");
-});
-
-test("normalizeVerdict drops findings that are missing path, line, severity, or message", () => {
-  const raw = {
+test("normalizeVerdict rejects invalid finding ranges and empty required text", () => {
+  const valid = {
     walkthrough: "Walkthrough.",
-    findings: [
-      { path: "a.ts", line: 1, severity: "blocking", message: "valid" },
-      { path: "b.ts", severity: "nit", message: "missing line" },            // invalid
-      { line: 10, severity: "blocking", message: "missing path" },           // invalid
-      { path: "c.ts", line: 5, message: "missing severity" },                 // invalid
-      { path: "d.ts", line: 5, severity: "nit" },                             // missing message
-    ],
-    verdict: "approve",
+    architectural_concerns: [],
+    findings: [{ path: "src/a.ts", line: 1, severity: "blocking", message: "Broken invariant", confidence: 90, suggestion: null }],
+    verdict: "request_changes",
+    verdict_reason: "One blocking issue.",
   };
-  const result = normalizeVerdict(raw);
-  assert.equal(result.findings.length, 1);
-  assert.equal(result.findings[0]?.path, "a.ts");
+  for (const invalid of [
+    { ...valid, findings: [{ ...valid.findings[0], line: 0 }] },
+    { ...valid, findings: [{ ...valid.findings[0], confidence: 101 }] },
+    { ...valid, findings: [{ ...valid.findings[0], path: "" }] },
+    { ...valid, findings: [{ ...valid.findings[0], message: "" }] },
+    { ...valid, verdict_reason: "" },
+    { ...valid, architectural_concerns: [{ severity: "nit", category: "", message: "Incomplete" }] },
+  ]) {
+    assert.throws(() => normalizeVerdict(invalid));
+  }
 });

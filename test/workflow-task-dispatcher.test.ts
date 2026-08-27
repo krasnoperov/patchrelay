@@ -14,7 +14,7 @@ function withDb<T>(fn: (db: PatchRelayDatabase, baseDir: string) => Promise<T>):
     const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-workflow-task-dispatcher-"));
     try {
       const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-      db.runMigrations();
+      db.initializeSchema();
       return await fn(db, baseDir);
     } finally {
       rmSync(baseDir, { recursive: true, force: true });

@@ -8,7 +8,6 @@ test("CodexAppServerClient wires outputSchema into turn/start", async () => {
   const client = new CodexAppServerClient({
     bin: "codex",
     args: ["app-server"],
-    outputSchema: true,
     approvalPolicy: "never",
     sandboxMode: "danger-full-access",
   }, {} as never);
@@ -35,7 +34,6 @@ test("CodexAppServerClient sends the exact source boundary and current runtime p
   const client = new CodexAppServerClient({
     bin: "codex",
     args: ["app-server"],
-    outputSchema: true,
     forkPriorReviewThread: true,
     model: "gpt-review",
     modelProvider: "openai",
@@ -85,7 +83,6 @@ test("CodexAppServerClient routes notifications and unsubscribe stops delivery",
   const client = new CodexAppServerClient({
     bin: "codex",
     args: ["app-server"],
-    outputSchema: true,
     approvalPolicy: "never",
     sandboxMode: "danger-full-access",
   }, {} as never);

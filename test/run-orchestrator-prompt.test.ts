@@ -54,7 +54,7 @@ test("implementation prompt keeps a concise scaffold with workflow pointer and p
     assert.match(prompt, /Before you open or update the PR, do one brief reviewer-minded pass on the current head\./);
     assert.match(prompt, /Fix any likely in-scope blocker you can see now: missing edge-case handling, broken adjacent invariant in the touched flow/);
     assert.match(prompt, /Name 2-4 concrete invariants most likely to regress in the touched flow, confirm which file or path enforces each one, and verify at least one adjacent path you did not edit directly\./);
-    assert.match(prompt, /If you changed schema, enums, shared vocabulary, normalization helpers, or compatibility mappings, inspect the main read\/write paths that can bypass the new abstraction and verify one legacy-flow and one new-flow case before publishing\./);
+    assert.match(prompt, /If you changed schema, enums, shared vocabulary, or normalization helpers, inspect the main read\/write paths that can bypass the new abstraction and verify every affected flow before publishing\./);
     assert.match(prompt, /If the issue explicitly allows a non-PR outcome, complete that outcome clearly; otherwise publish before stopping\./);
     assert.doesNotMatch(prompt, /## PR Body Contract/);
     assert.doesNotMatch(prompt, /## Follow-up Turn/);
@@ -283,7 +283,7 @@ test("orchestration prompts keep child-reuse and convergence babysitting guidanc
       runType: "implementation",
       repoPath: baseDir,
       context: {
-        trackedDependents: [
+        childIssues: [
           {
             issueKey: "TST-4",
             title: "Migrate public pages to Lingui",
@@ -341,7 +341,7 @@ test("orchestration follow-up prompts reason explicitly from the workflowTask ca
       repoPath: baseDir,
       context: {
         workflowReason: "child_delivered",
-        trackedDependents: [
+        childIssues: [
           {
             issueKey: "TST-4",
             title: "Migrate public pages to Lingui",

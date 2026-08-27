@@ -444,7 +444,6 @@ export class ReactiveRunPolicy {
   ): Promise<RunContext | undefined> {
     const merged: RunContext = { ...context };
     if (headSha) {
-      merged.headSha = headSha;
       merged.currentPrHeadSha = headSha;
     }
 

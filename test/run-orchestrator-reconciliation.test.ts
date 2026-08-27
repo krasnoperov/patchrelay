@@ -8,7 +8,7 @@ import test from "node:test";
 import { assertIssuePhase } from "./assert-issue-phase.ts";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { peekRunnableWorkflowTaskRunType } from "../src/pending-workflow-task.ts";
-import { RunOrchestrator } from "../src/run-orchestrator.ts";
+import { createTestRunOrchestrator } from "./helpers/workflow-task-dispatcher.ts";
 import { RunTaskPlanner } from "../src/run-task-planner.ts";
 import { reconcileWorkflowTasksForIssue } from "../src/workflow-task-reconciler.ts";
 import type { AppConfig, LinearClient, LinearIssueSnapshot } from "../src/types.ts";
@@ -67,7 +67,6 @@ function createConfig(baseDir: string): AppConfig {
         worktreeRoot: path.join(baseDir, "worktrees"),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
-        allowLabels: [],
         triggerEvents: ["statusChanged"],
         branchPrefix: "use",
         github: {
@@ -91,9 +90,9 @@ function createOrchestrator(
 ) {
   const config = createConfig(baseDir);
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
-  const orchestrator = new RunOrchestrator(
+  const orchestrator = createTestRunOrchestrator(
     config,
     db,
     (codex ?? {
@@ -1144,8 +1143,8 @@ test("resetWorktreeToTrackedBranch clears interrupted rebase state back to the r
     writeFileSync(path.join(worktreePath, "game.txt"), "dirty local edit\n", "utf8");
 
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
-    const orchestrator = new RunOrchestrator(
+    db.initializeSchema();
+    const orchestrator = createTestRunOrchestrator(
       config,
       db,
       {
@@ -1880,7 +1879,7 @@ test("reconcileRun recovers interrupted implementation runs to pr_open when a PR
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-14",
@@ -1908,7 +1907,7 @@ test("reconcileRun recovers interrupted implementation runs to pr_open when a PR
       workflowOutcome: undefined,
     });
 
-    const orchestrator = new RunOrchestrator(
+    const orchestrator = createTestRunOrchestrator(
       config,
       db,
       {
@@ -1944,7 +1943,7 @@ test("reconcileRun automatically requeues interrupted implementation runs when n
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
     db.upsertIssue({
       projectId: "usertold",
@@ -1970,7 +1969,7 @@ test("reconcileRun automatically requeues interrupted implementation runs when n
       workflowOutcome: undefined,
     });
 
-    const orchestrator = new RunOrchestrator(
+    const orchestrator = createTestRunOrchestrator(
       config,
       db,
       {
@@ -2010,7 +2009,7 @@ test("reconcileRun recovers interrupted implementation runs even when reconcilia
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-14b",
@@ -2038,7 +2037,7 @@ test("reconcileRun recovers interrupted implementation runs even when reconcilia
       workflowOutcome: undefined,
     });
 
-    const orchestrator = new RunOrchestrator(
+    const orchestrator = createTestRunOrchestrator(
       config,
       db,
       {
@@ -2089,7 +2088,7 @@ test("reconcileRun keeps interrupted ci_repair runs in repairing_ci when the PR 
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-15",
@@ -2117,7 +2116,7 @@ test("reconcileRun keeps interrupted ci_repair runs in repairing_ci when the PR 
       activeRunId: run.id,
     });
 
-    const orchestrator = new RunOrchestrator(
+    const orchestrator = createTestRunOrchestrator(
       config,
       db,
       {
@@ -2149,7 +2148,7 @@ test("reconcileRun reclaims a foreign active-run lease after restart once the ho
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
     const issue = db.upsertIssue({
       projectId: "usertold",
@@ -2197,7 +2196,7 @@ test("reconcileRun reclaims a foreign active-run lease after restart once the ho
       true,
     );
 
-    const orchestrator = new RunOrchestrator(
+    const orchestrator = createTestRunOrchestrator(
       config,
       db,
       {
@@ -2242,7 +2241,7 @@ test("reconcileRun leaves interrupted queue_repair eligible for retry on idle re
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
     const issue = db.upsertIssue({
       projectId: "usertold",
@@ -2277,7 +2276,7 @@ test("reconcileRun leaves interrupted queue_repair eligible for retry on idle re
       workflowOutcome: undefined,
     });
 
-    const orchestrator = new RunOrchestrator(
+    const orchestrator = createTestRunOrchestrator(
       config,
       db,
       {
@@ -2329,7 +2328,7 @@ exit 1
 
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
     const issue = db.upsertIssue({
       projectId: "usertold",
@@ -2360,7 +2359,7 @@ exit 1
       workflowOutcome: undefined,
     });
 
-    const orchestrator = new RunOrchestrator(
+    const orchestrator = createTestRunOrchestrator(
       config,
       db,
       {
@@ -2419,7 +2418,7 @@ exit 1
 
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
     const issue = db.upsertIssue({
       projectId: "usertold",
@@ -2450,7 +2449,7 @@ exit 1
       workflowOutcome: undefined,
     });
 
-    const orchestrator = new RunOrchestrator(
+    const orchestrator = createTestRunOrchestrator(
       config,
       db,
       {
@@ -2501,7 +2500,7 @@ test("completed review_fix queues branch_upkeep when the PR is still dirty", asy
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
     const issue = db.upsertIssue({
       projectId: "usertold",
@@ -2544,7 +2543,7 @@ exit 1
     chmodSync(ghPath, 0o755);
     process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
 
-    const orchestrator = new RunOrchestrator(
+    const orchestrator = createTestRunOrchestrator(
       config,
       db,
       {
@@ -2582,7 +2581,7 @@ test("completed review_fix escalates when the PR head did not advance", async ()
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
     const issue = db.upsertIssue({
       projectId: "usertold",
@@ -2625,7 +2624,7 @@ exit 1
     chmodSync(ghPath, 0o755);
     process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
 
-    const orchestrator = new RunOrchestrator(
+    const orchestrator = createTestRunOrchestrator(
       config,
       db,
       {
@@ -2874,7 +2873,7 @@ test("review_fix workflowTask infers branch upkeep context from a dirty PR", asy
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const issue = db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-review-workflowTask",
@@ -2901,7 +2900,7 @@ exit 1
     chmodSync(ghPath, 0o755);
     process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
 
-    const orchestrator = new RunOrchestrator(
+    const orchestrator = createTestRunOrchestrator(
       config,
       db,
       {
@@ -3013,7 +3012,7 @@ exit 1
       source: "operator_retry",
     }, config.projects[0]!);
 
-    assert.equal(context?.headSha, "sha-live");
+    assert.equal(context?.currentPrHeadSha, "sha-live");
     assert.equal(context?.reviewId, 901);
     assert.equal(context?.reviewCommitId, "commit-901");
     assert.equal(context?.reviewUrl, "https://github.com/owner/repo/pull/32#pullrequestreview-901");
@@ -3337,7 +3336,7 @@ test("reconcileRun syncs Linear session after interrupted runs when an agent ses
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-15b",
@@ -3368,7 +3367,7 @@ test("reconcileRun syncs Linear session after interrupted runs when an agent ses
 
     const activities: Array<{ agentSessionId: string; body: string }> = [];
     const updates: Array<{ agentSessionId: string; planLength: number }> = [];
-    const orchestrator = new RunOrchestrator(
+    const orchestrator = createTestRunOrchestrator(
       config,
       db,
       {
@@ -3435,7 +3434,7 @@ exit 1
 
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-16",
@@ -3464,7 +3463,7 @@ exit 1
       activeRunId: run.id,
     });
 
-    const orchestrator = new RunOrchestrator(
+    const orchestrator = createTestRunOrchestrator(
       config,
       db,
       {
@@ -3510,8 +3509,8 @@ exit 1
 
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
-    const orchestrator = new RunOrchestrator(
+    db.initializeSchema();
+    const orchestrator = createTestRunOrchestrator(
       config,
       db,
       {

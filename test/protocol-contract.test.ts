@@ -14,7 +14,6 @@ test("merge queue protocol defaults stay aligned across PatchRelay and Merge Ste
     worktreeRoot: "/worktrees",
     issueKeyPrefixes: [],
     linearTeamIds: [],
-    allowLabels: [],
     reviewChecks: [],
     gateChecks: [],
     triggerEvents: ["statusChanged"],

@@ -69,8 +69,8 @@ export function App({ baseUrl }: AppProps): React.JSX.Element {
 
   async function runReconcile(): Promise<void> {
     try {
-      const result = await triggerReconcile(baseUrl);
-      setFlashMessage(result.started ? "reconcile tick completed" : "reconcile already running");
+      await triggerReconcile(baseUrl);
+      setFlashMessage("reconcile tick completed");
       const next = await fetchSnapshot(baseUrl);
       setSnapshot(next);
       setLastSnapshotReceivedAt(Date.now());

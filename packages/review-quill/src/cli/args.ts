@@ -67,7 +67,6 @@ export function validateFlags(parsed: ParsedArgs): void {
     case "serve":
       assertKnownFlags(parsed, "root", ["config"]);
       return;
-    case "watch":
     case "dashboard":
       assertKnownFlags(parsed, "root", ["config"]);
       return;
@@ -76,12 +75,6 @@ export function validateFlags(parsed: ParsedArgs): void {
       return;
     case "init":
       assertKnownFlags(parsed, "root", ["force", "json"]);
-      return;
-    case "attach":
-      assertKnownFlags(parsed, "repo", ["base-branch", "wait-for-green-checks", "required-check", "review-doc", "refresh", "json"]);
-      return;
-    case "repos":
-      assertKnownFlags(parsed, "repo", ["json"]);
       return;
     case "repo":
       switch (subcommand) {
@@ -217,13 +210,13 @@ export function parseAttachTarget(parsed: ParsedArgs): { repoId: string; repoFul
   const first = parsed.positionals[1];
   const second = parsed.positionals[2];
   if (!first) {
-    throw new UsageError("review-quill attach requires <owner/repo> or <id> <owner/repo>.", "repo");
+    throw new UsageError("review-quill repo attach requires <owner/repo> or <id> <owner/repo>.", "repo");
   }
   if (second) {
     return { repoId: first, repoFullName: second };
   }
   if (!first.includes("/")) {
-    throw new UsageError("review-quill attach requires <owner/repo> or <id> <owner/repo>.", "repo");
+    throw new UsageError("review-quill repo attach requires <owner/repo> or <id> <owner/repo>.", "repo");
   }
 
   return { repoId: deriveRepoId(first), repoFullName: first };

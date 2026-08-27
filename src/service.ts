@@ -8,7 +8,6 @@ import {
   type GitHubAppTokenManager,
 } from "./github-app-token.ts";
 import { applyGitHubCliAuthEnv, resolveGhBin, verifyGitHubCliAuthEnv } from "./github-cli-auth.ts";
-import { remediateLeakedBotAuth } from "./github-auth-remediation.ts";
 import { GitHubWebhookHandler } from "./github-webhook-handler.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
 import { DatabaseBackedLinearClientProvider } from "./linear-client.ts";
@@ -282,13 +281,6 @@ export class PatchRelayService {
         }
         this.logger.info({ installationId: ghAuthStatus.installationId, expiresAt: ghAuthStatus.expiresAt }, "GitHub App auth ready — gh + git authenticate as the bot");
       }
-      // Clean up credentials older versions persisted into managed repo configs.
-      await remediateLeakedBotAuth({
-        gitBin: this.config.runner.gitBin,
-        repoPaths: this.config.repositories.map((repository) => repository.localPath),
-        ...(identity ? { botName: identity.name } : {}),
-        logger: this.logger,
-      });
     }
     this.startupRecovery.reconcileKnownWorkflowTasks();
     await this.runtime.start();

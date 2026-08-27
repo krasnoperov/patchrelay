@@ -352,7 +352,6 @@ export function buildRunningSessionPlan(runType: string): AgentSessionPlanStep[]
   }
   return buildAgentSessionPlan({
     phase: runType === "ci_repair" ? "repairing_ci"
-      : runType === "main_repair" ? "implementing"
       : runType === "review_fix" || runType === "branch_upkeep" ? "changes_requested"
       : runType === "queue_repair" ? "repairing_queue"
       : "implementing",

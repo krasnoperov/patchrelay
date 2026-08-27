@@ -13,7 +13,7 @@ import type { IssueMetadata, ProjectConfig } from "../src/types.ts";
 function setupDb(projectId: string, actorId?: string) {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-delegation-truth-"));
   const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-  db.runMigrations();
+  db.initializeSchema();
   if (actorId) {
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",

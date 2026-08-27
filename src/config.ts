@@ -31,27 +31,24 @@ const DEFAULT_PATCHRELAY_DEVELOPER_INSTRUCTIONS = [
   "- If you change files for an implementation run, commit, push the issue branch, and open or update the PR.",
   "- For repair runs, work on the existing PR branch and do not open a new PR.",
   "- A requested-changes repair is only complete after a newer PR head is pushed, unless a genuine external blocker prevents correct publication.",
-  "- If you change schema, enums, shared vocabulary, normalization helpers, or compatibility mappings, inspect the main read/write paths that can bypass the new abstraction and fix or cover any mismatch before publishing.",
+  "- If you change schema, enums, shared vocabulary, or normalization helpers, inspect the main read/write paths that can bypass the new abstraction and fix or cover any mismatch before publishing.",
   "- For CI repair, do not change code or config until you either reproduce the failure on the exact failing head or can point to a concrete log signature that justifies the fix. If you cannot reproduce it, prefer a rerun-only repair over speculative changes.",
-  "- For main repair, first verify that the incident still persists on the exact failing main SHA. If a rerun clears transient runner issues such as disk pressure or network lag, treat that as the repair instead of inventing branch changes.",
   "- Do not propose or implement moving CI, deploy, or tests to different nodes or runner pools unless a human explicitly asked for that infrastructure migration.",
   "- If a broader inconsistency is not required to make this task correct, mention it briefly instead of expanding scope.",
   "- Before publishing, do one brief reviewer-minded pass on the current head and fix likely in-scope blockers.",
 ].join("\n");
 
-const trustedActorsSchema = z
-  .object({
-    ids: z.array(z.string().min(1)).default([]),
-    names: z.array(z.string().min(1)).default([]),
-    emails: z.array(z.string().email()).default([]),
-    email_domains: z.array(z.string().min(1)).default([]),
-  })
-  .optional();
-
 const repoSettingsSchema = z.object({
   trigger_events: z.array(z.string().min(1)).min(1).optional(),
   branch_prefix: z.string().min(1).optional(),
 });
+
+const trustedActorsSchema = z.strictObject({
+  ids: z.array(z.string().min(1)).default([]),
+  names: z.array(z.string().min(1)).default([]),
+  emails: z.array(z.string().email()).default([]),
+  email_domains: z.array(z.string().min(1)).default([]),
+}).optional();
 
 const repairBudgetsSchema = z.object({
   ci_repair: z.number().int().positive().default(10),
@@ -59,41 +56,14 @@ const repairBudgetsSchema = z.object({
   review_fix: z.number().int().positive().default(3),
 });
 
-const projectSchema = z.object({
-  id: z.string().min(1),
-  repo_path: z.string().min(1),
-  worktree_root: z.string().min(1).optional(),
-  trusted_actors: trustedActorsSchema,
-  issue_key_prefixes: z.array(z.string().min(1)).default([]),
-  linear_team_ids: z.array(z.string().min(1)).default([]),
-  linear_project_ids: z.array(z.string().min(1)).default([]),
-  allow_labels: z.array(z.string().min(1)).default([]),
-  trigger_events: z.array(z.string().min(1)).min(1).optional(),
-  branch_prefix: z.string().min(1).optional(),
-  repair_budgets: repairBudgetsSchema.default({
-    ci_repair: 10,
-    queue_repair: 10,
-    review_fix: 3,
-  }),
-  /** Check names that are review gates (AI Review, quality analysis). Default: code class. */
-  review_checks: z.array(z.string().min(1)).default([]),
-  /** Check names that are policy gates (conventional title, release policy). Default: code class. */
-  gate_checks: z.array(z.string().min(1)).default([]),
-  github: z.object({
-    webhook_secret: z.string().min(1).optional(),
-    repo_full_name: z.string().min(1).optional(),
-    base_branch: z.string().min(1).optional(),
-    priority_queue_label: z.string().min(1).optional(),
-  }).optional(),
-});
-
-const repositorySchema = z.object({
+const repositorySchema = z.strictObject({
   github_repo: z.string().min(1),
   local_path: z.string().min(1).optional(),
   workspace: z.string().min(1).optional(),
   linear_team_ids: z.array(z.string().min(1)).default([]),
   linear_project_ids: z.array(z.string().min(1)).default([]),
   issue_key_prefixes: z.array(z.string().min(1)).default([]),
+  trusted_actors: trustedActorsSchema,
   review_checks: z.array(z.string().min(1)).default([]),
   gate_checks: z.array(z.string().min(1)).default([]),
   trigger_events: z.array(z.string().min(1)).min(1).optional(),
@@ -117,10 +87,8 @@ const promptLayerSchema = z.object({
   replace_sections: z.record(z.string().min(1), z.string().min(1)).default({}),
 });
 
-const promptByRunTypeSchema = z.object({
+const promptByRunTypeSchema = z.strictObject({
   implementation: promptLayerSchema.optional(),
-  // main_repair is a removed run type; key retained (optional) so pre-existing configs still validate.
-  main_repair: promptLayerSchema.optional(),
   review_fix: promptLayerSchema.optional(),
   branch_upkeep: promptLayerSchema.optional(),
   ci_repair: promptLayerSchema.optional(),
@@ -128,7 +96,7 @@ const promptByRunTypeSchema = z.object({
 });
 type PromptLayerConfig = z.infer<typeof promptLayerSchema>;
 
-const configSchema = z.object({
+const configSchema = z.strictObject({
   server: z.object({
     bind: z.string().default("127.0.0.1"),
     port: z.number().int().positive().default(8787),
@@ -216,7 +184,6 @@ const configSchema = z.object({
   repos: z.object({
     root: z.string().min(1).default(path.join(homedir(), "projects")),
   }).default(() => ({ root: path.join(homedir(), "projects") })),
-  projects: z.array(projectSchema).default([]),
   repositories: z.array(repositorySchema).default([]),
 });
 
@@ -268,7 +235,6 @@ function withSectionDefaults(input: unknown): unknown {
     operator_api: {},
     prompting: {},
     repos: {},
-    projects: [],
     repositories: [],
     ...rest,
     linear: {
@@ -556,6 +522,16 @@ export function loadConfig(
       linearTeamIds: repository.linear_team_ids,
       linearProjectIds: repository.linear_project_ids,
       issueKeyPrefixes: repository.issue_key_prefixes,
+      ...(repository.trusted_actors
+        ? {
+            trustedActors: {
+              ids: repository.trusted_actors.ids,
+              names: repository.trusted_actors.names,
+              emails: repository.trusted_actors.emails,
+              emailDomains: repository.trusted_actors.email_domains,
+            },
+          }
+        : {}),
       reviewChecks: repository.review_checks,
       gateChecks: repository.gate_checks,
       triggerEvents: repository.trigger_events as AppConfig["projects"][number]["triggerEvents"] | undefined,
@@ -578,7 +554,7 @@ export function loadConfig(
       issueKeyPrefixes: repository.issueKeyPrefixes,
       linearTeamIds: repository.linearTeamIds,
       linearProjectIds: repository.linearProjectIds,
-      allowLabels: [],
+      ...(repository.trustedActors ? { trustedActors: repository.trustedActors } : {}),
       reviewChecks: repository.reviewChecks,
       gateChecks: repository.gateChecks,
       triggerEvents: normalizeTriggerEvents(
@@ -598,55 +574,6 @@ export function loadConfig(
       },
     };
   });
-
-  const legacyProjects = parsed.projects.map((project) => {
-        const repoPath = ensureAbsolutePath(project.repo_path);
-        const repoSettings = readRepoSettings(repoPath, env);
-        const trustedActors = project.trusted_actors;
-        return {
-          id: project.id,
-          repoPath,
-          worktreeRoot: ensureAbsolutePath(project.worktree_root ?? defaultWorktreeRoot(project.id)),
-          ...(trustedActors
-            ? {
-                trustedActors: {
-                  ids: trustedActors.ids,
-                  names: trustedActors.names,
-                  emails: trustedActors.emails,
-                  emailDomains: trustedActors.email_domains,
-                },
-              }
-            : {}),
-          issueKeyPrefixes: project.issue_key_prefixes,
-          linearTeamIds: project.linear_team_ids,
-          linearProjectIds: project.linear_project_ids,
-          allowLabels: project.allow_labels,
-          reviewChecks: project.review_checks,
-          gateChecks: project.gate_checks,
-          triggerEvents: normalizeTriggerEvents(
-            parsed.linear.oauth.actor,
-            (repoSettings?.trigger_events as AppConfig["projects"][number]["triggerEvents"] | undefined) ??
-              (project.trigger_events as AppConfig["projects"][number]["triggerEvents"] | undefined),
-          ),
-          branchPrefix: repoSettings?.branch_prefix ?? project.branch_prefix ?? defaultBranchPrefix(project.id),
-          repairBudgets: {
-            ciRepair: project.repair_budgets.ci_repair,
-            queueRepair: project.repair_budgets.queue_repair,
-            reviewFix: project.repair_budgets.review_fix,
-          },
-          ...(repoSettings?.configPath ? { repoSettingsPath: repoSettings.configPath } : {}),
-          ...(project.github ? {
-            github: {
-              ...(project.github.webhook_secret ? { webhookSecret: project.github.webhook_secret } : {}),
-              ...(project.github.repo_full_name ? { repoFullName: project.github.repo_full_name } : {}),
-              ...(project.github.base_branch ? { baseBranch: project.github.base_branch } : {}),
-              ...(project.github.priority_queue_label ? { priorityQueueLabel: project.github.priority_queue_label } : {}),
-            },
-          } : {}),
-        };
-      });
-  const repositoryPaths = new Set(repositoryProjects.map((project) => project.repoPath));
-  const derivedProjects = [...repositoryProjects, ...legacyProjects.filter((project) => !repositoryPaths.has(project.repoPath))];
 
   const config: AppConfig = {
     server: {
@@ -737,7 +664,7 @@ export function loadConfig(
       linearProjectIds: repository.linearProjectIds,
       issueKeyPrefixes: repository.issueKeyPrefixes,
     })),
-    projects: derivedProjects,
+    projects: repositoryProjects,
     secretSources: {
       "linear-webhook-secret": rWebhookSecret.source,
       "token-encryption-key": rTokenEncryptionKey.source,

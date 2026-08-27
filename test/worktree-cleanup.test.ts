@@ -62,7 +62,6 @@ function createConfig(baseDir: string): AppConfig {
       issueKeyPrefixes: ["INV"],
       linearTeamIds: ["team"],
       linearProjectIds: [],
-      allowLabels: [],
       reviewChecks: [],
       gateChecks: [],
       triggerEvents: [],
@@ -115,7 +114,7 @@ test("terminal worktree cleanup removes old clean managed worktrees only", async
     git(["init"], config.projects[0]!.repoPath);
     mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const old = "2026-06-14T12:00:00.000Z";
     const recent = "2026-06-16T11:30:00.000Z";

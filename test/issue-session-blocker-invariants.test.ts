@@ -17,7 +17,7 @@ async function withDb(fn: (db: PatchRelayDatabase, telemetry: MemoryPatchRelayTe
   const telemetry = new MemoryPatchRelayTelemetry();
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true, telemetry);
-    db.runMigrations();
+    db.initializeSchema();
     await fn(db, telemetry);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

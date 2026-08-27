@@ -119,14 +119,14 @@ test("isDuplicateRepairAttempt returns true on matching signature and head", () 
   );
 });
 
-test("isDuplicateRepairAttempt falls back to context.headSha when failureHeadSha is missing", () => {
+test("isDuplicateRepairAttempt does not infer a removed head alias", () => {
   assert.equal(
     isDuplicateRepairAttempt(
       attemptIssue({
         lastAttemptedFailureSignature: "sig-1",
         lastAttemptedFailureHeadSha: "abc",
       }),
-      { failureSignature: "sig-1", headSha: "abc" },
+      { failureSignature: "sig-1" },
     ),
     true,
   );

@@ -401,7 +401,7 @@ test("parseModelResponse returns a reason when JSON parses but schema normalizat
 });
 
 test("parseModelResponse recovers from a markdown-fenced response", () => {
-  const message = "Here's the review:\n```json\n{\"walkthrough\":\"x\",\"findings\":[],\"verdict\":\"approve\",\"verdict_reason\":\"y\"}\n```";
+  const message = "Here's the review:\n```json\n{\"walkthrough\":\"x\",\"architectural_concerns\":[],\"findings\":[],\"verdict\":\"approve\",\"verdict_reason\":\"y\"}\n```";
   const result = parseModelResponse(message);
   assert.equal(result.ok, true);
   if (result.ok) {

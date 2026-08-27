@@ -63,7 +63,6 @@ function createConfig(baseDir: string): AppConfig {
         worktreeRoot: path.join(baseDir, "worktrees"),
         issueKeyPrefixes: ["TST"],
         linearProjectIds: ["project-tst"],
-        allowLabels: [],
         triggerEvents: ["delegateChanged", "statusChanged", "agentSessionCreated", "agentPrompted", "commentCreated", "commentUpdated"],
         branchPrefix: "tst",
         github: {
@@ -80,7 +79,7 @@ test("syncSession mirrors failure state into a visible Linear status comment", a
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "krasnoperov/ballony-i-nasosy",
@@ -147,7 +146,7 @@ test("syncSession does not create a durable status comment during active delegat
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "krasnoperov/ballony-i-nasosy",
@@ -227,7 +226,7 @@ test("syncSession collapses an existing durable status comment during active del
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "krasnoperov/ballony-i-nasosy",
@@ -279,7 +278,7 @@ test("syncSession prefers the intervention reason over the last assistant summar
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "krasnoperov/ballony-i-nasosy",
@@ -342,7 +341,7 @@ test("syncSession updates the existing visible Linear status comment even withou
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "krasnoperov/ballony-i-nasosy",
@@ -395,7 +394,7 @@ test("syncSession collapses paused undelegated PR-backed status comments when an
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "krasnoperov/ballony-i-nasosy",
@@ -477,7 +476,7 @@ test("syncSession skips visible status comments for paused undelegated no-PR iss
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "krasnoperov/ballony-i-nasosy",
@@ -565,7 +564,7 @@ test("syncSession renders completion-check input details for awaiting-input issu
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "krasnoperov/ballony-i-nasosy",
@@ -633,7 +632,7 @@ test("syncSession includes actionable input text for awaiting_input sessions", a
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "krasnoperov/ballony-i-nasosy",
@@ -687,7 +686,7 @@ test("syncSession skips the durable status comment for healthy agent-session run
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "krasnoperov/ballony-i-nasosy",
@@ -742,7 +741,7 @@ test("syncSession keeps a final visible comment for done planning-only issues", 
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "krasnoperov/ballony-i-nasosy",
@@ -797,7 +796,7 @@ test("syncSession keeps a final visible comment for done issues with a closed hi
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "krasnoperov/ballony-i-nasosy",
@@ -857,7 +856,7 @@ test("syncSession moves backlog issues into an active started state when impleme
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "krasnoperov/ballony-i-nasosy",
@@ -937,7 +936,7 @@ test("syncSession moves backlog issues into review when a PR is opened or waitin
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "krasnoperov/ballony-i-nasosy",
@@ -1020,7 +1019,7 @@ test("syncSession maps Usertold implementation work into Implementing instead of
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "krasnoperov/ballony-i-nasosy",
@@ -1102,7 +1101,7 @@ test("syncSession moves active lifecycle issues into Reviewing then In Merge Que
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const workflowStates = [
       { id: "state-backlog", name: "Backlog", type: "backlog" },
@@ -1210,7 +1209,7 @@ test("syncSession maps a pending review-quill verdict to Reviewing", async () =>
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const workflowStates = [
       { id: "state-backlog", name: "Backlog", type: "backlog" },
@@ -1299,7 +1298,7 @@ test("maybeEmitProgress surfaces routine plan steps but keeps command chatter ou
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "krasnoperov/ballony-i-nasosy",
@@ -1367,7 +1366,7 @@ test("maybeEmitProgress keeps streamed agent-message progress out of Linear", as
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "krasnoperov/ballony-i-nasosy",
@@ -1424,7 +1423,7 @@ test("maybeEmitProgress stays silent even after a streamed sentence completes", 
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "krasnoperov/ballony-i-nasosy",
@@ -1489,7 +1488,7 @@ test("maybeEmitProgress writes durable history alongside ephemeral status for me
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "krasnoperov/ballony-i-nasosy",
@@ -1566,7 +1565,7 @@ test("emitActivity deduplicates repeated durable milestone activities", async ()
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "krasnoperov/ballony-i-nasosy",
@@ -1622,7 +1621,7 @@ test("Linear writes back off by project after a rate-limit failure", async () =>
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "krasnoperov/ballony-i-nasosy",
@@ -1689,7 +1688,7 @@ test("emitActivity deduplicates repeated terminal response and error activities"
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "krasnoperov/ballony-i-nasosy",

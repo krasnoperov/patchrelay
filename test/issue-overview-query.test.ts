@@ -10,7 +10,7 @@ test("issue overview derives waiting reason without a stored session lifecycle",
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-issue-overview-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
 
     db.upsertIssue({
       projectId: "usertold",

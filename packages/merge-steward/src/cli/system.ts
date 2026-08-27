@@ -122,8 +122,8 @@ export function loadRepoConfigById(repoId: string): { configPath: string; config
       ? ` Configured repos: ${configured.map((repo) => repo.repoId).join(", ")}.`
       : "";
     throw new UsageError(
-      `Repo config not found for ${repoId}: ${configPath}. Run \`merge-steward attach ${repoId} <owner/repo>\` first.${configuredHint}`,
-      "repos",
+      `Repo config not found for ${repoId}: ${configPath}. Run \`merge-steward repo attach ${repoId} <owner/repo>\` first.${configuredHint}`,
+      "repo",
     );
   }
   return {

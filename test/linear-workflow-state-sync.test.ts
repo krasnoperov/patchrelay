@@ -9,7 +9,7 @@ import { syncActiveWorkflowState } from "../src/linear-workflow-state-sync.ts";
 function createDb() {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-workflow-state-"));
   const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-  db.runMigrations();
+  db.initializeSchema();
   return { baseDir, db };
 }
 

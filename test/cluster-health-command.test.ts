@@ -78,7 +78,6 @@ function createConfig(baseDir: string, port: number): AppConfig {
         worktreeRoot: path.join(baseDir, "worktrees"),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
-        allowLabels: [],
         triggerEvents: ["statusChanged"],
         branchPrefix: "use",
         github: {
@@ -132,7 +131,7 @@ test("cli status reports unmanaged blockers and lost dispatch", async () => {
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
   mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const server = await startPatchRelayHealthServer(config);
 
   try {
@@ -195,7 +194,7 @@ test("cli status reports a same-head requested-changes stall", async () => {
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
   mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const server = await startPatchRelayHealthServer(config);
 
   try {
@@ -280,7 +279,7 @@ test("cli status treats active PR repair runs as PatchRelay-owned", async () => 
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
   mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const server = await startPatchRelayHealthServer(config);
 
   try {
@@ -374,7 +373,7 @@ test("cli status ignores reviewer requests when the same head is still blocked",
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
   mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const server = await startPatchRelayHealthServer(config);
 
   try {
@@ -456,7 +455,7 @@ test("cli status reports dirty requested-changes PRs as missing branch upkeep, n
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
   mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const server = await startPatchRelayHealthServer(config);
 
   try {
@@ -538,7 +537,7 @@ test("cli status treats a live review-quill attempt on the current head as an ow
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
   mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const server = await startPatchRelayHealthServer(config);
 
   try {
@@ -635,7 +634,7 @@ test("cli status treats review-quill repo backlog as an owner for review-require
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
   mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const server = await startPatchRelayHealthServer(config);
 
   try {
@@ -739,7 +738,7 @@ test("cli status treats review-quill repo backlog as an owner for newer requeste
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
   mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const server = await startPatchRelayHealthServer(config);
 
   try {
@@ -858,7 +857,7 @@ test("cli status ignores closed PRs on completed issues", async () => {
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
   mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const server = await startPatchRelayHealthServer(config);
 
   try {
@@ -927,7 +926,7 @@ test("cli status treats closed PRs on terminal issues as historical, not active 
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
   mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const server = await startPatchRelayHealthServer(config);
 
   try {
@@ -975,7 +974,7 @@ test("cli status treats in-progress CI as externally owned instead of orphaned",
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
   mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const server = await startPatchRelayHealthServer(config);
 
   try {
@@ -1052,7 +1051,7 @@ test("cli status treats undelegated requested-changes PRs as paused instead of m
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
   mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const server = await startPatchRelayHealthServer(config);
 
   try {
@@ -1137,7 +1136,7 @@ test("cli status treats undelegated failing CI PRs as paused instead of missing 
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
   mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const server = await startPatchRelayHealthServer(config);
 
   try {
@@ -1217,7 +1216,7 @@ test("cli status treats undelegated paused no-pr work as paused instead of stuck
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
   mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const server = await startPatchRelayHealthServer(config);
 
   try {
@@ -1259,7 +1258,7 @@ test("cli status ignores canceled blockers", async () => {
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
   mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const server = await startPatchRelayHealthServer(config);
 
   try {
@@ -1318,7 +1317,7 @@ test("cli status warns when active repo work overlaps on the same files", async 
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
   mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const server = await startPatchRelayHealthServer(config);
 
   try {
@@ -1412,7 +1411,7 @@ test("cli status surfaces a review-quill Codex capacity pause as a degraded serv
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
   mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const server = await startPatchRelayHealthServer(config);
 
   try {

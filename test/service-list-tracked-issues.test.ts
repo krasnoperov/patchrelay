@@ -65,7 +65,6 @@ function createConfig(baseDir: string): AppConfig {
         worktreeRoot: path.join(baseDir, "worktrees"),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
-        allowLabels: [],
         triggerEvents: ["statusChanged"],
         branchPrefix: "use",
         github: {
@@ -82,7 +81,7 @@ test("listTrackedIssues suppresses stale interrupted notes while a run is active
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const service = new PatchRelayService(
       config,
       db,
@@ -143,7 +142,7 @@ test("listTrackedIssues treats a detached running latest run as active work", as
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const service = new PatchRelayService(
       config,
       db,
@@ -197,7 +196,7 @@ test("listTrackedIssues suppresses stale zombie notes while a run is active", as
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const service = new PatchRelayService(
       config,
       db,
@@ -255,7 +254,7 @@ test("listTrackedIssues ordering ignores lease heartbeats", async () => {
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const service = new PatchRelayService(
       config,
       db,
@@ -325,7 +324,7 @@ test("listTrackedIssues ordering follows visible session updates", async () => {
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const service = new PatchRelayService(
       config,
       db,
@@ -383,7 +382,7 @@ test("listTrackedIssues surfaces actionable stop guidance for awaiting_input iss
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const service = new PatchRelayService(
       config,
       db,
@@ -425,7 +424,7 @@ test("service start recovers delegated blocked issues from paused local-work sta
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -511,7 +510,7 @@ test("listTrackedIssues clears stale blocker text after blocker snapshot resolve
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const service = new PatchRelayService(
       config,
       db,
@@ -574,7 +573,7 @@ test("listTrackedIssues keeps undelegated local work paused instead of ready or 
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const service = new PatchRelayService(
       config,
       db,
@@ -613,7 +612,7 @@ test("service start preserves delegated completion-check questions in awaiting_i
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "workspace-1",
       actorId: "patchrelay-actor",
@@ -709,7 +708,7 @@ test("listTrackedIssues does not mark downstream waiting issues as ready just be
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const service = new PatchRelayService(
       config,
       db,
@@ -747,7 +746,7 @@ test("listTrackedIssues does not mark awaiting-review issues as ready just becau
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const service = new PatchRelayService(
       config,
       db,
@@ -786,7 +785,7 @@ test("listTrackedIssues does not treat closed PRs on done issues as awaiting ext
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const service = new PatchRelayService(
       config,
       db,
@@ -827,7 +826,7 @@ test("listTrackedIssues treats completed Linear state as terminal even before wo
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const service = new PatchRelayService(
       config,
       db,

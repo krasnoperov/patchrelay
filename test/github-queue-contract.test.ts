@@ -65,7 +65,6 @@ function createConfig(baseDir: string, options?: { gateChecks?: string[] }): App
         worktreeRoot: path.join(baseDir, "worktrees"),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
-        allowLabels: [],
         reviewChecks: [],
         gateChecks: options?.gateChecks ?? ["Tests"],
         triggerEvents: ["statusChanged"],
@@ -87,7 +86,7 @@ function createHandler(
 ) {
   const config = createConfig(baseDir, options);
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
   const handler = new GitHubWebhookHandler(
     config,

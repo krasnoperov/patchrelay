@@ -204,10 +204,9 @@ export async function startServer(configPath = process.env.REVIEW_QUILL_CONFIG ?
     const repoFullName = typeof (request.body as { repoFullName?: unknown } | undefined)?.repoFullName === "string"
       ? (request.body as { repoFullName: string }).repoFullName
       : undefined;
-    const started = await service.triggerReconcile(repoFullName);
+    await service.triggerReconcile(repoFullName);
     return {
       ok: true,
-      started,
       ...(repoFullName ? { repoFullName } : {}),
       runtime: service.getWatchSnapshot().runtime,
     };

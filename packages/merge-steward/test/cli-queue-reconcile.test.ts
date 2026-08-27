@@ -137,7 +137,7 @@ test("queue reconcile reports error when service is unreachable", async () => {
           stderr: createBufferStream().stream,
           runCommand: noop,
         });
-        await runCli(["attach", "app", "owner/repo"], {
+        await runCli(["repo", "attach", "app", "owner/repo"], {
           stdout: createBufferStream().stream,
           stderr: createBufferStream().stream,
           runCommand: noop,
@@ -173,7 +173,7 @@ test("queue reconcile --json also reports error when service is unreachable", as
           stderr: createBufferStream().stream,
           runCommand: noop,
         });
-        await runCli(["attach", "app", "owner/repo"], {
+        await runCli(["repo", "attach", "app", "owner/repo"], {
           stdout: createBufferStream().stream,
           stderr: createBufferStream().stream,
           runCommand: noop,
@@ -209,7 +209,7 @@ test("queue show for nonexistent entry reports error", async () => {
           stderr: createBufferStream().stream,
           runCommand: noop,
         });
-        await runCli(["attach", "app", "owner/repo"], {
+        await runCli(["repo", "attach", "app", "owner/repo"], {
           stdout: createBufferStream().stream,
           stderr: createBufferStream().stream,
           runCommand: noop,
@@ -245,7 +245,7 @@ test("queue status text output formats correctly with no entries", async () => {
           stderr: createBufferStream().stream,
           runCommand: noop,
         });
-        await runCli(["attach", "app", "owner/repo"], {
+        await runCli(["repo", "attach", "app", "owner/repo"], {
           stdout: createBufferStream().stream,
           stderr: createBufferStream().stream,
           runCommand: noop,
@@ -418,7 +418,7 @@ test("queue status reports initializing repos from the service without falling b
           stderr: createBufferStream().stream,
           runCommand: noop,
         });
-        await runCli(["attach", "app", "owner/repo"], {
+        await runCli(["repo", "attach", "app", "owner/repo"], {
           stdout: createBufferStream().stream,
           stderr: createBufferStream().stream,
           runCommand: noop,

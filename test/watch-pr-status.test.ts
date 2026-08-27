@@ -24,6 +24,7 @@ function makeIssue(overrides?: Partial<WatchIssue>): WatchIssue {
 test("pending full check summary blocks rereview even when gate status is success", () => {
   const issue = makeIssue({
     prNumber: 26,
+    prState: "open",
     readyForExecution: true,
     prReviewState: "changes_requested",
     prCheckStatus: "success",
@@ -46,6 +47,7 @@ test("pending full check summary blocks rereview even when gate status is succes
 test("completed green checks allow rereview once all checks settle", () => {
   const issue = makeIssue({
     prNumber: 26,
+    prState: "open",
     readyForExecution: true,
     prReviewState: "changes_requested",
     prCheckStatus: "success",
@@ -67,6 +69,7 @@ test("completed green checks allow rereview once all checks settle", () => {
 test("review-required and downstream PR states still count as display blockers", () => {
   const reviewRequired = makeIssue({
     prNumber: 34,
+    prState: "open",
     workflowOutcome: undefined,
     readyForExecution: true,
     prReviewState: "review_required",
@@ -74,6 +77,7 @@ test("review-required and downstream PR states still count as display blockers",
   });
   const downstream = makeIssue({
     prNumber: 36,
+    prState: "open",
     workflowOutcome: undefined,
     readyForExecution: true,
     prReviewState: "approved",

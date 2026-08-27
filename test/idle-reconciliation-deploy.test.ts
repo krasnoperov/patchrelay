@@ -15,7 +15,7 @@ import type { IssueRecord } from "../src/db-types.ts";
 function createDb() {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-deploy-reconcile-"));
   const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-  db.runMigrations();
+  db.initializeSchema();
   return { baseDir, db };
 }
 

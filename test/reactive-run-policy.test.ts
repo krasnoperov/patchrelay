@@ -38,7 +38,6 @@ function createConfig(baseDir: string): AppConfig {
         worktreeRoot: path.join(baseDir, "worktrees"),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
-        allowLabels: [],
         triggerEvents: ["statusChanged"],
         branchPrefix: "use",
         github: { repoFullName: "owner/repo" },
@@ -85,7 +84,7 @@ process.exit(1);
 function setupPolicy(baseDir: string) {
   const config = createConfig(baseDir);
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const lease = { projectId: "usertold", linearIssueId: "issue-1", leaseId: "lease-1" };
   db.issueSessions.forceAcquireIssueSessionLease({
     projectId: lease.projectId,

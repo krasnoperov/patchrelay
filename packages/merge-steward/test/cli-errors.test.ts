@@ -112,7 +112,7 @@ test("attach without repo exits 1", async () => {
         });
 
         const stderr = createBufferStream();
-        const code = await runCli(["attach"], {
+        const code = await runCli(["repo", "attach"], {
           stdout: createBufferStream().stream,
           stderr: stderr.stream,
           runCommand: noop,
@@ -144,7 +144,7 @@ test("attach with only id exits 1", async () => {
         });
 
         const stderr = createBufferStream();
-        const code = await runCli(["attach", "app"], {
+        const code = await runCli(["repo", "attach", "app"], {
           stdout: createBufferStream().stream,
           stderr: stderr.stream,
           runCommand: noop,
@@ -199,7 +199,7 @@ test("service unknown subcommand exits 1", async () => {
           stderr: createBufferStream().stream,
           runCommand: noop,
         });
-        await runCli(["attach", "app", "owner/repo"], {
+        await runCli(["repo", "attach", "app", "owner/repo"], {
           stdout: createBufferStream().stream,
           stderr: createBufferStream().stream,
           runCommand: noop,
@@ -236,7 +236,7 @@ test("queue unknown subcommand exits 1", async () => {
           stderr: createBufferStream().stream,
           runCommand: noop,
         });
-        await runCli(["attach", "app", "owner/repo"], {
+        await runCli(["repo", "attach", "app", "owner/repo"], {
           stdout: createBufferStream().stream,
           stderr: createBufferStream().stream,
           runCommand: noop,
@@ -274,7 +274,7 @@ test("dashboard with nonexistent repo exits 1 with a configured-repos hint inste
           stderr: createBufferStream().stream,
           runCommand: noop,
         });
-        await runCli(["attach", "app", "owner/repo"], {
+        await runCli(["repo", "attach", "app", "owner/repo"], {
           stdout: createBufferStream().stream,
           stderr: createBufferStream().stream,
           runCommand: noop,
@@ -385,7 +385,7 @@ test("queue show without --entry or --pr exits 1", async () => {
           stderr: createBufferStream().stream,
           runCommand: noop,
         });
-        await runCli(["attach", "app", "owner/repo"], {
+        await runCli(["repo", "attach", "app", "owner/repo"], {
           stdout: createBufferStream().stream,
           stderr: createBufferStream().stream,
           runCommand: noop,
@@ -423,7 +423,7 @@ test("queue show --pr with non-numeric value exits 1", async () => {
           stderr: createBufferStream().stream,
           runCommand: noop,
         });
-        await runCli(["attach", "app", "owner/repo"], {
+        await runCli(["repo", "attach", "app", "owner/repo"], {
           stdout: createBufferStream().stream,
           stderr: createBufferStream().stream,
           runCommand: noop,
@@ -459,7 +459,7 @@ test("service logs --lines with non-numeric value exits 1", async () => {
           stderr: createBufferStream().stream,
           runCommand: noop,
         });
-        await runCli(["attach", "app", "owner/repo"], {
+        await runCli(["repo", "attach", "app", "owner/repo"], {
           stdout: createBufferStream().stream,
           stderr: createBufferStream().stream,
           runCommand: noop,
@@ -500,7 +500,7 @@ test("repos with nonexistent repo id exits 1", async () => {
         });
 
         const stderr = createBufferStream();
-        const code = await runCli(["repos", "nonexistent"], {
+        const code = await runCli(["repo", "show", "nonexistent"], {
           stdout: createBufferStream().stream,
           stderr: stderr.stream,
         });

@@ -65,15 +65,7 @@ export function validateFlags(parsed: ParsedArgs): void {
       assertKnownFlags(parsed, "root", []);
       return;
     case "dashboard":
-    case "dash":
-    case "d":
       assertKnownFlags(parsed, "root", ["repo", "pr"]);
-      return;
-    case "attach":
-      assertKnownFlags(parsed, "repos", ["base-branch", "label", "merge-queue-check-name", "refresh", "json"]);
-      return;
-    case "repos":
-      assertKnownFlags(parsed, "repos", ["json"]);
       return;
     case "repo":
       switch (subcommand) {

@@ -15,7 +15,7 @@ import { createTestWorkflowTaskDispatcher } from "./helpers/workflow-task-dispat
 function createDb() {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-run-finalizer-"));
   const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-  db.runMigrations();
+  db.initializeSchema();
   return { baseDir, db };
 }
 
@@ -986,6 +986,7 @@ test("run finalizer queues a same-thread follow-up when completion check says co
     assert.equal(db.runs.getRunById(run.id)?.completionCheckOutcome, "continue");
     assert.equal(workflowTask?.runType, "implementation");
     assert.equal(workflowTask?.resumeThread, true);
+    assert.equal(workflowTask?.context.completionCheckSummary, "The run stopped early and PatchRelay can keep going automatically.");
     assert.equal(pendingEvent?.eventType, "completion_check_continue");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -1127,6 +1128,7 @@ test("run finalizer continues automatically when no-PR done leaves local changes
     assert.match(String(updatedRun.completionCheckSummary ?? ""), /has not published them yet/);
     assert.equal(workflowTask?.runType, "implementation");
     assert.equal(workflowTask?.resumeThread, true);
+    assert.equal(workflowTask?.context.completionCheckSummary, "Implementation completed without opening a PR; worktree still has 2 uncommitted change(s)");
     assert.equal(pendingEvent?.eventType, "completion_check_continue");
     assert.equal(feedEvents.at(-1)?.status, "completion_check_continue");
   } finally {

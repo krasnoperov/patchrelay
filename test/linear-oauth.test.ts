@@ -208,7 +208,7 @@ test("installLinearOAuthCode stores encrypted credentials and links the project 
   const config = createConfig();
   const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "patchrelay-linear-oauth-"));
   const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-  db.runMigrations();
+  db.initializeSchema();
 
   let calls = 0;
   globalThis.fetch = (async () => {

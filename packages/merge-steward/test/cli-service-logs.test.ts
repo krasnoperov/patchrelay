@@ -69,7 +69,7 @@ async function initAndAttach() {
     stderr: createBufferStream().stream,
     runCommand: noop,
   });
-  await runCli(["attach", "app", "owner/repo"], {
+  await runCli(["repo", "attach", "app", "owner/repo"], {
     stdout: createBufferStream().stream,
     stderr: createBufferStream().stream,
     runCommand: noop,

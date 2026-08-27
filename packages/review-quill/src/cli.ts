@@ -55,15 +55,12 @@ function helpTopicForCommand(command: string | undefined, topicArg: string | und
   if (command === "help") {
     switch (topicArg) {
       case "repo":
-      case "attach":
-      case "repos":
         return "repo";
       case "service":
         return "service";
       case "root":
       case undefined:
       case "dashboard":
-      case "watch":
         return "root";
       default:
         throw new UsageError(`Unknown help topic: ${topicArg}`);
@@ -71,9 +68,7 @@ function helpTopicForCommand(command: string | undefined, topicArg: string | und
   }
 
   switch (command) {
-    case "attach":
     case "repo":
-    case "repos":
       return "repo";
     case "service":
       return "service";
@@ -115,33 +110,28 @@ export async function runCli(args: string[], options?: RunCliOptions): Promise<n
         await startServer(configPath);
         return 0;
       }
-      case "watch":
       case "dashboard": {
         const configPath = parseConfigPath(args.slice(1)) ?? process.env.REVIEW_QUILL_CONFIG ?? getDefaultConfigPath();
         if (!process.env.NODE_ENV) process.env.NODE_ENV = "production";
-        const { startWatch } = await import("./watch/index.tsx");
-        await startWatch(configPath);
+        const { startDashboard } = await import("./watch/index.tsx");
+        await startDashboard(configPath);
         return 0;
       }
       case "init":
         return await handleInit(parsed, stdout, runCommand);
-      case "attach":
-        return await handleAttach(parsed, stdout, runCommand);
-      case "repos":
-        return await handleRepos(parsed, stdout);
       case "repo": {
         const subcommand = parsed.positionals[1] ?? "list";
         if (subcommand === "attach") {
-          return await handleAttach(rewriteParsedArgs(parsed, ["attach", ...parsed.positionals.slice(2)]), stdout, runCommand);
+          return await handleAttach(rewriteParsedArgs(parsed, ["repo", ...parsed.positionals.slice(2)]), stdout, runCommand);
         }
         if (subcommand === "list") {
-          return await handleRepos(rewriteParsedArgs(parsed, ["repos", ...parsed.positionals.slice(2)]), stdout);
+          return await handleRepos(rewriteParsedArgs(parsed, ["repo", ...parsed.positionals.slice(2)]), stdout);
         }
         if (subcommand === "show") {
           if (!parsed.positionals[2]) {
             throw new UsageError("review-quill repo show requires <id>.", "repo");
           }
-          return await handleRepos(rewriteParsedArgs(parsed, ["repos", ...parsed.positionals.slice(2)]), stdout);
+          return await handleRepos(rewriteParsedArgs(parsed, ["repo", ...parsed.positionals.slice(2)]), stdout);
         }
         throw new UsageError(`Unknown repo command: ${subcommand}`, "repo");
       }

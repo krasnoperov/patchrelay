@@ -1,6 +1,6 @@
 import { accessSync, constants, existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
-import { initializePatchRelaySchemaIfEmpty } from "./db/migrations.ts";
+import { initializePatchRelaySchema } from "./db/schema.ts";
 import { assertPatchRelaySchemaReady } from "./db/schema-guard.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
 import { SqliteConnection } from "./db/shared.ts";
@@ -18,7 +18,7 @@ export interface PreflightReport {
   ok: boolean;
 }
 
-export async function runPreflight(config: AppConfig, options?: { connectivity?: boolean; skipServiceCheck?: boolean; migrateDatabase?: boolean }): Promise<PreflightReport> {
+export async function runPreflight(config: AppConfig, options?: { connectivity?: boolean; skipServiceCheck?: boolean; initializeDatabase?: boolean }): Promise<PreflightReport> {
   const connectivity = options?.connectivity ?? true;
   const skipServiceCheck = options?.skipServiceCheck ?? false;
   const checks: PreflightCheck[] = [];
@@ -88,7 +88,7 @@ export async function runPreflight(config: AppConfig, options?: { connectivity?:
   checks.push(...checkOAuthRedirectUri(config));
 
   checks.push(...checkPath("database", path.dirname(config.database.path), "directory", { createIfMissing: true, writable: true }));
-  checks.push(...checkDatabaseHealth(config, options?.migrateDatabase ?? true));
+  checks.push(...checkDatabaseHealth(config, options?.initializeDatabase ?? true));
   checks.push(...checkPath("logging", path.dirname(config.logging.filePath), "directory", { createIfMissing: true, writable: true }));
   if (config.projects.length === 0) {
     checks.push(warn("projects", "No repos are configured yet; connect a Linear workspace with `patchrelay linear connect` and then link a GitHub repo with `patchrelay repo link <owner/repo> --workspace <workspace> --team <team>`"));
@@ -165,7 +165,7 @@ async function checkLinearApi(graphqlUrl: string): Promise<PreflightCheck> {
   }
 }
 
-function checkDatabaseHealth(config: AppConfig, migrateDatabase: boolean): PreflightCheck[] {
+function checkDatabaseHealth(config: AppConfig, initializeDatabase: boolean): PreflightCheck[] {
   const checks: PreflightCheck[] = [];
   let connection: SqliteConnection | undefined;
   try {
@@ -177,8 +177,8 @@ function checkDatabaseHealth(config: AppConfig, migrateDatabase: boolean): Prefl
 
     // Operator diagnostics may run while the service owns this database, so
     // doctor validates the live schema without creating any missing objects.
-    if (migrateDatabase) {
-      initializePatchRelaySchemaIfEmpty(connection);
+    if (initializeDatabase) {
+      initializePatchRelaySchema(connection);
     }
     assertPatchRelaySchemaReady(connection, config.database.path);
 
@@ -206,7 +206,7 @@ function checkDatabaseHealth(config: AppConfig, migrateDatabase: boolean): Prefl
       return checks;
     }
 
-    checks.push(pass("database_schema", `Database opened, schema is readable (${objectCount} objects)${migrateDatabase ? ", and the final schema is ready" : ""}`));
+    checks.push(pass("database_schema", `Database opened, schema is readable (${objectCount} objects)${initializeDatabase ? ", and the final schema is ready" : ""}`));
   } catch (error) {
     checks.push(fail("database_schema", `Unable to open or validate database schema at ${config.database.path}: ${formatError(error)}`));
   } finally {

@@ -8,7 +8,7 @@ import { assertIssuePhase } from "./assert-issue-phase.ts";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { deriveIssueExecutionStateFromRecords } from "../src/issue-execution-state.ts";
 import { ISSUE_SESSION_LEASE_MS } from "../src/issue-session-lease-service.ts";
-import { RunOrchestrator } from "../src/run-orchestrator.ts";
+import { createTestRunOrchestrator } from "./helpers/workflow-task-dispatcher.ts";
 import { RunTaskPlanner } from "../src/run-task-planner.ts";
 import { MemoryPatchRelayTelemetry } from "../src/telemetry.ts";
 import { reconcileWorkflowTasksForIssue } from "../src/workflow-task-reconciler.ts";
@@ -88,7 +88,6 @@ function createConfig(baseDir: string): AppConfig {
         worktreeRoot: path.join(baseDir, "worktrees"),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
-        allowLabels: [],
         reviewChecks: [],
         gateChecks: ["verify"],
         triggerEvents: ["statusChanged"],
@@ -104,7 +103,7 @@ function createConfig(baseDir: string): AppConfig {
 
 function openDb(config: AppConfig): PatchRelayDatabase {
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   return db;
 }
 
@@ -128,9 +127,9 @@ function startRestartedService(
 ) {
   const telemetry = new MemoryPatchRelayTelemetry();
   const db = new PatchRelayDatabase(config.database.path, config.database.wal, telemetry);
-  db.runMigrations();
+  db.initializeSchema();
   const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
-  const orchestrator = new RunOrchestrator(
+  const orchestrator = createTestRunOrchestrator(
     config,
     db,
     {
@@ -144,7 +143,6 @@ function startRestartedService(
       enqueueCalls.push({ projectId, issueId });
     },
     pino({ enabled: false }),
-    undefined,
     undefined,
     undefined,
     telemetry,

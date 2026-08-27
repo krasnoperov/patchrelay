@@ -97,7 +97,7 @@ test("attach owner/repo auto-discovers repo settings and derives the repo id", a
         });
 
         const stdout = createBufferStream();
-        const code = await runCli(["attach", "example/api-service"], {
+        const code = await runCli(["repo", "attach", "example/api-service"], {
           stdout: stdout.stream,
           stderr: createBufferStream().stream,
           runCommand: noop,
@@ -153,14 +153,14 @@ test("attach --refresh re-discovers repo defaults for an existing repo", async (
           runCommand: noop,
         });
 
-        await runCli(["attach", "app", "example/repo", "--base-branch", "main"], {
+        await runCli(["repo", "attach", "app", "example/repo", "--base-branch", "main"], {
           stdout: createBufferStream().stream,
           stderr: createBufferStream().stream,
           runCommand: noop,
         });
 
         const stdout = createBufferStream();
-        const code = await runCli(["attach", "app", "example/repo", "--refresh"], {
+        const code = await runCli(["repo", "attach", "app", "example/repo", "--refresh"], {
           stdout: stdout.stream,
           stderr: createBufferStream().stream,
           runCommand: noop,

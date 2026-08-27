@@ -47,6 +47,21 @@ export function assertPatchRelaySchemaReady(connection: DatabaseConnection, data
     );
   }
 
+  const obsoleteColumns = Object.entries(REQUIRED_PATCHRELAY_COLUMNS).flatMap(([table, requiredColumns]) => {
+    const required = new Set(requiredColumns);
+    return connection
+      .prepare(`PRAGMA table_info(${table})`)
+      .all()
+      .map((row) => String(row.name))
+      .filter((column) => !required.has(column))
+      .map((column) => `${table}.${column}`);
+  });
+  if (obsoleteColumns.length > 0) {
+    throw new Error(
+      `PatchRelay database schema is incompatible at ${databasePath}. Obsolete column(s): ${obsoleteColumns.join(", ")}`,
+    );
+  }
+
   const indexRows = connection
     .prepare("SELECT name FROM sqlite_master WHERE type = 'index'")
     .all() as Array<Record<string, unknown>>;

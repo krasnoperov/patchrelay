@@ -9,7 +9,7 @@ test("database bootstrap creates the complete final schema", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-schema-bootstrap-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
     const connection = db.unsafeRawConnectionForTests();
 
     const issueColumns = new Set(
@@ -54,14 +54,14 @@ test("database bootstrap is idempotent and preserves existing rows", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-schema-idempotent-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
     const connection = db.unsafeRawConnectionForTests();
     connection.prepare(`
       INSERT INTO issues (project_id, linear_issue_id, issue_key, title, updated_at)
       VALUES (?, ?, ?, ?, ?)
     `).run("krasnoperov/patchrelay", "issue-1", "PAT-1", "Keep this row", "2026-08-04T00:00:00.000Z");
 
-    db.runMigrations();
+    db.initializeSchema();
 
     const row = connection
       .prepare("SELECT issue_key, title FROM issues WHERE project_id = ? AND linear_issue_id = ?")
@@ -75,7 +75,7 @@ test("database bootstrap is idempotent and preserves existing rows", () => {
 });
 
 test("database bootstrap contains no data migration or destructive DDL", () => {
-  const source = readFileSync(new URL("../src/db/migrations.ts", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/db/schema.ts", import.meta.url), "utf8");
   assert.doesNotMatch(source, /\b(?:ALTER|DROP|INSERT|UPDATE|DELETE|REPLACE)\b/i);
   assert.doesNotMatch(source, /issues_new/i);
 });

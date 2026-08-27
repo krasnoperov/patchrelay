@@ -14,15 +14,6 @@ function delegatedEvent(runType: string): IssueSessionEventRecord {
   };
 }
 
-test("deriveSessionInputPlan resolves a legacy main_repair payload to implementation", () => {
-  // main_repair was removed as a run type; a historical delegated event carrying it
-  // must not strand the issue — it falls back to a normal implementation workflowTask.
-  const issue = { issueClass: "implementation" } as IssueRecord;
-  const plan = deriveSessionInputPlan(issue, [delegatedEvent("main_repair")]);
-  assert.equal(plan?.runType, "implementation");
-  assert.equal(plan?.workflowReason, "delegated");
-});
-
 test("deriveSessionInputPlan keeps a still-valid run type from the delegated payload", () => {
   const issue = { issueClass: "implementation" } as IssueRecord;
   const plan = deriveSessionInputPlan(issue, [delegatedEvent("ci_repair")]);
@@ -77,7 +68,7 @@ test("deriveSessionInputPlan downgrades a completion_check_continue review_fix t
   // workflowTask and strand the issue — so it must resolve to implementation instead.
   const issue = { issueClass: "implementation", prReviewState: "commented" } as IssueRecord;
   const plan = deriveSessionInputPlan(issue, [
-    event("completion_check_continue", JSON.stringify({ runType: "review_fix", summary: "continue" })),
+    event("completion_check_continue", JSON.stringify({ runType: "review_fix", completionCheckSummary: "continue" })),
   ]);
   assert.equal(plan?.runType, "implementation");
   assert.equal(plan?.workflowReason, "completion_check_continue");
@@ -86,7 +77,7 @@ test("deriveSessionInputPlan downgrades a completion_check_continue review_fix t
 test("deriveSessionInputPlan keeps a completion_check_continue review_fix when the PR is still changes_requested", () => {
   const issue = { issueClass: "implementation", prReviewState: "changes_requested" } as IssueRecord;
   const plan = deriveSessionInputPlan(issue, [
-    event("completion_check_continue", JSON.stringify({ runType: "review_fix", summary: "continue" })),
+    event("completion_check_continue", JSON.stringify({ runType: "review_fix", completionCheckSummary: "continue" })),
   ]);
   assert.equal(plan?.runType, "review_fix");
 });
@@ -151,6 +142,13 @@ test("parseIssueSessionEvent fails loudly on a mistyped payload field", () => {
   assert.throws(
     () => parseIssueSessionEvent(event("operator_closed", JSON.stringify({ terminalState: "exploded" }))),
     /terminalState/,
+  );
+});
+
+test("parseIssueSessionEvent rejects removed run types", () => {
+  assert.throws(
+    () => parseIssueSessionEvent(event("delegated", JSON.stringify({ runType: "main_repair" }))),
+    /runType/,
   );
 });
 

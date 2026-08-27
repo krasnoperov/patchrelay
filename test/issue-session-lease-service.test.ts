@@ -22,7 +22,7 @@ function setup(prefix: string): {
 } {
   const baseDir = mkdtempSync(path.join(tmpdir(), prefix));
   const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-  db.runMigrations();
+  db.initializeSchema();
   const telemetryEvents: PatchRelayTelemetryEvent[] = [];
   const telemetry = { emit: (event: PatchRelayTelemetryEvent) => { telemetryEvents.push(event); } };
   return {

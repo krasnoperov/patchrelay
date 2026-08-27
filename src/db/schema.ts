@@ -4,7 +4,7 @@ import type { DatabaseConnection } from "./shared.ts";
  * The complete PatchRelay schema.
  *
  * PatchRelay has one production database. Existing databases must already be
- * on this schema; startup never rewrites tables or migrates stored rows. This
+ * on this schema; startup never rewrites tables or transforms stored rows. This
  * bootstrap is intentionally limited to creating missing objects for a new
  * empty database.
  */
@@ -350,7 +350,7 @@ CREATE INDEX IF NOT EXISTS idx_workflow_tasks_subject ON workflow_tasks(project_
 CREATE INDEX IF NOT EXISTS idx_workflow_tasks_open ON workflow_tasks(status, project_id, updated_at);
 `;
 
-export function initializePatchRelaySchemaIfEmpty(connection: DatabaseConnection): boolean {
+export function initializePatchRelaySchema(connection: DatabaseConnection): boolean {
   const existingTable = connection.prepare(`
     SELECT 1
     FROM sqlite_master

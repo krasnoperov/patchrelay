@@ -544,7 +544,6 @@ export class RunFinalizer {
     const outcomeSummary = "Repair left unpublished local changes; continuing automatically to publish them.";
     const continuationContext = {
       runType: params.run.runType,
-      summary: message,
       preserveDirtyWorktree: true,
       ...(params.status.summary !== undefined ? { dirtyWorktreeSummary: params.status.summary } : {}),
       dirtyWorktreeChangedPaths: params.status.changedPaths,

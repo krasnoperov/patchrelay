@@ -9,7 +9,7 @@ test("abandoned sweep marks only stale pending rows and makes them archiveable",
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-abandoned-sweep-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), false);
-    db.runMigrations();
+    db.initializeSchema();
 
     const staleAt = "2026-01-01T00:00:00.000Z";
     const freshAt = "2026-01-02T11:55:00.000Z";

@@ -15,7 +15,7 @@ function withDb<T>(fn: (db: PatchRelayDatabase) => T): T {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-supersede-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
     return fn(db);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

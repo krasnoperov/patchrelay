@@ -594,7 +594,7 @@ test("DatabaseBackedLinearClientProvider refreshes expiring tokens and returns a
   const config = createConfig();
   const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "patchrelay-linear-client-"));
   const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-  db.runMigrations();
+  db.initializeSchema();
 
   const installation = db.linearInstallations.upsertLinearInstallation({
     workspaceId: "team-1",
@@ -653,7 +653,7 @@ test("repairProjectInstallations backfills missing and dangling project links", 
   const config = createConfig();
   const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "patchrelay-linear-repair-"));
   const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-  db.runMigrations();
+  db.initializeSchema();
 
   const installation = db.linearInstallations.upsertLinearInstallation({
     workspaceId: "workspace-1",

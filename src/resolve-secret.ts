@@ -16,7 +16,7 @@ export interface ResolvedSecret {
  * 2. `${envKey}_FILE` — reads the secret from an arbitrary file path.
  *    Works with any file-based provider (age, sops, mounted volumes).
  * 3. `$envKey` — direct environment variable (dev, `op run`, `sops exec-env`,
- *    or the legacy `service.env` EnvironmentFile).
+ *    or the installation's `service.env` EnvironmentFile).
  *
  * Returns `undefined` when the secret is not found at any level.
  */

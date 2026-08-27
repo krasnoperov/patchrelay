@@ -10,7 +10,7 @@ test("getPublicAgentSessionStatus returns summarized run history for session-bac
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-issue-query-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "usertold",
@@ -76,7 +76,7 @@ test("getPublicAgentSessionStatus returns undefined when the issue is unknown", 
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-issue-query-missing-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
 
     const query = new IssueQueryService(
       db,
@@ -94,7 +94,7 @@ test("getPublicAgentSessionStatus suppresses superseded repair run as current st
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-issue-query-superseded-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "usertold",
@@ -142,7 +142,7 @@ test("getPublicAgentSessionStatus suppresses superseded repair run after termina
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-issue-query-terminal-superseded-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
 
     const issue = db.upsertIssue({
       projectId: "inventory",

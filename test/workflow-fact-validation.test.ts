@@ -11,7 +11,7 @@ test("issue reads reject invalid persisted workflow facts", () => {
   try {
     const dbPath = path.join(baseDir, "patchrelay.sqlite");
     const db = new PatchRelayDatabase(dbPath, true);
-    db.runMigrations();
+    db.initializeSchema();
     db.upsertIssue({ projectId: "project", linearIssueId: "issue", workflowOutcome: undefined });
     const raw = new SqliteConnection(dbPath);
 

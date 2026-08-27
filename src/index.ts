@@ -65,7 +65,7 @@ async function main(): Promise<void> {
   }
   await enforceRuntimeFilePermissions(config);
 
-  const preflight = await runPreflight(config, { skipServiceCheck: true, migrateDatabase: true });
+  const preflight = await runPreflight(config, { skipServiceCheck: true, initializeDatabase: true });
   const failedChecks = preflight.checks.filter((check) => check.status === "fail");
   if (failedChecks.length > 0) {
     throw new Error(
@@ -75,7 +75,7 @@ async function main(): Promise<void> {
 
   const logger = createLogger(config);
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
 
   // The Codex app-server is long-lived: give it an env without GH_TOKEN/GITHUB_TOKEN so the
   // agent's git/gh resolve credentials via the inherited GH_CONFIG_DIR (rotated hosts.yml)

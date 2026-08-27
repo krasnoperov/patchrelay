@@ -10,7 +10,7 @@ test("operator feed persists events and supports issue/project filters across fe
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-operator-feed-store-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-    db.runMigrations();
+    db.initializeSchema();
 
     const firstFeed = new OperatorEventFeed(db.operatorFeed);
     firstFeed.publish({

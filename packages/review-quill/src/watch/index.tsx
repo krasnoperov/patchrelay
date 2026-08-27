@@ -12,9 +12,9 @@ function resolveBaseUrl(configPath: string): string {
   return `http://${bind}:${config.server.port}`;
 }
 
-export async function startWatch(configPath: string): Promise<void> {
+export async function startDashboard(configPath: string): Promise<void> {
   if (!process.stdin.isTTY || typeof process.stdin.setRawMode !== "function") {
-    throw new Error("review-quill watch requires an interactive TTY");
+    throw new Error("review-quill dashboard requires an interactive TTY");
   }
 
   const baseUrl = resolveBaseUrl(configPath);

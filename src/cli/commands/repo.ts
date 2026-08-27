@@ -125,7 +125,7 @@ async function handleRepoLink(params: RepoCommandParams): Promise<number> {
     await ensureDir(dirname(config.database.path));
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
     try {
-      db.runMigrations();
+      db.initializeSchema();
       db.linearInstallations.setProjectInstallation(githubRepo, installation.id);
     } finally {
       db.close();
@@ -177,7 +177,7 @@ async function handleRepoUnlink(params: RepoCommandParams): Promise<number> {
   await ensureDir(dirname(config.database.path));
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
   try {
-    db.runMigrations();
+    db.initializeSchema();
     db.linearInstallations.unlinkProjectInstallation(githubRepo);
   } finally {
     db.close();

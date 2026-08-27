@@ -146,40 +146,13 @@ export class RunOrchestrator {
     private readonly codex: CodexAppServerClient,
     private readonly linearProvider: LinearClientProvider,
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
-    workflowTaskDispatcherOrLogger: WorkflowTaskDispatcher | Logger,
-    loggerOrFeed?: Logger | OperatorEventFeed,
-    feedOrConfigPath?: OperatorEventFeed | string,
-    configPathOrUndefined?: string,
-    telemetryOrUndefined?: PatchRelayTelemetry,
+    workflowTaskDispatcher: WorkflowTaskDispatcher,
+    logger: Logger,
+    feed?: OperatorEventFeed,
+    configPath?: string,
+    telemetry: PatchRelayTelemetry = noopTelemetry,
   ) {
-    // Backward-compat: tests pass `(config, db, codex, lp, enqueue, logger, feed?, configPath?)`
-    // (no dispatcher). Production passes `(..., enqueue, dispatcher, logger, feed?, configPath?)`.
-    let logger: Logger;
-    let feed: OperatorEventFeed | undefined;
-    let configPath: string | undefined;
-    const telemetry = telemetryOrUndefined ?? noopTelemetry;
-    if (workflowTaskDispatcherOrLogger instanceof WorkflowTaskDispatcher) {
-      this.workflowTaskDispatcher = workflowTaskDispatcherOrLogger;
-      logger = loggerOrFeed as Logger;
-      feed = feedOrConfigPath as OperatorEventFeed | undefined;
-      configPath = configPathOrUndefined;
-    } else {
-      logger = workflowTaskDispatcherOrLogger;
-      feed = loggerOrFeed as OperatorEventFeed | undefined;
-      configPath = feedOrConfigPath as string | undefined;
-      // Construct a dispatcher with a stub releaseLease — the real one
-      // gets wired below once the lease service exists. The stub is
-      // never called before the wiring completes because the run()
-      // loop is the only consumer of releaseRunAndDispatch.
-      this.workflowTaskDispatcher = new WorkflowTaskDispatcher(
-        db,
-        enqueueIssue,
-        (projectId, linearIssueId) => this.leaseService?.release(projectId, linearIssueId),
-        logger,
-        feed,
-        telemetry,
-      );
-    }
+    this.workflowTaskDispatcher = workflowTaskDispatcher;
     this.logger = logger;
     this.feed = feed;
     this.configPath = configPath;
@@ -700,7 +673,7 @@ export class RunOrchestrator {
       ? { ...coordinationContext, ...baseContextWithRecoveredActivity }
       : baseContextWithRecoveredActivity;
     const sourceHeadSha = effectiveContext?.failureHeadSha
-      ?? effectiveContext?.headSha
+      ?? effectiveContext?.currentPrHeadSha
       ?? issue.prHeadSha;
     const workflowSnapshot = reconcileWorkflowTasksForIssue(this.db, issue).snapshot;
     const budgetExceeded = this.runTaskPlanner.budgetExceeded(issue, project, runType, isRequestedChangesRunType);

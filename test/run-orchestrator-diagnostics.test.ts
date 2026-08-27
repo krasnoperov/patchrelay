@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import pino from "pino";
 import { PatchRelayDatabase } from "../src/db.ts";
-import { RunOrchestrator } from "../src/run-orchestrator.ts";
+import { createTestRunOrchestrator } from "./helpers/workflow-task-dispatcher.ts";
 import type { AppConfig, LinearClient } from "../src/types.ts";
 
 // Captures every log entry written through pino so tests can assert on
@@ -49,7 +49,6 @@ function createConfig(baseDir: string): AppConfig {
       worktreeRoot: path.join(baseDir, "worktrees"),
       issueKeyPrefixes: ["PRJ"],
       linearTeamIds: ["team"],
-      allowLabels: [],
       triggerEvents: ["statusChanged"],
       branchPrefix: "prj",
       github: { repoFullName: "owner/repo" },
@@ -61,7 +60,7 @@ function createConfig(baseDir: string): AppConfig {
 function buildOrchestrator(baseDir: string, logger: pino.Logger) {
   const config = createConfig(baseDir);
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
   const codex = {
     startThreadForIssueTriage: async () => ({ id: "triage-1", cwd: "/tmp", preview: "", status: "idle", turns: [] }),
@@ -72,7 +71,7 @@ function buildOrchestrator(baseDir: string, logger: pino.Logger) {
   const linearProvider: { forProject(projectId: string): Promise<LinearClient | undefined> } = {
     forProject: async () => undefined,
   };
-  const orchestrator = new RunOrchestrator(
+  const orchestrator = createTestRunOrchestrator(
     config,
     db,
     codex as never,

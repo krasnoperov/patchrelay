@@ -21,7 +21,7 @@ test("buildOperatorRetryEvent preserves queue incident and failure context for q
   const event = buildOperatorRetryEvent(createIssue({
     linearIssueId: "issue-queue",
     prHeadSha: "head-123",
-    lastQueueIncidentJson: JSON.stringify({ queuePosition: 3, incident: "evicted" }),
+    lastQueueIncidentJson: JSON.stringify({ queuePosition: 3, incidentSummary: "Evicted from queue" }),
     lastGitHubFailureContextJson: JSON.stringify({ checkName: "merge-steward", summary: "Evicted from queue" }),
   }), "queue_repair");
 
@@ -29,7 +29,7 @@ test("buildOperatorRetryEvent preserves queue incident and failure context for q
   assert.equal(event.dedupeKey, "operator_retry:queue_repair:issue-queue:head-123");
   const payload = JSON.parse(event.eventJson) as Record<string, unknown>;
   assert.equal(payload.queuePosition, 3);
-  assert.equal(payload.incident, "evicted");
+  assert.equal(payload.incidentSummary, "Evicted from queue");
   assert.equal(payload.checkName, "merge-steward");
   assert.equal(payload.summary, "Evicted from queue");
   assert.equal(payload.source, "operator_retry");

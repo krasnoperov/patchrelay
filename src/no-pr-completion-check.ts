@@ -184,7 +184,7 @@ export async function handleNoPrCompletionCheck(params: {
         eventType: "completion_check_continue",
         eventJson: JSON.stringify({
           runType: params.run.runType,
-          summary: completionCheck.summary,
+          completionCheckSummary: completionCheck.summary,
         } satisfies RunContext),
         dedupeKey: `completion_check_continue:${params.run.id}`,
       }));
@@ -265,7 +265,7 @@ export async function handleNoPrCompletionCheck(params: {
           eventType: "completion_check_continue",
           eventJson: JSON.stringify({
             runType: params.run.runType,
-            summary: params.publishedOutcomeError,
+            completionCheckSummary: params.publishedOutcomeError,
           } satisfies RunContext),
           dedupeKey: `completion_check_continue:${params.run.id}`,
         }));

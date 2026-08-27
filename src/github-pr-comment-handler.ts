@@ -79,7 +79,7 @@ export class GitHubPrCommentHandler {
     reconcileWorkflowTasksForIssue(this.db, issue);
     this.workflowTaskDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
       eventType: "followup_comment",
-      eventJson: JSON.stringify({ body, author } satisfies InputMessageEventPayload),
+      eventJson: JSON.stringify({ text: body, author } satisfies InputMessageEventPayload),
     });
   }
 }

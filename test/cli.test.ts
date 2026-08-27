@@ -85,7 +85,6 @@ function createConfig(baseDir: string): AppConfig {
         worktreeRoot: path.join(baseDir, "worktrees"),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
-        allowLabels: [],
         triggerEvents: ["statusChanged"],
         branchPrefix: "use",
       },
@@ -304,8 +303,6 @@ function writeExternalConfig(configPath: string, baseDir: string, overrides?: {
           root: path.join(baseDir, "projects"),
         },
         repositories: [],
-        projects: [],
-        secretSources: {},
       },
       null,
       2,
@@ -400,7 +397,7 @@ test("cli path and open render stored issue details", async () => {
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, true);
-    db.runMigrations();
+    db.initializeSchema();
     seedDatabase(db, config);
     data = new CliDataAccess(config, { db });
 
@@ -425,7 +422,7 @@ test("cli open launches codex in the issue worktree", async () => {
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, true);
-    db.runMigrations();
+    db.initializeSchema();
     seedDatabase(db, config);
     data = new CliDataAccess(config, { db });
 
@@ -466,7 +463,7 @@ test("cli open resumes the thread stored on the issue record", async () => {
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, true);
-    db.runMigrations();
+    db.initializeSchema();
     seedDatabase(db, config);
 
     // Set a threadId directly on the issue (the new model stores it on issues)
@@ -516,7 +513,7 @@ test("cli retry covers operator control flows", async () => {
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, true);
-    db.runMigrations();
+    db.initializeSchema();
     seedDatabase(db, config);
     const doneIssue = db.upsertIssue({
       projectId: "usertold",
@@ -673,7 +670,7 @@ test("cli retry blocks when the issue still has an active run", () => {
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, true);
-    db.runMigrations();
+    db.initializeSchema();
     seedDatabase(db, config);
     data = new CliDataAccess(config, { db });
 
@@ -709,7 +706,7 @@ test("cli close force-terminates a stuck issue and releases its active run", asy
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, true);
-    db.runMigrations();
+    db.initializeSchema();
     seedDatabase(db, config);
     data = new CliDataAccess(config, { db });
 
@@ -734,7 +731,7 @@ test("cli close force-terminates a stuck issue and releases its active run", asy
 
     const closeOut = createBufferStream();
     assert.equal(
-      await runCli(["close", "USE-CLOSE-CLI", "--reason", "fixed externally"], {
+      await runCli(["issue", "close", "USE-CLOSE-CLI", "--reason", "fixed externally"], {
         config,
         data,
         stdout: closeOut.stream,
@@ -842,42 +839,18 @@ test("cli help explains the setup sequence and default behavior", async () => {
   assert.doesNotMatch(stdout.read(), /patchrelay cluster/);
 });
 
-test("cli linear and repo help print command-specific usage and legacy aliases point to replacements", async () => {
+test("cli linear and repo help print the current command surface", async () => {
   const linearHelp = createBufferStream();
   assert.equal(await runCli(["linear", "--help"], { stdout: linearHelp.stream, stderr: createBufferStream().stream }), 0);
   assert.match(linearHelp.read(), /patchrelay linear connect/);
   assert.match(linearHelp.read(), /authorizes one Linear workspace/);
-  assert.match(linearHelp.read(), /patchrelay connect/);
+  assert.doesNotMatch(linearHelp.read(), /Compatibility aliases/);
 
   const repoHelp = createBufferStream();
   assert.equal(await runCli(["repo", "--help"], { stdout: repoHelp.stream, stderr: createBufferStream().stream }), 0);
   assert.match(repoHelp.read(), /patchrelay repo link <github-repo>/);
   assert.match(repoHelp.read(), /GitHub repo as the source of truth/);
-  assert.match(repoHelp.read(), /patchrelay attach/);
-  assert.match(repoHelp.read(), /patchrelay repos/);
-
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-aliases-"));
-  try {
-    const config = createConfig(baseDir);
-
-    const reposOut = createBufferStream();
-    assert.equal(await runCli(["repos"], { stdout: reposOut.stream, stderr: createBufferStream().stream, config }), 0);
-    assert.match(reposOut.read(), /krasnoperov\/usertold/);
-
-    const reposShowOut = createBufferStream();
-    assert.equal(await runCli(["repos", "krasnoperov/usertold"], { stdout: reposShowOut.stream, stderr: createBufferStream().stream, config }), 0);
-    assert.match(reposShowOut.read(), /Repository: krasnoperov\/usertold/);
-
-    const connectHelp = createBufferStream();
-    assert.equal(await runCli(["connect", "--help"], { stdout: connectHelp.stream, stderr: createBufferStream().stream }), 0);
-    assert.match(connectHelp.read(), /patchrelay linear connect/);
-
-    const installationsHelp = createBufferStream();
-    assert.equal(await runCli(["installations", "--help"], { stdout: installationsHelp.stream, stderr: createBufferStream().stream }), 0);
-    assert.match(installationsHelp.read(), /patchrelay linear connect/);
-  } finally {
-    rmSync(baseDir, { recursive: true, force: true });
-  }
+  assert.doesNotMatch(repoHelp.read(), /Compatibility aliases/);
 
   const flagError = createBufferStream();
   assert.equal(
@@ -1009,12 +982,10 @@ test("cli issue and service groups expose only control and account commands", as
   assert.doesNotMatch(serviceHelp.read(), /logs \[--lines/);
 });
 
-test("cli dashboard aliases resolve to the TUI command", async () => {
-  for (const command of [["dashboard"], ["dash"], ["d"]] as const) {
-    const helpOut = createBufferStream();
-    assert.equal(await runCli([...command, "--help"], { stdout: helpOut.stream, stderr: createBufferStream().stream }), 0);
-    assert.match(helpOut.read(), /dashboard \[--issue <issueKey>\]/);
-  }
+test("cli dashboard resolves to the TUI command", async () => {
+  const helpOut = createBufferStream();
+  assert.equal(await runCli(["dashboard", "--help"], { stdout: helpOut.stream, stderr: createBufferStream().stream }), 0);
+  assert.match(helpOut.read(), /dashboard \[--issue <issueKey>\]/);
 });
 
 test("cli dashboard reports a clean error when stdin is not a TTY", async () => {

@@ -6,7 +6,7 @@ import pino from "pino";
 import test from "node:test";
 import { assertIssuePhase } from "./assert-issue-phase.ts";
 import { PatchRelayDatabase } from "../src/db.ts";
-import { RunOrchestrator } from "../src/run-orchestrator.ts";
+import { createTestRunOrchestrator } from "./helpers/workflow-task-dispatcher.ts";
 import type { AppConfig } from "../src/types.ts";
 
 function createConfig(baseDir: string): AppConfig {
@@ -63,7 +63,6 @@ function createConfig(baseDir: string): AppConfig {
         worktreeRoot: path.join(baseDir, "worktrees"),
         issueKeyPrefixes: ["PRJ"],
         linearTeamIds: ["PRJ"],
-        allowLabels: [],
         triggerEvents: ["statusChanged"],
         branchPrefix: "prj",
         github: {
@@ -79,7 +78,7 @@ function createConfig(baseDir: string): AppConfig {
 function createTestHarness(baseDir: string, ghScript: string) {
   const config = createConfig(baseDir);
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
 
   // Fake gh binary
@@ -91,7 +90,7 @@ function createTestHarness(baseDir: string, ghScript: string) {
   const oldPath = process.env.PATH;
   process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
 
-  const orchestrator = new RunOrchestrator(
+  const orchestrator = createTestRunOrchestrator(
     config,
     db,
     {

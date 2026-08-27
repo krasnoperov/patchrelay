@@ -182,7 +182,7 @@ Default trigger events for app-mode installs: `delegateChanged`, `statusChanged`
 
 The managed local clone root defaults to `~/projects`. Issue worktrees still default to `~/.local/share/patchrelay/worktrees/<repo-name>`. `branch_prefix` defaults to the GitHub repo name.
 
-If you want Linear itself to be part of your trust boundary, configure `trusted_actors` on each project. That allowlist can name specific owners by `id` or `email`, or define a group-style allowlist with `email_domains`.
+If you want Linear itself to be part of your trust boundary, configure `trusted_actors` on each `repositories[]` entry. That allowlist can name specific owners by `id` or `email`, or define a group-style allowlist with `email_domains`.
 
 ## 5. Add Repo-Local Workflow Docs
 
@@ -255,6 +255,6 @@ Recommended production posture:
 - leave `operator_api.enabled` disabled unless you explicitly need the HTTP operator endpoints
 - require `PATCHRELAY_OPERATOR_TOKEN` if you enable the operator API on a non-loopback bind
 - treat workflow files and Codex runtime access as privileged automation policy
-- configure `trusted_actors` for every project that should only be driven by a known owner or trusted group
+- configure `trusted_actors` for every repository that should only be driven by a known owner or trusted group
 
 Use [../SECURITY.md](../SECURITY.md) for the security policy.

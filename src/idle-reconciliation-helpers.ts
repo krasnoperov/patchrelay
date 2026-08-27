@@ -70,7 +70,7 @@ export function isDuplicateRepairAttempt(
   context: RunContext | undefined,
 ): boolean {
   const signature = context?.failureSignature;
-  const headSha = context?.failureHeadSha ?? context?.headSha;
+  const headSha = context?.failureHeadSha;
   if (!signature) return false;
   if (issue.lastAttemptedFailureSignature !== signature) return false;
   if (headSha !== undefined && issue.lastAttemptedFailureHeadSha !== headSha) return false;

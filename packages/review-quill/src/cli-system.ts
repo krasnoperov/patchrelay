@@ -104,7 +104,7 @@ export function loadRepoConfigById(repoRef: string): {
   if (!repo) {
     const configured = config.repositories.map((entry) => entry.repoId).join(", ");
     throw new Error(
-      `Repo config not found for ${repoRef}. Run \`review-quill attach <owner/repo>\` first.${configured ? ` Configured repos: ${configured}.` : ""}`,
+      `Repo config not found for ${repoRef}. Run \`review-quill repo attach <owner/repo>\` first.${configured ? ` Configured repos: ${configured}.` : ""}`,
     );
   }
   return {
@@ -284,11 +284,4 @@ export async function fetchWatchSnapshot(): Promise<{
   };
 }> {
   return await requestLocalJson("/watch");
-}
-
-export async function triggerServiceReconcile(repoFullName?: string): Promise<{ ok: boolean; started: boolean }> {
-  return await requestLocalJson("/admin/reconcile", {
-    method: "POST",
-    ...(repoFullName ? { body: { repoFullName } } : {}),
-  });
 }

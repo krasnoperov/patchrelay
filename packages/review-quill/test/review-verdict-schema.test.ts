@@ -26,9 +26,12 @@ test("ReviewVerdict JSON schema is strict and requires the canonical shape", () 
   assert.deepEqual(REVIEW_VERDICT_JSON_SCHEMA.properties.findings.items.properties.suggestion.type, ["string", "null"]);
 });
 
-test("ReviewVerdict JSON schema adds no length, count, confidence, or line caps", () => {
+test("ReviewVerdict JSON schema constrains required text, lines, and confidence", () => {
   const serialized = JSON.stringify(REVIEW_VERDICT_JSON_SCHEMA);
-  assert.doesNotMatch(serialized, /minLength|maxLength|minItems|maxItems|minimum|maximum/);
+  assert.match(serialized, /minLength/);
+  assert.match(serialized, /minimum/);
+  assert.match(serialized, /maximum/);
+  assert.doesNotMatch(serialized, /maxLength|minItems|maxItems/);
 });
 
 test("normalizeVerdict omits nullable optional finding values from the internal verdict", () => {

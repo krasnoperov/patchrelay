@@ -65,7 +65,6 @@ function createConfig(baseDir: string): AppConfig {
         worktreeRoot: path.join(baseDir, "worktrees"),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["team-removed"],
-        allowLabels: [],
         triggerEvents: ["agentSessionCreated"],
         branchPrefix: "use",
       },
@@ -75,7 +74,7 @@ function createConfig(baseDir: string): AppConfig {
 
 function createDatabase(config: AppConfig): PatchRelayDatabase {
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
-  db.runMigrations();
+  db.initializeSchema();
   return db;
 }
 

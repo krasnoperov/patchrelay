@@ -171,7 +171,7 @@ Three properties worth knowing:
 
 - **PR-base-ref aware.** Materialisation reads the PR's GitHub-reported base ref, not the repo default. For a stacked PR (`B.base = A.branch`), the diff base — and so `patch_id` — is computed against the parent PR's head, not main.
 - **Stored, not fetched.** The rendered `review_body` and `review_event` (`APPROVE` / `REQUEST_CHANGES` / `COMMENT`) are stored on each `review_attempts` row so carry-forward can re-publish without a GitHub round-trip.
-- **Rollout-safe.** Old rows from before the carry-forward migration have NULL `review_body` and naturally fall through to a fresh review. No data migration needed; the cache hit rate climbs over time as new rows accumulate.
+- **Complete cache key.** Carry-forward rows always include `review_body` and `review_event`, so a cache hit can be republished without another model run.
 
 A PR carrying the configured no-cache label (default `review:no-cache`) is always re-reviewed even when the patch is unchanged.
 

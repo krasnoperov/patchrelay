@@ -1,4 +1,4 @@
-import { SCHEMA_SQL } from "./schema.ts";
+import { ensureSchema } from "./schema.ts";
 import { SqliteConnection, isoNow } from "./shared.ts";
 import type {
   ReviewAttemptConclusion,
@@ -60,36 +60,7 @@ export class SqliteStore {
     this.db = new SqliteConnection(filePath);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
-    this.db.exec(SCHEMA_SQL);
-    this.addColumnIfMissing("review_attempts", "pr_title", "TEXT");
-    this.addColumnIfMissing("review_attempts", "prompt_fingerprint", "TEXT");
-    this.db.exec("DROP INDEX IF EXISTS idx_review_attempts_patch_tree");
-    this.dropColumnIfPresent("review_attempts", "transcript_json");
-    this.dropColumnIfPresent("review_attempts", "integration_tree_id");
-    this.dropColumnIfPresent("review_attempts", "review_surface_mode");
-    // Carry-forward identity columns. Existing rows backfill NULL and behave
-    // as cache misses; new approved rows populate them so future heads can
-    // re-emit the verdict without re-running the reviewer.
-    this.addColumnIfMissing("review_attempts", "patch_id", "TEXT");
-    this.addColumnIfMissing("review_attempts", "pr_base_sha", "TEXT");
-    this.addColumnIfMissing("review_attempts", "base_sha", "TEXT");
-    this.addColumnIfMissing("review_attempts", "prior_attempt_id", "INTEGER");
-    this.addColumnIfMissing("review_attempts", "review_body", "TEXT");
-    this.addColumnIfMissing("review_attempts", "review_event", "TEXT");
-    this.addColumnIfMissing("review_attempts", "publication_mode", "TEXT");
-    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_review_attempts_patch ON review_attempts(repo_full_name, pr_number, patch_id);`);
-  }
-
-  private addColumnIfMissing(table: string, column: string, type: string): void {
-    const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<Record<string, unknown>>;
-    if (rows.some((row) => String(row.name) === column)) return;
-    this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
-  }
-
-  private dropColumnIfPresent(table: string, column: string): void {
-    const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<Record<string, unknown>>;
-    if (!rows.some((row) => String(row.name) === column)) return;
-    this.db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+    ensureSchema(this.db);
   }
 
   close(): void {
@@ -168,9 +139,7 @@ export class SqliteStore {
   }
 
   // Finds an approved attempt with the same patch-id (any prior head) that
-  // has a stored body+event we can re-emit on the new head SHA. Old rows
-  // missing review_body are skipped — only rows written after the migration
-  // can serve cache hits.
+  // has a stored body+event we can re-emit on the new head SHA.
   findApprovedAttemptByPatchId(
     repoFullName: string,
     prNumber: number,

@@ -10,7 +10,7 @@ import { settleRun } from "../src/run-settlement.ts";
 function createDb() {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-run-settlement-"));
   const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
-  db.runMigrations();
+  db.initializeSchema();
   return { baseDir, db };
 }
 

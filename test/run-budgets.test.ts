@@ -31,7 +31,6 @@ function createProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
     worktreeRoot: "/tmp/worktrees/test",
     issueKeyPrefixes: ["TST"],
     linearTeamIds: ["team-1"],
-    allowLabels: [],
     reviewChecks: [],
     gateChecks: [],
     triggerEvents: ["statusChanged"],

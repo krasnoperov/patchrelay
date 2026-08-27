@@ -139,7 +139,7 @@ function summarizeRelationEntries(
 
 function buildIssueTopology(context?: RunContext): string[] {
   const unresolvedBlockers = context?.unresolvedBlockers ?? [];
-  const childIssues = context?.childIssues ?? context?.trackedDependents ?? [];
+  const childIssues = context?.childIssues ?? [];
 
   if (unresolvedBlockers.length === 0 && childIssues.length === 0) {
     return [];
@@ -174,7 +174,7 @@ function buildConstraints(context?: RunContext): string {
 
 function buildOrchestrationConstraints(context?: RunContext): string {
   const unresolvedBlockers = context?.unresolvedBlockers ?? [];
-  const childIssues = context?.childIssues ?? context?.trackedDependents ?? [];
+  const childIssues = context?.childIssues ?? [];
 
   return [
     "## Constraints",
@@ -207,8 +207,6 @@ function buildOrchestrationConstraints(context?: RunContext): string {
 function buildHumanContextLines(context?: RunContext): string[] {
   const promptContext = context?.promptContext?.trim() ?? "";
   const latestPrompt = context?.promptBody?.trim() ?? "";
-  const operatorPrompt = context?.operatorPrompt?.trim() ?? "";
-  const userComment = context?.userComment?.trim() ?? "";
   const linearAgentActivityContext = context?.linearAgentActivityContext?.trim() ?? "";
 
   const lines: string[] = [];
@@ -217,12 +215,6 @@ function buildHumanContextLines(context?: RunContext): string[] {
   }
   if (latestPrompt) {
     lines.push("Latest human instruction:", latestPrompt, "");
-  }
-  if (operatorPrompt) {
-    lines.push("Operator prompt:", operatorPrompt, "");
-  }
-  if (userComment) {
-    lines.push("Human follow-up comment:", userComment, "");
   }
   if (linearAgentActivityContext) {
     lines.push("Recovered Linear agent activity context:", linearAgentActivityContext, "");
@@ -378,45 +370,8 @@ function buildCiRepairContext(context?: RunContext): string {
   ].filter(Boolean).join("\n");
 }
 
-function appendQueueRepairContext(lines: string[], context?: RunContext): void {
-  const record = context?.mergeQueueContext;
-  if (!record) {
-    return;
-  }
-
-  const conflictingFiles = (record.conflictingFiles ?? []).filter((entry) => entry.trim().length > 0);
-  const operatorHints = (record.operatorHints ?? []).filter((entry) => entry.trim().length > 0);
-
-  lines.push("## Merge Queue Context", "");
-  if (record.baseBranch !== undefined) {
-    lines.push(`Base branch: ${record.baseBranch}`);
-  }
-  if (record.baseSha !== undefined) {
-    lines.push(`Base SHA at eviction: ${record.baseSha}`);
-  }
-  if (record.mergeCommitSha !== undefined) {
-    lines.push(`Synthetic merge commit SHA: ${record.mergeCommitSha}`);
-  }
-  if (record.checkRunUrl !== undefined) {
-    lines.push(`Steward check run: ${record.checkRunUrl}`);
-  }
-  if (record.incidentSummary !== undefined) {
-    lines.push(`Steward summary: ${record.incidentSummary}`);
-  }
-  if (conflictingFiles.length > 0) {
-    lines.push("Conflicting files:");
-    conflictingFiles.forEach((file) => lines.push(`- ${file}`));
-  }
-  if (operatorHints.length > 0) {
-    lines.push("", "Operator hints:");
-    operatorHints.forEach((hint) => lines.push(`- ${hint}`));
-  }
-  lines.push("");
-}
-
 function buildQueueRepairContext(context?: RunContext): string {
   const lines: string[] = [];
-  appendQueueRepairContext(lines, context);
   if (context?.incidentTitle) lines.push(`Queue incident: ${context.incidentTitle}`);
   if (context?.incidentSummary) lines.push(context.incidentSummary);
   const openPrAncestors = context?.incidentContext?.openPrAncestors ?? [];
@@ -616,7 +571,7 @@ function buildPrePushSelfReviewSection(target: "new_pr" | "existing_pr", runType
   if (runType === "implementation") {
     lines.push(
       "Name 2-4 concrete invariants most likely to regress in the touched flow, confirm which file or path enforces each one, and verify at least one adjacent path you did not edit directly.",
-      "If you changed schema, enums, shared vocabulary, normalization helpers, or compatibility mappings, inspect the main read/write paths that can bypass the new abstraction and verify one legacy-flow and one new-flow case before publishing.",
+      "If you changed schema, enums, shared vocabulary, or normalization helpers, inspect the main read/write paths that can bypass the new abstraction and verify every affected flow before publishing.",
     );
   }
 

@@ -63,7 +63,6 @@ function createConfig(baseDir: string): AppConfig {
         worktreeRoot: path.join(baseDir, "worktrees"),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
-        allowLabels: [],
         triggerEvents: ["statusChanged"],
         branchPrefix: "use",
         github: {
@@ -81,7 +80,7 @@ test("promptIssue queues operator input for the next run when no run is active",
   try {
     const config = createConfig(baseDir);
     db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const service = new PatchRelayService(
       config,
       db,
@@ -116,7 +115,7 @@ test("promptIssue steers active runs through the shared agent input path", async
   try {
     const config = createConfig(baseDir);
     db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const steers: Array<{ threadId: string; turnId: string; input: string }> = [];
     let classifierStarts = 0;
     const service = new PatchRelayService(
@@ -183,7 +182,7 @@ test("retryIssue preserves branch upkeep retries for requested-changes issues", 
   try {
     const config = createConfig(baseDir);
     db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const service = new PatchRelayService(
       config,
       db,
@@ -199,6 +198,7 @@ test("retryIssue preserves branch upkeep retries for requested-changes issues", 
       title: "Requested changes upkeep",
       workflowOutcome: undefined,
       prNumber: 42,
+      prState: "open",
       prReviewState: "changes_requested",
       prHeadSha: "abc123",
     });
@@ -231,7 +231,7 @@ test("retryIssue treats closed PR issues as fresh implementation retries", async
   try {
     const config = createConfig(baseDir);
     db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const service = new PatchRelayService(
       config,
       db,
@@ -270,7 +270,7 @@ test("closeIssue releases active runs and clears pending work", async () => {
   try {
     const config = createConfig(baseDir);
     db = new PatchRelayDatabase(config.database.path, config.database.wal);
-    db.runMigrations();
+    db.initializeSchema();
     const service = new PatchRelayService(
       config,
       db,

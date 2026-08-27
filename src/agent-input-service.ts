@@ -385,7 +385,7 @@ export class AgentInputService {
     return this.workflowTaskDispatcher.recordEventAndDispatch(issue.projectId, issue.linearIssueId, {
       eventType: inputKind,
       eventJson: JSON.stringify({
-        ...(source === "linear_addressed_comment" ? { body } : { text: body }),
+        text: body,
         source: inputSourcePayloadSource(source),
         ...(author ? { author } : {}),
         ...(operatorSource ? { operatorSource } : {}),

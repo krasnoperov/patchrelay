@@ -33,8 +33,6 @@ export interface CodexAppServerConfig {
   shellBin?: string;
   sourceBashrc?: boolean;
   requestTimeoutMs?: number;
-  /** Request native structured ReviewVerdict output from Codex. */
-  outputSchema: boolean;
   /** Fork a validated prior review thread for a newer PR head. Default off. */
   forkPriorReviewThread?: boolean;
   model?: string;
@@ -245,9 +243,8 @@ export interface ReviewAttemptRecord {
   // Set on a carry-forward row to point at the original approved attempt
   // whose verdict we re-emitted. NULL on the original.
   priorAttemptId?: number;
-  // The body and event re-emittable by carry-forward. Populated on
-  // approved rows only; old rows from before the migration have NULL
-  // and are skipped by the carry-forward gate (rollout safety).
+  // The body and event re-emittable by carry-forward. Populated on approved
+  // rows only.
   reviewBody?: string;
   reviewEvent?: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
   publicationMode?: "body_only";

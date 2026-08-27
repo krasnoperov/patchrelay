@@ -50,7 +50,7 @@ test("sequence backstop alerts only on shared unlanded history within the same r
   process.env.GITHUB_TOKEN = "test-token";
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), false);
-    db.runMigrations();
+    db.initializeSchema();
     withCandidate(db);
     db.upsertIssue({
       projectId: "owner/repo",
@@ -137,7 +137,7 @@ test("sequence backstop ignores overlapping but independent PR histories", async
   process.env.GITHUB_TOKEN = "test-token";
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), false);
-    db.runMigrations();
+    db.initializeSchema();
     withCandidate(db);
     const feed = new OperatorEventFeed();
 
