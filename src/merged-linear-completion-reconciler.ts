@@ -120,7 +120,6 @@ export class MergedLinearCompletionReconciler {
       return;
     }
 
-    await this.commentOnCompletedIssueReopen(issue, linear);
     const updated = await linear.setIssueState(issue.linearIssueId, targetState);
     this.db.issueSessions.commitIssueState({
       writer: WRITER,
@@ -131,6 +130,7 @@ export class MergedLinearCompletionReconciler {
         ...(updated.stateType ? { currentLinearStateType: updated.stateType } : {}),
       },
     });
+    await this.commentOnCompletedIssueReopen(issue, linear);
   }
 
   private async commentOnCompletedIssueReopen(

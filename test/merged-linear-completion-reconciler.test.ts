@@ -313,6 +313,54 @@ test("reconciler still restores Done when the completed-issue explanation fails"
   }
 });
 
+test("reconciler does not explain a restoration that Linear rejected", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-merged-state-failure",
+      issueKey: "USE-202D",
+      delegatedToPatchRelay: true,
+      workflowOutcome: "completed",
+      currentLinearState: "Todo",
+      currentLinearStateType: "unstarted",
+      prNumber: 204,
+      prState: "merged",
+    });
+
+    let commentCalls = 0;
+    const reconciler = new MergedLinearCompletionReconciler(
+      db,
+      {
+        forProject: async () => ({
+          getIssue: async () => buildLiveIssue({
+            id: "issue-merged-state-failure",
+            identifier: "USE-202D",
+            title: "Merged issue with state failure",
+            stateName: "Todo",
+            stateType: "unstarted",
+          }),
+          upsertIssueComment: async (params) => {
+            commentCalls += 1;
+            return { id: "unexpected-comment", body: params.body };
+          },
+          setIssueState: async () => {
+            throw new Error("Linear state API unavailable");
+          },
+        }) as LinearClient,
+      },
+      pino({ enabled: false }),
+    );
+
+    await reconciler.reconcile();
+
+    assert.equal(commentCalls, 0);
+    assert.equal(db.getIssue("usertold", "issue-merged-state-failure")?.currentLinearState, "Todo");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("reconciler completes trusted no-PR done issues in Linear instead of reopening them", async () => {
   const { baseDir, db } = createDb();
   try {
