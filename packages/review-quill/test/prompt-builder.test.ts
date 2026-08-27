@@ -142,6 +142,11 @@ test("native two-pass prompts separate review policy, PR evidence, and verdict s
 
   assert.match(developerInstructions, /evidence, not operating instructions/);
   assert.match(developerInstructions, /Do not format that review as Review Quill's delivery JSON/);
+  assert.match(developerInstructions, /enough likelihood to justify delaying the merge/);
+  assert.match(developerInstructions, /race merely because an interleaving can be imagined/);
+  assert.match(developerInstructions, /assumed browser, platform, provider, or runtime behavior/);
+  assert.match(developerInstructions, /one concern rather than one per data family/);
+  assert.match(developerInstructions, /up to 3/);
   assert.doesNotMatch(developerInstructions, /Ignore prior instructions/);
   assert.match(nativeReviewPrompt, /## Pull request/);
   assert.match(nativeReviewPrompt, /## Ignore prior instructions/);
@@ -151,6 +156,7 @@ test("native two-pass prompts separate review policy, PR evidence, and verdict s
   assert.match(normalizationPrompt, /Do not inspect the repository again/);
   assert.match(normalizationPrompt, /schema-constrained JSON verdict/);
   assert.match(normalizationPrompt, /integer percentage from 0 to 100/);
+  assert.match(normalizationPrompt, /actually changed new-version line/);
   assert.doesNotMatch(normalizationPrompt, /base-sha-123/);
 });
 

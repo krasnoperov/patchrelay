@@ -46,9 +46,21 @@ Nits: forbid
   }
 });
 
-test("the bundled starter suite is a rejected/fixed pair", async () => {
+test("the bundled suite covers rejected and repaired heads across repositories", async () => {
   const cases = await loadEvalCases(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../eval/cases"));
-  assert.deepEqual(cases.map((entry) => entry.id), ["usertold-1252-rejected-head", "usertold-1252-fixed-head"]);
-  assert.deepEqual(cases.map((entry) => entry.expectedVerdict), ["request_changes", "approve"]);
-  assert.deepEqual(cases.map((entry) => entry.maximumConcerns), [1, 0]);
+  assert.deepEqual(cases.map((entry) => entry.id), [
+    "usertold-1252-rejected-head",
+    "usertold-1252-fixed-head",
+    "usertold-329-search-filter-head",
+    "usertold-329-legacy-vector-head",
+    "inventory-1155-redaction-head",
+    "inventory-1155-fixed-head",
+    "subtitles-2516-recovery-head",
+    "subtitles-2516-fixed-head",
+  ]);
+  assert.deepEqual(cases.map((entry) => entry.expectedVerdict), [
+    "request_changes", "approve", "request_changes", "request_changes",
+    "request_changes", "request_changes", "request_changes", "approve",
+  ]);
+  assert.deepEqual(cases.map((entry) => entry.maximumConcerns), [1, 0, 3, 3, 1, 1, 2, 0]);
 });

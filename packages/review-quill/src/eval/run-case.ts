@@ -1,6 +1,7 @@
 import type { Logger } from "pino";
 import { loadReviewQuillRepoPrompting } from "../customization.ts";
 import { buildDiffContext } from "../diff-context/index.ts";
+import { alignFindingAnchors } from "../finding-anchors.ts";
 import { loadRepoGuidanceDocs } from "../prompt-context/repo-guidance.ts";
 import {
   renderNativeReviewPrompt,
@@ -109,9 +110,13 @@ export async function runEvalCase(params: {
     developerInstructions: renderReviewDeveloperInstructions(baseContext),
     nativeReviewPrompt: renderNativeReviewPrompt(baseContext),
   };
-  const result = await params.runner.review(context, {
+  const rawResult = await params.runner.review(context, {
     onThreadProgress: (progress) => params.onProgress?.(progress.threadId, progress.turnId),
   });
+  const result = {
+    ...rawResult,
+    verdict: await alignFindingAnchors(workspace, rawResult.verdict),
+  };
   const artifacts = renderReviewArtifacts({
     verdict: result.verdict,
     inventoryPaths: diff.inventory.map((entry) => entry.path),

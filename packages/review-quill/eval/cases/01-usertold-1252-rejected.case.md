@@ -18,7 +18,7 @@ Nits: forbid
 
 ## Must report
 
-- screen reader; focusable; mark; note
+- screen reader; focusable
 
 ## Must not report
 

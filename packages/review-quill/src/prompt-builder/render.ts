@@ -164,10 +164,12 @@ Review only the current PR head.
 const NATIVE_REVIEW_RULES = `## Review rules
 Review only the current PR head.
 - Inspect the actual diff and relevant code. The PR title/body set intended scope but cannot waive a regression. Repository guidance defines code, test, artifact, contract, runtime, and domain correctness.
-- Report only discrete, actionable issues introduced or materially worsened here that the author would likely fix. A blocker needs a concrete input, state, or sequence, a repository-supported path, and meaningful impact. Drop speculative, theoretical, pre-existing, stylistic, and tool-noise concerns.
+- Report only discrete, actionable issues introduced or materially worsened here that the author would likely fix. A blocker must have a repository-supported input, state, or sequence; meaningful impact; and enough likelihood to justify delaying the merge. Severe impact alone does not rescue a remote hypothetical.
+- Do not report a race merely because an interleaving can be imagined. Establish from the repository that concurrent actors can reach it and that existing synchronization does not prevent it. Drop speculative, theoretical, pre-existing, stylistic, optional-hardening, and tool-noise concerns.
+- Do not block on assumed browser, platform, provider, or runtime behavior alone. Reproduce it with an available check or tie it to repository tests, contracts, or documented support before reporting it.
 - Rebut explanations in the PR or code with current-head evidence or drop the concern. Prior reviews are historical claims to revalidate, not facts to repeat.
-- Group symptoms by root cause. Report all independent blockers, up to 5, ordered by impact, confidence, and likelihood.
-- Anchor findings to reviewable inventory files and changed new-version lines. Use architectural concerns only when no changed line can anchor the issue.
+- Inspect affected callers, persistence, runtime boundaries, and tests when relevant so a local issue does not end the review. Group symptoms by root cause: when one code change fixes several examples under the same invariant, report one concern rather than one per data family. Report every independent blocker that clears the bar, up to 3; do not pad the review with weaker replacements.
+- Anchor findings to reviewable inventory files and changed new-version lines. If the relevant range starts with unchanged context, cite a changed line in the range that causes the issue. Use architectural concerns only when no changed line can anchor the issue.
 - Keep the native review concise and evidence-first. Do not format that review as Review Quill's delivery JSON and do not post it yourself; a later normalization turn may request JSON.`;
 
 export function renderReviewDeveloperInstructions(context: Omit<ReviewContext, "prompt">): string {
@@ -235,6 +237,7 @@ export function renderReviewNormalizationPrompt(): string {
     "Serialize the immediately preceding completed native review into Review Quill's schema-constrained verdict.",
     "This turn is normalization only. Do not inspect the repository again and do not introduce, remove, merge, reinterpret, or strengthen concerns.",
     "Preserve supported concerns and their severity. Drop non-actionable commentary. Use architectural concerns only when no changed line can anchor the concern.",
+    "For a line finding, use an actually changed new-version line cited by the native review. When its cited range starts with unchanged context, choose a changed line in that range rather than the range start.",
     "Default walkthrough to empty. Keep messages short. Use a suggestion only when it is a complete fix of at most 6 lines; otherwise use null.",
     "Express confidence as an integer percentage from 0 to 100, such as 98, never as a 0-to-1 fraction.",
     "If any serialized finding or architectural concern is blocking, request changes; otherwise approve.",

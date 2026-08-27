@@ -35,6 +35,7 @@ import {
   REVIEW_MAX_INLINE_COMMENTS,
 } from "./review-publication-policy.ts";
 import { renderReviewArtifacts } from "./review-artifact-renderer.ts";
+import { alignFindingAnchors } from "./finding-anchors.ts";
 import { submitReviewWithFallback } from "./submit-review-with-fallback.ts";
 import { evaluateReviewEligibility } from "./review-eligibility.ts";
 import { ReviewSemaphore } from "./review-semaphore.ts";
@@ -815,6 +816,10 @@ export class ReviewQuillService {
               });
             },
           }, prepared.priorThread);
+          result = {
+            ...result,
+            verdict: await alignFindingAnchors(prepared.context.workspace, result.verdict),
+          };
           codexReviewCompleted = true;
         } finally {
           timing?.endCodexReview(codexReviewCompleted);

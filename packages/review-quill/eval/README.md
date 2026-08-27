@@ -22,7 +22,7 @@ It creates a detached temporary worktree, builds the real Review Quill prompt an
 
 Copy an existing case and change the frozen SHAs and expectations. PR body text lives in a normal Markdown sidecar so it can contain headings without escaping.
 
-The initial checks are intentionally simple:
+The checks are intentionally simple:
 
 - exact delivered verdict;
 - maximum number of normalized concerns;
