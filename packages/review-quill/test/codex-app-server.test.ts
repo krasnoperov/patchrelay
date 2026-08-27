@@ -29,6 +29,55 @@ test("CodexAppServerClient wires outputSchema into turn/start", async () => {
   assert.deepEqual(requests[0]?.params.outputSchema, REVIEW_VERDICT_JSON_SCHEMA);
 });
 
+test("CodexAppServerClient starts a custom inline native review", async () => {
+  const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const client = new CodexAppServerClient({
+    bin: "codex",
+    args: ["app-server"],
+    approvalPolicy: "never",
+    sandboxMode: "danger-full-access",
+  }, {} as never);
+  (client as unknown as {
+    sendRequest: (method: string, params: Record<string, unknown>) => Promise<unknown>;
+  }).sendRequest = async (method, params) => {
+    requests.push({ method, params });
+    return { turn: { id: "review-turn", status: "running" }, reviewThreadId: "thread-1" };
+  };
+
+  const result = await client.startReview({ threadId: "thread-1", instructions: "Review exact base..HEAD" });
+
+  assert.deepEqual(requests, [{
+    method: "review/start",
+    params: {
+      threadId: "thread-1",
+      delivery: "inline",
+      target: { type: "custom", instructions: "Review exact base..HEAD" },
+    },
+  }]);
+  assert.deepEqual(result, { turnId: "review-turn", status: "running", reviewThreadId: "thread-1" });
+});
+
+test("CodexAppServerClient sends developer instructions when starting a thread", async () => {
+  const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const client = new CodexAppServerClient({
+    bin: "codex",
+    args: ["app-server"],
+    approvalPolicy: "never",
+    sandboxMode: "read-only",
+  }, {} as never);
+  (client as unknown as {
+    sendRequest: (method: string, params: Record<string, unknown>) => Promise<unknown>;
+  }).sendRequest = async (method, params) => {
+    requests.push({ method, params });
+    return { thread: { id: "thread-1", turns: [] } };
+  };
+
+  await client.startThread({ cwd: "/tmp/worktree", developerInstructions: "Review policy" });
+
+  assert.equal(requests[0]?.method, "thread/start");
+  assert.equal(requests[0]?.params.developerInstructions, "Review policy");
+});
+
 test("CodexAppServerClient sends the exact source boundary and current runtime policy to thread/fork", async () => {
   const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
   const client = new CodexAppServerClient({

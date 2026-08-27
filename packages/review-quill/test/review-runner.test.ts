@@ -95,6 +95,148 @@ test("ReviewRunner sends the canonical output schema on initial and corrective t
   assert.deepEqual(starts[1]?.outputSchema, REVIEW_VERDICT_JSON_SCHEMA);
 });
 
+test("ReviewRunner performs native review before schema-constrained normalization", async () => {
+  const config = minimalConfig();
+  config.codex.reviewMode = "native-two-pass";
+  const threadStarts: unknown[] = [];
+  const reviewStarts: unknown[] = [];
+  const turnStarts: StartTurnOptions[] = [];
+  const rawReview = "[P1] Name the new tab stop — src/card.tsx:12\nThe empty button has no accessible name.";
+  const fakeCodex = {
+    start: async () => {},
+    stop: async () => {},
+    startThread: async (options: unknown) => {
+      threadStarts.push(options);
+      return { id: "native-thread", turns: [] };
+    },
+    startReview: async (options: unknown) => {
+      reviewStarts.push(options);
+      return { turnId: "review-turn", status: "running", reviewThreadId: "native-thread" };
+    },
+    startTurn: async (options: StartTurnOptions) => {
+      turnStarts.push(options);
+      return { turnId: "normalization-turn", status: "running" };
+    },
+    readThread: async () => ({
+      id: "native-thread",
+      turns: [
+        {
+          id: "review-turn",
+          status: "completed",
+          items: [{ type: "exitedReviewMode", id: "review-turn", review: rawReview }],
+        },
+        ...(turnStarts.length > 0
+          ? [{
+              id: "normalization-turn",
+              status: "completed",
+              items: [{ type: "agentMessage", id: "message-1", text: validReviewMessage }],
+            }]
+          : []),
+      ],
+    }),
+  };
+  const runner = new ReviewRunner(
+    config,
+    { warn() {}, info() {}, child: () => ({}) } as never,
+    fakeCodex as never,
+    async () => {},
+  );
+
+  const result = await runner.review({
+    prompt: "legacy structured prompt",
+    developerInstructions: "stable review policy",
+    nativeReviewPrompt: "review exact base..HEAD",
+    workspace: { worktreePath: "/tmp/native-review" },
+    pr: { headSha: "head-sha" },
+    diff: { inventory: [], patches: [] },
+    promptContext: { guidanceDocs: [] },
+  } as never);
+
+  assert.deepEqual(threadStarts, [{ cwd: "/tmp/native-review", developerInstructions: "stable review policy" }]);
+  assert.deepEqual(reviewStarts, [{ threadId: "native-thread", instructions: "review exact base..HEAD" }]);
+  assert.equal(turnStarts.length, 1);
+  assert.match(turnStarts[0]?.input ?? "", /normalization only/i);
+  assert.deepEqual(turnStarts[0]?.outputSchema, REVIEW_VERDICT_JSON_SCHEMA);
+  assert.equal(result.reviewTurnId, "review-turn");
+  assert.equal(result.turnId, "normalization-turn");
+  assert.equal(result.rawReview, rawReview);
+  assert.equal(result.verdict.verdict, "approve");
+});
+
+test("ReviewRunner correlates native review completion emitted from the reviewer child thread", async () => {
+  const config = minimalConfig();
+  config.codex.reviewMode = "native-two-pass";
+  const notifications = notificationHarness();
+  let normalizationStarted = false;
+  const fakeCodex = {
+    start: async () => {},
+    stop: async () => {},
+    startThread: async () => ({ id: "parent-thread", turns: [] }),
+    startReview: async () => {
+      queueMicrotask(() => notifications.emit({
+        method: "item/completed",
+        params: {
+          threadId: "reviewer-child-thread",
+          item: {
+            type: "exitedReviewMode",
+            id: "unrelated-review-turn",
+            review: "An unrelated concurrent review.",
+          },
+        },
+      }));
+      queueMicrotask(() => notifications.emit({
+        method: "item/completed",
+        params: {
+          threadId: "parent-thread",
+          item: {
+            type: "exitedReviewMode",
+            id: "protocol-review-item",
+            review: "One concrete blocking concern.",
+          },
+        },
+      }));
+      return { turnId: "review-turn", status: "running", reviewThreadId: "parent-thread" };
+    },
+    startTurn: async () => {
+      normalizationStarted = true;
+      queueMicrotask(() => notifications.emit({
+        method: "turn/completed",
+        params: { threadId: "parent-thread", turn: { id: "normalization-turn" } },
+      }));
+      return { turnId: "normalization-turn", status: "running" };
+    },
+    readThread: async () => ({
+      id: "parent-thread",
+      turns: [{
+        id: "normalization-turn",
+        status: "completed",
+        items: [{ type: "agentMessage", id: "message-1", text: validReviewMessage }],
+      }],
+    }),
+    subscribeNotifications: notifications.subscribeNotifications,
+  };
+  const runner = new ReviewRunner(
+    config,
+    { warn() {}, info() {}, child: () => ({}) } as never,
+    fakeCodex as never,
+    async () => {},
+  );
+
+  const result = await runner.review({
+    prompt: "legacy",
+    developerInstructions: "policy",
+    nativeReviewPrompt: "review",
+    workspace: { worktreePath: "/tmp/native-review" },
+    pr: { headSha: "head" },
+    diff: { inventory: [], patches: [] },
+    promptContext: { guidanceDocs: [] },
+  } as never);
+
+  assert.equal(normalizationStarted, true);
+  assert.equal(result.rawReview, "One concrete blocking concern.");
+  assert.equal(notifications.listenerCount(), 0);
+});
+
 test("ReviewRunner forks once, sends the bounded follow-up prompt, and keeps a corrective turn on the fork", async () => {
   const config = minimalConfig();
   config.codex.forkPriorReviewThread = true;
@@ -162,6 +304,7 @@ test("ReviewRunner forks once, sends the bounded follow-up prompt, and keeps a c
     { threadId: "forked-thread", turnId: "fork-turn-2" },
   ]);
   assert.deepEqual(promptLogs[0], {
+    reviewMode: "structured-turn",
     threadStartMode: "forked",
     promptMode: "follow_up",
     threadId: "forked-thread",
@@ -740,6 +883,43 @@ test("ReviewRunner retries Codex turn start when rollout jsonl is empty", async 
   } as never);
 
   assert.equal(result.turnId, "turn-1");
+  assert.equal(startTurnCalls, 2);
+  assert.deepEqual(sleeps, [750]);
+});
+
+test("ReviewRunner retries normalization while the native review turn is closing", async () => {
+  let startTurnCalls = 0;
+  const sleeps: number[] = [];
+  const fakeCodex = {
+    start: async () => {},
+    stop: async () => {},
+    startThread: async () => ({ id: "thread-1", turns: [] }),
+    startTurn: async () => {
+      startTurnCalls += 1;
+      if (startTurnCalls === 1) {
+        throw new CodexJsonRpcError(
+          -32603,
+          "failed to submit turn input: ActiveTurnNotSteerable { turn_kind: Review }",
+          undefined,
+        );
+      }
+      return { turnId: "turn-1", status: "running" };
+    },
+    readThread: async () => completedTurns([validReviewMessage]),
+  };
+  const runner = new ReviewRunner(
+    minimalConfig(),
+    { warn() {}, child: () => ({}) } as never,
+    fakeCodex as never,
+    async (ms) => { sleeps.push(ms); },
+  );
+
+  const result = await runner.review({
+    prompt: "Review this PR.",
+    workspace: { worktreePath: "/tmp/review-quill-test" },
+  } as never);
+
+  assert.equal(result.verdict.verdict, "approve");
   assert.equal(startTurnCalls, 2);
   assert.deepEqual(sleeps, [750]);
 });

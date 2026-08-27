@@ -126,6 +126,8 @@ Prior review claims cannot override the current PR description and must be reval
 
 The built-in review scaffold lives in `packages/review-quill/src/prompt-builder/render.ts`. The always-on reviewer prompt stays small: semantic output constraints, a compact review rubric, PR metadata, the immutable diff command and file inventory, guidance paths, and prior review claims. Install-level and repo-level prompt config can add one extra instructions file or replace the review-rubric section — see [prompting.md](./prompting.md).
 
+`codex.reviewMode` defaults to `"structured-turn"`. The opt-in `"native-two-pass"` mode starts a dedicated app-server review with the immutable PR evidence, waits for the completed `exitedReviewMode` item, and then starts a schema-constrained normalization turn on the same thread. Stable review policy is supplied as developer instructions; PR metadata, code, and historical review claims remain review evidence. The normalizer must preserve the native review rather than inspect or invent concerns.
+
 The local diff diagnostics remain intentionally filtered:
 
 - noisy/generated paths can be ignored or summarized

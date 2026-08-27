@@ -49,6 +49,7 @@ export type CodexAppServerNotificationListener = (notification: CodexAppServerNo
 
 export interface StartThreadOptions {
   cwd: string;
+  developerInstructions?: string;
 }
 
 export interface StartTurnOptions {
@@ -62,6 +63,12 @@ export interface ForkThreadOptions {
   threadId: string;
   lastTurnId: string;
   cwd: string;
+  developerInstructions?: string;
+}
+
+export interface StartReviewOptions {
+  threadId: string;
+  instructions: string;
 }
 
 export interface InterruptTurnOptions {
@@ -142,6 +149,7 @@ export class CodexAppServerClient extends EventEmitter {
       serviceName: this.config.serviceName ?? "review-quill",
       model: this.config.model ?? null,
       modelProvider: this.config.modelProvider ?? null,
+      ...(options.developerInstructions ? { developerInstructions: options.developerInstructions } : {}),
     })) as { thread: Record<string, unknown> };
     return this.mapThread(response.thread);
   }
@@ -155,6 +163,7 @@ export class CodexAppServerClient extends EventEmitter {
       sandbox: this.config.sandboxMode,
       model: this.config.model ?? null,
       modelProvider: this.config.modelProvider ?? null,
+      ...(options.developerInstructions ? { developerInstructions: options.developerInstructions } : {}),
     })) as { thread: Record<string, unknown> };
     return this.mapThread(response.thread);
   }
@@ -169,6 +178,22 @@ export class CodexAppServerClient extends EventEmitter {
     return {
       turnId: String(response.turn.id),
       status: String(response.turn.status),
+    };
+  }
+
+  async startReview(options: StartReviewOptions): Promise<{ turnId: string; status: string; reviewThreadId: string }> {
+    const response = (await this.sendRequest("review/start", {
+      threadId: options.threadId,
+      delivery: "inline",
+      target: {
+        type: "custom",
+        instructions: options.instructions,
+      },
+    })) as { turn: Record<string, unknown>; reviewThreadId: string };
+    return {
+      turnId: String(response.turn.id),
+      status: String(response.turn.status),
+      reviewThreadId: String(response.reviewThreadId),
     };
   }
 

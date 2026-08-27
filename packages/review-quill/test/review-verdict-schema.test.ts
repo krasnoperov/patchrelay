@@ -22,7 +22,7 @@ test("ReviewVerdict JSON schema is strict and requires the canonical shape", () 
     "confidence",
     "suggestion",
   ]);
-  assert.deepEqual(REVIEW_VERDICT_JSON_SCHEMA.properties.findings.items.properties.confidence.type, ["number", "null"]);
+  assert.deepEqual(REVIEW_VERDICT_JSON_SCHEMA.properties.findings.items.properties.confidence.type, ["integer", "null"]);
   assert.deepEqual(REVIEW_VERDICT_JSON_SCHEMA.properties.findings.items.properties.suggestion.type, ["string", "null"]);
 });
 
@@ -32,6 +32,23 @@ test("ReviewVerdict JSON schema constrains required text, lines, and confidence"
   assert.match(serialized, /minimum/);
   assert.match(serialized, /maximum/);
   assert.doesNotMatch(serialized, /maxLength|minItems|maxItems/);
+});
+
+test("normalizeVerdict rejects fractional confidence scores", () => {
+  assert.throws(() => normalizeVerdict({
+    walkthrough: "",
+    architectural_concerns: [],
+    findings: [{
+      path: "src/a.ts",
+      line: 1,
+      severity: "blocking",
+      message: "Broken invariant",
+      confidence: 0.98,
+      suggestion: null,
+    }],
+    verdict: "request_changes",
+    verdict_reason: "A blocker remains.",
+  }));
 });
 
 test("normalizeVerdict omits nullable optional finding values from the internal verdict", () => {

@@ -6,7 +6,7 @@ import {
 } from "./codex-app-server.ts";
 import { classifyCodexFailure, CodexCapacityError } from "./codex-capacity.ts";
 import { buildAgentChildEnv } from "./github-cli-auth.ts";
-import { renderCorrectivePrompt } from "./prompt-builder/index.ts";
+import { renderCorrectivePrompt, renderReviewNormalizationPrompt } from "./prompt-builder/index.ts";
 import { extractFirstJsonObject, forgivingJsonParse } from "./utils.ts";
 import { REVIEW_VERDICT_JSON_SCHEMA, reviewVerdictSchema } from "./review-verdict-schema.ts";
 import type {
@@ -66,6 +66,12 @@ function isCodexAppServerRequestTimeout(error: unknown): boolean {
   return /^Codex app-server request timed out after \d+ms$/.test(message);
 }
 
+function isNativeReviewStillClosing(error: unknown): boolean {
+  return error instanceof CodexJsonRpcError
+    && error.code === -32603
+    && /ActiveTurnNotSteerable.*turn_kind:\s*Review/i.test(error.message);
+}
+
 function isForkSourceUnavailable(error: unknown): boolean {
   return error instanceof CodexJsonRpcError
     && error.code === -32600
@@ -91,6 +97,18 @@ function collectAssistantMessages(thread: { turns: Array<{ items: Array<{ type: 
     }
   }
   return messages;
+}
+
+function collectNativeReview(thread: CodexThreadSummary, turnId: string): string | undefined {
+  const turn = thread.turns.find((entry) => entry.id === turnId);
+  if (!turn) return undefined;
+  for (let index = turn.items.length - 1; index >= 0; index -= 1) {
+    const item = turn.items[index];
+    if (item?.type === "exitedReviewMode" && typeof item.review === "string" && item.review.trim()) {
+      return item.review.trim();
+    }
+  }
+  return undefined;
 }
 
 // The error a Codex turn carried, preferring the turn we actually started
@@ -177,10 +195,16 @@ export function normalizeVerdict(raw: Record<string, unknown>): ReviewVerdict {
 
 type CodexRunnerClient = Pick<CodexAppServerClient, "start" | "stop" | "startThread" | "startTurn" | "readThread">;
 type InterruptibleCodexRunnerClient = CodexRunnerClient & Partial<Pick<CodexAppServerClient, "interruptTurn" | "subscribeNotifications">>;
-type ForkableCodexRunnerClient = InterruptibleCodexRunnerClient & Partial<Pick<CodexAppServerClient, "forkThread">>;
+type ForkableCodexRunnerClient = InterruptibleCodexRunnerClient & Partial<Pick<CodexAppServerClient, "forkThread" | "startReview">>;
 
 interface TurnCompletionSubscription {
   completion: Promise<void>;
+  expectTurn(turnId: string): void;
+  unsubscribe(): void;
+}
+
+interface NativeReviewCompletionSubscription {
+  completion: Promise<string>;
   expectTurn(turnId: string): void;
   unsubscribe(): void;
 }
@@ -218,10 +242,16 @@ export class ReviewRunner {
     context: ReviewContext,
     options: ReviewRunOptions = {},
     priorThread?: PriorReviewThreadCandidate,
-  ): Promise<{ verdict: ReviewVerdict; threadId: string; turnId: string }> {
+  ): Promise<{ verdict: ReviewVerdict; threadId: string; turnId: string; reviewTurnId?: string; rawReview?: string }> {
     const cwd = context.workspace.worktreePath;
     this.throwIfReviewRunInterrupted(options.signal);
-    const threadStart = await this.startReviewThread(cwd, priorThread, options.signal);
+    const reviewMode = this.config.codex.reviewMode ?? "structured-turn";
+    const threadStart = await this.startReviewThread(
+      cwd,
+      priorThread,
+      options.signal,
+      reviewMode === "native-two-pass" ? context.developerInstructions : undefined,
+    );
     const thread = threadStart.thread;
     this.throwIfReviewRunInterrupted(options.signal, thread.id);
     const promptMode = threadStart.mode === "forked" ? "follow_up" : "full";
@@ -229,10 +259,18 @@ export class ReviewRunner {
       throw new Error("Forked review thread is missing its bounded follow-up prompt");
     }
     const reviewPrompt = promptMode === "follow_up" ? context.followUpPrompt! : context.prompt;
+    const nativePrompt = reviewMode === "native-two-pass"
+      ? (promptMode === "follow_up" ? context.nativeFollowUpReviewPrompt : context.nativeReviewPrompt)
+      : undefined;
+    if (reviewMode === "native-two-pass" && !nativePrompt) {
+      throw new Error(`Native ${promptMode} review prompt is missing`);
+    }
+    const selectedPrompt = nativePrompt ?? reviewPrompt;
     const inventoryCount = context.diff?.inventory.length ?? 0;
     const patches = context.diff?.patches ?? [];
     const omittedPatchChars = patches.reduce((sum, patch) => sum + patch.patch.length, 0);
     this.logger.info?.({
+      reviewMode,
       threadStartMode: threadStart.mode,
       promptMode,
       threadId: thread.id,
@@ -249,8 +287,54 @@ export class ReviewRunner {
       guidancePathCount: context.promptContext?.guidanceDocs.length ?? 0,
       omittedPatchCount: patches.length,
       omittedPatchChars,
-      promptChars: reviewPrompt.length,
+      promptChars: selectedPrompt.length,
     }, "Selected Review Quill prompt mode");
+
+    if (reviewMode === "native-two-pass") {
+      if (!this.codex.startReview) {
+        throw new Error("Codex app-server client does not support review/start");
+      }
+      const nativeTurn = await this.runNativeReview(thread, cwd, selectedPrompt, options);
+      const normalizationPrompt = renderReviewNormalizationPrompt();
+      const firstNormalization = await this.runTurn(nativeTurn.thread, cwd, normalizationPrompt, options);
+      const firstParse = parseModelResponse(firstNormalization.latestMessage);
+      if (firstParse.ok) {
+        return {
+          verdict: firstParse.verdict,
+          threadId: thread.id,
+          turnId: firstNormalization.turnId,
+          reviewTurnId: nativeTurn.turnId,
+          rawReview: nativeTurn.rawReview,
+        };
+      }
+      this.logger.warn({
+        reason: firstParse.reason,
+        preview: firstNormalization.latestMessage.slice(0, PARSE_FAILURE_PREVIEW_CHARS),
+        threadId: thread.id,
+        reviewTurnId: nativeTurn.turnId,
+        normalizationTurnId: firstNormalization.turnId,
+      }, "Native review normalization failed, retrying with corrective prompt");
+      const correctiveTurn = await this.runTurn(
+        firstNormalization.thread,
+        cwd,
+        renderCorrectivePrompt(firstParse.reason),
+        options,
+      );
+      const correctiveParse = parseModelResponse(correctiveTurn.latestMessage);
+      if (!correctiveParse.ok) {
+        throw new Error(
+          `Native review normalization produced unparseable output after one corrective retry. `
+          + `First failure: ${firstParse.reason}. Second failure: ${correctiveParse.reason}.`,
+        );
+      }
+      return {
+        verdict: correctiveParse.verdict,
+        threadId: thread.id,
+        turnId: correctiveTurn.turnId,
+        reviewTurnId: nativeTurn.turnId,
+        rawReview: nativeTurn.rawReview,
+      };
+    }
 
     // First attempt: selected review prompt, fresh turn on the chosen thread.
     const firstTurn = await this.runTurn(thread, cwd, reviewPrompt, options);
@@ -295,31 +379,33 @@ export class ReviewRunner {
     cwd: string,
     priorThread: PriorReviewThreadCandidate | undefined,
     signal: AbortSignal | undefined,
+    developerInstructions: string | undefined,
   ): Promise<ReviewThreadStart> {
     if (!this.config.codex.forkPriorReviewThread || !priorThread || !this.threadForkAvailable) {
-      const thread = await this.startThreadWithMaterializationRetry(cwd);
+      const thread = await this.startThreadWithMaterializationRetry(cwd, developerInstructions);
       return { thread, mode: priorThread && this.config.codex.forkPriorReviewThread ? "fresh_fallback" : "fresh" };
     }
     if (!this.codex.forkThread) {
       this.disableThreadForkCapability();
-      return { thread: await this.startThreadWithMaterializationRetry(cwd), mode: "fresh_fallback" };
+      return { thread: await this.startThreadWithMaterializationRetry(cwd, developerInstructions), mode: "fresh_fallback" };
     }
     try {
       const thread = await this.codex.forkThread({
         threadId: priorThread.threadId,
         lastTurnId: priorThread.lastTurnId,
         cwd,
+        ...(developerInstructions ? { developerInstructions } : {}),
       });
       return { thread, mode: "forked" };
     } catch (error) {
       this.throwIfReviewRunInterrupted(signal);
       if (error instanceof CodexJsonRpcError && error.code === -32601) {
         this.disableThreadForkCapability();
-        return { thread: await this.startThreadWithMaterializationRetry(cwd), mode: "fresh_fallback" };
+        return { thread: await this.startThreadWithMaterializationRetry(cwd, developerInstructions), mode: "fresh_fallback" };
       }
       if (isForkSourceUnavailable(error)) {
         this.logger.debug({ sourceAttemptId: priorThread.sourceAttemptId }, "Prior review thread unavailable; starting a fresh thread");
-        return { thread: await this.startThreadWithMaterializationRetry(cwd), mode: "fresh_fallback" };
+        return { thread: await this.startThreadWithMaterializationRetry(cwd, developerInstructions), mode: "fresh_fallback" };
       }
       throw error;
     }
@@ -371,6 +457,143 @@ export class ReviewRunner {
     }
   }
 
+  private async runNativeReview(
+    priorThread: CodexThreadSummary,
+    cwd: string,
+    instructions: string,
+    options: ReviewRunOptions,
+  ): Promise<{ rawReview: string; turnId: string; thread: CodexThreadSummary }> {
+    const threadId = priorThread.id;
+    this.throwIfReviewRunInterrupted(options.signal, threadId);
+    const reviewCompletion = this.subscribeToNativeReviewCompletion(threadId);
+    try {
+      const started = await this.startNativeReviewWithMaterializationRetry(threadId, instructions);
+      if (started.reviewThreadId !== threadId) {
+        throw new Error(`Inline review unexpectedly started on detached thread ${started.reviewThreadId}`);
+      }
+      reviewCompletion?.expectTurn(started.turnId);
+      this.emitThreadProgress(options.onThreadProgress, { threadId, turnId: started.turnId });
+      let rawReview: string | undefined;
+      let completedThread = priorThread;
+      if (reviewCompletion) {
+        rawReview = await this.waitForNativeReviewNotification(
+          reviewCompletion.completion,
+          threadId,
+          started.turnId,
+          options.signal,
+        );
+      } else {
+        completedThread = await this.waitForTurnCompletion(threadId, started.turnId, options);
+        rawReview = collectNativeReview(completedThread, started.turnId);
+      }
+      if (!rawReview) {
+        const turnError = latestTurnErrorMessage(completedThread, started.turnId);
+        if (turnError) throwTurnError(turnError, "Native review completed without exitedReviewMode output");
+        throw new Error("Native review completed without exitedReviewMode output");
+      }
+      this.logger.info({
+        threadId,
+        reviewTurnId: started.turnId,
+        reviewChars: rawReview.length,
+      }, "Native Codex review completed; starting structured normalization");
+      return { rawReview, turnId: started.turnId, thread: completedThread };
+    } finally {
+      reviewCompletion?.unsubscribe();
+    }
+  }
+
+  private subscribeToNativeReviewCompletion(threadId: string): NativeReviewCompletionSubscription | undefined {
+    if (!this.codex.subscribeNotifications) return undefined;
+    let expectedTurnId: string | undefined;
+    let completed = false;
+    const buffered: Array<{ itemId: string; notifiedThreadId?: string; review: string }> = [];
+    let resolveCompletion!: (review: string) => void;
+    const completion = new Promise<string>((resolve) => {
+      resolveCompletion = resolve;
+    });
+    const listener = (notification: CodexAppServerNotification): void => {
+      if (completed || notification.method !== "item/completed") return;
+      const params = notification.params && typeof notification.params === "object"
+        ? notification.params as Record<string, unknown>
+        : undefined;
+      const item = params?.item && typeof params.item === "object"
+        ? params.item as Record<string, unknown>
+        : undefined;
+      const notifiedThreadId = typeof params?.threadId === "string" ? params.threadId : undefined;
+      const itemId = typeof item?.id === "string" ? item.id : undefined;
+      const review = item?.type === "exitedReviewMode" && typeof item.review === "string"
+        ? item.review.trim()
+        : undefined;
+      if (!itemId || !review) return;
+      if (!expectedTurnId) {
+        buffered.push({ itemId, ...(notifiedThreadId ? { notifiedThreadId } : {}), review });
+        return;
+      }
+      // Depending on the installed app-server version, the completed review
+      // may retain either the parent review thread id or the synthetic review
+      // turn id while the actual reviewer runs on a managed child thread.
+      // Accept either correlation key, but never an unrelated review.
+      if (itemId !== expectedTurnId && notifiedThreadId !== threadId) return;
+      completed = true;
+      resolveCompletion(review);
+    };
+    const unsubscribe = this.codex.subscribeNotifications(listener);
+    return {
+      completion,
+      expectTurn: (turnId) => {
+        expectedTurnId = turnId;
+        const match = buffered.find((entry) => entry.itemId === turnId || entry.notifiedThreadId === threadId);
+        buffered.length = 0;
+        if (!completed && match) {
+          completed = true;
+          resolveCompletion(match.review);
+        }
+      },
+      unsubscribe,
+    };
+  }
+
+  private async waitForNativeReviewNotification(
+    completion: Promise<string>,
+    threadId: string,
+    turnId: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    let timeout: NodeJS.Timeout | undefined;
+    let abortListener: (() => void) | undefined;
+    try {
+      const result = await Promise.race([
+        completion.then((review) => ({ kind: "completed" as const, review })),
+        new Promise<{ kind: "timeout" }>((resolve) => {
+          timeout = setTimeout(() => resolve({ kind: "timeout" }), 15 * 60_000);
+          timeout.unref?.();
+        }),
+        ...(signal
+          ? [new Promise<{ kind: "aborted" }>((resolve) => {
+              abortListener = () => resolve({ kind: "aborted" });
+              signal.addEventListener("abort", abortListener, { once: true });
+            })]
+          : []),
+      ]);
+      if (result.kind === "completed") return result.review;
+      if (result.kind === "aborted") {
+        if (this.codex.interruptTurn) {
+          try {
+            await this.codex.interruptTurn({ threadId, turnId });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            this.logger.warn({ threadId, turnId, error: message }, "Codex native review interrupt failed while cancelling review");
+          }
+        }
+        throw new ReviewRunInterruptedError(abortedReviewMessage(signal), threadId, turnId);
+      }
+      throw new Error("Timed out waiting for native review completion");
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      if (abortListener) signal?.removeEventListener("abort", abortListener);
+    }
+  }
+
   private subscribeToTurnCompletion(threadId: string): TurnCompletionSubscription | undefined {
     if (!this.codex.subscribeNotifications) return undefined;
     let expectedTurnId: string | undefined;
@@ -414,10 +637,16 @@ export class ReviewRunner {
     };
   }
 
-  private async startThreadWithMaterializationRetry(cwd: string): Promise<Awaited<ReturnType<CodexRunnerClient["startThread"]>>> {
+  private async startThreadWithMaterializationRetry(
+    cwd: string,
+    developerInstructions?: string,
+  ): Promise<Awaited<ReturnType<CodexRunnerClient["startThread"]>>> {
     for (let attempt = 1; attempt <= CODEX_START_MAX_ATTEMPTS; attempt += 1) {
       try {
-        return await this.codex.startThread({ cwd });
+        return await this.codex.startThread({
+          cwd,
+          ...(developerInstructions ? { developerInstructions } : {}),
+        });
       } catch (error) {
         if (!isThreadMaterializationRace(error) || attempt === CODEX_START_MAX_ATTEMPTS) {
           throw error;
@@ -426,6 +655,23 @@ export class ReviewRunner {
           attempt,
           nextAttemptInMs: CODEX_START_BACKOFF_MS,
         }, "Codex thread start hit materialization race; retrying");
+        await this.sleep(CODEX_START_BACKOFF_MS);
+      }
+    }
+    throw new Error("unreachable");
+  }
+
+  private async startNativeReviewWithMaterializationRetry(
+    threadId: string,
+    instructions: string,
+  ): Promise<Awaited<ReturnType<NonNullable<ForkableCodexRunnerClient["startReview"]>>>> {
+    if (!this.codex.startReview) throw new Error("Codex app-server client does not support review/start");
+    for (let attempt = 1; attempt <= CODEX_START_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        return await this.codex.startReview({ threadId, instructions });
+      } catch (error) {
+        if (!isThreadMaterializationRace(error) || attempt === CODEX_START_MAX_ATTEMPTS) throw error;
+        this.logger.warn({ threadId, attempt, nextAttemptInMs: CODEX_START_BACKOFF_MS }, "Codex review start hit materialization race; retrying");
         await this.sleep(CODEX_START_BACKOFF_MS);
       }
     }
@@ -446,14 +692,17 @@ export class ReviewRunner {
           outputSchema: REVIEW_VERDICT_JSON_SCHEMA as unknown as Record<string, unknown>,
         });
       } catch (error) {
-        if (!isThreadMaterializationRace(error) || attempt === CODEX_START_MAX_ATTEMPTS) {
+        const retryable = isThreadMaterializationRace(error) || isNativeReviewStillClosing(error);
+        if (!retryable || attempt === CODEX_START_MAX_ATTEMPTS) {
           throw error;
         }
         this.logger.warn({
           threadId,
           attempt,
           nextAttemptInMs: CODEX_START_BACKOFF_MS,
-        }, "Codex turn start hit materialization race; retrying");
+        }, isNativeReviewStillClosing(error)
+          ? "Codex native review is still closing; retrying normalization turn"
+          : "Codex turn start hit materialization race; retrying");
         await this.sleep(CODEX_START_BACKOFF_MS);
       }
     }

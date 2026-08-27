@@ -4,7 +4,13 @@ import type { PullRequestSummary, ReviewContext, ReviewQuillRepositoryConfig } f
 import { loadReviewQuillRepoPrompting } from "./customization.ts";
 import { buildDiffContext } from "./diff-context/index.ts";
 import { buildPromptContext } from "./prompt-context/index.ts";
-import { renderFollowUpReviewPrompt, renderReviewPrompt } from "./prompt-builder/index.ts";
+import {
+  renderFollowUpReviewPrompt,
+  renderNativeFollowUpReviewPrompt,
+  renderNativeReviewPrompt,
+  renderReviewDeveloperInstructions,
+  renderReviewPrompt,
+} from "./prompt-builder/index.ts";
 import { findDisallowedReviewPromptSectionIds, findUnknownReviewPromptSectionIds } from "./prompt-builder/render.ts";
 import { materializeReviewWorkspace } from "./review-workspace/index.ts";
 import type { PriorReviewThreadCandidate } from "./prior-review-thread-selector.ts";
@@ -126,11 +132,19 @@ export async function buildReviewContext(params: {
     const followUpPrompt = priorThread
       ? renderFollowUpReviewPrompt(baseContext, priorThread.priorHeadSha)
       : undefined;
+    const developerInstructions = renderReviewDeveloperInstructions(baseContext);
+    const nativeReviewPrompt = renderNativeReviewPrompt(baseContext);
+    const nativeFollowUpReviewPrompt = priorThread
+      ? renderNativeFollowUpReviewPrompt(baseContext, priorThread.priorHeadSha)
+      : undefined;
     return {
       context: {
         ...baseContext,
         prompt,
+        developerInstructions,
+        nativeReviewPrompt,
         ...(followUpPrompt ? { followUpPrompt } : {}),
+        ...(nativeFollowUpReviewPrompt ? { nativeFollowUpReviewPrompt } : {}),
       },
       dispose: materialized.dispose,
       ...(priorThread ? { priorThread } : {}),
