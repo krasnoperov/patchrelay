@@ -57,7 +57,7 @@ test("loadConfig defaults waitForGreenChecks to false for repositories", () => {
 
     const config = loadConfig(configPath);
     assert.equal(config.repositories[0]?.waitForGreenChecks, false);
-    assert.deepEqual(config.repositories[0]?.reviewDocs, ["REVIEW_WORKFLOW.md", "AGENTS.md"]);
+    assert.deepEqual(config.repositories[0]?.reviewDocs, ["REVIEW_WORKFLOW.md"]);
     assert.equal(config.codex.model, "gpt-5.5");
     assert.equal(config.codex.forkPriorReviewThread, true);
     assert.equal(config.reconciliation.headStabilizationMs, 20_000);

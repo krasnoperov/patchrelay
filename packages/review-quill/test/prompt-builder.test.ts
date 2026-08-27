@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { renderDiffContextLines } from "../src/diff-context/index.ts";
 import { renderFollowUpReviewPrompt, renderReviewPrompt } from "../src/prompt-builder/index.ts";
 import { findDisallowedReviewPromptSectionIds } from "../src/prompt-builder/render.ts";
 import type { ReviewContext } from "../src/types.ts";
@@ -15,6 +14,7 @@ function baseContext(): Omit<ReviewContext, "prompt"> {
       baseRef: "origin/main",
       headRef: "refs/remotes/pull/1/head",
       headSha: "abc123",
+      diffBaseRef: "base-sha-123",
     },
     repo: {
       repoId: "fixture",
@@ -23,7 +23,7 @@ function baseContext(): Omit<ReviewContext, "prompt"> {
       waitForGreenChecks: true,
       requiredChecks: ["Tests"],
       excludeBranches: [],
-      reviewDocs: ["REVIEW_WORKFLOW.md", "AGENTS.md"],
+      reviewDocs: ["REVIEW_WORKFLOW.md"],
       diffIgnore: [],
       diffSummarizeOnly: ["package-lock.json"],
       patchBodyBudgetTokens: 75_000,
@@ -93,7 +93,6 @@ function baseContext(): Omit<ReviewContext, "prompt"> {
     },
     promptContext: {
       guidanceDocs: [
-        { path: "AGENTS.md", text: "Be careful with merges." },
         { path: "REVIEW_WORKFLOW.md", text: "Focus on correctness and regressions." },
       ],
       priorReviewClaims: [
@@ -104,66 +103,42 @@ function baseContext(): Omit<ReviewContext, "prompt"> {
   };
 }
 
-test("renderReviewPrompt includes explicit guidance docs and suppressed summaries", () => {
+test("renderReviewPrompt points Codex at the checkout without embedding patches or guidance bodies", () => {
   const prompt = renderReviewPrompt(baseContext());
 
   assert.match(prompt, /AGENTS\.md/);
   assert.match(prompt, /REVIEW_WORKFLOW\.md/);
+  assert.doesNotMatch(prompt, /Focus on correctness and regressions/);
   assert.match(prompt, /package-lock\.json .*— summary only by rule/);
-  assert.doesNotMatch(prompt, /lockfile patch body/);
   assert.match(prompt, /src\/service\.ts/);
+  assert.match(prompt, /git diff base-sha-123 HEAD --/);
+  assert.doesNotMatch(prompt, /Detailed patches:/);
+  assert.doesNotMatch(prompt, /export const updated = true/);
+  assert.doesNotMatch(prompt, /```diff/);
   assert.match(prompt, /Earlier note/);
   assert.match(prompt, /## Prior review claims to verify/);
   assert.match(prompt, /Linked issue keys: TST-28/);
   assert.match(prompt, /## Review rules/);
-  assert.match(prompt, /Flag only high-signal issues/);
-  assert.match(prompt, /Calibrate likelihood and impact from repository evidence/);
-  assert.match(prompt, /A conceivable failure mode is not automatically a bug/);
-  assert.match(prompt, /theoretical concurrency, timing, scale, or adversarial assumptions/);
-  assert.match(prompt, /Repository guidance is authoritative project policy/);
-  assert.match(prompt, /Rules about starting work from an issue or other pre-PR workflow provenance belong to the implementation agent and operator/);
-  assert.match(prompt, /project-specific guidance, glossaries, samples, and PR-linked docs as the product spec/);
-  assert.match(prompt, /These documents are project-specific policy/);
-  assert.match(prompt, /previous blocking review concerns are now resolved, still blocking, or no longer relevant/);
-  assert.match(prompt, /Include still-blocking prior concerns and newly discovered independent blockers in the same review, up to the blocker cap/);
-  assert.match(prompt, /Only raise a new blocker when it is clearly independent from the previous blockers/);
-  assert.match(prompt, /When several symptoms share one root cause, report them as one blocker/);
-  assert.match(prompt, /Report the complete set of independent merge-blocking concerns you can substantiate on the current head, up to 5 blockers/);
-  assert.match(prompt, /do not intentionally stop after the first blocker/);
-  assert.match(prompt, /Include nits only when they are high-confidence, directly tied to the diff, and useful to fix while touching this code/);
-  assert.match(prompt, /Treat the current PR title and description as the authoritative statement of intended behavior, requested scope, and acceptance criteria/);
-  assert.match(prompt, /Start by identifying the PR's primary task from its title and description, then verify the current diff against that stated intent/);
-  assert.match(prompt, /Treat explicit scope notes, out-of-scope notes, supersedes notes, and threat-model notes in the PR body as evidence of author intent, not automatic waivers/);
-  assert.match(prompt, /Do not let the PR description waive direct regressions or correctness issues introduced by the diff/);
-  assert.match(prompt, /Do not request changes solely because a coherent diff hunk, file, or behavior change is missing from, underexplained by, or only briefly mentioned in the PR description/);
-  assert.match(prompt, /"The PR body did not justify this" is not by itself a blocker/);
-  assert.match(prompt, /Do not silently widen the stated PR task/);
-  assert.match(prompt, /When a PR introduces or rewires stored enums, schema vocabulary, normalization helpers, or compatibility mappings, inspect untouched read\/write paths that can bypass the new abstraction/);
-  assert.match(prompt, /If a concern is real but mostly pre-existing or only weakly connected to the stated PR task, prefer a nit or drop it instead of blocking/);
-  assert.match(prompt, /Verify these historical claims against the current head before reusing them/);
-  assert.match(prompt, /make the continuity explicit: note what appears resolved since the prior review, what still blocks on this head, and what is genuinely new/);
+  assert.match(prompt, /concrete input, state, or sequence/);
+  assert.match(prompt, /repository-supported path/);
+  assert.match(prompt, /meaningful impact/);
+  assert.match(prompt, /Prior reviews are historical claims, not facts/);
+  assert.match(prompt, /up to 5/);
+  assert.match(prompt, /pre-PR provenance is never a finding/);
 });
 
-test("renderReviewPrompt keeps missing issue provenance outside the review verdict", () => {
+test("renderReviewPrompt keeps workflow provenance outside the review verdict", () => {
   const context = baseContext();
   context.pr.body = "No Linear issue: implemented from a direct owner request.";
   context.promptContext.issueKeys = [];
   context.promptContext.guidanceDocs = [{
-    path: "AGENTS.md",
-    text: "## Hard Rules\n- Start non-trivial work from a Linear issue.",
+    path: "REVIEW_WORKFLOW.md",
+    text: "Start non-trivial work from a Linear issue.",
   }];
 
   const prompt = renderReviewPrompt(context);
-  const repoRuleIndex = prompt.indexOf("Start non-trivial work from a Linear issue.");
-  const reviewBoundaryIndex = prompt.indexOf("### Review boundary for workflow guidance");
-
-  assert.ok(repoRuleIndex >= 0);
-  assert.ok(reviewBoundaryIndex > repoRuleIndex);
-  assert.match(
-    prompt,
-    /Never request changes or add a nit solely because a ticket, issue link, assignment, or other pre-PR process artifact is missing/,
-  );
-  assert.match(prompt, /Review the current head from the PR, code, and available evidence/);
+  assert.doesNotMatch(prompt, /Start non-trivial work from a Linear issue/);
+  assert.match(prompt, /Pre-PR workflow provenance such as issue creation, assignment, or linking is not a defect/);
 });
 
 test("renderFollowUpReviewPrompt carries policy and inventory without patch bodies", () => {
@@ -187,14 +162,14 @@ test("renderFollowUpReviewPrompt carries policy and inventory without patch bodi
   assert.match(prompt, /src\/service\.ts/);
   assert.match(prompt, /package-lock\.json .*summary only by rule/);
   assert.match(prompt, /AGENTS\.md/);
-  assert.match(prompt, /Be careful with merges/);
+  assert.match(prompt, /REVIEW_WORKFLOW\.md/);
+  assert.doesNotMatch(prompt, /Focus on correctness and regressions/);
   assert.match(prompt, /CUSTOM EFFECTIVE RUBRIC/);
   assert.match(prompt, /Check the release boundary/);
   assert.match(prompt, /A newer human concern/);
-  assert.match(prompt, /"verdict": "approve" \| "request_changes"/);
-  assert.match(prompt, /current checkout to inspect the actual changes/i);
+  assert.match(prompt, /schema-constrained JSON verdict/);
+  assert.match(prompt, /git diff base-sha-123 HEAD --/);
   assert.match(prompt, /do not anchor on its verdict/i);
-  assert.match(prompt, /underlying root cause over symptom-by-symptom findings/i);
   assert.doesNotMatch(prompt, /Detailed patches:/);
   assert.doesNotMatch(prompt, /export const updated = true/);
   assert.doesNotMatch(prompt, /```diff/);
@@ -219,26 +194,21 @@ test("review prompts keep the PR description authoritative over a conflicting pr
 
   for (const prompt of [renderReviewPrompt(context), renderFollowUpReviewPrompt(context, "previous-sha")]) {
     assert.match(prompt, /Known durations over 15 seconds are submitted unchanged\./);
-    assert.match(prompt, /Treat the current PR title and description as the authoritative statement/);
-    assert.match(prompt, /Do not preserve an old implementation invariant or prior review claim that the PR explicitly removes/);
+    assert.match(prompt, /PR title\/body set intended scope/);
+    assert.match(prompt, /Prior reviews are historical claims, not facts/);
     assert.doesNotMatch(prompt, /Authoritative task/);
     assert.doesNotMatch(prompt, /PatchRelay/);
   }
 });
 
-test("renderReviewPrompt embeds renderDiffContextLines verbatim (CLI/LLM parity lock)", () => {
-  // The `review-quill diff` CLI and the LLM prompt must render the diff
-  // portion identically. They achieve this by both calling
-  // `renderDiffContextLines(diff)`. This test locks that property — if
-  // anyone ever re-inlines the rendering in prompt-builder/render.ts
-  // (as happened once before), this assertion fails loudly.
+test("renderReviewPrompt keeps the static prompt budget small", () => {
   const context = baseContext();
+  context.pr.body = "";
+  context.pr.title = "";
+  context.diff = { inventory: [], patches: [], suppressed: [] };
+  context.promptContext = { guidanceDocs: [], priorReviewClaims: [], issueKeys: [] };
   const prompt = renderReviewPrompt(context);
-  const diffSection = renderDiffContextLines(context.diff).join("\n");
-  assert.ok(
-    prompt.includes(diffSection),
-    "renderReviewPrompt output must contain renderDiffContextLines output as a substring",
-  );
+  assert.ok(prompt.length <= 3_000, `static review prompt is ${prompt.length} characters`);
 });
 
 test("renderReviewPrompt applies extra instructions and allowed section replacement", () => {

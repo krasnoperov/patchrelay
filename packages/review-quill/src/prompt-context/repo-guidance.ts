@@ -32,12 +32,16 @@ async function readGuidanceDoc(worktreePath: string, relativePath: string): Prom
   }
 }
 
+function isAutomaticallyLoadedAgentsFile(relativePath: string): boolean {
+  return relativePath.replace(/^\.\//, "") === "AGENTS.md";
+}
+
 export async function loadRepoGuidanceDocs(
   worktreePath: string,
   reviewDocs: string[],
   explicitReferenceText: string[] = [],
 ): Promise<GuidanceDoc[]> {
-  const paths = [...new Set([...reviewDocs, "AGENTS.md"])];
+  const paths = [...new Set(reviewDocs.filter((relativePath) => !isAutomaticallyLoadedAgentsFile(relativePath)))];
   const docs: GuidanceDoc[] = [];
   for (const relativePath of paths) {
     const doc = await readGuidanceDoc(worktreePath, relativePath);
@@ -46,7 +50,7 @@ export async function loadRepoGuidanceDocs(
 
   const explicitPaths = explicitReferenceText.flatMap(extractLocalMarkdownReferences);
   for (const relativePath of explicitPaths) {
-    if (paths.includes(relativePath)) continue;
+    if (isAutomaticallyLoadedAgentsFile(relativePath) || paths.includes(relativePath)) continue;
     const doc = await readGuidanceDoc(worktreePath, relativePath);
     if (!doc) continue;
     paths.push(relativePath);

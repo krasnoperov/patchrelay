@@ -1,4 +1,4 @@
-import { renderDiffContextLines, renderDiffInventoryLines } from "../diff-context/index.ts";
+import { renderDiffInventoryLines } from "../diff-context/index.ts";
 import type { ReviewContext } from "../types.ts";
 
 export const REVIEW_QUILL_PROMPT_SECTION_IDS = [
@@ -26,11 +26,11 @@ function outputContractSection(): ReviewPromptSection {
     id: "output-contract",
     content: [
       "## Output contract",
-      "Return exactly ONE JSON object matching this schema:",
-      "",
-      OUTPUT_SCHEMA,
-      "",
-      OUTPUT_RULES,
+      "Return only the schema-constrained JSON verdict.",
+      "- Default `walkthrough` to empty; use it only for context absent from the diff or PR.",
+      "- Finding paths must be reviewable inventory files and lines must be changed lines in the new version.",
+      "- Keep messages short. Use `suggestion` only for a complete fix of at most 6 lines; otherwise null.",
+      "- If any finding or architectural concern is blocking, use `request_changes`; otherwise use `approve`.",
     ].join("\n"),
   };
 }
@@ -61,12 +61,27 @@ function appendGuidanceSections(sections: ReviewPromptSection[], context: Omit<R
     id: "repo-guidance",
     content: [
       "## Repository guidance",
-      "These documents are project-specific policy. If they conflict with generic review instincts or prior review claims, follow the repository guidance and explain only current-head violations of that guidance.",
-      ...context.promptContext.guidanceDocs.flatMap((doc) => [`### ${doc.path}`, doc.text.slice(0, 8_000), ""]),
-      "### Review boundary for workflow guidance",
-      "Instructions about how work must be initiated, tracked, assigned, or linked govern the implementation and operator workflow; they are not defects in the current PR head. Never request changes or add a nit solely because a ticket, issue link, assignment, or other pre-PR process artifact is missing. Review the current head from the PR, code, and available evidence.",
+      "Codex has already loaded the applicable AGENTS.md instruction chain. Read these additional project-policy files from the checkout before deciding:",
+      ...context.promptContext.guidanceDocs.map((doc) => `- ${doc.path}`),
+      "Apply repository guidance only to reviewable properties of the current head. Pre-PR workflow provenance such as issue creation, assignment, or linking is not a defect.",
     ].join("\n"),
   });
+}
+
+function reviewScopeSection(context: Omit<ReviewContext, "prompt">, followUp = false): ReviewPromptSection {
+  const diffBaseRef = context.workspace.diffBaseRef ?? context.workspace.baseRef;
+  return {
+    id: "diff-context",
+    content: [
+      "## Current-head review scope",
+      followUp
+        ? "The checkout is pinned to the newer PR head. Compare it with the immutable review base and revalidate earlier concerns against the current code."
+        : "The checkout is pinned to the PR head. Inspect the complete change and enough surrounding code, tests, and call sites to verify every finding.",
+      `Run \`git diff ${diffBaseRef} HEAD --\` to inspect the exact review surface. Do not rely only on the inventory below.`,
+      "Files marked ignored by rule are context only and cannot be findings. For summarized files, inspect the checkout when they matter to the PR's behavior.",
+      ...renderDiffInventoryLines(context.diff),
+    ].join("\n"),
+  };
 }
 
 function renderCustomizedSections(sections: ReviewPromptSection[], context: Omit<ReviewContext, "prompt">): string {
@@ -138,41 +153,13 @@ export const OUTPUT_RULES = `Output rules — the response parser expects strict
 - Findings on files not visible in the inventory will be silently dropped before posting.`;
 
 const REVIEW_RULES = `## Review rules
-Review the current PR head only.
-
-- Start by understanding the actual code and diff before deciding on a verdict.
-- Treat the current PR title and description as the authoritative statement of intended behavior, requested scope, and acceptance criteria. Do not preserve an old implementation invariant or prior review claim that the PR explicitly removes.
-- Repository guidance is authoritative project policy. Apply it before general reviewer instincts or prior-review momentum; if guidance says a pattern is intentional, do not push the author in the opposite direction unless the current head violates a different explicit rule.
-- Apply repository guidance only to reviewable properties of the current head: code, tests, committed artifacts, documented contracts, and runtime behavior. Rules about starting work from an issue or other pre-PR workflow provenance belong to the implementation agent and operator; missing issue or ticket context is never a blocker or nit.
-- When reviewing domain content such as translations, curriculum, prompts, fixtures, policy docs, or generated artifacts, treat project-specific guidance, glossaries, samples, and PR-linked docs as the product spec for that content.
-- Every blocking concern must name (a) a concrete input, runtime state, or sequence that triggers it on the current head, and (b) the realistic usage pattern under which that state arises in this repository. Hypothetical failure modes that require unstated preconditions are not blockers — flag them as nits at most, or drop them.
-- Calibrate likelihood and impact from repository evidence. A conceivable failure mode is not automatically a bug: report it only when there is a plausible path for it to occur in real use of the current system. Do not manufacture blockers from theoretical concurrency, timing, scale, or adversarial assumptions that the repository does not support.
-- If the PR body, diff, or repository guidance directly names your concern and argues against it — e.g., a threat-model section, a "why not X" paragraph, or an explicit rationale inside the changed code — engage with that argument. Either identify the specific condition under which the rebuttal fails on this head, or drop the concern. Do not re-raise it without rebutting.
-- Start by checking whether the previous blocking review concerns are now resolved, still blocking, or no longer relevant on the current head. Include still-blocking prior concerns and newly discovered independent blockers in the same review, up to the blocker cap.
-- If a previous blocker still applies AND the author has not visibly engaged with it on the new head, restate it clearly. If the author has pushed heads without accepting it OR has added a rebuttal in the current head's content, engage with that engagement — do not mechanically restate.
-- Only raise a new blocker when it is clearly independent from the previous blockers.
-- When several symptoms share one root cause, report them as one blocker instead of separate variants.
-- Report the complete set of independent merge-blocking concerns you can substantiate on the current head, up to 5 blockers. Group duplicate symptoms by root cause, but do not intentionally stop after the first blocker. Order blockers by severity, confidence, and likelihood of affecting normal use.
-- Flag only high-signal issues: real correctness bugs, definite regressions, or clear documented rule violations that govern the current code, committed artifacts, or runtime behavior.
-- Include nits only when they are high-confidence, directly tied to the diff, and useful to fix while touching this code. Do not let nits crowd out blockers.
-- Keep each \`finding.message\` under ~200 characters of prose. Put multi-line fix detail in the \`suggestion\` committable block (≤6 lines) instead of the message body.
-- Do not raise speculative issues, style debates, pre-existing problems, or linter/typechecker noise.
-- Keep architectural concerns for cross-file or product-level issues that cannot be pinned to one line.
-- Keep findings for one concrete issue at one concrete file/line on the current head.
-- If any finding or architectural concern is blocking, verdict must be \`request_changes\`. Otherwise verdict must be \`approve\`.
-- This is a decisive reviewer in the merge pipeline. Do not emit a neutral/comment-only outcome.
-- Do not post the review yourself with \`gh\` or other tools. Return JSON only; review-quill will publish it.
-- The changed-files inventory and patch set below define this PR's scope on the current head.
-- Use the checked-out repository for surrounding context, but do not expand the claimed PR scope beyond the diff inventory.
-- Start by identifying the PR's primary task from its title and description, then verify the current diff against that stated intent.
-- Treat explicit scope notes, out-of-scope notes, supersedes notes, and threat-model notes in the PR body as evidence of author intent, not automatic waivers.
-- Do not let the PR description waive direct regressions or correctness issues introduced by the diff.
-- Do not request changes solely because a coherent diff hunk, file, or behavior change is missing from, underexplained by, or only briefly mentioned in the PR description. If you can understand from the diff that the change is logical, cohesive, and does not introduce a concrete blocker, approve it.
-- For scope-drift concerns, substantiate that the change is actually unnecessary, incoherent with the PR, risky, or forbidden by repository guidance. "The PR body did not justify this" is not by itself a blocker.
-- Do not silently widen the stated PR task. A broader inconsistency is blocking only when the current diff introduces it, materially worsens it, the repository guidance explicitly treats the changed surfaces as one flow, or the stated PR task depends on it being correct.
-- When a PR introduces or rewires stored enums, schema vocabulary, normalization helpers, or compatibility mappings, inspect untouched read/write paths that can bypass the new abstraction — especially webhooks, background jobs, DAO update methods, and auth/session sync.
-- If a concern is real but mostly pre-existing or only weakly connected to the stated PR task, prefer a nit or drop it instead of blocking.
-- Previous reviews are historical claims to verify, not facts to repeat. Re-check them against the current head, current diff, and current behavior before reusing them.`;
+Review only the current PR head.
+- Inspect the actual diff and relevant code. The PR title/body set intended scope but cannot waive a regression. Repository guidance defines code, test, artifact, contract, runtime, and domain correctness.
+- Report only discrete, actionable issues introduced or materially worsened here that the author would likely fix. A blocker needs a concrete input, state, or sequence, a repository-supported path, and meaningful impact. Drop speculative, theoretical, pre-existing, stylistic, and tool-noise concerns; reserve nits for high-confidence issues worth fixing now.
+- Rebut explanations in the PR or code with current-head evidence or drop the concern. Use surrounding code to verify impact, but findings must use inventory files and changed lines. A broader inconsistency blocks only when this change introduces or worsens it, or the stated task depends on it.
+- A brief PR description or missing issue, assignment, or other pre-PR provenance is never a finding.
+- Prior reviews are historical claims, not facts. Revalidate engaged concerns and say whether each is resolved, still blocking despite the response, or irrelevant. Group symptoms by root cause; report all independent blockers, up to 5, ordered by impact, confidence, and likelihood.
+- Use architectural concerns only when no changed line can anchor the issue. Keep line findings concrete and messages under about 200 characters. Return JSON only; do not post it. Any blocker means \`request_changes\`; otherwise approve.`;
 
 export function renderCorrectivePrompt(reason: string): string {
   return [
@@ -203,7 +190,7 @@ export function renderReviewPrompt(context: Omit<ReviewContext, "prompt">): stri
     pullRequestSection(context),
   ];
 
-  sections.push({ id: "diff-context", content: renderDiffContextLines(context.diff).join("\n") });
+  sections.push(reviewScopeSection(context));
 
   appendGuidanceSections(sections, context);
 
@@ -246,15 +233,7 @@ export function renderFollowUpReviewPrompt(
     { id: "review-rubric", content: REVIEW_RULES },
     pullRequestSection(context, [`Previous reviewed head SHA: ${priorHeadSha}`, `Current head SHA: ${context.pr.headSha}`]),
   ];
-  sections.push({
-      id: "diff-context",
-      content: [
-        "## Current-head review scope",
-        "Patch bodies are intentionally omitted because the fork already contains the prior review context. Inspect the current checkout and compare the previous and current SHAs with repository tools before deciding what changed.",
-        "Re-validate earlier concerns against the current code. Prefer the underlying root cause over symptom-by-symptom findings, and report only realistic bugs aligned with this PR's goal and normal project usage.",
-        ...renderDiffInventoryLines(context.diff),
-      ].join("\n"),
-    });
+  sections.push(reviewScopeSection(context, true));
   appendGuidanceSections(sections, context);
   const claims = context.promptContext.followUpReviewClaims ?? [];
   if (claims.length > 0) {

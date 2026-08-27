@@ -246,8 +246,9 @@ export class ReviewRunner {
         : {}),
       currentHeadSha: context.pr?.headSha,
       inventoryCount,
-      omittedPatchCount: promptMode === "follow_up" ? patches.length : 0,
-      omittedPatchChars: promptMode === "follow_up" ? omittedPatchChars : 0,
+      guidancePathCount: context.promptContext?.guidanceDocs.length ?? 0,
+      omittedPatchCount: patches.length,
+      omittedPatchChars,
       promptChars: reviewPrompt.length,
     }, "Selected Review Quill prompt mode");
 
@@ -261,8 +262,8 @@ export class ReviewRunner {
     // First attempt failed parse/normalize. Log with a truncated preview
     // so we can tell what the model actually produced, then send a
     // corrective turn on the SAME thread. Same-thread is important:
-    // the Codex thread retains the diff + PR + guidance context, so we
-    // don't pay the full prompt cost a second time.
+    // the Codex thread retains the PR and review context, so we do not
+    // pay the initial prompt cost a second time.
     this.logger.warn({
       reason: firstParse.reason,
       preview: firstTurn.latestMessage.slice(0, PARSE_FAILURE_PREVIEW_CHARS),

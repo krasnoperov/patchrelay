@@ -5,17 +5,17 @@ import path from "node:path";
 import test from "node:test";
 import { loadRepoGuidanceDocs } from "../src/prompt-context/repo-guidance.ts";
 
-test("loadRepoGuidanceDocs loads configured docs plus universal AGENTS.md in order", async () => {
+test("loadRepoGuidanceDocs skips root AGENTS.md because Codex loads it automatically", async () => {
   const repoPath = mkdtempSync(path.join(tmpdir(), "review-quill-guidance-"));
   try {
     writeFileSync(path.join(repoPath, "AGENTS.md"), "Universal guidance\n");
     writeFileSync(path.join(repoPath, "REVIEW_WORKFLOW.md"), "Review guidance\n");
     writeFileSync(path.join(repoPath, "CLAUDE.md"), "Interactive guidance\n");
 
-    const docs = await loadRepoGuidanceDocs(repoPath, ["REVIEW_WORKFLOW.md"]);
+    const docs = await loadRepoGuidanceDocs(repoPath, ["REVIEW_WORKFLOW.md", "AGENTS.md"]);
 
-    assert.deepEqual(docs.map((doc) => doc.path), ["REVIEW_WORKFLOW.md", "AGENTS.md"]);
-    assert.deepEqual(docs.map((doc) => doc.text), ["Review guidance\n", "Universal guidance\n"]);
+    assert.deepEqual(docs.map((doc) => doc.path), ["REVIEW_WORKFLOW.md"]);
+    assert.deepEqual(docs.map((doc) => doc.text), ["Review guidance\n"]);
   } finally {
     rmSync(repoPath, { recursive: true, force: true });
   }
@@ -33,11 +33,11 @@ test("loadRepoGuidanceDocs includes local markdown docs explicitly referenced by
     const docs = await loadRepoGuidanceDocs(
       repoPath,
       ["REVIEW_WORKFLOW.md"],
-      ["Audit against [docs/translation.md](docs/translation.md) and keep timing intact."],
+      ["Audit against [AGENTS.md](AGENTS.md) and [docs/translation.md](docs/translation.md)."],
     );
 
-    assert.deepEqual(docs.map((doc) => doc.path), ["REVIEW_WORKFLOW.md", "AGENTS.md", "docs/translation.md"]);
-    assert.deepEqual(docs.map((doc) => doc.text), ["Review guidance\n", "Universal guidance\n", "Translation rubric\n"]);
+    assert.deepEqual(docs.map((doc) => doc.path), ["REVIEW_WORKFLOW.md", "docs/translation.md"]);
+    assert.deepEqual(docs.map((doc) => doc.text), ["Review guidance\n", "Translation rubric\n"]);
   } finally {
     rmSync(repoPath, { recursive: true, force: true });
   }

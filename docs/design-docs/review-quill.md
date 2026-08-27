@@ -78,9 +78,9 @@ The review prompt should include:
 - PR title and body
 - base branch
 - current head SHA
-- curated local diff
+- immutable diff command plus changed-file inventory; Codex inspects patches and surrounding code from the checkout
 - prior formal PR reviews as concise claims to verify
-- configured review guidance docs plus universal `AGENTS.md`, normally `REVIEW_WORKFLOW.md` and `AGENTS.md`
+- the automatically loaded `AGENTS.md` chain plus paths to configured review guidance, normally `REVIEW_WORKFLOW.md`
 - detected issue keys from PR title, body, or branch
 
 The prompt must keep GitHub truth authoritative and review only the current head SHA.

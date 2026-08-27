@@ -171,6 +171,7 @@ test("ReviewRunner forks once, sends the bounded follow-up prompt, and keeps a c
     priorHeadSha: "prior-head",
     currentHeadSha: "current-head",
     inventoryCount: 2,
+    guidancePathCount: 0,
     omittedPatchCount: 1,
     omittedPatchChars: "PATCH BODY SENTINEL".length,
     promptChars: "BOUNDED FOLLOW-UP REVIEW PROMPT".length,
@@ -241,7 +242,9 @@ test("ReviewRunner sends the byte-identical full prompt after a fork source fall
   assert.equal(starts[0]?.input, fullPrompt);
   assert.equal(promptLogs[0]?.threadStartMode, "fresh_fallback");
   assert.equal(promptLogs[0]?.promptMode, "full");
-  assert.equal(promptLogs[0]?.omittedPatchCount, 0);
+  assert.equal(promptLogs[0]?.guidancePathCount, 0);
+  assert.equal(promptLogs[0]?.omittedPatchCount, 1);
+  assert.equal(promptLogs[0]?.omittedPatchChars, "PATCH BODY SENTINEL".length);
   assert.equal(promptLogs[0]?.promptChars, fullPrompt.length);
 });
 

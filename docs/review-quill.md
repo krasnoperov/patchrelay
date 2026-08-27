@@ -114,17 +114,17 @@ If you want machine review to count toward merge admission, include `review-quil
 Default context path for each reviewable PR:
 
 1. Ephemeral local checkout at the exact PR head SHA.
-2. Local `git diff <base>...HEAD` inventory and curated patch set.
-3. Repo guidance: configured review docs plus universal `AGENTS.md` (`REVIEW_WORKFLOW.md`, `AGENTS.md` by default), plus local Markdown docs explicitly referenced by the PR title/body.
+2. Local changed-file inventory plus an immutable merge-base ref. The prompt tells Codex to inspect the exact diff and surrounding code from the checkout; it does not duplicate patch bodies.
+3. Repo guidance: the `AGENTS.md` chain Codex loads automatically, plus paths to configured review docs (`REVIEW_WORKFLOW.md` by default) and local Markdown docs explicitly referenced by the PR title/body.
 4. Prior formal PR reviews from GitHub.
 
 Review Quill does not load external tracker context. The current PR title and description are the authoritative statement of intended behavior, requested scope, and acceptance criteria; the checked-out head and diff show what the PR actually does. Repository rules about initiating, tracking, assigning, or linking work guide implementation and operators, not current-head review findings.
 
 Prior review claims cannot override the current PR description and must be revalidated against the current head. A PR description cannot waive a concrete regression introduced by the diff. Review Quill continues to schedule reviews from its existing push/check lifecycle.
 
-The built-in review scaffold lives in `packages/review-quill/src/prompt-builder/render.ts`. The always-on reviewer prompt stays small: output contract, review rules, PR metadata, diff, repo guidance, prior review claims. Install-level and repo-level prompt config can add one extra instructions file or replace the review-rubric section — see [prompting.md](./prompting.md).
+The built-in review scaffold lives in `packages/review-quill/src/prompt-builder/render.ts`. The always-on reviewer prompt stays small: semantic output constraints, a compact review rubric, PR metadata, the immutable diff command and file inventory, guidance paths, and prior review claims. Install-level and repo-level prompt config can add one extra instructions file or replace the review-rubric section — see [prompting.md](./prompting.md).
 
-Diff context is intentionally filtered:
+The local diff diagnostics remain intentionally filtered:
 
 - noisy/generated paths can be ignored or summarized
 - oversized patches are summarized instead of dumped whole
@@ -132,7 +132,7 @@ Diff context is intentionally filtered:
 
 Review execution concurrency defaults to 4. The cap is configurable with `reconciliation.maxConcurrentReviews`; keep it conservative on hosts where many reviews share one Codex app-server and the same per-repo git cache.
 
-Review threads start fresh by default. `codex.forkPriorReviewThread: true` enables a conservative optimization for a newer head: Review Quill may fork only the immediately preceding decisive attempt when its live Codex thread ends at the recorded completed turn and its review surface, base SHA, and prompt fingerprint still match. A successful fork receives a bounded follow-up prompt with the current inventory and inspects the current checkout instead of receiving patch bodies again. Fresh starts and Codex's explicit missing-rollout fallback keep the full prompt; other protocol, authentication, model, sandbox, transport, or timeout failures remain visible as errors. Set the option back to `false` to roll back immediately to always-fresh review threads.
+Review threads start fresh by default. `codex.forkPriorReviewThread: true` enables a conservative optimization for a newer head: Review Quill may fork only the immediately preceding decisive attempt when its live Codex thread ends at the recorded completed turn and its review surface, base SHA, and prompt fingerprint still match. Both fresh and follow-up reviews receive the current inventory and inspect the checkout via the immutable diff command; neither receives patch bodies. Codex's explicit missing-rollout fallback keeps the fresh-review prompt, while other protocol, authentication, model, sandbox, transport, or timeout failures remain visible as errors. Set the option back to `false` to roll back immediately to always-fresh review threads.
 
 Codex remains the source of truth for the full review transcript. SQLite stores thread/turn identifiers, verdicts, bounded summaries, timings, and publication outcomes; it does not store a second transcript. The transcript command asks the local Review Quill daemon to read its Codex thread, so it uses the service-owned Codex home. Interrupted webhook receipts are abandoned for reconciliation after 15 minutes, and processed delivery records are pruned after seven days.
 

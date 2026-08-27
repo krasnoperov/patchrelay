@@ -184,6 +184,8 @@ Review Quill allows replacing only:
 
 - `review-rubric`
 
+Review Quill relies on Codex to load the applicable `AGENTS.md` instruction chain. Additional configured or PR-linked Markdown guidance is passed as checkout paths, not copied into the turn prompt.
+
 Unknown section ids are ignored and logged as warnings. Known but non-overridable sections are also ignored and logged.
 
 ## Recommended Usage
