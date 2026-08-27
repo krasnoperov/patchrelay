@@ -241,6 +241,8 @@ test("ReviewRunner classifies a failed native review as soon as its turn complet
   const config = minimalConfig();
   config.codex.reviewMode = "native-two-pass";
   const notifications = notificationHarness();
+  const sleeps: number[] = [];
+  let readCalls = 0;
   let normalizationStarted = false;
   const fakeCodex = {
     start: async () => {},
@@ -257,22 +259,26 @@ test("ReviewRunner classifies a failed native review as soon as its turn complet
       normalizationStarted = true;
       return { turnId: "normalization-turn", status: "running" };
     },
-    readThread: async () => ({
-      id: "native-thread",
-      turns: [{
-        id: "review-turn",
-        status: "failed",
-        items: [],
-        error: { message: USAGE_LIMIT_MESSAGE },
-      }],
-    }),
+    readThread: async () => {
+      readCalls += 1;
+      if (readCalls === 1) throw new Error("Codex app-server request timed out after 30000ms");
+      return {
+        id: "native-thread",
+        turns: [{
+          id: "review-turn",
+          status: "failed",
+          items: [],
+          error: { message: USAGE_LIMIT_MESSAGE },
+        }],
+      };
+    },
     subscribeNotifications: notifications.subscribeNotifications,
   };
   const runner = new ReviewRunner(
     config,
     { warn() {}, info() {}, child: () => ({}) } as never,
     fakeCodex as never,
-    async () => {},
+    async (ms) => { sleeps.push(ms); },
   );
 
   await assert.rejects(
@@ -288,6 +294,8 @@ test("ReviewRunner classifies a failed native review as soon as its turn complet
     (error: unknown) => error instanceof CodexCapacityError,
   );
   assert.equal(normalizationStarted, false);
+  assert.equal(readCalls, 2);
+  assert.deepEqual(sleeps, [1_500]);
   assert.equal(notifications.listenerCount(), 0);
 });
 

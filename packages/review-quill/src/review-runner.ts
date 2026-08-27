@@ -488,7 +488,12 @@ export class ReviewRunner {
         if (completion.kind === "review") {
           rawReview = completion.review;
         } else {
-          completedThread = await this.codex.readThread(threadId);
+          completedThread = await this.waitForTurnCompletion(
+            threadId,
+            started.turnId,
+            options,
+            Promise.resolve(),
+          );
           rawReview = collectNativeReview(completedThread, started.turnId);
         }
       } else {
