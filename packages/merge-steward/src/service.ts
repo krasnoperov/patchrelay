@@ -27,6 +27,7 @@ export class MergeStewardService {
     private readonly eviction: EvictionReporter,
     private readonly specBuilder: SpeculativeBranchBuilder,
     private readonly logger: Logger,
+    onReconcileWatchdog?: ((runtime: QueueRuntimeStatus) => Promise<void> | void) | undefined,
   ) {
     this.queueCommands = new MergeStewardQueueCommands(config, policy, store, github, specBuilder, logger);
     this.runtime = new MergeStewardRuntime(
@@ -42,6 +43,7 @@ export class MergeStewardService {
       async () => {
         await this.queueCommands.scanEligibleOpenPrs();
       },
+      onReconcileWatchdog,
     );
     this.watchQueries = new MergeStewardWatchQueries(config, store, this.runtime);
   }

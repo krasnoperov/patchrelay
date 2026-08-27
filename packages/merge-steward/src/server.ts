@@ -21,12 +21,14 @@ import { readFileSync, existsSync } from "node:fs";
 import type { Logger } from "pino";
 import type { ServiceGitHubAuthStatus, ServiceGitHubRepoAccessResponse } from "./admin-types.ts";
 import type { RepoInstance, RepoRuntimeRecord } from "./repo-runtime.ts";
+import type { QueueRuntimeStatus } from "./types.ts";
 
 async function createRepoInstance(
   config: StewardConfig,
   policy: GitHubPolicyCache,
   logger: Logger,
   botIdentity?: BotIdentity,
+  onReconcileWatchdog?: (runtime: QueueRuntimeStatus) => Promise<void> | void,
 ): Promise<RepoInstance> {
   const repoUrl = `https://github.com/${config.repoFullName}.git`;
   const clone = new CloneManager(config.clonePath, repoUrl, config.repoFullName, config.gitBin, logger);
@@ -51,7 +53,18 @@ async function createRepoInstance(
     config.admissionLabel,
     config.mergeQueueCheckName,
   );
-  const service = new MergeStewardService(config, policy, store, git, ci, github, eviction, git, logger);
+  const service = new MergeStewardService(
+    config,
+    policy,
+    store,
+    git,
+    ci,
+    github,
+    eviction,
+    git,
+    logger,
+    onReconcileWatchdog,
+  );
 
   return { config, service, store };
 }
@@ -249,6 +262,7 @@ export async function startMultiServer(): Promise<void> {
       }
       await app.close();
     },
+    forceTerminateAfterMs: 15_000,
   });
 
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
@@ -299,7 +313,16 @@ export async function startMultiServer(): Promise<void> {
         githubRequiredChecks: policy.getRequiredChecks(),
         requireAllChecksOnEmptyRequiredSet: policy.shouldRequireAllChecksOnEmptyRequiredSet(),
       }, "Resolved GitHub protection requirements");
-      const instance = await createRepoInstance(config, policy, logger.child({ repoId: config.repoId }), botIdentity);
+      const instance = await createRepoInstance(
+        config,
+        policy,
+        logger.child({ repoId: config.repoId }),
+        botIdentity,
+        async (runtime) => {
+          logger.error({ repoId: config.repoId, runtime }, "Reconcile watchdog is restarting merge-steward");
+          await shutdown(`reconcile_watchdog:${config.repoId}`, 1);
+        },
+      );
       if (shuttingDown) {
         instance.store.close();
         return;

@@ -121,6 +121,6 @@ function staleRuntimeLines(repos: RepoRuntimeStatus[]): string[] {
     .map((repo) => {
       const event = repo.runtime?.lastReconcileEvent;
       const latest = event ? `; latest action ${event.action} PR #${event.prNumber}` : "";
-      return `Warning: ${repo.repoId} reconcile tick is stale after ${formatDurationMs(repo.runtime?.tickAgeMs)}${latest}`;
+      return `Warning: ${repo.repoId} reconcile watchdog is restarting the service after ${formatDurationMs(repo.runtime?.tickAgeMs)}${latest}`;
     });
 }

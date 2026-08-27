@@ -27,7 +27,7 @@ export function formatRuntimeActivity(runtime: QueueRuntimeStatus): string[] {
   const latest = formatReconcileEvent(runtime.lastReconcileEvent);
   if (latest) lines.push(`Latest action: ${latest}`);
   if (runtime.staleTick) {
-    lines.push(`Warning: reconcile tick appears stale; threshold ${formatDurationMs(runtime.staleTickThresholdMs)}.`);
+    lines.push(`Warning: reconcile watchdog is restarting the service after threshold ${formatDurationMs(runtime.staleTickThresholdMs)}.`);
   }
   return lines;
 }

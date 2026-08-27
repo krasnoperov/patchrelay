@@ -285,7 +285,7 @@ export function formatReconcileRequestText(result: QueueReconcileResult): string
       ? `; latest action ${result.runtime.lastReconcileEvent.action} PR #${result.runtime.lastReconcileEvent.prNumber}`
       : "";
     const guidance = result.runtime.staleTick
-      ? "inspect logs before restarting"
+      ? "the reconcile watchdog is restarting the service"
       : "wait for the current tick before restarting";
     return `Reconcile already running for ${age}${latest}; ${guidance}.`;
   }

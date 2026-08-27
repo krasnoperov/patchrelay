@@ -185,9 +185,14 @@ test("triggerReconcile reports already_running while a tick is active", async ()
   await first;
 });
 
-test("runtime marks a long active tick stale", async () => {
+test("runtime watchdog requests restart for a long active tick without overlapping reconciliation", async () => {
   let releaseTick: (() => void) | undefined;
   let tickStarted = false;
+  let releaseWatchdog!: () => void;
+  const watchdogTriggered = new Promise<void>((resolve) => {
+    releaseWatchdog = resolve;
+  });
+  const watchdogStatuses: Array<ReturnType<MergeStewardRuntime["getRuntimeStatus"]>> = [];
   const runtime = new MergeStewardRuntime(
     makeConfig({ reconcileStaleAfterMs: 5 }),
     { getSnapshot: () => ({ requiredChecks: [], requireAllChecksOnEmptyRequiredSet: false, fetchedAt: null, lastRefreshReason: null, lastRefreshChanged: null }) } as never,
@@ -204,19 +209,28 @@ test("runtime marks a long active tick stale", async () => {
         releaseTick = resolve;
       });
     },
+    (status) => {
+      watchdogStatuses.push(status);
+      releaseWatchdog();
+    },
   );
 
   const tick = runtime.triggerReconcile();
   while (!tickStarted) await delay(0);
-  await delay(20);
+  await watchdogTriggered;
 
   const status = runtime.getRuntimeStatus();
   assert.equal(status.tickInProgress, true);
   assert.equal(status.staleTick, true);
   assert.ok((status.tickAgeMs ?? 0) >= 5);
+  assert.equal(status.lastTickOutcome, "failed");
+  assert.match(status.lastTickError ?? "", /service restart requested/);
+  assert.equal(watchdogStatuses.length, 1);
+  assert.equal((await runtime.triggerReconcile()).started, false);
 
   releaseTick?.();
   await tick;
+  assert.equal(runtime.getRuntimeStatus().lastTickOutcome, "failed");
 });
 
 test("runtime clears the previous reconcile event when a new tick starts", async () => {

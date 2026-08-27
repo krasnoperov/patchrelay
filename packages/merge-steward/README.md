@@ -66,6 +66,8 @@ merge-steward queue reconcile --repo <id>       # force one reconcile tick
 merge-steward service logs --lines 100
 ```
 
+Each repository reconcile tick is bounded by `reconcileStaleAfterMs` (five minutes by default). If a tick exceeds that threshold, Merge Steward records the failed runtime state, performs bounded service cleanup, and exits unsuccessfully so its `Restart=always` systemd unit restarts from the durable queue. It never starts a second reconciler beside the stuck tick.
+
 `pr status`, `queue status`, `queue show`, and `queue reconcile` auto-resolve `--repo` and `--pr` from the current git checkout. `pr status` supports `--wait --timeout <s> --poll <s>` for blocking until a terminal state. Exit codes:
 
 | Code | Meaning |

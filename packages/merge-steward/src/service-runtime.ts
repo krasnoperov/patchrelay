@@ -15,6 +15,7 @@ export class MergeStewardRuntime {
   private lastTickOutcome: QueueRuntimeStatus["lastTickOutcome"] = "idle";
   private lastTickError: string | null = null;
   private lastReconcileEvent: ReconcileEventSummary | null = null;
+  private watchdogTickStartedAt: string | null = null;
 
   constructor(
     private readonly config: StewardConfig,
@@ -27,6 +28,7 @@ export class MergeStewardRuntime {
     private readonly specBuilder: SpeculativeBranchBuilder,
     private readonly logger: Logger,
     private readonly beforeTick?: (() => Promise<void>) | undefined,
+    private readonly onReconcileWatchdog?: ((runtime: QueueRuntimeStatus) => Promise<void> | void) | undefined,
   ) {}
 
   async start(): Promise<void> {
@@ -44,6 +46,12 @@ export class MergeStewardRuntime {
     const deadline = Date.now() + 10_000;
     while (this.tickInProgress && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (this.tickInProgress) {
+      this.logger.warn(
+        { runtime: this.getRuntimeStatus() },
+        "Stopping while a reconcile tick is still active; process restart will recover from durable queue state",
+      );
     }
     this.logger.info("Steward service stopped");
   }
@@ -121,20 +129,32 @@ export class MergeStewardRuntime {
     return Math.max(0, Date.now() - startedMs);
   }
 
-  private scheduleStaleTickWarning(startedAt: string): void {
+  private scheduleReconcileWatchdog(startedAt: string): void {
     this.clearStaleTickTimer();
     const timer = setTimeout(() => {
       if (!this.tickInProgress || this.lastTickStartedAt !== startedAt) return;
+      this.staleTickTimer = undefined;
+      this.watchdogTickStartedAt = startedAt;
+      this.lastTickOutcome = "failed";
+      this.lastTickError = `Reconcile tick exceeded the ${this.config.reconcileStaleAfterMs}ms stale threshold; service restart requested.`;
       const runtime = this.getRuntimeStatus();
-      this.logger.warn(
+      this.logger.error(
         {
           startedAt,
           tickAgeMs: runtime.tickAgeMs,
           staleTickThresholdMs: runtime.staleTickThresholdMs,
           lastReconcileEvent: runtime.lastReconcileEvent,
         },
-        "Reconcile tick appears stale",
+        "Reconcile watchdog detected a stuck tick; requesting service restart",
       );
+      void (async () => {
+        await this.onReconcileWatchdog?.(runtime);
+      })().catch((error) => {
+        this.logger.error(
+          { startedAt, error: error instanceof Error ? error.message : String(error) },
+          "Reconcile watchdog could not restart the service",
+        );
+      });
     }, this.config.reconcileStaleAfterMs);
     timer.unref?.();
     this.staleTickTimer = timer;
@@ -154,7 +174,9 @@ export class MergeStewardRuntime {
     this.lastTickOutcome = "running";
     this.lastTickError = null;
     this.lastReconcileEvent = null;
-    this.scheduleStaleTickWarning(this.lastTickStartedAt);
+    this.watchdogTickStartedAt = null;
+    const startedAt = this.lastTickStartedAt;
+    this.scheduleReconcileWatchdog(startedAt);
     try {
       await this.beforeTick?.();
       await reconcile({
@@ -185,7 +207,9 @@ export class MergeStewardRuntime {
           this.logger[level]({ ...event }, `Queue: ${event.action} PR #${event.prNumber}`);
         },
       });
-      this.lastTickOutcome = "succeeded";
+      if (this.watchdogTickStartedAt !== startedAt) {
+        this.lastTickOutcome = "succeeded";
+      }
     } catch (error) {
       this.lastTickOutcome = "failed";
       this.lastTickError = error instanceof Error

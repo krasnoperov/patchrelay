@@ -88,6 +88,48 @@ for (const [service, factory] of [
   });
 }
 
+test("merge-steward watchdog exits unsuccessfully after graceful cleanup", async () => {
+  const logs = createLogCapture();
+  const exitCodes: number[] = [];
+  let cleanedUp = false;
+  const shutdown = createMergeStewardShutdown({
+    service: "merge-steward",
+    logger: logs.logger,
+    cleanup: async () => {
+      cleanedUp = true;
+    },
+    terminate: (code) => {
+      exitCodes.push(code);
+    },
+  });
+
+  await shutdown("reconcile_watchdog:app", 1);
+
+  assert.equal(cleanedUp, true);
+  assert.deepEqual(exitCodes, [1]);
+  assert.equal(logs.entries.at(-1)?.message, "Shutdown complete");
+});
+
+test("merge-steward watchdog forces termination when an active request blocks cleanup", async () => {
+  const logs = createLogCapture();
+  let resolveTermination!: (code: number) => void;
+  const terminated = new Promise<number>((resolve) => {
+    resolveTermination = resolve;
+  });
+  const shutdown = createMergeStewardShutdown({
+    service: "merge-steward",
+    logger: logs.logger,
+    cleanup: async () => await new Promise<void>(() => {}),
+    terminate: resolveTermination,
+    forceTerminateAfterMs: 5,
+  });
+
+  void shutdown("reconcile_watchdog:app", 1);
+
+  assert.equal(await terminated, 1);
+  assert.equal(logs.entries.at(-1)?.message, "Shutdown deadline exceeded; terminating");
+});
+
 test("all canonical daemon units recover from unexpected clean exits", () => {
   for (const unitPath of [
     "infra/patchrelay.service",

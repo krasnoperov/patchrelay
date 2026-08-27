@@ -9,15 +9,23 @@ export function createGracefulShutdown(options: {
   logger: ShutdownLogger;
   cleanup: () => Promise<void>;
   terminate?: (code: number) => void;
-}): (trigger: string) => Promise<void> {
+  forceTerminateAfterMs?: number;
+}): (trigger: string, exitCode?: number) => Promise<void> {
   let shutdownPromise: Promise<void> | undefined;
   let firstTrigger: string | undefined;
+  let terminated = false;
   const terminate = options.terminate ?? ((code: number) => {
     process.exitCode = code;
     setImmediate(() => process.exit(code));
   });
 
-  return (trigger: string) => {
+  const terminateOnce = (code: number): void => {
+    if (terminated) return;
+    terminated = true;
+    terminate(code);
+  };
+
+  return (trigger: string, exitCode?: number) => {
     if (shutdownPromise) {
       options.logger.warn(
         { service: options.service, trigger, firstTrigger },
@@ -28,11 +36,26 @@ export function createGracefulShutdown(options: {
 
     firstTrigger = trigger;
     options.logger.info({ service: options.service, trigger }, "Shutdown requested");
+    const forcedTermination = exitCode !== undefined && options.forceTerminateAfterMs !== undefined
+      ? setTimeout(() => {
+        options.logger.error(
+          { service: options.service, trigger, forceTerminateAfterMs: options.forceTerminateAfterMs },
+          "Shutdown deadline exceeded; terminating",
+        );
+        terminateOnce(exitCode);
+      }, options.forceTerminateAfterMs)
+      : undefined;
+    forcedTermination?.unref?.();
     shutdownPromise = options.cleanup()
       .then(() => {
+        if (forcedTermination) clearTimeout(forcedTermination);
         options.logger.info({ service: options.service, trigger }, "Shutdown complete");
+        if (exitCode !== undefined) {
+          terminateOnce(exitCode);
+        }
       })
       .catch((error: unknown) => {
+        if (forcedTermination) clearTimeout(forcedTermination);
         options.logger.error(
           {
             service: options.service,
@@ -41,7 +64,7 @@ export function createGracefulShutdown(options: {
           },
           "Shutdown failed",
         );
-        terminate(1);
+        terminateOnce(1);
       });
     return shutdownPromise;
   };

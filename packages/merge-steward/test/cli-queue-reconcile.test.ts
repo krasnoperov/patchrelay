@@ -374,7 +374,7 @@ test("queue status text output warns about a stale reconcile tick", () => {
 
   const text = formatQueueStatusText("service", snapshot);
   assert.match(text, /Reconcile: stale for 5m1s/);
-  assert.match(text, /Warning: reconcile tick appears stale; threshold 5m\./);
+  assert.match(text, /Warning: reconcile watchdog is restarting the service after threshold 5m\./);
 });
 
 test("queue reconcile text output gives guidance when a tick is already running", () => {
@@ -400,6 +400,26 @@ test("queue reconcile text output gives guidance when a tick is already running"
   });
 
   assert.equal(text, "Reconcile already running for 12s; latest action ci_passed PR #42; wait for the current tick before restarting.");
+});
+
+test("queue reconcile text output reports automatic watchdog recovery for a stale tick", () => {
+  const text = formatReconcileRequestText({
+    started: false,
+    reason: "already_running",
+    runtime: {
+      tickInProgress: true,
+      lastTickStartedAt: "2026-05-22T07:10:00.000Z",
+      lastTickCompletedAt: "2026-05-22T07:09:30.000Z",
+      lastTickOutcome: "failed",
+      lastTickError: "Reconcile tick exceeded the stale threshold; service restart requested.",
+      tickAgeMs: 301_000,
+      staleTickThresholdMs: 300_000,
+      staleTick: true,
+      lastReconcileEvent: null,
+    },
+  });
+
+  assert.equal(text, "Reconcile already running for 5m1s; the reconcile watchdog is restarting the service.");
 });
 
 test("queue status reports initializing repos from the service without falling back to the database", async () => {
