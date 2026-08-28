@@ -161,6 +161,12 @@ An external mechanism must make the signing key available noninteractively in th
 configured GPG home. PatchRelay has no passphrase setting and must never receive the
 passphrase.
 
+The canonical systemd unit uses `ProtectSystem=strict`. Add the exact configured
+`gpg_home` directory to that unit's `ReadWritePaths`; otherwise GPG cannot create or
+recover its agent state and signing will fail. Keep the grant limited to the dedicated
+GPG home instead of making the user's whole home writable, then run `systemctl
+daemon-reload` and restart PatchRelay during the planned rollout.
+
 Configure the Linear OAuth app settings and webhook categories in your Linear workspace settings. Configure the GitHub App webhook to send PR, review, check suite, check run, and push events to `${server.public_base_url}/webhooks/github`.
 
 ## 4. Configure Projects
