@@ -38,6 +38,9 @@ test("buildGitHubCliAuthEnv points gh at the config dir and routes git through g
   assert.equal(env.GIT_CONFIG_VALUE_0, "");
   assert.equal(env.GIT_CONFIG_KEY_1, "credential.https://github.com.helper");
   assert.equal(env.GIT_CONFIG_VALUE_1, "!/usr/bin/gh auth git-credential");
+  assert.equal(env.GIT_CONFIG_COUNT, "3");
+  assert.equal(env.GIT_CONFIG_KEY_2, "commit.gpgSign");
+  assert.equal(env.GIT_CONFIG_VALUE_2, "false");
   assert.equal(env.GIT_AUTHOR_NAME, "patchrelay[bot]");
   assert.equal(env.GIT_COMMITTER_EMAIL, "1+patchrelay[bot]@users.noreply.github.com");
 });

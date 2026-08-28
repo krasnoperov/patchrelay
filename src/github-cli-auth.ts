@@ -66,6 +66,8 @@ export async function writeGhHostsToken(
  *   helper first clears any inherited/global helper, then ours is appended).
  * - `GIT_AUTHOR_*`/`GIT_COMMITTER_*` attribute commits to the bot without writing
  *   `user.name` into any repo config.
+ * - `commit.gpgSign=false` prevents a developer's inherited global signing key from
+ *   attaching their human identity to bot-authored commits.
  *
  * Note on token env vars: the daemon keeps `GH_TOKEN`/`GITHUB_TOKEN` fresh (rotated each
  * cycle) for in-process consumers that read them directly. They are stripped only when
@@ -80,11 +82,13 @@ export function buildGitHubCliAuthEnv(opts: {
   const env: Record<string, string> = {
     GH_CONFIG_DIR: opts.ghConfigDir,
     GIT_TERMINAL_PROMPT: "0",
-    GIT_CONFIG_COUNT: "2",
+    GIT_CONFIG_COUNT: "3",
     GIT_CONFIG_KEY_0: `credential.https://${GITHUB_HOST}.helper`,
     GIT_CONFIG_VALUE_0: "",
     GIT_CONFIG_KEY_1: `credential.https://${GITHUB_HOST}.helper`,
     GIT_CONFIG_VALUE_1: `!${opts.ghBin} auth git-credential`,
+    GIT_CONFIG_KEY_2: "commit.gpgSign",
+    GIT_CONFIG_VALUE_2: "false",
   };
   if (opts.identity) {
     env.GIT_AUTHOR_NAME = opts.identity.name;
