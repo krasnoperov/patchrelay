@@ -31,6 +31,13 @@ export interface CodexAppServerConfig {
   experimentalRawEvents?: boolean;
 }
 
+export interface GitSigningConfig {
+  gpgHome: string;
+  signingKey: string;
+  committerName: string;
+  committerEmail: string;
+}
+
 export interface PromptFileFragment {
   sourcePath: string;
   content: string;
@@ -94,6 +101,7 @@ export interface AppConfig {
   };
   runner: {
     gitBin: string;
+    gitSigning?: GitSigningConfig;
     codex: CodexAppServerConfig;
   };
   prompting: PatchRelayPromptingConfig;

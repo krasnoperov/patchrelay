@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
+import type { GitSigningConfig } from "./config-types.ts";
 
 /**
  * Unified GitHub App credential delivery for `git` and the `gh` CLI.
@@ -64,10 +65,11 @@ export async function writeGhHostsToken(
  * - `GH_CONFIG_DIR` points `gh` at the rotated bot config.
  * - `git` delegates github.com credentials to `gh auth git-credential` (an empty
  *   helper first clears any inherited/global helper, then ours is appended).
- * - `GIT_AUTHOR_*`/`GIT_COMMITTER_*` attribute commits to the bot without writing
- *   `user.name` into any repo config.
- * - `commit.gpgSign=false` prevents a developer's inherited global signing key from
- *   attaching their human identity to bot-authored commits.
+ * - `GIT_AUTHOR_*` attributes commits to the App identity. `GIT_COMMITTER_*` uses
+ *   that same identity unless an explicit signer supplies a separate committer.
+ * - Without an explicit signer, `commit.gpgSign=false` prevents a developer's
+ *   inherited global signing key from attaching their human identity to bot-authored
+ *   commits. With a signer, commits and tags are forced through that exact key.
  *
  * Note on token env vars: the daemon keeps `GH_TOKEN`/`GITHUB_TOKEN` fresh (rotated each
  * cycle) for in-process consumers that read them directly. They are stripped only when
@@ -78,23 +80,49 @@ export function buildGitHubCliAuthEnv(opts: {
   ghConfigDir: string;
   ghBin: string;
   identity?: GitHubBotIdentity;
+  signing?: GitSigningConfig;
 }): Record<string, string> {
   const env: Record<string, string> = {
     GH_CONFIG_DIR: opts.ghConfigDir,
     GIT_TERMINAL_PROMPT: "0",
-    GIT_CONFIG_COUNT: "3",
     GIT_CONFIG_KEY_0: `credential.https://${GITHUB_HOST}.helper`,
     GIT_CONFIG_VALUE_0: "",
     GIT_CONFIG_KEY_1: `credential.https://${GITHUB_HOST}.helper`,
     GIT_CONFIG_VALUE_1: `!${opts.ghBin} auth git-credential`,
-    GIT_CONFIG_KEY_2: "commit.gpgSign",
-    GIT_CONFIG_VALUE_2: "false",
   };
+  if (opts.signing) {
+    Object.assign(env, {
+      GNUPGHOME: opts.signing.gpgHome,
+      GIT_CONFIG_COUNT: "7",
+      GIT_CONFIG_KEY_2: "gpg.format",
+      GIT_CONFIG_VALUE_2: "openpgp",
+      GIT_CONFIG_KEY_3: "gpg.program",
+      GIT_CONFIG_VALUE_3: "/usr/bin/gpg",
+      GIT_CONFIG_KEY_4: "user.signingKey",
+      GIT_CONFIG_VALUE_4: `${opts.signing.signingKey}!`,
+      GIT_CONFIG_KEY_5: "commit.gpgSign",
+      GIT_CONFIG_VALUE_5: "true",
+      GIT_CONFIG_KEY_6: "tag.gpgSign",
+      GIT_CONFIG_VALUE_6: "true",
+      GIT_COMMITTER_NAME: opts.signing.committerName,
+      GIT_COMMITTER_EMAIL: opts.signing.committerEmail,
+    });
+  } else {
+    Object.assign(env, {
+      GIT_CONFIG_COUNT: "4",
+      GIT_CONFIG_KEY_2: "commit.gpgSign",
+      GIT_CONFIG_VALUE_2: "false",
+      GIT_CONFIG_KEY_3: "tag.gpgSign",
+      GIT_CONFIG_VALUE_3: "false",
+    });
+  }
   if (opts.identity) {
     env.GIT_AUTHOR_NAME = opts.identity.name;
     env.GIT_AUTHOR_EMAIL = opts.identity.email;
-    env.GIT_COMMITTER_NAME = opts.identity.name;
-    env.GIT_COMMITTER_EMAIL = opts.identity.email;
+    if (!opts.signing) {
+      env.GIT_COMMITTER_NAME = opts.identity.name;
+      env.GIT_COMMITTER_EMAIL = opts.identity.email;
+    }
   }
   return env;
 }
@@ -102,7 +130,7 @@ export function buildGitHubCliAuthEnv(opts: {
 /** Apply {@link buildGitHubCliAuthEnv} onto a process env object in place. */
 export function applyGitHubCliAuthEnv(
   target: NodeJS.ProcessEnv,
-  opts: { ghConfigDir: string; ghBin: string; identity?: GitHubBotIdentity },
+  opts: { ghConfigDir: string; ghBin: string; identity?: GitHubBotIdentity; signing?: GitSigningConfig },
 ): void {
   Object.assign(target, buildGitHubCliAuthEnv(opts));
 }
@@ -111,7 +139,8 @@ export function applyGitHubCliAuthEnv(
  * Build the environment for a long-lived child process (e.g. the Codex app-server).
  * `GH_TOKEN`/`GITHUB_TOKEN` are stripped so the child resolves credentials through the
  * inherited `GH_CONFIG_DIR` (re-read fresh on each call) instead of a token frozen at
- * spawn. The child still inherits the `gh` credential helper and bot identity.
+ * spawn. The child still inherits the `gh` credential helper, Git identity, and any
+ * configured signing environment.
  */
 export function buildAgentChildEnv(parentEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env = { ...parentEnv };

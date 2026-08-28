@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { accessSync, constants, existsSync, readFileSync, statSync } from "node:fs";
 import { isIP } from "node:net";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -96,6 +96,29 @@ const promptByRunTypeSchema = z.strictObject({
 });
 type PromptLayerConfig = z.infer<typeof promptLayerSchema>;
 
+const usableAbsoluteDirectorySchema = z.string().superRefine((value, context) => {
+  if (!path.isAbsolute(value)) {
+    context.addIssue({ code: "custom", message: "GPG home must be an absolute path" });
+    return;
+  }
+  try {
+    if (!statSync(value).isDirectory()) {
+      context.addIssue({ code: "custom", message: "GPG home must be a directory" });
+      return;
+    }
+    accessSync(value, constants.R_OK | constants.X_OK);
+  } catch {
+    context.addIssue({ code: "custom", message: "GPG home must be an existing, readable, searchable directory" });
+  }
+});
+
+const gitSigningSchema = z.strictObject({
+  gpg_home: usableAbsoluteDirectorySchema,
+  signing_key: z.string().regex(/^[0-9A-Fa-f]{40}$/, "Signing key must be a full 40-character hexadecimal fingerprint"),
+  committer_name: z.string().trim().min(1),
+  committer_email: z.string().trim().email(),
+});
+
 const configSchema = z.strictObject({
   server: z.object({
     bind: z.string().default("127.0.0.1"),
@@ -151,6 +174,7 @@ const configSchema = z.strictObject({
     }),
   runner: z.object({
     git_bin: z.string().default("git"),
+    git_signing: gitSigningSchema.optional(),
     codex: z.object({
       bin: z.string().default("codex"),
       args: z.array(z.string()).default(["app-server"]),
@@ -623,6 +647,16 @@ export function loadConfig(
     },
     runner: {
       gitBin: parsed.runner.git_bin,
+      ...(parsed.runner.git_signing
+        ? {
+            gitSigning: {
+              gpgHome: parsed.runner.git_signing.gpg_home,
+              signingKey: parsed.runner.git_signing.signing_key,
+              committerName: parsed.runner.git_signing.committer_name,
+              committerEmail: parsed.runner.git_signing.committer_email,
+            },
+          }
+        : {}),
       codex: {
         bin: parsed.runner.codex.bin,
         args: parsed.runner.codex.args,

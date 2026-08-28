@@ -125,6 +125,42 @@ Optional non-secret overrides such as `PATCHRELAY_CONFIG`, `PATCHRELAY_DB_PATH`,
 
 Keep these values machine-level. They belong in PatchRelay's own config files, not inside repository `.env` files.
 
+### Optional commit and tag signing
+
+PatchRelay leaves App-authored commits and tags unsigned by default and explicitly
+disables inherited global signing for both. To opt into OpenPGP signing, configure
+all four fields together in `patchrelay.json`:
+
+```json
+{
+  "runner": {
+    "git_signing": {
+      "gpg_home": "/absolute/path/to/dedicated-gpg-home",
+      "signing_key": "0123456789ABCDEF0123456789ABCDEF01234567",
+      "committer_name": "PatchRelay Bot",
+      "committer_email": "patchrelay-bot@example.com"
+    }
+  }
+}
+```
+
+`gpg_home` must be an accessible absolute directory and `signing_key` must be the
+full 40-character signing-subkey fingerprint, without a trailing `!`. PatchRelay
+adds the `!` when passing the key to Git so GPG cannot select another key. Missing,
+partial, or malformed groups fail configuration loading.
+Git signing also requires PatchRelay GitHub App authentication; startup rejects a
+signing configuration when the App is not configured.
+
+These identities remain separate: the GitHub App installation token authenticates
+GitHub operations, the App-derived identity remains the commit author, the configured
+name and email become the committer, and the configured subkey produces the signature.
+Signing is fail-closed: if the exact key or GPG agent is unavailable, Git fails instead
+of creating an unsigned commit or tag.
+
+An external mechanism must make the signing key available noninteractively in the
+configured GPG home. PatchRelay has no passphrase setting and must never receive the
+passphrase.
+
 Configure the Linear OAuth app settings and webhook categories in your Linear workspace settings. Configure the GitHub App webhook to send PR, review, check suite, check run, and push events to `${server.public_base_url}/webhooks/github`.
 
 ## 4. Configure Projects

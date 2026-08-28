@@ -153,6 +153,127 @@ test("loadConfig expands env vars, resolves paths, and honors runtime overrides"
   }
 });
 
+test("loadConfig accepts a complete Git signing group", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-signing-"));
+  try {
+    const configPath = path.join(baseDir, "patchrelay.json");
+    const gpgHome = path.join(baseDir, "gnupg");
+    mkdirSync(gpgHome, { mode: 0o700 });
+    writeConfigFixture(configPath, {
+      runner: {
+        git_signing: {
+          gpg_home: gpgHome,
+          signing_key: "0123456789ABCDEF0123456789ABCDEF01234567",
+          committer_name: " PatchRelay Bot ",
+          committer_email: " patchrelay-bot@example.com ",
+        },
+      },
+    });
+    const config = loadConfig(configPath, { profile: "cli" });
+    assert.deepEqual(config.runner.gitSigning, {
+      gpgHome,
+      signingKey: "0123456789ABCDEF0123456789ABCDEF01234567",
+      committerName: "PatchRelay Bot",
+      committerEmail: "patchrelay-bot@example.com",
+    });
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig rejects partial Git signing configuration", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-signing-partial-"));
+  try {
+    const configPath = path.join(baseDir, "patchrelay.json");
+    mkdirSync(path.join(baseDir, "gnupg"));
+    writeConfigFixture(configPath, {
+      runner: {
+        git_signing: {
+          gpg_home: path.join(baseDir, "gnupg"),
+          signing_key: "0123456789ABCDEF0123456789ABCDEF01234567",
+        },
+      },
+    });
+    assert.throws(() => loadConfig(configPath, { profile: "cli" }), /committer_name|committer_email/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig rejects malformed Git signing configuration", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-signing-malformed-"));
+  try {
+    const configPath = path.join(baseDir, "patchrelay.json");
+    writeConfigFixture(configPath, {
+      runner: {
+        git_signing: {
+          gpg_home: "relative/gnupg",
+          signing_key: "DEADBEEF!",
+          committer_name: " ",
+          committer_email: "not-an-email",
+        },
+      },
+    });
+    assert.throws(
+      () => loadConfig(configPath, { profile: "cli" }),
+      /GPG home must be an absolute path|40-character hexadecimal fingerprint|committer_name|committer_email/,
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig rejects an unusable GPG home", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-signing-home-"));
+  try {
+    const configPath = path.join(baseDir, "patchrelay.json");
+    writeConfigFixture(configPath, {
+      runner: {
+        git_signing: {
+          gpg_home: path.join(baseDir, "missing-gnupg"),
+          signing_key: "0123456789ABCDEF0123456789ABCDEF01234567",
+          committer_name: "PatchRelay Bot",
+          committer_email: "patchrelay-bot@example.com",
+        },
+      },
+    });
+    assert.throws(
+      () => loadConfig(configPath, { profile: "cli" }),
+      /GPG home must be an existing, readable, searchable directory/,
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig rejects a Git signing passphrase field without exposing its value", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-signing-passphrase-"));
+  try {
+    const configPath = path.join(baseDir, "patchrelay.json");
+    const gpgHome = path.join(baseDir, "gnupg");
+    mkdirSync(gpgHome, { mode: 0o700 });
+    writeConfigFixture(configPath, {
+      runner: {
+        git_signing: {
+          gpg_home: gpgHome,
+          signing_key: "0123456789ABCDEF0123456789ABCDEF01234567",
+          committer_name: "PatchRelay Bot",
+          committer_email: "patchrelay-bot@example.com",
+          passphrase: "must-not-leak",
+        },
+      },
+    });
+    assert.throws(
+      () => loadConfig(configPath, { profile: "cli" }),
+      (error: unknown) => error instanceof Error
+        && /Unrecognized key.*passphrase/s.test(error.message)
+        && !error.message.includes("must-not-leak"),
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("loadConfig defaults to the XDG config path when PATCHRELAY_CONFIG is unset", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-xdg-"));
   const configHome = path.join(baseDir, "config-home");

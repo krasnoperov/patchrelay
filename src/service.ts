@@ -202,6 +202,9 @@ export class PatchRelayService {
   }
 
   async start(): Promise<void> {
+    if (this.config.runner.gitSigning && !this.githubAppTokenManager) {
+      throw new Error("runner.git_signing requires PatchRelay GitHub App authentication");
+    }
     this.db.issueSessions.releaseExpiredIssueSessionLeases();
     this.sweepAbandonedWebhookEvents();
 
@@ -257,13 +260,22 @@ export class PatchRelayService {
       // Point gh + git at the bot config dir before the first rotation and before the
       // Codex app-server spawns (it inherits this process env). GH_TOKEN/GITHUB_TOKEN are
       // cleared so the rotated hosts.yml is the single source of truth.
-      applyGitHubCliAuthEnv(process.env, { ghConfigDir, ghBin });
+      applyGitHubCliAuthEnv(process.env, {
+        ghConfigDir,
+        ghBin,
+        ...(this.config.runner.gitSigning ? { signing: this.config.runner.gitSigning } : {}),
+      });
       await this.githubAppTokenManager.start();
       const identity = this.githubAppTokenManager.botIdentity();
       if (identity) {
         this.orchestrator.botIdentity = identity;
         // Re-apply with identity so bot commit attribution flows to git via env.
-        applyGitHubCliAuthEnv(process.env, { ghConfigDir, ghBin, identity });
+        applyGitHubCliAuthEnv(process.env, {
+          ghConfigDir,
+          ghBin,
+          identity,
+          ...(this.config.runner.gitSigning ? { signing: this.config.runner.gitSigning } : {}),
+        });
       }
       const ghAuthStatus = this.githubAppTokenManager.authStatus();
       this.runtime.setGithubAppAuthHealthy(ghAuthStatus.healthy, ghAuthStatus.lastRefreshError ?? undefined);
