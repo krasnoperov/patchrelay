@@ -6,6 +6,8 @@ import { getBuildInfo } from "./build-info.ts";
 import { getCodexStatusSnapshot } from "./codex-status.ts";
 import type { PatchRelayService } from "./service.ts";
 import type { AppConfig } from "./types.ts";
+import { registerFactoryApi, registerFactoryPage } from "./factory/routes.ts";
+import { createFactorySnapshotReader } from "./factory/snapshot.ts";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -29,6 +31,8 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
     encoding: false,
     runFirst: true,
   });
+
+  registerFactoryPage(app);
 
   app.get("/", async (_request, reply) => {
     return reply
@@ -144,6 +148,7 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
         staged Codex runs through <code>codex app-server</code> with durable thread history and read-only reports.
       </p>
       <div class="meta">
+        <span class="chip"><a href="/factory">Open Circuit City →</a></span>
         <span class="chip">Health: <a href="${config.server.healthPath}">${config.server.healthPath}</a></span>
         <span class="chip">Webhook: <code>${config.ingress.linearWebhookPath}</code></span>
         <span class="chip">Version: <code>${buildInfo.version}</code></span>
@@ -283,6 +288,10 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
   }
 
   if (managementRoutesEnabled) {
+    registerFactoryApi(app, createFactorySnapshotReader(config, service, {
+      mergeStewardUrl: process.env.PATCHRELAY_FACTORY_MERGE_STEWARD_URL,
+      reviewQuillUrl: process.env.PATCHRELAY_FACTORY_REVIEW_QUILL_URL,
+    }));
     const readCodexStatus = async () => {
       const status = await getCodexStatusSnapshot(config.runner.codex.bin);
       if (status.ok) return status;

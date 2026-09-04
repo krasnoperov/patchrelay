@@ -503,6 +503,7 @@ export class PatchRelayService {
     title?: string;
     statusNote?: string;
     projectId: string;
+    delegatedToPatchRelay: boolean;
     phase: string;
     blockedByCount: number;
     blockedByKeys: string[];
@@ -513,6 +514,7 @@ export class PatchRelayService {
     latestRunType?: string;
     latestRunStatus?: string;
     prNumber?: number;
+    prHeadSha?: string;
     prState?: string;
     prReviewState?: string;
     prCheckStatus?: string;

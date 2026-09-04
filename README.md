@@ -134,6 +134,7 @@ See the [merge-steward package README](./packages/merge-steward/README.md) for t
 - [Secrets](./docs/secrets.md) — systemd credentials, resolution order
 - [review-quill reference](./docs/review-quill.md) · [merge-steward reference](./docs/merge-steward.md)
 - [Dashboard guidance](./docs/dashboard-guidance.md) · [Design docs](./docs/design-docs/index.md)
+- [Circuit City](./docs/circuit-city.md) — interactive web factory, local demo, and service connections
 - [Contributing](./CONTRIBUTING.md) · [Security policy](./SECURITY.md)
 
 ## Status

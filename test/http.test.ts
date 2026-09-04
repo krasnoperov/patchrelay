@@ -1019,3 +1019,50 @@ test("http exposes OAuth state polling for CLI-driven OAuth completion", async (
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("factory data respects operator auth and management-route availability", async () => {
+  for (const mode of ["loopback", "remote", "disabled"] as const) {
+    const config = createConfig("/tmp/factory-http-test");
+    config.server.bind = mode === "loopback" ? "127.0.0.1" : "0.0.0.0";
+    config.operatorApi = { enabled: mode === "remote", bearerToken: "factory-token" };
+    const app = await buildHttpServer(config, {
+      getReadiness: () => ({ ready: true, linearConnected: true }),
+      listTrackedIssues: () => [],
+    } as never, pino({ enabled: false }));
+    try {
+      const page = await app.inject("/factory");
+      assert.equal(page.statusCode, 200);
+      assert.match(page.body, /Circuit City/);
+      assert.doesNotMatch(page.body, /factory-token|usertold/);
+      const response = await app.inject("/api/factory");
+      assert.equal(response.statusCode, mode === "loopback" ? 200 : mode === "remote" ? 401 : 404);
+      if (mode === "remote") {
+        const stream = await app.inject("/api/factory/stream");
+        assert.equal(stream.statusCode, 401);
+        const authorized = await app.inject({ url: "/api/factory", headers: { authorization: "Bearer factory-token" } });
+        assert.equal(authorized.statusCode, 200);
+        assert.equal(authorized.json().projects[0].id, "usertold");
+        assert.equal(authorized.headers["cache-control"], "no-store");
+      }
+    } finally { await app.close(); }
+  }
+});
+
+test("factory streams snapshots and releases connections on server shutdown", async () => {
+  const config = createConfig("/tmp/factory-stream-test");
+  const app = await buildHttpServer(config, {
+    getReadiness: () => ({ ready: true, linearConnected: true }), listTrackedIssues: () => [],
+  } as never, pino({ enabled: false }));
+  try {
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const response = await fetch(`${address}/api/factory/stream`, { signal: AbortSignal.timeout(5000) });
+    assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
+    const reader = response.body!.getReader();
+    const first = await reader.read();
+    const text = new TextDecoder().decode(first.value);
+    assert.ok(text.startsWith("data: "));
+    assert.equal(JSON.parse(text.slice(6)).projects[0].id, "usertold");
+    await app.close();
+    assert.equal((await reader.read()).done, true);
+  } finally { await app.close(); }
+});

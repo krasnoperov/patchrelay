@@ -99,6 +99,7 @@ export class TrackedIssueListQuery {
     latestRunType?: string;
     latestRunStatus?: string;
     prNumber?: number;
+    prHeadSha?: string;
     prState?: string;
     prReviewState?: string;
     prCheckStatus?: string;
@@ -264,6 +265,7 @@ export class TrackedIssueListQuery {
         ...(row.latest_run_type !== null ? { latestRunType: String(row.latest_run_type) } : {}),
         ...(row.latest_run_status !== null ? { latestRunStatus: String(row.latest_run_status) } : {}),
         ...(row.pr_number !== null ? { prNumber: Number(row.pr_number) } : {}),
+        ...(typeof row.pr_head_sha === "string" ? { prHeadSha: row.pr_head_sha } : {}),
         ...(row.pr_state !== null ? { prState: String(row.pr_state) } : {}),
         ...(row.pr_review_state !== null ? { prReviewState: String(row.pr_review_state) } : {}),
         ...(row.pr_check_status !== null ? { prCheckStatus: String(row.pr_check_status) } : {}),

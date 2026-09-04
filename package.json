@@ -37,17 +37,20 @@
   ],
   "scripts": {
     "dev": "node --watch --experimental-transform-types src/index.ts",
-    "build": "rm -rf dist && tsgo -p tsconfig.json && chmod +x dist/index.js && node scripts/write-build-info.mjs",
+    "build": "rm -rf dist && tsgo -p tsconfig.json && chmod +x dist/index.js && node scripts/write-build-info.mjs && pnpm build:factory",
     "prepack": "pnpm build",
     "start": "node dist/index.js serve",
     "doctor": "node dist/index.js doctor",
     "restart": "node dist/index.js service restart",
     "deploy": "pnpm pack --out /tmp/patchrelay-deploy.tgz && pnpm add -g /tmp/patchrelay-deploy.tgz && patchrelay service restart",
     "lint": "oxlint --ignore-path .gitignore .",
-    "typecheck": "tsgo -p tsconfig.json --noEmit",
+    "typecheck": "tsgo -p tsconfig.json --noEmit && tsgo -p web/factory/tsconfig.json",
     "check": "pnpm typecheck",
     "test": "node --experimental-transform-types --test 'test/**/*.test.ts'",
-    "ci": "pnpm lint && pnpm check && pnpm test && pnpm build"
+    "ci": "pnpm lint && pnpm check && pnpm test && pnpm build",
+    "build:factory": "node scripts/build-factory.mjs",
+    "factory:demo": "pnpm build:factory && node --experimental-transform-types scripts/factory-demo.ts",
+    "test:factory:browser": "pnpm build:factory && playwright test --config web/factory/playwright.config.ts"
   },
   "dependencies": {
     "fastify": "^5.12.1",
@@ -56,12 +59,16 @@
     "pino": "^10.3.1",
     "pino-logfmt": "^1.1.5",
     "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
     "@typescript/native-preview": "7.0.0-dev.20260527.1",
+    "esbuild": "^0.28.2",
     "oxlint": "^1.80.0"
   }
 }
