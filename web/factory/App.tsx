@@ -159,7 +159,7 @@ export function App() {
               Work, in motion<span>.</span>
             </h1>
             <p className="page-subtitle">
-              From first commit to main. Follow the circuit.
+              Open work. Recent merges. A clear view of what needs you.
             </p>
           </div>
           <div className="heading-actions">
@@ -213,6 +213,9 @@ export function App() {
               Advance PR-142 →
             </button>
           </div>
+        )}
+        {!demo && snapshot?.sources.some(s => s.id === "github" && s.state === "unavailable") && (
+          <div className="connection-banner" role="alert">Some repositories could not be checked on GitHub. Their PRs are temporarily omitted; retrying automatically.</div>
         )}
         {!demo && connection === "stale" && (
           <div className="connection-banner" role="alert">
@@ -298,7 +301,7 @@ export function App() {
               ? `${needsMe} tasks need attention`
               : "Implementation → Review → Merge queue → Main"}
           </span>
-          <span>SVG WORLD ENGINE</span>
+          <span>OPEN + MERGED IN 7 DAYS</span>
         </div>
       </main>
       <Inspector

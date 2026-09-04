@@ -6,7 +6,7 @@ const stages: { id: Station; label: string; detail: string }[] = [
   { id: "implementation", label: "Implementation", detail: "Building and repairing" },
   { id: "review", label: "Review", detail: "Checking the change" },
   { id: "queue", label: "Merge queue", detail: "Waiting to merge" },
-  { id: "main", label: "Main", detail: "Merged changes" },
+  { id: "main", label: "Main", detail: "Merged in the last 7 days" },
 ];
 const signals = { active: "Working", waiting: "Waiting", attention: "Needs attention", complete: "Complete" };
 
@@ -25,7 +25,7 @@ export function ProjectFlow({ project, selectedId, onSelect, attention, query, o
     <div className="flow-heading">
       <button onClick={onBack} aria-label="Fit all projects">← All projects</button>
       <h2>{project.name}</h2>
-      <p>Follow the numbered stages. Select a task for its review, checks, and queue status.</p>
+      <p>Open PRs and the last 7 days of merges. Select a task to see what happens next.</p>
       {repairs > 0 && <p className="flow-repairs">↶ {repairs} {repairs === 1 ? "task is" : "tasks are"} back in implementation for repairs.</p>}
     </div>
     <div className="flow-columns">

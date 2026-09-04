@@ -1,7 +1,7 @@
 # Circuit City
 
 Circuit City is a read-only web view of the software factory at `/factory`.
-It renders project districts and task stations in SVG, with a React inspector.
+It renders an SVG project overview and readable task columns within each project, with a React inspector.
 No 3D engine, generated artwork, or external asset CDN is required.
 
 ## Run a preview
@@ -51,8 +51,18 @@ Merge-steward's `/health` supplies repository IDs, then each repository's
 `/repos/:repoId/queue/watch` supplies queue entries and positions. Review-quill's
 `/watch` supplies review attempts. These requests happen on the backend, with a
 three-second timeout per request. Missing or failed services are labeled; no
-positions or connectivity are fabricated. GitHub/CI values are explicitly stored
-observations from PatchRelay, rather than a live GitHub health check.
+positions or connectivity are fabricated.
+
+GitHub PR lifecycle is read through the service's existing authenticated `gh` CLI,
+with a shared 60-second cache and up to three repository reads at a time. Open PRs
+remain visible regardless of age. Main shows only PRs merged in the last seven
+days, using the merge date rather than later comments or queue updates. Closed,
+unmerged PRs and older merges are omitted. Finished no-PR issues are omitted;
+other no-PR work is shown when active or updated in the last seven days.
+Queue and review history is matched to the current GitHub head before it can
+supply attention signals. A repository that cannot be checked is labeled
+unavailable and its PRs are temporarily omitted, rather than presenting old
+history as current work. CI details remain stored PatchRelay observations.
 
 One shared snapshot cache coalesces concurrent reads. `/api/factory/stream` emits
 server-sent snapshots approximately every five seconds. The browser reconnects

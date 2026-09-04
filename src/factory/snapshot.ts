@@ -1,8 +1,9 @@
 import { z } from "zod";
+import { createFactoryGitHubReader } from "./github.ts";
+import { buildCurrentFactoryProjects } from "./current-work.ts";
 import type { AppConfig } from "../types.ts";
 import type { PatchRelayService } from "../service.ts";
 import {
-  buildFactoryProjects,
   type QueueObservation,
   type ReviewObservation,
 } from "./model.ts";
@@ -48,6 +49,7 @@ export function createFactorySnapshotReader(
   service: Pick<PatchRelayService, "listTrackedIssues" | "getReadiness">,
   connections: FactoryConnections,
   fetcher: typeof fetch = fetch,
+  readGitHub = createFactoryGitHubReader(),
 ) {
   let cached: FactorySnapshot | undefined;
   let inFlight: Promise<FactorySnapshot> | undefined;
@@ -139,9 +141,14 @@ export function createFactorySnapshotReader(
     ]);
     const readiness = service.getReadiness();
     const issues = service.listTrackedIssues();
+    const repositories = await readGitHub([
+      ...config.projects.flatMap(p => p.github?.repoFullName ? [p.github.repoFullName] : []),
+      ...queues.map(q => q.repo), ...reviews.map(r => r.repo),
+    ]);
+    const missing = repositories.filter(r => !r.available).length;
     return {
       generatedAt: new Date().toISOString(),
-      projects: buildFactoryProjects(config.projects, issues, queues, reviews),
+      projects: buildCurrentFactoryProjects(config.projects, issues, queues, reviews, repositories),
       sources: [
         {
           id: "patchrelay",
@@ -160,9 +167,10 @@ export function createFactorySnapshotReader(
         {
           id: "github",
           name: "GitHub / CI",
-          state: "observed",
-          detail:
-            "Stored GitHub webhook observations; not a live GitHub health check",
+          state: missing ? "unavailable" : "connected",
+          detail: missing
+            ? `${missing} repositories could not be verified; their PRs are temporarily omitted`
+            : "Open PRs and merges from the last 7 days; GitHub lifecycle refreshed every 60 seconds. CI details are stored observations.",
         },
         ...sources.sort((a, b) => a.id.localeCompare(b.id)),
       ],

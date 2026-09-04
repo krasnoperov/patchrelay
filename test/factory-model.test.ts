@@ -255,6 +255,7 @@ test("snapshot uses discovered repo IDs, preserves working queues during partial
         });
       return new Response("Unavailable", { status: 503 });
     }) as typeof fetch,
+    async () => [{ repo: "org/factory", available: true, prs: [{ number: 9, title: "Queued work", state: "open", head: { sha: "current" }, draft: false, updated_at: queue.updatedAt, merged_at: null }] }],
   );
   const snapshot = await read();
   assert.ok(paths.includes("/repos/custom-id/queue/watch"));
@@ -272,7 +273,7 @@ test("snapshot sources fail independently, deduplicate concurrent reads, and nev
   const read = createFactorySnapshotReader(
     { projects } as never,
     {
-      listTrackedIssues: () => [issue()],
+      listTrackedIssues: () => [issue({ updatedAt: new Date().toISOString() })],
       getReadiness: () => ({ ready: true, linearConnected: true }) as never,
     },
     {
@@ -285,6 +286,7 @@ test("snapshot sources fail independently, deduplicate concurrent reads, and nev
         throw new Error("private internal detail");
       return new Response(JSON.stringify({ attempts: [] }));
     }) as typeof fetch,
+    async () => [{ repo: "org/factory", available: true, prs: [] }],
   );
   const [a, b] = await Promise.all([read(), read()]);
   assert.equal(a, b);

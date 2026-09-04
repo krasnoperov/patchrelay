@@ -25,7 +25,7 @@ export const stationLabels: Record<Station, string> = {
   queue: "Merge queue",
   main: "Main",
 };
-export const palette = ["#86efc5", "#a6a2ff", "#f2be7a", "#78c5ec"];
+export const palette = ["#a6bbd0", "#adb7c6", "#b8b5aa", "#a1b7bd"];
 const glyphs = { active: "●", waiting: "○", complete: "✓", attention: "⚠" };
 
 export function projectOrigin(index: number) {
