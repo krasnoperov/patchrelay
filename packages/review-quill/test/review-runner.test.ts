@@ -70,34 +70,59 @@ function completedTurns(messages: string[]): { id: string; turns: Array<Record<s
   };
 }
 
-test("ReviewRunner sends the canonical output schema on initial and corrective turns", async () => {
-  const starts: StartTurnOptions[] = [];
-  const fakeCodex = {
-    start: async () => {},
-    stop: async () => {},
-    startThread: async () => ({ id: "thread-structured", turns: [] }),
-    startTurn: async (options: StartTurnOptions) => {
-      starts.push(options);
-      return { turnId: `turn-${starts.length}`, status: "running" };
+function withNativeReview<T extends {
+  startReview?: (...args: never[]) => unknown;
+  startTurn: (...args: never[]) => unknown;
+  readThread: (...args: never[]) => unknown;
+  subscribeNotifications?: (listener: (notification: CodexAppServerNotification) => void) => () => void;
+}>(fake: T): T {
+  if (fake.startReview) return fake;
+  let normalizing = false;
+  let reviewThreadId = "native-review-thread";
+  const notificationListeners = new Set<(notification: CodexAppServerNotification) => void>();
+  return {
+    ...fake,
+    startReview: async (options: { threadId: string }) => {
+      reviewThreadId = options.threadId;
+      for (const listener of notificationListeners) {
+        listener({ method: "turn/completed", params: { threadId: reviewThreadId, turn: { id: "native-review-turn" } } });
+      }
+      return { turnId: "native-review-turn", status: "running", reviewThreadId };
     },
-    readThread: async () => completedTurns(starts.length === 1 ? ["not json"] : ["not json", validReviewMessage]),
-  };
-  const runner = new ReviewRunner(minimalConfig(), { warn() {}, info() {}, child: () => ({}) } as never, fakeCodex as never, async () => {});
-
-  const result = await runner.review({
-    prompt: "Review this PR.",
-    workspace: { worktreePath: "/tmp/review-quill-test" },
-  } as never);
-
-  assert.equal(result.verdict.verdict, "approve");
-  assert.equal(starts.length, 2);
-  assert.deepEqual(starts[0]?.outputSchema, REVIEW_VERDICT_JSON_SCHEMA);
-  assert.deepEqual(starts[1]?.outputSchema, REVIEW_VERDICT_JSON_SCHEMA);
-});
+    ...(fake.subscribeNotifications
+      ? {
+        subscribeNotifications: (listener: (notification: CodexAppServerNotification) => void) => {
+          notificationListeners.add(listener);
+          const unsubscribe = fake.subscribeNotifications!(listener);
+          return () => {
+            notificationListeners.delete(listener);
+            unsubscribe();
+          };
+        },
+      }
+      : {}),
+    startTurn: async (...args: never[]) => {
+      normalizing = true;
+      return await fake.startTurn(...args);
+    },
+    readThread: async (...args: never[]) => {
+      if (!normalizing) {
+        return {
+          id: reviewThreadId,
+          turns: [{
+            id: "native-review-turn",
+            status: "completed",
+            items: [{ type: "exitedReviewMode", id: "native-review-turn", review: "Native review completed." }],
+          }],
+        };
+      }
+      return await fake.readThread(...args);
+    },
+  } as T;
+}
 
 test("ReviewRunner performs native review before schema-constrained normalization", async () => {
   const config = minimalConfig();
-  config.codex.reviewMode = "native-two-pass";
   const threadStarts: unknown[] = [];
   const reviewStarts: unknown[] = [];
   const turnStarts: StartTurnOptions[] = [];
@@ -138,14 +163,13 @@ test("ReviewRunner performs native review before schema-constrained normalizatio
   const runner = new ReviewRunner(
     config,
     { warn() {}, info() {}, child: () => ({}) } as never,
-    fakeCodex as never,
+    withNativeReview(fakeCodex) as never,
     async () => {},
   );
 
   const result = await runner.review({
-    prompt: "legacy structured prompt",
     developerInstructions: "stable review policy",
-    nativeReviewPrompt: "review exact base..HEAD",
+    reviewPrompt: "review exact base..HEAD",
     workspace: { worktreePath: "/tmp/native-review" },
     pr: { headSha: "head-sha" },
     diff: { inventory: [], patches: [] },
@@ -165,7 +189,6 @@ test("ReviewRunner performs native review before schema-constrained normalizatio
 
 test("ReviewRunner correlates native review completion emitted from the reviewer child thread", async () => {
   const config = minimalConfig();
-  config.codex.reviewMode = "native-two-pass";
   const notifications = notificationHarness();
   let normalizationStarted = false;
   const fakeCodex = {
@@ -218,14 +241,13 @@ test("ReviewRunner correlates native review completion emitted from the reviewer
   const runner = new ReviewRunner(
     config,
     { warn() {}, info() {}, child: () => ({}) } as never,
-    fakeCodex as never,
+    withNativeReview(fakeCodex) as never,
     async () => {},
   );
 
   const result = await runner.review({
-    prompt: "legacy",
     developerInstructions: "policy",
-    nativeReviewPrompt: "review",
+    reviewPrompt: "review",
     workspace: { worktreePath: "/tmp/native-review" },
     pr: { headSha: "head" },
     diff: { inventory: [], patches: [] },
@@ -239,7 +261,6 @@ test("ReviewRunner correlates native review completion emitted from the reviewer
 
 test("ReviewRunner classifies a failed native review as soon as its turn completes", async () => {
   const config = minimalConfig();
-  config.codex.reviewMode = "native-two-pass";
   const notifications = notificationHarness();
   const sleeps: number[] = [];
   let readCalls = 0;
@@ -277,15 +298,14 @@ test("ReviewRunner classifies a failed native review as soon as its turn complet
   const runner = new ReviewRunner(
     config,
     { warn() {}, info() {}, child: () => ({}) } as never,
-    fakeCodex as never,
+    withNativeReview(fakeCodex) as never,
     async (ms) => { sleeps.push(ms); },
   );
 
   await assert.rejects(
     () => runner.review({
-      prompt: "legacy",
       developerInstructions: "policy",
-      nativeReviewPrompt: "review",
+      reviewPrompt: "review",
       workspace: { worktreePath: "/tmp/native-review" },
       pr: { headSha: "head" },
       diff: { inventory: [], patches: [] },
@@ -314,6 +334,11 @@ test("ReviewRunner forks once, sends the bounded follow-up prompt, and keeps a c
       forkCalls.push(options);
       return { id: "forked-thread", turns: [{ id: "source-turn", status: "completed", items: [] }] };
     },
+    startReview: async (options: { threadId: string }) => ({
+      turnId: "fork-review-turn",
+      status: "running",
+      reviewThreadId: options.threadId,
+    }),
     startTurn: async (options: StartTurnOptions) => {
       starts.push(options);
       return { turnId: `fork-turn-${starts.length}`, status: "running" };
@@ -322,6 +347,7 @@ test("ReviewRunner forks once, sends the bounded follow-up prompt, and keeps a c
       id: "forked-thread",
       turns: [
         { id: "source-turn", status: "completed", items: [] },
+        { id: "fork-review-turn", status: "completed", items: [{ type: "exitedReviewMode", id: "fork-review-turn", review: "Review completed." }] },
         { id: "fork-turn-1", status: "completed", items: [{ type: "agentMessage", text: "not json" }] },
         ...(starts.length === 2
           ? [{ id: "fork-turn-2", status: "completed", items: [{ type: "agentMessage", text: validReviewMessage }] }]
@@ -332,13 +358,14 @@ test("ReviewRunner forks once, sends the bounded follow-up prompt, and keeps a c
   const runner = new ReviewRunner(
     config,
     { warn() {}, info: (fields: Record<string, unknown>) => promptLogs.push(fields), debug() {}, child: () => ({}) } as never,
-    fakeCodex as never,
+    withNativeReview(fakeCodex) as never,
     async () => {},
   );
 
   const result = await runner.review({
-    prompt: "FULL CURRENT REVIEW PROMPT",
-    followUpPrompt: "BOUNDED FOLLOW-UP REVIEW PROMPT",
+    developerInstructions: "stable review policy",
+    reviewPrompt: "FULL CURRENT REVIEW PROMPT",
+    followUpReviewPrompt: "BOUNDED FOLLOW-UP REVIEW PROMPT",
     workspace: { worktreePath: "/tmp/current-head" },
     pr: { headSha: "current-head" },
     diff: {
@@ -355,18 +382,19 @@ test("ReviewRunner forks once, sends the bounded follow-up prompt, and keeps a c
     promptFingerprint: "prompt-1",
   });
 
-  assert.deepEqual(forkCalls, [{ threadId: "source-thread", lastTurnId: "source-turn", cwd: "/tmp/current-head" }]);
-  assert.equal(starts[0]?.input, "BOUNDED FOLLOW-UP REVIEW PROMPT");
+  assert.deepEqual(forkCalls, [{ threadId: "source-thread", lastTurnId: "source-turn", cwd: "/tmp/current-head", developerInstructions: "stable review policy" }]);
+  assert.match(starts[0]?.input ?? "", /normalization only/i);
   assert.match(starts[1]?.input ?? "", /previous response could not be parsed/i);
   assert.deepEqual(starts.map((entry) => entry.threadId), ["forked-thread", "forked-thread"]);
   assert.equal(result.threadId, "forked-thread");
   assert.equal(result.turnId, "fork-turn-2");
   assert.deepEqual(progress, [
+    { threadId: "forked-thread", turnId: "fork-review-turn" },
     { threadId: "forked-thread", turnId: "fork-turn-1" },
     { threadId: "forked-thread", turnId: "fork-turn-2" },
   ]);
   assert.deepEqual(promptLogs[0], {
-    reviewMode: "structured-turn",
+    reviewMode: "native-two-pass",
     threadStartMode: "forked",
     promptMode: "follow_up",
     threadId: "forked-thread",
@@ -383,7 +411,7 @@ test("ReviewRunner forks once, sends the bounded follow-up prompt, and keeps a c
   });
 });
 
-test("ReviewRunner keeps the default-off path fresh even when given a candidate", async () => {
+test("ReviewRunner keeps the fresh path when thread forking is disabled", async () => {
   let forkCalls = 0;
   let freshCalls = 0;
   const starts: StartTurnOptions[] = [];
@@ -397,42 +425,50 @@ test("ReviewRunner keeps the default-off path fresh even when given a candidate"
     },
     readThread: async () => completedTurns([validReviewMessage]),
   };
-  const runner = new ReviewRunner(minimalConfig(), { warn() {}, child: () => ({}) } as never, fakeCodex as never, async () => {});
+  const runner = new ReviewRunner(minimalConfig(), { warn() {}, child: () => ({}) } as never, withNativeReview(fakeCodex) as never, async () => {});
 
-  await runner.review({ prompt: "Review", workspace: { worktreePath: "/tmp/current" } } as never, {}, {
+  await runner.review({ reviewPrompt: "Review", workspace: { worktreePath: "/tmp/current" } } as never, {}, {
     sourceAttemptId: 1, threadId: "source", lastTurnId: "turn", priorHeadSha: "prior-head", promptFingerprint: "prompt-1",
   });
   assert.equal(forkCalls, 0);
   assert.equal(freshCalls, 1);
-  assert.equal(starts[0]?.input, "Review");
+  assert.match(starts[0]?.input ?? "", /normalization only/i);
 });
 
 test("ReviewRunner sends the byte-identical full prompt after a fork source fallback", async () => {
   const config = minimalConfig();
   config.codex.forkPriorReviewThread = true;
   const starts: StartTurnOptions[] = [];
+  const reviewStarts: Array<{ instructions: string }> = [];
   const promptLogs: Array<Record<string, unknown>> = [];
   const fakeCodex = {
     start: async () => {}, stop: async () => {},
     forkThread: async () => { throw new CodexJsonRpcError(-32600, "No rollout found for thread id source", null); },
     startThread: async () => ({ id: "fresh-thread", turns: [] }),
+    startReview: async (options: { instructions: string }) => {
+      reviewStarts.push(options);
+      return { turnId: "review-turn", status: "running", reviewThreadId: "fresh-thread" };
+    },
     startTurn: async (options: StartTurnOptions) => {
       starts.push(options);
       return { turnId: "turn-1", status: "running" };
     },
     readThread: async () => ({
       id: "fresh-thread",
-      turns: [{ id: "turn-1", status: "completed", items: [{ type: "agentMessage", text: validReviewMessage }] }],
+      turns: [
+        { id: "review-turn", status: "completed", items: [{ type: "exitedReviewMode", id: "review-turn", review: "Review completed." }] },
+        { id: "turn-1", status: "completed", items: [{ type: "agentMessage", text: validReviewMessage }] },
+      ],
     }),
   };
   const runner = new ReviewRunner(config, {
     warn() {}, debug() {}, info: (fields: Record<string, unknown>) => promptLogs.push(fields), child: () => ({}),
-  } as never, fakeCodex as never, async () => {});
+  } as never, withNativeReview(fakeCodex) as never, async () => {});
   const fullPrompt = "FULL PROMPT WITH PATCH BODY SENTINEL";
 
   await runner.review({
-    prompt: fullPrompt,
-    followUpPrompt: "FOLLOW-UP MUST NOT BE SENT",
+    reviewPrompt: fullPrompt,
+    followUpReviewPrompt: "FOLLOW-UP MUST NOT BE SENT",
     workspace: { worktreePath: "/tmp/current" },
     pr: { headSha: "current-head" },
     diff: { inventory: [], patches: [{ patch: "PATCH BODY SENTINEL" }] },
@@ -444,7 +480,7 @@ test("ReviewRunner sends the byte-identical full prompt after a fork source fall
     promptFingerprint: "prompt-1",
   });
 
-  assert.equal(starts[0]?.input, fullPrompt);
+  assert.equal(reviewStarts[0]?.instructions, fullPrompt);
   assert.equal(promptLogs[0]?.threadStartMode, "fresh_fallback");
   assert.equal(promptLogs[0]?.promptMode, "full");
   assert.equal(promptLogs[0]?.guidancePathCount, 0);
@@ -474,7 +510,7 @@ test("ReviewRunner disables unsupported thread/fork once across concurrent start
   };
   const runner = new ReviewRunner(config, {
     warn: (...args: unknown[]) => warnings.push(String(args.at(-1))), debug() {}, child: () => ({}),
-  } as never, fakeCodex as never, async () => {});
+  } as never, withNativeReview(fakeCodex) as never, async () => {});
   const start = (runner as unknown as {
     startReviewThread(cwd: string, candidate: unknown, signal?: AbortSignal): Promise<{ thread: { id: string }; mode: string }>;
   }).startReviewThread.bind(runner);
@@ -503,7 +539,7 @@ test("ReviewRunner falls back for the real missing source rollout payload withou
     },
     startThread: async () => ({ id: `fresh-${++freshCalls}`, turns: [] }),
   };
-  const runner = new ReviewRunner(config, { warn() {}, debug() {}, child: () => ({}) } as never, fakeCodex as never, async () => {});
+  const runner = new ReviewRunner(config, { warn() {}, debug() {}, child: () => ({}) } as never, withNativeReview(fakeCodex) as never, async () => {});
   const start = (runner as unknown as {
     startReviewThread(cwd: string, candidate: unknown, signal?: AbortSignal): Promise<{ thread: { id: string }; mode: string }>;
   }).startReviewThread.bind(runner);
@@ -611,14 +647,14 @@ test("ReviewRunner keeps waiting when a Codex thread read times out", async () =
   const runner = new ReviewRunner(
     minimalConfig(),
     { warn: () => {}, child: () => ({}) } as never,
-    fakeCodex as never,
+    withNativeReview(fakeCodex) as never,
     async (ms) => {
       sleeps.push(ms);
     },
   );
 
   const result = await runner.review({
-    prompt: "Review this PR.",
+    reviewPrompt: "Review this PR.",
     workspace: { worktreePath: "/tmp/review-quill-test" },
   } as never, { onThreadProgress: (value) => progress.push(value) });
 
@@ -627,7 +663,10 @@ test("ReviewRunner keeps waiting when a Codex thread read times out", async () =
   assert.equal(result.verdict.verdict, "approve");
   assert.equal(readCalls, 2);
   assert.deepEqual(sleeps, [1_500]);
-  assert.deepEqual(progress, [{ threadId: "thread-1", turnId: "turn-1" }]);
+  assert.deepEqual(progress, [
+    { threadId: "thread-1", turnId: "native-review-turn" },
+    { threadId: "thread-1", turnId: "turn-1" },
+  ]);
 });
 
 test("ReviewRunner buffers an early matching completion and ignores unrelated or duplicate notifications", async () => {
@@ -654,12 +693,12 @@ test("ReviewRunner buffers an early matching completion and ignores unrelated or
   const runner = new ReviewRunner(
     minimalConfig(),
     { warn() {}, info() {}, child: () => ({}) } as never,
-    fakeCodex as never,
+    withNativeReview(fakeCodex) as never,
     async (ms) => { sleeps.push(ms); },
   );
 
   const result = await runner.review({
-    prompt: "Review this PR.",
+    reviewPrompt: "Review this PR.",
     workspace: { worktreePath: "/tmp/review-quill-test" },
   } as never);
 
@@ -689,13 +728,13 @@ test("ReviewRunner falls back to polling after the notification watchdog", async
   const runner = new ReviewRunner(
     minimalConfig(),
     { warn() {}, info() {}, child: () => ({}) } as never,
-    fakeCodex as never,
+    withNativeReview(fakeCodex) as never,
     async (ms) => { sleeps.push(ms); },
     0,
   );
 
   const result = await runner.review({
-    prompt: "Review this PR.",
+    reviewPrompt: "Review this PR.",
     workspace: { worktreePath: "/tmp/review-quill-test" },
   } as never);
 
@@ -724,12 +763,12 @@ test("ReviewRunner applies terminal error classification after a completion noti
   const runner = new ReviewRunner(
     minimalConfig(),
     { warn() {}, child: () => ({}) } as never,
-    fakeCodex as never,
+    withNativeReview(fakeCodex) as never,
     async () => {},
   );
 
   await assert.rejects(
-    runner.review({ prompt: "Review", workspace: { worktreePath: "/tmp/review-quill-test" } } as never),
+    runner.review({ reviewPrompt: "Review", workspace: { worktreePath: "/tmp/review-quill-test" } } as never),
     /Review turn ended with status failed: sandbox denied write access/,
   );
   assert.equal(notifications.listenerCount(), 0);
@@ -774,14 +813,14 @@ test("ReviewRunner retries Codex thread start when rollout jsonl is empty", asyn
   const runner = new ReviewRunner(
     minimalConfig(),
     { warn: () => {}, child: () => ({}) } as never,
-    fakeCodex as never,
+    withNativeReview(fakeCodex) as never,
     async (ms) => {
       sleeps.push(ms);
     },
   );
 
   const result = await runner.review({
-    prompt: "Review this PR.",
+    reviewPrompt: "Review this PR.",
     workspace: { worktreePath: "/tmp/review-quill-test" },
   } as never);
 
@@ -821,12 +860,12 @@ test("ReviewRunner continues when bounded thread progress recording fails", asyn
       warn: (_data: unknown, message: string) => warnings.push(message),
       child: () => ({}),
     } as never,
-    fakeCodex as never,
+    withNativeReview(fakeCodex) as never,
     async () => {},
   );
 
   const result = await runner.review({
-    prompt: "Review this PR.",
+    reviewPrompt: "Review this PR.",
     workspace: { worktreePath: "/tmp/review-quill-test" },
   } as never, {
     onThreadProgress: () => { throw new Error("database is read-only"); },
@@ -834,6 +873,7 @@ test("ReviewRunner continues when bounded thread progress recording fails", asyn
 
   assert.equal(result.verdict.verdict, "approve");
   assert.deepEqual(warnings, [
+    "Failed to record Codex thread progress; continuing review",
     "Failed to record Codex thread progress; continuing review",
   ]);
 });
@@ -880,18 +920,21 @@ test("ReviewRunner records bounded progress once when a turn starts", async () =
   const runner = new ReviewRunner(
     minimalConfig(),
     { warn: () => {}, child: () => ({}) } as never,
-    fakeCodex as never,
+    withNativeReview(fakeCodex) as never,
     async () => {},
   );
 
   const result = await runner.review({
-    prompt: "Review this PR.",
+    reviewPrompt: "Review this PR.",
     workspace: { worktreePath: "/tmp/review-quill-test" },
   } as never, { onThreadProgress: (value) => progress.push(value) });
 
   assert.equal(result.verdict.verdict, "approve");
   assert.equal(readCalls, 3);
-  assert.deepEqual(progress, [{ threadId: "thread-progress", turnId: "turn-progress" }]);
+  assert.deepEqual(progress, [
+    { threadId: "thread-progress", turnId: "native-review-turn" },
+    { threadId: "thread-progress", turnId: "turn-progress" },
+  ]);
 });
 
 test("ReviewRunner retries Codex turn start when rollout jsonl is empty", async () => {
@@ -933,14 +976,14 @@ test("ReviewRunner retries Codex turn start when rollout jsonl is empty", async 
   const runner = new ReviewRunner(
     minimalConfig(),
     { warn: () => {}, child: () => ({}) } as never,
-    fakeCodex as never,
+    withNativeReview(fakeCodex) as never,
     async (ms) => {
       sleeps.push(ms);
     },
   );
 
   const result = await runner.review({
-    prompt: "Review this PR.",
+    reviewPrompt: "Review this PR.",
     workspace: { worktreePath: "/tmp/review-quill-test" },
   } as never);
 
@@ -972,12 +1015,12 @@ test("ReviewRunner retries normalization while the native review turn is closing
   const runner = new ReviewRunner(
     minimalConfig(),
     { warn() {}, child: () => ({}) } as never,
-    fakeCodex as never,
+    withNativeReview(fakeCodex) as never,
     async (ms) => { sleeps.push(ms); },
   );
 
   const result = await runner.review({
-    prompt: "Review this PR.",
+    reviewPrompt: "Review this PR.",
     workspace: { worktreePath: "/tmp/review-quill-test" },
   } as never);
 
@@ -1021,7 +1064,7 @@ test("ReviewRunner interrupts a running Codex turn when the review signal aborts
   const runner = new ReviewRunner(
     minimalConfig(),
     { warn: () => {}, child: () => ({}) } as never,
-    fakeCodex as never,
+    withNativeReview(fakeCodex) as never,
     async (ms) => {
       sleeps.push(ms);
     },
@@ -1029,7 +1072,7 @@ test("ReviewRunner interrupts a running Codex turn when the review signal aborts
 
   await assert.rejects(
     () => runner.review({
-      prompt: "Review this PR.",
+      reviewPrompt: "Review this PR.",
       workspace: { worktreePath: "/tmp/review-quill-test" },
     } as never, { signal: controller.signal, onThreadProgress: (value) => progress.push(value) }),
     (error: unknown) => {
@@ -1044,7 +1087,10 @@ test("ReviewRunner interrupts a running Codex turn when the review signal aborts
   assert.equal(interruptCalls, 1);
   assert.equal(readCalls, 1);
   assert.deepEqual(sleeps, []);
-  assert.deepEqual(progress, [{ threadId: "thread-1", turnId: "turn-1" }]);
+  assert.deepEqual(progress, [
+    { threadId: "thread-1", turnId: "native-review-turn" },
+    { threadId: "thread-1", turnId: "turn-1" },
+  ]);
 });
 
 test("ReviewRunner interrupts once when cancellation arrives before startTurn responds and removes its listener", async () => {
@@ -1070,13 +1116,13 @@ test("ReviewRunner interrupts once when cancellation arrives before startTurn re
   const runner = new ReviewRunner(
     minimalConfig(),
     { warn() {}, child: () => ({}) } as never,
-    fakeCodex as never,
+    withNativeReview(fakeCodex) as never,
     async () => {},
   );
 
   await assert.rejects(
     runner.review(
-      { prompt: "Review", workspace: { worktreePath: "/tmp/review-quill-test" } } as never,
+      { reviewPrompt: "Review", workspace: { worktreePath: "/tmp/review-quill-test" } } as never,
       { signal: controller.signal },
     ),
     (error: unknown) => error instanceof ReviewRunInterruptedError && error.turnId === "turn-1",
@@ -1112,7 +1158,7 @@ test("ReviewRunner fails fast when the Codex app-server reports a failed turn", 
   const runner = new ReviewRunner(
     minimalConfig(),
     { warn: () => {}, child: () => ({}) } as never,
-    fakeCodex as never,
+    withNativeReview(fakeCodex) as never,
     async (ms) => {
       sleeps.push(ms);
     },
@@ -1120,13 +1166,16 @@ test("ReviewRunner fails fast when the Codex app-server reports a failed turn", 
 
   await assert.rejects(
     () => runner.review({
-      prompt: "Review this PR.",
+      reviewPrompt: "Review this PR.",
       workspace: { worktreePath: "/tmp/review-quill-test" },
     } as never, { onThreadProgress: (value) => progress.push(value) }),
     /Review turn ended with status failed/,
   );
   assert.deepEqual(sleeps, []);
-  assert.deepEqual(progress, [{ threadId: "thread-failed", turnId: "turn-failed" }]);
+  assert.deepEqual(progress, [
+    { threadId: "thread-failed", turnId: "native-review-turn" },
+    { threadId: "thread-failed", turnId: "turn-failed" },
+  ]);
 });
 
 test("ReviewRunner does not retry non-materialization app-server start failures", async () => {
@@ -1145,7 +1194,7 @@ test("ReviewRunner does not retry non-materialization app-server start failures"
   const runner = new ReviewRunner(
     minimalConfig(),
     { warn: () => {}, child: () => ({}) } as never,
-    fakeCodex as never,
+    withNativeReview(fakeCodex) as never,
     async (ms) => {
       sleeps.push(ms);
     },
@@ -1153,7 +1202,7 @@ test("ReviewRunner does not retry non-materialization app-server start failures"
 
   await assert.rejects(
     () => runner.review({
-      prompt: "Review this PR.",
+      reviewPrompt: "Review this PR.",
       workspace: { worktreePath: "/tmp/review-quill-test" },
     } as never),
     /exited before accepting/,
@@ -1176,7 +1225,7 @@ function runnerWithCompletedTurn(turn: Record<string, unknown>): ReviewRunner {
   return new ReviewRunner(
     minimalConfig(),
     { warn: () => {}, child: () => ({}) } as never,
-    fakeCodex as never,
+    withNativeReview(fakeCodex) as never,
     async () => {},
   );
 }
@@ -1191,7 +1240,7 @@ test("ReviewRunner throws a typed capacity error when the turn completed with a 
 
   await assert.rejects(
     () => runner.review({
-      prompt: "Review this PR.",
+      reviewPrompt: "Review this PR.",
       workspace: { worktreePath: "/tmp/review-quill-test" },
     } as never),
     (error: unknown) => {
@@ -1215,7 +1264,7 @@ test("ReviewRunner surfaces the real turn error text when there is no assistant 
 
   await assert.rejects(
     () => runner.review({
-      prompt: "Review this PR.",
+      reviewPrompt: "Review this PR.",
       workspace: { worktreePath: "/tmp/review-quill-test" },
     } as never),
     /Review run completed without an assistant message: stream disconnected before completion/,
@@ -1231,7 +1280,7 @@ test("ReviewRunner keeps the generic message when the empty turn carries no erro
 
   await assert.rejects(
     () => runner.review({
-      prompt: "Review this PR.",
+      reviewPrompt: "Review this PR.",
       workspace: { worktreePath: "/tmp/review-quill-test" },
     } as never),
     /Review run completed without an assistant message$/,
@@ -1248,7 +1297,7 @@ test("ReviewRunner classifies a failed turn carrying a usage-limit error as a ca
 
   await assert.rejects(
     () => runner.review({
-      prompt: "Review this PR.",
+      reviewPrompt: "Review this PR.",
       workspace: { worktreePath: "/tmp/review-quill-test" },
     } as never),
     (error: unknown) => error instanceof CodexCapacityError,
@@ -1265,7 +1314,7 @@ test("ReviewRunner includes the turn error text when a turn fails for non-capaci
 
   await assert.rejects(
     () => runner.review({
-      prompt: "Review this PR.",
+      reviewPrompt: "Review this PR.",
       workspace: { worktreePath: "/tmp/review-quill-test" },
     } as never),
     /Review turn ended with status failed: sandbox denied write access/,

@@ -186,6 +186,8 @@ When a PR is already completed and someone asks for more work, use the agent ses
 
 Requested-changes repairs fetch review feedback from GitHub directly on every repair run. If a reviewer says "fix the PR comments" in Linear, PatchRelay still reads the review body, inline comments, reviewer, reviewed head, and current PR head from GitHub before launching the repair. If that refresh is degraded, the worker prompt says so explicitly and instructs the worker to re-read the GitHub review before changing code.
 
+Reviewer authority is bounded by the delegated issue. PatchRelay repairs demonstrated defects required by that issue, but refuses to add newly requested capabilities, optional hardening, hypothetical failure modes, or explicitly excluded work to the active PR. When the concern is still useful, PatchRelay creates a new undelegated Linear follow-up in the same team and project, relates it to the source issue, records the review link and deferral rationale, and returns the unchanged PR scope on a fresh review head. PatchRelay does not search for similar work or deduplicate, prioritize, or triage the follow-up.
+
 ## Taking a run over manually
 
 When the agent cannot make progress and you need to drive the worktree yourself:

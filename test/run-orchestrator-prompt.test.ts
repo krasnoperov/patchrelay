@@ -44,18 +44,12 @@ test("implementation prompt keeps a concise scaffold with workflow pointer and p
     const prompt = buildInitialRunPrompt({ issue: createIssue(), runType: "implementation", repoPath: baseDir });
 
     assert.match(prompt, /## Task/);
-    assert.match(prompt, /## Constraints/);
-    assert.match(prompt, /Stay inside the delegated task/);
     assert.match(prompt, /## Workflow/);
     assert.match(prompt, /Read and follow `IMPLEMENTATION_WORKFLOW\.md` in the repository for task-specific behavior/);
     assert.match(prompt, /## Publish/);
-    assert.match(prompt, /If this is code-delivery work, publish before stopping: commit, push the issue branch, and open or update the PR\./);
-    assert.match(prompt, /## Final Self-Review Before Push/);
-    assert.match(prompt, /Before you open or update the PR, do one brief reviewer-minded pass on the current head\./);
-    assert.match(prompt, /Fix any likely in-scope blocker you can see now: missing edge-case handling, broken adjacent invariant in the touched flow/);
-    assert.match(prompt, /Name 2-4 concrete invariants most likely to regress in the touched flow, confirm which file or path enforces each one, and verify at least one adjacent path you did not edit directly\./);
-    assert.match(prompt, /If you changed schema, enums, shared vocabulary, or normalization helpers, inspect the main read\/write paths that can bypass the new abstraction and verify every affected flow before publishing\./);
-    assert.match(prompt, /If the issue explicitly allows a non-PR outcome, complete that outcome clearly; otherwise publish before stopping\./);
+    assert.match(prompt, /If the issue explicitly allows a non-PR outcome, complete that outcome clearly instead of inventing a PR\./);
+    assert.doesNotMatch(prompt, /Stay inside the delegated task/);
+    assert.doesNotMatch(prompt, /## Final Self-Review Before Push/);
     assert.doesNotMatch(prompt, /## PR Body Contract/);
     assert.doesNotMatch(prompt, /## Follow-up Turn/);
   } finally {
@@ -144,7 +138,7 @@ test("initial implementation goal preserves only the explicit Goal section", () 
   assert.doesNotMatch(goal, /Acceptance criteria/);
 });
 
-test("repair prompts publish to the existing PR branch with concise self-review guidance", () => {
+test("repair prompts add only run-specific publication guidance", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
   try {
     writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), "# Implementation Workflow\n");
@@ -161,9 +155,6 @@ test("repair prompts publish to the existing PR branch with concise self-review 
     });
 
     assert.match(prompt, /## Publish/);
-    assert.match(prompt, /Restore and publish on the existing PR branch: commit and push the same branch\./);
-    assert.match(prompt, /Do not open a new PR/);
-    assert.match(prompt, /A PR-less stop is not a successful outcome for a repair run unless a genuine external blocker prevents any correct push\./);
     assert.match(prompt, /After pushing a new head, stop and report the pushed commit\./);
     assert.match(prompt, /Do not poll or watch GitHub for CI, review, mergeability, review-quill, merge-steward, approval, or merge completion\./);
     assert.match(prompt, /Do not run blocking wait commands such as `gh pr checks --watch`/);
@@ -171,10 +162,8 @@ test("repair prompts publish to the existing PR branch with concise self-review 
     assert.match(prompt, /If the issue text asks you to watch CI, wait for approval, or merge after checks pass, treat that as PatchRelay service responsibility/);
     assert.match(prompt, /Keep reactive repairs narrow: do not run TypeScript, lint, full test suites, Playwright, browser UI suites, or screenshot capture/);
     assert.match(prompt, /If the repair is a tiny reviewer-requested edit, commit and push the fresh head without broad local verification\./);
-    assert.match(prompt, /Before changing code or config, reproduce the failure on the exact failing head or identify the concrete log signature that justifies the fix\./);
-    assert.match(prompt, /If the exact failing head does not reproduce locally and the logs do not support a scoped fix, prefer a rerun-only repair over speculative branch changes\./);
-    assert.match(prompt, /## Final Self-Review Before Push/);
-    assert.match(prompt, /Before you push the existing PR branch, do one brief reviewer-minded pass on the current head\./);
+    assert.doesNotMatch(prompt, /Restore and publish on the existing PR branch/);
+    assert.doesNotMatch(prompt, /## Final Self-Review Before Push/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -239,8 +228,8 @@ test("fresh-head queue repair prompt overrides patch-id no-op guard", () => {
     });
 
     assert.match(prompt, /This queue repair requires a fresh PR head SHA/);
-    assert.match(prompt, /If the patch-id matches, preserve the approved diff and still push a new head SHA/);
-    assert.match(prompt, /create an empty queue-kick commit/);
+    assert.match(prompt, /If the patch-id matches, preserve the current diff and still push a new head SHA/);
+    assert.match(prompt, /create an empty repair-handoff commit/);
     assert.doesNotMatch(prompt, /If they match, do not push — finish the run as a no-op/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -304,7 +293,7 @@ test("orchestration prompts keep child-reuse and convergence babysitting guidanc
       },
     });
 
-    assert.match(prompt, /## Constraints/);
+    assert.doesNotMatch(prompt, /Stay inside the delegated task/);
     assert.match(prompt, /This issue is orchestration work\. Coordinate convergence instead of duplicating child implementation\./);
     assert.match(prompt, /Inspect the current child set before acting\. Reuse existing child issues when they already cover the needed slices instead of creating duplicates\./);
     assert.match(prompt, /Before creating child issues, list existing children and recent parent context, normalize the intended child purpose, and update or reuse matching issues\./);
@@ -434,20 +423,23 @@ test("review_fix prompt keeps concise reviewer context plus structured comments"
       },
     });
 
-    assert.match(prompt, /## Constraints/);
     assert.match(prompt, /## Current Context/);
     assert.match(prompt, /Requested changes on the existing PR branch\./);
     assert.match(prompt, /Review ID: 901/);
     assert.match(prompt, /Reviewed commit: abc123def456/);
     assert.match(prompt, /Inline review comments captured: 1/);
-    assert.match(prompt, /Do not push a commit that produces a patch-id-equivalent diff just to make the fix unmistakable\./);
+    assert.match(prompt, /Complete the requested-changes repair by pushing a newer PR head\./);
     assert.match(prompt, /src\/frontend\/app\/sessionSchema\.ts:1526 \(RIGHT\)/);
     assert.match(prompt, /Blank totals should not produce a leader\./);
-    assert.match(prompt, /Goal: restore review readiness on the current PR branch\. Push a newer head only when the fix actually changes the diff/);
+    assert.match(prompt, /Goal: restore review readiness on the current PR branch and push a newer head before returning it to review\./);
     assert.match(prompt, /Address the real concern behind the feedback and verify nearby invariants in the touched flow before you publish\./);
-    assert.match(prompt, /For each review comment, identify the resource, epoch, or token it touches[\s\S]*enumerate the other transitions that share that same resource, and verify each one before pushing/);
-    assert.match(prompt, /## Final Self-Review Before Push/);
-    assert.match(prompt, /Fix any likely in-scope blocker you can see now: missing edge-case handling, broken adjacent invariant in the touched flow/);
+    assert.match(prompt, /Do not implement a newly requested capability, optional hardening, hypothetical failure mode, or explicitly excluded work in this PR merely because a reviewer marked it blocking\./);
+    assert.match(prompt, /refuse it for this PR and create a new Linear issue in the same team and project, related to the current issue/);
+    assert.match(prompt, /do not delegate it\./);
+    assert.match(prompt, /Do not search for similar work, deduplicate it, prioritize it, or triage it; another owner handles that later\./);
+    assert.match(prompt, /If every requested change is deferred, leave the PR diff unchanged and use the fresh-head repair-handoff path/);
+    assert.match(prompt, /Inspect only the directly relevant call paths needed to verify the concern and the in-scope fix\./);
+    assert.doesNotMatch(prompt, /## Final Self-Review Before Push/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -698,7 +690,7 @@ test("buildRunPrompt applies extra instructions and section replacement without 
     assert.match(prompt, /## Extra Instructions/);
     assert.match(prompt, /Use the repo's rollout checklist\./);
     assert.match(prompt, /## Task/);
-    assert.match(prompt, /## Constraints/);
+    assert.doesNotMatch(prompt, /Stay inside the delegated task/);
     assert.match(prompt, /## Workflow/);
     assert.match(prompt, /Read and follow `IMPLEMENTATION_WORKFLOW\.md` in the repository for task-specific behavior/);
     assert.match(prompt, /Use the existing publication contract/);

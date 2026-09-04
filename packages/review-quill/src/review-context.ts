@@ -1,15 +1,12 @@
 import type { Logger } from "pino";
 import type { GitHubClient } from "./github-client.ts";
 import type { PullRequestSummary, ReviewContext, ReviewQuillRepositoryConfig } from "./types.ts";
-import { loadReviewQuillRepoPrompting } from "./customization.ts";
 import { buildDiffContext } from "./diff-context/index.ts";
 import { buildPromptContext } from "./prompt-context/index.ts";
 import {
-  renderFollowUpReviewPrompt,
   renderNativeFollowUpReviewPrompt,
   renderNativeReviewPrompt,
   renderReviewDeveloperInstructions,
-  renderReviewPrompt,
 } from "./prompt-builder/index.ts";
 import { findDisallowedReviewPromptSectionIds, findUnknownReviewPromptSectionIds } from "./prompt-builder/render.ts";
 import { materializeReviewWorkspace } from "./review-workspace/index.ts";
@@ -38,23 +35,6 @@ export function revalidatePriorThreadForPrompt(
   promptPr: PullRequestSummary,
 ): PriorReviewThreadCandidate | undefined {
   return candidate?.promptFingerprint === buildPromptFingerprint(promptPr) ? candidate : undefined;
-}
-
-function mergePromptCustomization(
-  base: ReviewContext["promptCustomization"],
-  override: ReviewContext["promptCustomization"] | undefined,
-): ReviewContext["promptCustomization"] {
-  return {
-    ...(override?.extraInstructions
-      ? { extraInstructions: override.extraInstructions }
-      : base.extraInstructions
-      ? { extraInstructions: base.extraInstructions }
-      : {}),
-    replaceSections: {
-      ...base.replaceSections,
-      ...override?.replaceSections,
-    },
-  };
 }
 
 export async function buildReviewContext(params: {
@@ -101,17 +81,13 @@ export async function buildReviewContext(params: {
       params.selfLogin,
       priorThread?.completedAt,
     );
-    const repoPromptCustomization = loadReviewQuillRepoPrompting({
-      repoRoot: materialized.workspace.worktreePath,
-      logger: params.logger,
-    });
     const baseContext = {
       workspaceMode: "checkout" as const,
       workspace: materialized.workspace,
       repo: params.repo,
       pr: promptPr,
       diff,
-      promptCustomization: mergePromptCustomization(params.prompting, repoPromptCustomization),
+      promptCustomization: params.prompting,
       promptContext,
     };
     const unknownPromptSections = findUnknownReviewPromptSectionIds(baseContext.promptCustomization.replaceSections);
@@ -128,23 +104,17 @@ export async function buildReviewContext(params: {
         "Review Quill prompt customization attempted to replace non-overridable sections",
       );
     }
-    const prompt = renderReviewPrompt(baseContext);
-    const followUpPrompt = priorThread
-      ? renderFollowUpReviewPrompt(baseContext, priorThread.priorHeadSha)
-      : undefined;
     const developerInstructions = renderReviewDeveloperInstructions(baseContext);
-    const nativeReviewPrompt = renderNativeReviewPrompt(baseContext);
-    const nativeFollowUpReviewPrompt = priorThread
+    const reviewPrompt = renderNativeReviewPrompt(baseContext);
+    const followUpReviewPrompt = priorThread
       ? renderNativeFollowUpReviewPrompt(baseContext, priorThread.priorHeadSha)
       : undefined;
     return {
       context: {
         ...baseContext,
-        prompt,
         developerInstructions,
-        nativeReviewPrompt,
-        ...(followUpPrompt ? { followUpPrompt } : {}),
-        ...(nativeFollowUpReviewPrompt ? { nativeFollowUpReviewPrompt } : {}),
+        reviewPrompt,
+        ...(followUpReviewPrompt ? { followUpReviewPrompt } : {}),
       },
       dispose: materialized.dispose,
       ...(priorThread ? { priorThread } : {}),

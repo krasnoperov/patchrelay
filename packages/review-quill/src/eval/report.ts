@@ -24,7 +24,7 @@ export function renderEvalReport(params: {
     `Result: ${allPassed ? "PASS" : "FAIL"}`,
     `Cases: ${passed}/${params.outcomes.length} passed`,
     `Started: ${params.startedAt}`,
-    `Mode: ${params.config.codex.reviewMode ?? "structured-turn"}`,
+    "Mode: native-two-pass",
     `Model: ${params.config.codex.model ?? "default"}`,
     ...(params.sourceCommit ? [`Source commit: ${params.sourceCommit}`] : []),
     "Runs per case: 1",

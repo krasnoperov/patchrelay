@@ -68,9 +68,8 @@ Review Quill prompt order:
 
 1. built-in sections from `packages/review-quill/src/prompt-builder/render.ts`
 2. install-level prompt config from `review-quill.json`
-3. repo-level prompt config from `.patchrelay/review-quill.json`
-4. PR and diff context
-5. repo guidance docs
+3. PR and diff context
+4. repo guidance docs
 
 ## PatchRelay Shape
 
@@ -87,7 +86,6 @@ The per-turn PatchRelay prompt is intentionally lean and usually contains only:
 
 - header (`Issue`, `Title`, `Branch`, `PR`)
 - `## Task` containing the complete Linear description unchanged
-- `## Constraints`
 - `## Current Context` when needed
 - `## Workflow`
 - `## Publish`
@@ -154,20 +152,6 @@ PatchRelay repo-local prompt config:
 }
 ```
 
-Review Quill repo-local prompt config:
-
-```json
-{
-  "version": 1,
-  "prompt": {
-    "extraInstructionsFile": ".patchrelay/prompts/review-policy.md",
-    "replaceSections": {
-      "review-rubric": ".patchrelay/prompts/review-rubric.md"
-    }
-  }
-}
-```
-
 Paths are resolved relative to the repo root.
 
 ## Replaceable Sections
@@ -184,7 +168,7 @@ Review Quill allows replacing only:
 
 - `review-rubric`
 
-Review Quill relies on Codex to load the applicable `AGENTS.md` instruction chain. Additional configured or PR-linked Markdown guidance is passed as checkout paths, not copied into the turn prompt.
+Review Quill prompt overrides are install-level only. A pull request cannot replace the rubric used to review itself. Review Quill relies on Codex to load the applicable `AGENTS.md` instruction chain; additional configured Markdown guidance is passed as checkout paths, not copied into the turn prompt.
 
 Unknown section ids are ignored and logged as warnings. Known but non-overridable sections are also ignored and logged.
 

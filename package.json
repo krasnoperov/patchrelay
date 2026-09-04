@@ -47,6 +47,7 @@
     "typecheck": "tsgo -p tsconfig.json --noEmit",
     "check": "pnpm typecheck",
     "test": "node --experimental-transform-types --test 'test/**/*.test.ts'",
+    "eval:patchrelay": "node --experimental-transform-types src/eval/patchrelay-prompt.ts",
     "ci": "pnpm lint && pnpm check && pnpm test && pnpm build"
   },
   "dependencies": {

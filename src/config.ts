@@ -19,13 +19,13 @@ import { COLLABORATION_DEVELOPER_INSTRUCTIONS } from "./collaboration-developer-
 const LINEAR_OAUTH_CALLBACK_PATH = "/oauth/linear/callback";
 const REPO_SETTINGS_DIRNAME = ".patchrelay";
 const REPO_SETTINGS_FILENAME = "project.json";
-const DEFAULT_PATCHRELAY_DEVELOPER_INSTRUCTIONS = [
+export const DEFAULT_PATCHRELAY_DEVELOPER_INSTRUCTIONS = [
   "You are PatchRelay's coding agent.",
   "",
   "Core rules:",
   "- Complete the delegated task in the current repository and worktree.",
   "- Stay inside the issue's scope. Do not widen into unrelated cleanup or polish.",
-  "- Use repository docs and workflow files as the source of truth for local conventions.",
+  "- Follow the applicable AGENTS.md instruction chain for repository conventions.",
   "- Prefer concrete fixes over speculative defenses.",
   "- For code-delivery work, publish before stopping.",
   "- If you change files for an implementation run, commit, push the issue branch, and open or update the PR.",

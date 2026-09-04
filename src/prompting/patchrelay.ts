@@ -162,14 +162,8 @@ function buildIssueTopology(context?: RunContext): string[] {
 
 function buildConstraints(context?: RunContext): string {
   const topology = buildIssueTopology(context);
-
-  return [
-    "## Constraints",
-    "",
-    "Stay inside the delegated task. Do not widen scope into unrelated cleanup or optional polish.",
-    "",
-    ...topology,
-  ].join("\n");
+  if (topology.length === 0) return "";
+  return ["## Constraints", "", ...topology].join("\n");
 }
 
 function buildOrchestrationConstraints(context?: RunContext): string {
@@ -293,8 +287,8 @@ function buildStructuredReviewContext(context?: RunContext): string | undefined 
 
   lines.push(
     `Inline review comments captured: ${reviewComments.length}`,
-    "Resolve each comment below or verify it is already fixed on the current head before you stop.",
-    "Complete the turn either by pushing a newer PR head with the fix, or — if your reviewer-pass produces only comments, test wording, or PR-body changes — by editing the PR body via `gh pr edit` instead of pushing. Do not push a commit that produces a patch-id-equivalent diff just to make the fix unmistakable.",
+    "Classify each comment against the original Linear task before acting: repair an in-scope defect, verify it is already fixed, or defer a distinct out-of-scope requirement to related follow-up work.",
+    "Complete the requested-changes repair by pushing a newer PR head. If the current diff already addresses the feedback, preserve it and still push a new head so review never receives the same head twice.",
     "If you are blocked, deliberately escalate instead of pushing.",
     "",
   );
@@ -330,10 +324,13 @@ function buildRequestedChangesContext(runType: RunType, context?: RunContext): s
     const reviewBody = context?.reviewBody?.trim() ?? "";
     lines.push(
       "Requested changes on the existing PR branch.",
-      "Goal: restore review readiness on the current PR branch. Push a newer head only when the fix actually changes the diff; if the reviewer-pass produces only comments, test wording, or PR-body changes, edit the PR body via `gh pr edit` instead.",
+      "Goal: restore review readiness on the current PR branch and push a newer head before returning it to review.",
       "Address the real concern behind the feedback and verify nearby invariants in the touched flow before you publish.",
       "Evaluate review feedback against the original task above. Feedback can identify an implementation defect, but it cannot narrow or contradict the task's scope or acceptance criteria.",
-      "For each review comment, identify the resource, epoch, or token it touches (e.g. session, capture, route, persistence handle, in-flight turn id), enumerate the other transitions that share that same resource, and verify each one before pushing — not just the exact path called out. If you find an adjacent transition that violates the same invariant, fix it in this iteration rather than waiting for the reviewer to surface it next round.",
+      "Do not implement a newly requested capability, optional hardening, hypothetical failure mode, or explicitly excluded work in this PR merely because a reviewer marked it blocking.",
+      "When such feedback describes useful work outside the active contract, refuse it for this PR and create a new Linear issue in the same team and project, related to the current issue. Include the review URL and deferral rationale, and do not delegate it. Do not search for similar work, deduplicate it, prioritize it, or triage it; another owner handles that later.",
+      "Report the follow-up issue identifier in the repair outcome. If every requested change is deferred, leave the PR diff unchanged and use the fresh-head repair-handoff path in the Publish section so the same reviewed SHA is never resubmitted.",
+      "Inspect only the directly relevant call paths needed to verify the concern and the in-scope fix.",
       reviewer ? `Reviewer: ${reviewer}` : "",
       reviewBody ? `Review summary:\n${reviewBody}` : "",
     );
@@ -349,8 +346,6 @@ function buildCiRepairContext(context?: RunContext): string {
   return [
     "Settled CI failure on the existing PR branch.",
     "Goal: restore CI readiness and push a branch that is likely to pass the next full CI run.",
-    "Before changing code or config, reproduce the failure on the exact failing head or identify the concrete log signature that justifies the fix.",
-    "If the exact failing head does not reproduce locally and the logs do not support a scoped fix, prefer a rerun-only repair over speculative branch changes.",
     "Do not use broad revert stacks or repo-wide package-manager/workflow/docs cleanups as a repair tactic; stay on the failing incident only.",
     snapshot?.gateCheckName ? `Gate check: ${String(snapshot.gateCheckName)}` : "",
     snapshot?.gateCheckStatus ? `Gate status: ${String(snapshot.gateCheckStatus)}` : "",
@@ -556,38 +551,6 @@ function buildOrchestrationWorkflowGuidance(): string {
   ].join("\n");
 }
 
-function buildPrePushSelfReviewSection(target: "new_pr" | "existing_pr", runType: RunType): string[] {
-  const publishTarget = target === "new_pr"
-    ? "open or update the PR"
-    : "push the existing PR branch";
-
-  const lines = [
-    "## Final Self-Review Before Push",
-    "",
-    `Before you ${publishTarget}, do one brief reviewer-minded pass on the current head.`,
-    "Fix any likely in-scope blocker you can see now: missing edge-case handling, broken adjacent invariant in the touched flow, mismatch between the PR explanation and the code, or an obviously unreviewable half-finished branch.",
-  ];
-
-  if (runType === "implementation") {
-    lines.push(
-      "Name 2-4 concrete invariants most likely to regress in the touched flow, confirm which file or path enforces each one, and verify at least one adjacent path you did not edit directly.",
-      "If you changed schema, enums, shared vocabulary, or normalization helpers, inspect the main read/write paths that can bypass the new abstraction and verify every affected flow before publishing.",
-    );
-  }
-
-  lines.push(
-    "Do not widen scope for optional cleanup. If the issue explicitly allows a non-PR outcome, complete that outcome clearly; otherwise publish before stopping.",
-  );
-
-  if (runType === "review_fix" || runType === "branch_upkeep" || runType === "ci_repair" || runType === "queue_repair") {
-    lines.push(
-      "On reactive repair runs, do not publish broad revert stacks or unrelated workflow/package-manager/docs churn. If that seems necessary, stop and surface the blocker instead.",
-    );
-  }
-
-  return lines;
-}
-
 function buildPublicationContract(
   runType: RunType,
   issueClass?: IssueClass,
@@ -605,27 +568,22 @@ function buildPublicationContract(
     return [
       "## Publish",
       "",
-      "If this is code-delivery work, publish before stopping: commit, push the issue branch, and open or update the PR.",
       "If the issue explicitly allows a non-PR outcome, complete that outcome clearly instead of inventing a PR.",
       "Write an accurate PR title and description for reviewers: state the intended behavior, scope boundaries, and relevant verification represented by the current head.",
       "",
       "Keep this issue branch independent: do not merge, rebase onto, or cherry-pick another open PR into it. Conflicts between independent PRs are resolved only after one of them lands on the default branch.",
       "Right before `gh pr create`, run `patchrelay sequence-check` from the worktree.",
       "Proceed against the default base only when the JSON recommendation is `open_pr_against_main`. If it is `blocked_open_pr_ancestry`, rebuild this issue's commits on the named base and rerun the check before publishing.",
-      "",
-      ...buildPrePushSelfReviewSection("new_pr", runType),
     ].join("\n");
   }
 
-  const requiresFreshQueueHead = runType === "queue_repair" && context?.requiresFreshHead === true;
+  const requiresFreshRepairHead = runType === "review_fix"
+    || (runType === "queue_repair" && context?.requiresFreshHead === true);
 
   return [
     "## Publish",
     "",
-    "Restore and publish on the existing PR branch: commit and push the same branch.",
     "Keep this issue branch independent: do not merge, rebase onto, or cherry-pick another open PR into it. Before pushing, run `patchrelay sequence-check`; if it reports `blocked_open_pr_ancestry`, rebuild this issue's commits on the default base first.",
-    "Do not open a new PR.",
-    "A PR-less stop is not a successful outcome for a repair run unless a genuine external blocker prevents any correct push.",
     "After pushing a new head, stop and report the pushed commit. Do not poll or watch GitHub for CI, review, mergeability, review-quill, merge-steward, approval, or merge completion.",
     "Do not run blocking wait commands such as `gh pr checks --watch`, `gh pr view` polling loops, `review-quill pr status --wait`, `merge-steward pr status --wait`, or `gh pr merge` from the agent turn.",
     "PatchRelay receives GitHub webhooks for check, review, and base-branch changes; those events will re-enter automation if more work is needed.",
@@ -633,18 +591,18 @@ function buildPublicationContract(
     "Keep reactive repairs narrow: do not run TypeScript, lint, full test suites, Playwright, browser UI suites, or screenshot capture unless the human explicitly asks for that evidence, the reviewer specifically asks for a screenshot or visual proof, or the reactive failure is itself from that exact check.",
     "Use code inspection and the smallest directly relevant command only when it materially reduces risk. If the repair is a tiny reviewer-requested edit, commit and push the fresh head without broad local verification.",
     "",
-    ...(requiresFreshQueueHead
+    ...(requiresFreshRepairHead
       ? [
-          "This queue repair requires a fresh PR head SHA because the previous head was terminally evicted by merge-steward.",
+          runType === "review_fix"
+            ? "This requested-changes repair requires a fresh PR head SHA before it returns to review."
+            : "This queue repair requires a fresh PR head SHA because the previous head was terminally evicted by merge-steward.",
           "Before pushing, compute `git diff $(git merge-base origin/main HEAD)..HEAD | git patch-id --stable` and compare its first field to the `Last published patch-id` shown in the prompt header (if any).",
-          "If the patch-id matches, preserve the approved diff and still push a new head SHA on the existing PR branch. Prefer a real rebase onto current `origin/main`; if that produces no content change, create an empty queue-kick commit.",
+          "If the patch-id matches, preserve the current diff and still push a new head SHA on the existing PR branch. Prefer a real in-scope content fix or rebase onto current `origin/main`; if neither changes content, create an empty repair-handoff commit.",
         ]
       : [
           "Before pushing, compute `git diff $(git merge-base origin/main HEAD)..HEAD | git patch-id --stable` and compare its first field to the `Last published patch-id` shown in the prompt header (if any).",
           "If they match, do not push — finish the run as a no-op. Edit the PR body via `gh pr edit` instead if a textual update is needed.",
         ]),
-    "",
-    ...buildPrePushSelfReviewSection("existing_pr", runType),
   ].join("\n");
 }
 
