@@ -45,7 +45,8 @@ export function buildCurrentFactoryProjects(
         updatedAt: pr.updated_at, prNumber: pr.number, prUrl: `https://github.com/${pr.repo}/pull/${pr.number}`, headSha: pr.head.sha } satisfies FactoryTask;
       project.tasks.push(task);
     }
-    task.updatedAt = pr.merged_at ?? pr.updated_at;
+    const prUpdatedAt = pr.merged_at ?? pr.updated_at;
+    if (Date.parse(prUpdatedAt) > Date.parse(task.updatedAt)) task.updatedAt = prUpdatedAt;
     if (!task.issueKey) task.title = pr.title;
     if (pr.merged_at) {
       task.station = "main";

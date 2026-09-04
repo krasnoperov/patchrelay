@@ -73,3 +73,14 @@ test("GitHub reader retries after its cache expires and reports failures without
   assert.deepEqual(failed.prs, []);
   assert.doesNotMatch(JSON.stringify(failed), /credential/);
 });
+
+
+test("tracked issue updates continue to refresh inspector details after GitHub reconciliation", () => {
+  for (const merged_at of [null, "2026-09-05T09:00:00Z"]) {
+    const repositories = [{ repo, available: true, prs: [pr(9, { state: merged_at ? "closed" as const : "open" as const, merged_at })] }];
+    const build = (updatedAt: string) => buildCurrentFactoryProjects(configs, [issue({ prNumber: 9, prHeadSha: "current", updatedAt })], [], [], repositories, now)[0]!.tasks[0]!;
+    assert.equal(build("2026-09-05T11:00:00Z").updatedAt, "2026-09-05T11:00:00Z");
+    assert.equal(build("2026-09-05T11:05:00Z").updatedAt, "2026-09-05T11:05:00Z");
+    assert.equal(build("2026-09-05T08:00:00Z").updatedAt, merged_at ?? "2026-09-05T10:00:00Z");
+  }
+});
