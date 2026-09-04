@@ -18,6 +18,7 @@ const queueSchema = z.object({
       headSha: z.string(),
       status: z.string(),
       position: z.number(),
+      priority: z.number().default(0),
       updatedAt: z.string(),
       prTitle: z.string().nullish(),
     }),

@@ -19,7 +19,7 @@ export interface FactoryTask {
   headSha?: string;
   agent?: string;
   review?: string;
-  queue?: { status: string; position: number; headSha: string };
+  queue?: { status: string; position?: number; headSha: string };
   checks?: { passed: number; failed: number; pending: number; total: number };
 }
 

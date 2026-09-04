@@ -11,6 +11,7 @@ export interface QueueObservation {
   headSha: string;
   status: string;
   position: number;
+  priority?: number;
   updatedAt: string;
   title?: string | undefined;
 }
@@ -52,6 +53,20 @@ export function buildFactoryProjects(
   queues: QueueObservation[] = [],
   reviews: ReviewObservation[] = [],
 ): FactoryProject[] {
+  // position is a lifetime admission counter. Pick the latest admission per PR,
+  // then rank active entries in the same priority/position order as the steward.
+  const latestQueues = new Map<string, QueueObservation>();
+  for (const queue of [...queues].sort((a, b) => a.position - b.position || a.updatedAt.localeCompare(b.updatedAt))) {
+    latestQueues.set(`${queue.repo}#${queue.prNumber}`, queue);
+  }
+  const queueRanks = new Map<QueueObservation, number>();
+  const repoRanks = new Map<string, number>();
+  for (const queue of [...latestQueues.values()].filter((q) => activeQueueStates.has(q.status))
+    .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0) || a.position - b.position)) {
+    const rank = (repoRanks.get(queue.repo) ?? 0) + 1;
+    repoRanks.set(queue.repo, rank);
+    queueRanks.set(queue, rank);
+  }
   const projects = new Map<string, FactoryProject>(
     configs.map((config) => [
       config.id,
@@ -121,34 +136,12 @@ export function buildFactoryProjects(
           r.headSha === task.headSha,
       )
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
-    if (review) {
-      task.review = review.conclusion ?? review.status;
-      if (
-        review.status === "running" &&
-        task.station === "review" &&
-        task.signal === "waiting" &&
-        !paused
-      )
-        task.signal = "active";
-    }
-    const queue = queues
-      .filter(
-        (q) =>
-          q.repo === project.repo &&
-          q.prNumber === task.prNumber &&
-          q.headSha === task.headSha,
-      )
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
-    if (queue) applyQueue(task, queue);
+    if (review) applyReview(task, review);
+    const queue = latestQueues.get(`${project.repo}#${task.prNumber}`);
+    if (queue && queue.headSha === task.headSha) applyQueue(task, queue, queueRanks.get(queue));
     project.tasks.push(task);
   }
   // Queue-only PRs also belong in the world, including repos with no Linear issues.
-  const latestQueues = new Map<string, QueueObservation>();
-  for (const queue of [...queues].sort((a, b) =>
-    a.updatedAt.localeCompare(b.updatedAt),
-  )) {
-    latestQueues.set(`${queue.repo}#${queue.prNumber}`, queue);
-  }
   for (const queue of latestQueues.values()) {
     let project = [...projects.values()].find((p) => p.repo === queue.repo);
     if (!project) {
@@ -177,7 +170,7 @@ export function buildFactoryProjects(
       prUrl: `https://github.com/${queue.repo}/pull/${queue.prNumber}`,
       headSha: queue.headSha,
     };
-    applyQueue(task, queue);
+    applyQueue(task, queue, queueRanks.get(queue));
     project.tasks.push(task);
   }
   const latestReviews = new Map<string, ReviewObservation>();
@@ -204,23 +197,17 @@ export function buildFactoryProjects(
       (task) => task.prNumber === review.prNumber,
     );
     if (existing) {
-      if (existing.headSha === review.headSha)
-        existing.review = review.conclusion ?? review.status;
+      if (existing.headSha === review.headSha) applyReview(existing, review);
       continue;
     }
-    project.tasks.push({
+    const task: FactoryTask = {
       id: `${project.id}:pr-${review.prNumber}`,
       projectId: project.id,
       key: `#${review.prNumber}`,
       title: `Pull request #${review.prNumber}`,
       station: "review",
       phase: "External review",
-      signal:
-        review.status === "failed" || review.conclusion === "declined"
-          ? "attention"
-          : review.status === "running"
-            ? "active"
-            : "waiting",
+      signal: "waiting",
       updatedAt: review.updatedAt,
       paused: false,
       repairing: false,
@@ -229,15 +216,27 @@ export function buildFactoryProjects(
       headSha: review.headSha,
       review: review.conclusion ?? review.status,
       note: "Latest review-quill observation. PR lifecycle has not been observed by PatchRelay or merge-steward.",
-    });
+    };
+    applyReview(task, review);
+    project.tasks.push(task);
   }
   return [...projects.values()].sort((a, b) => a.id.localeCompare(b.id));
 }
 
-function applyQueue(task: FactoryTask, queue: QueueObservation) {
+function applyReview(task: FactoryTask, review: ReviewObservation) {
+  task.review = review.conclusion ?? review.status;
+  if (task.station === "main") return;
+  if (review.status === "failed" || review.conclusion === "declined" || review.conclusion === "error") {
+    task.signal = "attention";
+  } else if (review.status === "running" && task.station === "review" && task.signal === "waiting" && !task.paused) {
+    task.signal = "active";
+  }
+}
+
+function applyQueue(task: FactoryTask, queue: QueueObservation, rank?: number) {
   task.queue = {
     status: queue.status,
-    position: queue.position,
+    ...(rank !== undefined ? { position: rank } : {}),
     headSha: queue.headSha,
   };
   if (queue.status === "merged") {

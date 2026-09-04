@@ -252,7 +252,7 @@ function ProjectCell({
           >
             <title>
               {task.title}
-              {task.queue ? ` · Queue position ${task.queue.position}` : ""}
+              {task.queue?.position !== undefined ? ` · Queue position ${task.queue.position}` : ""}
             </title>
             <rect width="87" height="24" rx="5" />
             <text x="9" y="16" className="task-glyph">
@@ -261,7 +261,7 @@ function ProjectCell({
             <text x="26" y="16" className="task-key">
               {task.key.length > 10 ? `${task.key.slice(0, 9)}…` : task.key}
             </text>
-            {task.queue && (
+            {task.queue?.position !== undefined && (
               <text x="93" y="16" className="queue-position">
                 {String(task.queue.position).padStart(2, "0")}
               </text>

@@ -137,7 +137,7 @@ export function advanceDemo(snapshot: FactorySnapshot): FactorySnapshot {
     "queue",
     "main",
   ];
-  return {
+  const next: FactorySnapshot = {
     ...snapshot,
     generatedAt: new Date().toISOString(),
     projects: snapshot.projects.map((project, index) => ({
@@ -155,10 +155,16 @@ export function advanceDemo(snapshot: FactorySnapshot): FactorySnapshot {
             station === "queue" || station === "main" ? "approved" : "pending",
           queue:
             station === "queue"
-              ? { status: "validating", position: 0, headSha: task.headSha! }
+              ? { status: "validating", position: 1, headSha: task.headSha! }
               : undefined,
         };
       }),
     })),
   };
+  next.projects = next.projects.map((project) => {
+    let position = 0;
+    return { ...project, tasks: project.tasks.map((task) => task.queue
+      ? { ...task, queue: { ...task.queue, position: ++position } } : task) };
+  });
+  return next;
 }

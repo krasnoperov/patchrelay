@@ -59,7 +59,7 @@ test("factory preserves empty projects and places issue phases without calling n
 test("queue positions come only from the observed current head", () => {
   const fields = { phase: "awaiting_queue", prNumber: 9, prHeadSha: "current" };
   assert.equal(task(fields).queue, undefined);
-  assert.equal(task(fields, [queue]).queue?.position, 7);
+  assert.equal(task(fields, [queue]).queue?.position, 1);
   assert.equal(task(fields, [queue]).signal, "active");
   assert.equal(
     task({ ...fields, prHeadSha: "new-head" }, [queue]).queue,
@@ -69,6 +69,21 @@ test("queue positions come only from the observed current head", () => {
     task({ phase: "awaiting_queue", prNumber: 9 }, [queue]).queue,
     undefined,
   );
+});
+
+test("active queue ranks honor priority and exclude terminal or older admissions", () => {
+  const world = buildFactoryProjects([], [], [
+    { ...queue, prNumber: 1, position: 300, status: "merged", updatedAt: "2026-09-05T15:00:00Z" },
+    { ...queue, prNumber: 1, position: 310, priority: 0, status: "queued" },
+    { ...queue, prNumber: 2, position: 311, priority: 5, status: "queued" },
+    { ...queue, prNumber: 3, position: 312, priority: 0, status: "queued" },
+    { ...queue, prNumber: 4, position: 309, status: "evicted" },
+  ]);
+  const tasks = world[0]!.tasks;
+  assert.equal(tasks.find((t) => t.prNumber === 2)!.queue?.position, 1);
+  assert.equal(tasks.find((t) => t.prNumber === 1)!.queue?.position, 2);
+  assert.equal(tasks.find((t) => t.prNumber === 3)!.queue?.position, 3);
+  assert.equal(tasks.find((t) => t.prNumber === 4)!.queue?.position, undefined);
 });
 
 test("requested changes keeps repair in implementation and the native phase stays separate", () => {
@@ -180,6 +195,17 @@ test("review-only repositories are visible and running reviews activate their st
   );
 });
 
+test("current review failures need attention for tracked, queue-only, and review-only work", () => {
+  for (const result of [{ status: "completed", conclusion: "declined" }, { status: "failed" }, { status: "completed", conclusion: "error" }]) {
+    const review = { repo: "org/factory", prNumber: 9, headSha: "current", updatedAt: queue.updatedAt, ...result };
+    const tracked = buildFactoryProjects(projects, [issue({ phase: "pr_open", prNumber: 9, prHeadSha: "current" })], [], [review]);
+    assert.equal(tracked.find((p) => p.id === "factory")!.tasks[0]!.signal, "attention");
+    assert.equal(buildFactoryProjects([], [], [queue], [review])[0]!.tasks[0]!.signal, "attention");
+    assert.equal(buildFactoryProjects([], [], [], [review])[0]!.tasks[0]!.signal, "attention");
+    assert.equal(buildFactoryProjects([], [], [{ ...queue, status: "merged" }], [review])[0]!.tasks[0]!.signal, "complete");
+  }
+});
+
 test("snapshot uses discovered repo IDs, preserves working queues during partial failures, and drops stale reviews", async () => {
   const paths: string[] = [];
   const read = createFactorySnapshotReader(
@@ -237,7 +263,7 @@ test("snapshot uses discovered repo IDs, preserves working queues during partial
     "unavailable",
   );
   const current = snapshot.projects.find((p) => p.id === "factory")!.tasks[0]!;
-  assert.equal(current.queue?.position, 7);
+  assert.equal(current.queue?.position, 1);
   assert.equal(current.review, "pending");
 });
 

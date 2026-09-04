@@ -139,7 +139,7 @@ export function Inspector({
               <dt>Queue</dt>
               <dd>
                 {task.queue
-                  ? `${human(task.queue.status)} · ${task.queue.position}`
+                  ? `${human(task.queue.status)}${task.queue.position !== undefined ? ` · ${task.queue.position}` : ""}`
                   : "Position unknown"}
               </dd>
               {task.headSha && (
