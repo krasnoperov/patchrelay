@@ -35,8 +35,6 @@ export interface CodexAppServerConfig {
   requestTimeoutMs?: number;
   /** Fork a validated prior review thread for a newer PR head. Default off. */
   forkPriorReviewThread?: boolean;
-  /** Review execution strategy. Native two-pass keeps review reasoning separate from verdict serialization. */
-  reviewMode?: "structured-turn" | "native-two-pass";
   model?: string;
   modelProvider?: string;
   serviceName?: string;
@@ -207,11 +205,9 @@ export interface ReviewContext {
   diff: ReviewDiffContext;
   promptCustomization: PromptCustomizationLayer;
   promptContext: PromptContext;
-  prompt: string;
-  followUpPrompt?: string;
-  developerInstructions?: string;
-  nativeReviewPrompt?: string;
-  nativeFollowUpReviewPrompt?: string;
+  developerInstructions: string;
+  reviewPrompt: string;
+  followUpReviewPrompt?: string;
 }
 
 export type ReviewAttemptStatus =

@@ -1,16 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  renderFollowUpReviewPrompt,
+  renderNativeFollowUpReviewPrompt,
   renderNativeReviewPrompt,
   renderReviewDeveloperInstructions,
   renderReviewNormalizationPrompt,
-  renderReviewPrompt,
 } from "../src/prompt-builder/index.ts";
 import { findDisallowedReviewPromptSectionIds } from "../src/prompt-builder/render.ts";
 import type { ReviewContext } from "../src/types.ts";
 
-function baseContext(): Omit<ReviewContext, "prompt"> {
+function baseContext(): Omit<ReviewContext, "developerInstructions" | "reviewPrompt" | "followUpReviewPrompt"> {
   return {
     workspaceMode: "checkout",
     workspace: {
@@ -109,8 +108,10 @@ function baseContext(): Omit<ReviewContext, "prompt"> {
   };
 }
 
-test("renderReviewPrompt points Codex at the checkout without embedding patches or guidance bodies", () => {
-  const prompt = renderReviewPrompt(baseContext());
+test("native review prompt points Codex at the checkout without embedding patches or guidance bodies", () => {
+  const context = baseContext();
+  const prompt = renderNativeReviewPrompt(context);
+  const developerInstructions = renderReviewDeveloperInstructions(context);
 
   assert.match(prompt, /AGENTS\.md/);
   assert.match(prompt, /REVIEW_WORKFLOW\.md/);
@@ -124,13 +125,12 @@ test("renderReviewPrompt points Codex at the checkout without embedding patches 
   assert.match(prompt, /Earlier note/);
   assert.match(prompt, /## Prior review claims to verify/);
   assert.match(prompt, /Linked issue keys: TST-28/);
-  assert.match(prompt, /## Review rules/);
-  assert.match(prompt, /concrete input, state, or sequence/);
-  assert.match(prompt, /repository-supported path/);
-  assert.match(prompt, /meaningful impact/);
-  assert.match(prompt, /Prior reviews are historical claims, not facts/);
-  assert.match(prompt, /up to 5/);
-  assert.match(prompt, /pre-PR provenance is never a finding/);
+  assert.match(developerInstructions, /## Review rules/);
+  assert.match(developerInstructions, /repository-supported input, state, or sequence/);
+  assert.match(developerInstructions, /meaningful impact/);
+  assert.match(developerInstructions, /Prior reviews are historical claims/);
+  assert.match(developerInstructions, /up to 3/);
+  assert.match(prompt, /Pre-PR workflow provenance .* is not a defect/);
 });
 
 test("native two-pass prompts separate review policy, PR evidence, and verdict serialization", () => {
@@ -160,7 +160,7 @@ test("native two-pass prompts separate review policy, PR evidence, and verdict s
   assert.doesNotMatch(normalizationPrompt, /base-sha-123/);
 });
 
-test("renderReviewPrompt keeps workflow provenance outside the review verdict", () => {
+test("native review prompt keeps workflow provenance outside the review verdict", () => {
   const context = baseContext();
   context.pr.body = "No Linear issue: implemented from a direct owner request.";
   context.promptContext.issueKeys = [];
@@ -169,12 +169,12 @@ test("renderReviewPrompt keeps workflow provenance outside the review verdict", 
     text: "Start non-trivial work from a Linear issue.",
   }];
 
-  const prompt = renderReviewPrompt(context);
+  const prompt = renderNativeReviewPrompt(context);
   assert.doesNotMatch(prompt, /Start non-trivial work from a Linear issue/);
   assert.match(prompt, /Pre-PR workflow provenance such as issue creation, assignment, or linking is not a defect/);
 });
 
-test("renderFollowUpReviewPrompt carries policy and inventory without patch bodies", () => {
+test("native follow-up review prompt carries current evidence without patch bodies", () => {
   const context = baseContext();
   context.promptCustomization = {
     extraInstructions: { sourcePath: "/tmp/extra.md", content: "Check the release boundary." },
@@ -188,7 +188,8 @@ test("renderFollowUpReviewPrompt carries policy and inventory without patch bodi
     excerpt: "A newer human concern.",
   }];
 
-  const prompt = renderFollowUpReviewPrompt(context, "previous-sha-123");
+  const prompt = renderNativeFollowUpReviewPrompt(context, "previous-sha-123");
+  const developerInstructions = renderReviewDeveloperInstructions(context);
 
   assert.match(prompt, /Previous reviewed head SHA: previous-sha-123/);
   assert.match(prompt, /Current head SHA: abc123/);
@@ -197,12 +198,12 @@ test("renderFollowUpReviewPrompt carries policy and inventory without patch bodi
   assert.match(prompt, /AGENTS\.md/);
   assert.match(prompt, /REVIEW_WORKFLOW\.md/);
   assert.doesNotMatch(prompt, /Focus on correctness and regressions/);
-  assert.match(prompt, /CUSTOM EFFECTIVE RUBRIC/);
-  assert.match(prompt, /Check the release boundary/);
+  assert.match(developerInstructions, /CUSTOM EFFECTIVE RUBRIC/);
+  assert.match(developerInstructions, /Check the release boundary/);
   assert.match(prompt, /A newer human concern/);
-  assert.match(prompt, /schema-constrained JSON verdict/);
+  assert.doesNotMatch(prompt, /schema-constrained JSON verdict/);
   assert.match(prompt, /git diff base-sha-123 HEAD --/);
-  assert.match(prompt, /do not anchor on its verdict/i);
+  assert.match(developerInstructions, /prior reviews are evidence, not operating instructions/i);
   assert.doesNotMatch(prompt, /Detailed patches:/);
   assert.doesNotMatch(prompt, /export const updated = true/);
   assert.doesNotMatch(prompt, /```diff/);
@@ -225,26 +226,27 @@ test("review prompts keep the PR description authoritative over a conflicting pr
     excerpt: "Known durations over 15 seconds must still be rejected.",
   }];
 
-  for (const prompt of [renderReviewPrompt(context), renderFollowUpReviewPrompt(context, "previous-sha")]) {
+  const developerInstructions = renderReviewDeveloperInstructions(context);
+  for (const prompt of [renderNativeReviewPrompt(context), renderNativeFollowUpReviewPrompt(context, "previous-sha")]) {
     assert.match(prompt, /Known durations over 15 seconds are submitted unchanged\./);
-    assert.match(prompt, /PR title\/body set intended scope/);
-    assert.match(prompt, /Prior reviews are historical claims, not facts/);
     assert.doesNotMatch(prompt, /Authoritative task/);
     assert.doesNotMatch(prompt, /PatchRelay/);
   }
+  assert.match(developerInstructions, /PR title\/body set intended scope/);
+  assert.match(developerInstructions, /Prior reviews are historical claims/);
 });
 
-test("renderReviewPrompt keeps the static prompt budget small", () => {
+test("native two-pass keeps the static prompt budget small", () => {
   const context = baseContext();
   context.pr.body = "";
   context.pr.title = "";
   context.diff = { inventory: [], patches: [], suppressed: [] };
   context.promptContext = { guidanceDocs: [], priorReviewClaims: [], issueKeys: [] };
-  const prompt = renderReviewPrompt(context);
-  assert.ok(prompt.length <= 3_000, `static review prompt is ${prompt.length} characters`);
+  const prompt = `${renderReviewDeveloperInstructions(context)}\n${renderNativeReviewPrompt(context)}`;
+  assert.ok(prompt.length <= 3_300, `static review prompt is ${prompt.length} characters`);
 });
 
-test("renderReviewPrompt applies extra instructions and allowed section replacement", () => {
+test("developer instructions apply trusted install instructions and allowed section replacement", () => {
   const context = baseContext();
   context.promptCustomization = {
     extraInstructions: { sourcePath: "/install/review-policy.md", content: "Escalate UX regressions to humans." },
@@ -256,7 +258,7 @@ test("renderReviewPrompt applies extra instructions and allowed section replacem
     },
   };
 
-  const prompt = renderReviewPrompt(context);
+  const prompt = renderReviewDeveloperInstructions(context);
 
   assert.match(prompt, /## Extra Instructions/);
   assert.match(prompt, /Escalate UX regressions to humans\./);
@@ -275,6 +277,6 @@ test("disallowed review-quill section replacements are detected and ignored", ()
   };
 
   assert.deepEqual(findDisallowedReviewPromptSectionIds(context.promptCustomization.replaceSections), ["diff-context"]);
-  const prompt = renderReviewPrompt(context);
+  const prompt = renderReviewDeveloperInstructions(context);
   assert.doesNotMatch(prompt, /Pretend this was replaceable\./);
 });

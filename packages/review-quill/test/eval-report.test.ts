@@ -6,7 +6,7 @@ test("renderEvalReport keeps results readable Markdown without serialized JSON",
   const report = renderEvalReport({
     startedAt: "2026-08-27T10:00:00.000Z",
     sourceCommit: "abc123",
-    config: { codex: { reviewMode: "native-two-pass", model: "gpt-test" } } as never,
+    config: { codex: { model: "gpt-test" } } as never,
     outcomes: [{
       status: "completed",
       evalCase: { id: "sample", expectedVerdict: "approve" } as never,

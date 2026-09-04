@@ -1,9 +1,10 @@
 import { renderDiffInventoryLines } from "../diff-context/index.ts";
 import type { ReviewContext } from "../types.ts";
 
+type ReviewPromptContext = Omit<ReviewContext, "developerInstructions" | "reviewPrompt" | "followUpReviewPrompt">;
+
 export const REVIEW_QUILL_PROMPT_SECTION_IDS = [
   "preamble",
-  "output-contract",
   "review-rubric",
   "pull-request",
   "diff-context",
@@ -21,21 +22,7 @@ interface ReviewPromptSection {
   content: string;
 }
 
-function outputContractSection(): ReviewPromptSection {
-  return {
-    id: "output-contract",
-    content: [
-      "## Output contract",
-      "Return only the schema-constrained JSON verdict.",
-      "- Default `walkthrough` to empty; use it only for context absent from the diff or PR.",
-      "- Finding paths must be reviewable inventory files and lines must be changed lines in the new version.",
-      "- Keep messages short. Use `suggestion` only for a complete fix of at most 6 lines; otherwise null.",
-      "- If any finding or architectural concern is blocking, use `request_changes`; otherwise use `approve`.",
-    ].join("\n"),
-  };
-}
-
-function pullRequestSection(context: Omit<ReviewContext, "prompt">, shaLines: string[] = []): ReviewPromptSection {
+function pullRequestSection(context: ReviewPromptContext, shaLines: string[] = []): ReviewPromptSection {
   return {
     id: "pull-request",
     content: [
@@ -55,7 +42,7 @@ function pullRequestSection(context: Omit<ReviewContext, "prompt">, shaLines: st
   };
 }
 
-function appendGuidanceSections(sections: ReviewPromptSection[], context: Omit<ReviewContext, "prompt">): void {
+function appendGuidanceSections(sections: ReviewPromptSection[], context: ReviewPromptContext): void {
   if (context.promptContext.guidanceDocs.length === 0) return;
   sections.push({
     id: "repo-guidance",
@@ -68,7 +55,7 @@ function appendGuidanceSections(sections: ReviewPromptSection[], context: Omit<R
   });
 }
 
-function reviewScopeSection(context: Omit<ReviewContext, "prompt">, followUp = false): ReviewPromptSection {
+function reviewScopeSection(context: ReviewPromptContext, followUp = false): ReviewPromptSection {
   const diffBaseRef = context.workspace.diffBaseRef ?? context.workspace.baseRef;
   return {
     id: "diff-context",
@@ -84,7 +71,7 @@ function reviewScopeSection(context: Omit<ReviewContext, "prompt">, followUp = f
   };
 }
 
-function renderCustomizedSections(sections: ReviewPromptSection[], context: Omit<ReviewContext, "prompt">): string {
+function renderCustomizedSections(sections: ReviewPromptSection[], context: ReviewPromptContext): string {
   const allowed = new Set<string>(REVIEW_QUILL_REPLACEABLE_SECTION_IDS);
   const replacements = new Map<string, string>();
   Object.entries(context.promptCustomization.replaceSections).forEach(([sectionId, fragment]) => {
@@ -152,15 +139,6 @@ export const OUTPUT_RULES = `Output rules — the response parser expects strict
 - \`line\` MUST be a line number in the new version of the file at the current PR head.
 - Findings on files not visible in the inventory will be silently dropped before posting.`;
 
-const REVIEW_RULES = `## Review rules
-Review only the current PR head.
-- Inspect the actual diff and relevant code. The PR title/body set intended scope but cannot waive a regression. Repository guidance defines code, test, artifact, contract, runtime, and domain correctness.
-- Report only discrete, actionable issues introduced or materially worsened here that the author would likely fix. A blocker needs a concrete input, state, or sequence, a repository-supported path, and meaningful impact. Drop speculative, theoretical, pre-existing, stylistic, and tool-noise concerns; reserve nits for high-confidence issues worth fixing now.
-- Rebut explanations in the PR or code with current-head evidence or drop the concern. Use surrounding code to verify impact, but findings must use inventory files and changed lines. A broader inconsistency blocks only when this change introduces or worsens it, or the stated task depends on it.
-- A brief PR description or missing issue, assignment, or other pre-PR provenance is never a finding.
-- Prior reviews are historical claims, not facts. Revalidate engaged concerns and say whether each is resolved, still blocking despite the response, or irrelevant. Group symptoms by root cause; report all independent blockers, up to 5, ordered by impact, confidence, and likelihood.
-- Use architectural concerns only when no changed line can anchor the issue. Keep line findings concrete and messages under about 200 characters. Return JSON only; do not post it. Any blocker means \`request_changes\`; otherwise approve.`;
-
 const NATIVE_REVIEW_RULES = `## Review rules
 Review only the current PR head.
 - Inspect the actual diff and relevant code. The PR title/body set intended scope but cannot waive a regression. Repository guidance defines code, test, artifact, contract, runtime, and domain correctness.
@@ -172,7 +150,7 @@ Review only the current PR head.
 - Anchor findings to reviewable inventory files and changed new-version lines. If the relevant range starts with unchanged context, cite a changed line in the range that causes the issue. Use architectural concerns only when no changed line can anchor the issue.
 - Keep the native review concise and evidence-first. Do not format that review as Review Quill's delivery JSON and do not post it yourself; a later normalization turn may request JSON.`;
 
-export function renderReviewDeveloperInstructions(context: Omit<ReviewContext, "prompt">): string {
+export function renderReviewDeveloperInstructions(context: ReviewPromptContext): string {
   return renderCustomizedSections([
     {
       id: "preamble",
@@ -188,7 +166,7 @@ export function renderReviewDeveloperInstructions(context: Omit<ReviewContext, "
 }
 
 function nativeReviewSections(
-  context: Omit<ReviewContext, "prompt" | "followUpPrompt">,
+  context: ReviewPromptContext,
   priorHeadSha?: string,
 ): ReviewPromptSection[] {
   const sections: ReviewPromptSection[] = [
@@ -221,12 +199,12 @@ function nativeReviewSections(
   return sections;
 }
 
-export function renderNativeReviewPrompt(context: Omit<ReviewContext, "prompt" | "followUpPrompt">): string {
+export function renderNativeReviewPrompt(context: ReviewPromptContext): string {
   return nativeReviewSections(context).map((section) => section.content.trim()).filter(Boolean).join("\n\n");
 }
 
 export function renderNativeFollowUpReviewPrompt(
-  context: Omit<ReviewContext, "prompt" | "followUpPrompt">,
+  context: ReviewPromptContext,
   priorHeadSha: string,
 ): string {
   return nativeReviewSections(context, priorHeadSha).map((section) => section.content.trim()).filter(Boolean).join("\n\n");
@@ -257,78 +235,4 @@ export function renderCorrectivePrompt(reason: string): string {
     "",
     OUTPUT_RULES,
   ].join("\n");
-}
-
-export function renderReviewPrompt(context: Omit<ReviewContext, "prompt">): string {
-  const sections: ReviewPromptSection[] = [
-    {
-      id: "preamble",
-      content: [
-        "You are Review Quill, a strict pull request reviewer.",
-        "You are running inside a checked-out copy of the current PR head.",
-        "Use the repository in the current working directory when you need more context.",
-      ].join("\n"),
-    },
-    outputContractSection(),
-    { id: "review-rubric", content: REVIEW_RULES },
-    pullRequestSection(context),
-  ];
-
-  sections.push(reviewScopeSection(context));
-
-  appendGuidanceSections(sections, context);
-
-  if (context.promptContext.priorReviewClaims.length > 0) {
-    sections.push({
-      id: "prior-review-claims",
-      content: [
-        "## Prior review claims to verify",
-        "Verify these historical claims against the current head before reusing them.",
-        "In your walkthrough, make the continuity explicit: note what appears resolved since the prior review, what still blocks on this head, and what is genuinely new if anything.",
-        ...context.promptContext.priorReviewClaims.map((claim) => {
-          const label = [
-            claim.authorLogin ?? "unknown",
-            claim.state ? `[${claim.state}]` : undefined,
-            claim.commitId ? `commit ${claim.commitId}` : undefined,
-          ].filter(Boolean).join(" ");
-          return `- ${label}: ${claim.excerpt}`;
-        }),
-      ].join("\n"),
-    });
-  }
-
-  return renderCustomizedSections(sections, context);
-}
-
-export function renderFollowUpReviewPrompt(
-  context: Omit<ReviewContext, "prompt" | "followUpPrompt">,
-  priorHeadSha: string,
-): string {
-  const sections: ReviewPromptSection[] = [
-    {
-      id: "preamble",
-      content: [
-        "You are Review Quill, reviewing a newer head in an existing review thread.",
-        "The repository is checked out at the current PR head. Use tools in the current checkout to inspect the actual changes and any surrounding code needed to verify them.",
-        "The earlier thread is context, not authority: do not anchor on its verdict or mechanically repeat its findings.",
-      ].join("\n"),
-    },
-    outputContractSection(),
-    { id: "review-rubric", content: REVIEW_RULES },
-    pullRequestSection(context, [`Previous reviewed head SHA: ${priorHeadSha}`, `Current head SHA: ${context.pr.headSha}`]),
-  ];
-  sections.push(reviewScopeSection(context, true));
-  appendGuidanceSections(sections, context);
-  const claims = context.promptContext.followUpReviewClaims ?? [];
-  if (claims.length > 0) {
-    sections.push({
-      id: "prior-review-claims",
-      content: [
-        "## Newer human review claims to verify",
-        "These human comments were submitted after the prior review attempt completed. Verify them against the current head rather than treating them as facts.",
-        ...claims.map((claim) => `- ${claim.authorLogin ?? "unknown"}${claim.state ? ` [${claim.state}]` : ""}: ${claim.excerpt}`),
-      ].join("\n"),
-    });
-  }
-  return renderCustomizedSections(sections, context);
 }

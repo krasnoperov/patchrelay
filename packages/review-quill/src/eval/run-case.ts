@@ -1,17 +1,14 @@
 import type { Logger } from "pino";
-import { loadReviewQuillRepoPrompting } from "../customization.ts";
 import { buildDiffContext } from "../diff-context/index.ts";
 import { alignFindingAnchors } from "../finding-anchors.ts";
 import { loadRepoGuidanceDocs } from "../prompt-context/repo-guidance.ts";
 import {
   renderNativeReviewPrompt,
   renderReviewDeveloperInstructions,
-  renderReviewPrompt,
 } from "../prompt-builder/index.ts";
 import { renderReviewArtifacts } from "../review-artifact-renderer.ts";
 import type { ReviewRunner } from "../review-runner.ts";
 import type {
-  PromptCustomizationLayer,
   PullRequestSummary,
   ReviewContext,
   ReviewQuillConfig,
@@ -22,23 +19,6 @@ import type {
 import type { ReviewEvalCase } from "./case-file.ts";
 import { gradeEvalCase, type EvalGrade } from "./grade.ts";
 import { isChangedNewLine } from "./worktree.ts";
-
-function mergePromptCustomization(
-  installation: PromptCustomizationLayer,
-  repository: PromptCustomizationLayer | undefined,
-): PromptCustomizationLayer {
-  return {
-    ...(repository?.extraInstructions
-      ? { extraInstructions: repository.extraInstructions }
-      : installation.extraInstructions
-      ? { extraInstructions: installation.extraInstructions }
-      : {}),
-    replaceSections: {
-      ...installation.replaceSections,
-      ...repository?.replaceSections,
-    },
-  };
-}
 
 function buildPullRequest(evalCase: ReviewEvalCase): PullRequestSummary {
   return {
@@ -90,14 +70,13 @@ export async function runEvalCase(params: {
   const diff = await buildDiffContext(params.repository, workspace);
   const pr = buildPullRequest(evalCase);
   const guidanceDocs = await loadRepoGuidanceDocs(workspace.worktreePath, evalCase.reviewDocs, [evalCase.title, evalCase.body]);
-  const repoCustomization = loadReviewQuillRepoPrompting({ repoRoot: workspace.worktreePath, logger: params.logger });
   const baseContext = {
     workspaceMode: "checkout" as const,
     workspace,
     repo: params.repository,
     pr,
     diff,
-    promptCustomization: mergePromptCustomization(params.config.prompting, repoCustomization),
+    promptCustomization: params.config.prompting,
     promptContext: {
       guidanceDocs,
       priorReviewClaims: evalCase.priorReviewClaims.map((excerpt) => ({ excerpt })),
@@ -106,9 +85,8 @@ export async function runEvalCase(params: {
   };
   const context: ReviewContext = {
     ...baseContext,
-    prompt: renderReviewPrompt(baseContext),
     developerInstructions: renderReviewDeveloperInstructions(baseContext),
-    nativeReviewPrompt: renderNativeReviewPrompt(baseContext),
+    reviewPrompt: renderNativeReviewPrompt(baseContext),
   };
   const rawResult = await params.runner.review(context, {
     onThreadProgress: (progress) => params.onProgress?.(progress.threadId, progress.turnId),

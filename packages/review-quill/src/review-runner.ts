@@ -245,32 +245,24 @@ export class ReviewRunner {
   ): Promise<{ verdict: ReviewVerdict; threadId: string; turnId: string; reviewTurnId?: string; rawReview?: string }> {
     const cwd = context.workspace.worktreePath;
     this.throwIfReviewRunInterrupted(options.signal);
-    const reviewMode = this.config.codex.reviewMode ?? "structured-turn";
     const threadStart = await this.startReviewThread(
       cwd,
       priorThread,
       options.signal,
-      reviewMode === "native-two-pass" ? context.developerInstructions : undefined,
+      context.developerInstructions,
     );
     const thread = threadStart.thread;
     this.throwIfReviewRunInterrupted(options.signal, thread.id);
     const promptMode = threadStart.mode === "forked" ? "follow_up" : "full";
-    if (promptMode === "follow_up" && !context.followUpPrompt) {
+    if (promptMode === "follow_up" && !context.followUpReviewPrompt) {
       throw new Error("Forked review thread is missing its bounded follow-up prompt");
     }
-    const reviewPrompt = promptMode === "follow_up" ? context.followUpPrompt! : context.prompt;
-    const nativePrompt = reviewMode === "native-two-pass"
-      ? (promptMode === "follow_up" ? context.nativeFollowUpReviewPrompt : context.nativeReviewPrompt)
-      : undefined;
-    if (reviewMode === "native-two-pass" && !nativePrompt) {
-      throw new Error(`Native ${promptMode} review prompt is missing`);
-    }
-    const selectedPrompt = nativePrompt ?? reviewPrompt;
+    const selectedPrompt = promptMode === "follow_up" ? context.followUpReviewPrompt! : context.reviewPrompt;
     const inventoryCount = context.diff?.inventory.length ?? 0;
     const patches = context.diff?.patches ?? [];
     const omittedPatchChars = patches.reduce((sum, patch) => sum + patch.patch.length, 0);
     this.logger.info?.({
-      reviewMode,
+      reviewMode: "native-two-pass",
       threadStartMode: threadStart.mode,
       promptMode,
       threadId: thread.id,
@@ -290,89 +282,49 @@ export class ReviewRunner {
       promptChars: selectedPrompt.length,
     }, "Selected Review Quill prompt mode");
 
-    if (reviewMode === "native-two-pass") {
-      if (!this.codex.startReview) {
-        throw new Error("Codex app-server client does not support review/start");
-      }
-      const nativeTurn = await this.runNativeReview(thread, cwd, selectedPrompt, options);
-      const normalizationPrompt = renderReviewNormalizationPrompt();
-      const firstNormalization = await this.runTurn(nativeTurn.thread, cwd, normalizationPrompt, options);
-      const firstParse = parseModelResponse(firstNormalization.latestMessage);
-      if (firstParse.ok) {
-        return {
-          verdict: firstParse.verdict,
-          threadId: thread.id,
-          turnId: firstNormalization.turnId,
-          reviewTurnId: nativeTurn.turnId,
-          rawReview: nativeTurn.rawReview,
-        };
-      }
-      this.logger.warn({
-        reason: firstParse.reason,
-        preview: firstNormalization.latestMessage.slice(0, PARSE_FAILURE_PREVIEW_CHARS),
-        threadId: thread.id,
-        reviewTurnId: nativeTurn.turnId,
-        normalizationTurnId: firstNormalization.turnId,
-      }, "Native review normalization failed, retrying with corrective prompt");
-      const correctiveTurn = await this.runTurn(
-        firstNormalization.thread,
-        cwd,
-        renderCorrectivePrompt(firstParse.reason),
-        options,
-      );
-      const correctiveParse = parseModelResponse(correctiveTurn.latestMessage);
-      if (!correctiveParse.ok) {
-        throw new Error(
-          `Native review normalization produced unparseable output after one corrective retry. `
-          + `First failure: ${firstParse.reason}. Second failure: ${correctiveParse.reason}.`,
-        );
-      }
+    if (!this.codex.startReview) {
+      throw new Error("Codex app-server client does not support review/start");
+    }
+    const nativeTurn = await this.runNativeReview(thread, cwd, selectedPrompt, options);
+    const normalizationPrompt = renderReviewNormalizationPrompt();
+    const firstNormalization = await this.runTurn(nativeTurn.thread, cwd, normalizationPrompt, options);
+    const firstParse = parseModelResponse(firstNormalization.latestMessage);
+    if (firstParse.ok) {
       return {
-        verdict: correctiveParse.verdict,
+        verdict: firstParse.verdict,
         threadId: thread.id,
-        turnId: correctiveTurn.turnId,
+        turnId: firstNormalization.turnId,
         reviewTurnId: nativeTurn.turnId,
         rawReview: nativeTurn.rawReview,
       };
     }
-
-    // First attempt: selected review prompt, fresh turn on the chosen thread.
-    const firstTurn = await this.runTurn(thread, cwd, reviewPrompt, options);
-    const firstParse = parseModelResponse(firstTurn.latestMessage);
-    if (firstParse.ok) {
-      return { verdict: firstParse.verdict, threadId: thread.id, turnId: firstTurn.turnId };
-    }
-
-    // First attempt failed parse/normalize. Log with a truncated preview
-    // so we can tell what the model actually produced, then send a
-    // corrective turn on the SAME thread. Same-thread is important:
-    // the Codex thread retains the PR and review context, so we do not
-    // pay the initial prompt cost a second time.
     this.logger.warn({
       reason: firstParse.reason,
-      preview: firstTurn.latestMessage.slice(0, PARSE_FAILURE_PREVIEW_CHARS),
+      preview: firstNormalization.latestMessage.slice(0, PARSE_FAILURE_PREVIEW_CHARS),
       threadId: thread.id,
-      firstTurnId: firstTurn.turnId,
-    }, "Review parse failed, retrying with corrective prompt");
-
-    const correctivePrompt = renderCorrectivePrompt(firstParse.reason);
-    const secondTurn = await this.runTurn(firstTurn.thread, cwd, correctivePrompt, options);
-    const secondParse = parseModelResponse(secondTurn.latestMessage);
-    if (secondParse.ok) {
-      this.logger.info({
-        threadId: thread.id,
-        correctiveTurnId: secondTurn.turnId,
-      }, "Review parse recovered on corrective retry");
-      return { verdict: secondParse.verdict, threadId: thread.id, turnId: secondTurn.turnId };
-    }
-
-    // Two consecutive parse failures. Bubble up a combined error —
-    // reconciliation loop will re-enter on the next cycle with a fresh
-    // workspace and a fresh Codex thread.
-    throw new Error(
-      `Review run produced unparseable output after one corrective retry. `
-      + `First failure: ${firstParse.reason}. Second failure: ${secondParse.reason}.`,
+      reviewTurnId: nativeTurn.turnId,
+      normalizationTurnId: firstNormalization.turnId,
+    }, "Native review normalization failed, retrying with corrective prompt");
+    const correctiveTurn = await this.runTurn(
+      firstNormalization.thread,
+      cwd,
+      renderCorrectivePrompt(firstParse.reason),
+      options,
     );
+    const correctiveParse = parseModelResponse(correctiveTurn.latestMessage);
+    if (!correctiveParse.ok) {
+      throw new Error(
+        `Native review normalization produced unparseable output after one corrective retry. `
+        + `First failure: ${firstParse.reason}. Second failure: ${correctiveParse.reason}.`,
+      );
+    }
+    return {
+      verdict: correctiveParse.verdict,
+      threadId: thread.id,
+      turnId: correctiveTurn.turnId,
+      reviewTurnId: nativeTurn.turnId,
+      rawReview: nativeTurn.rawReview,
+    };
   }
 
   private async startReviewThread(
@@ -505,7 +457,7 @@ export class ReviewRunner {
         if (turnError) throwTurnError(turnError, "Native review completed without exitedReviewMode output");
         throw new Error("Native review completed without exitedReviewMode output");
       }
-      this.logger.info({
+      this.logger.info?.({
         threadId,
         reviewTurnId: started.turnId,
         reviewChars: rawReview.length,

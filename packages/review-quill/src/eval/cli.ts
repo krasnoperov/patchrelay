@@ -82,7 +82,6 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     codex: {
       ...loadedConfig.codex,
       forkPriorReviewThread: false,
-      reviewMode: "native-two-pass" as const,
       serviceName: "review-quill-eval",
     },
   };

@@ -333,6 +333,8 @@ Requested-changes repair owns its GitHub review context directly. Before a `revi
 
 Each review-fix run emits a review-round start activity that identifies the round number, reviewer, and captured comment count when known. The final Linear response for the run includes the review round and concise addressed outcome without commit hashes or empty boilerplate sections.
 
+Review feedback does not expand the delegated Linear contract. During a review-fix run, the coding agent classifies each requested change against the source issue: an in-scope implementation defect is repaired, while a newly requested capability, optional hardening, hypothetical failure mode, or explicitly excluded concern is refused for the current PR. Useful deferred work is always created as a new undelegated Linear issue in the same team and project, related to the source issue and carrying the review evidence. PatchRelay does not search for similar work, deduplicate, prioritize, or triage the follow-up; another owner handles that later. The current PR still receives a fresh head before re-review; when no in-scope content change is required, the normal empty repair-handoff commit satisfies the fresh-head protocol without widening the diff.
+
 ### No-op publish detection
 
 When a run finishes, the finalizer recomputes `patch_id` for the new head and compares it to `IssueRecord.lastPublishedPatchId` (cached on every successful push):
