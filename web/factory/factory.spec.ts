@@ -32,9 +32,8 @@ test("explore projects, inspect and move a task, filter, zoom, and pause", async
   await page
     .getByRole("button", { name: "Focus PatchRelay", exact: true })
     .click();
-  await expect(page.locator(".world-caption")).toContainText("PROJECT VIEW");
-  await page.getByRole("button", { name: "Zoom in", exact: true }).click();
-  await expect(page.locator(".map-tools")).toContainText("125%");
+  await expect(page.locator(".project-flow")).toBeVisible();
+  await expect(page.locator(".project-flow")).toContainText("Build the factory world");
   await page
     .getByRole("button", { name: "Fit all projects", exact: true })
     .click();
@@ -135,4 +134,46 @@ test("desktop and mobile browser screenshots and usable inspector", async ({
   await page.screenshot({
     path: "/tmp/patchrelay-factory-mobile-inspector.png",
   });
+});
+
+
+test("drag release and cancellation do not crash queued camera updates", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", e => errors.push(e.message));
+  await page.goto("/factory?demo=1");
+  const world = page.locator(".world-svg");
+  const box = (await world.boundingBox())!;
+  const before = await world.getAttribute("viewBox");
+  await page.mouse.move(box.x + 8, box.y + 8);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 75, box.y + 45, { steps: 8 });
+  await page.mouse.up();
+  await expect(world).not.toHaveAttribute("viewBox", before!);
+  // Release in the same browser turn as movement: React may defer the updater.
+  await world.evaluate(el => {
+    for (let i = 0; i < 30; i++) {
+      el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 1, clientX: 10, clientY: 10 }));
+      el.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 1, clientX: 50, clientY: 50 }));
+      el.dispatchEvent(new PointerEvent(i % 2 ? "pointerup" : "pointercancel", { bubbles: true, pointerId: 1 }));
+    }
+  });
+  await page.getByRole("button", { name: "Zoom in", exact: true }).click();
+  await expect(page.locator(".map-tools")).toContainText("125%");
+  expect(errors).toEqual([]);
+});
+
+test("project flow shows task meaning and filters across stages", async ({ page }) => {
+  await page.goto("/factory?demo=1");
+  await page.getByRole("button", { name: "Focus PatchRelay", exact: true }).click();
+  await expect(page.locator(".flow-stage")).toHaveCount(5);
+  await expect(page.locator(".chip-shell")).toHaveCount(0);
+  await page.getByRole("textbox", { name: "Search tasks" }).fill("no such task");
+  await expect(page.locator(".flow-task")).toHaveCount(0);
+  await expect(page.locator(".flow-empty")).toHaveCount(5);
+  await page.getByRole("textbox", { name: "Search tasks" }).fill("");
+  await page.screenshot({ path: "/tmp/patchrelay-project-flow-desktop.png" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Close inspector" }).click();
+  await page.screenshot({ path: "/tmp/patchrelay-project-flow-mobile.png" });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
 });

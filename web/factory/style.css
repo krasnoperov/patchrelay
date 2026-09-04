@@ -1310,3 +1310,34 @@ code {
     width: 65%;
   }
 }
+
+.project-flow { flex: 1; min-height: 0; overflow: auto; background: #0b121a; padding: 24px; }
+.flow-heading button { color: var(--mint); padding: 0; font-size: 12px; }
+.flow-heading h2 { font-size: 23px; margin: 18px 0 6px; overflow-wrap: anywhere; }
+.flow-heading p { color: #a2b1c2; font-size: 12px; margin: 0 0 20px; }
+.flow-heading .flow-repairs { color: #f2be7a; }
+.flow-columns { display: grid; grid-template-columns: repeat(5, minmax(180px, 1fr)); gap: 24px; padding-bottom: 16px; }
+.flow-stage { position: relative; padding-top: 26px; border-top: 3px solid #86efc5; }
+.flow-stage::after { content: '→'; position: absolute; top: -15px; right: -21px; color: #86efc5; font-size: 21px; }
+.flow-lane:last-child .flow-stage::after { display: none; }
+.flow-step { position: absolute; top: -12px; left: 0; background: #0b121a; border: 1px solid #86efc5; border-radius: 50%; width: 23px; height: 23px; display: grid; place-items: center; font-size: 11px; color: #86efc5; }
+.flow-stage h3 { font-size: 14px; margin: 0; display: flex; align-items: center; justify-content: space-between; }
+.flow-stage h3 small { font-size: 12px; color: #b0c4d6; font-weight: 400; }
+.flow-stage p { font-size: 11px; color: #94a6ba; margin: 7px 0 20px; }
+.flow-task { display: block; width: 100%; text-align: left; padding: 13px; margin-bottom: 10px; border: 1px solid #314255; border-radius: 7px; background: #111d29; }
+.flow-task:hover, .flow-selected { border-color: #86efc5; background: #172e32; }
+.flow-task-meta { display: flex; gap: 8px; flex-wrap: wrap; font-size: 10px; color: #a8bdce; }
+.flow-task-meta b { color: #86efc5; }
+.flow-task-title { display: block; font-size: 13px; line-height: 1.5; margin: 8px 0 12px; overflow-wrap: anywhere; }
+.flow-signal { font-size: 10px; }
+.flow-empty, .flow-more { font-size: 12px; color: #94a6ba; line-height: 1.5; }
+.flow-more { padding: 12px 0; color: #86efc5; }
+@media (max-width: 600px) {
+  .project-flow { padding: 18px; }
+  .flow-columns { grid-template-columns: 1fr; gap: 24px; }
+  .flow-stage::after { display: none; }
+  .flow-stage { border-top: 0; border-left: 3px solid #86efc5; padding: 0 0 0 34px; }
+  .flow-step { top: 0; left: -12px; }
+  .flow-tasks { border-left: 3px solid #365c53; padding-left: 20px; }
+  .flow-heading p { font-size: 12px; }
+}

@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { ProjectFlow } from "./ProjectFlow.tsx";
 import type {
   FactoryProject,
   FactoryTask,
@@ -328,6 +329,7 @@ export function World({
         y: c.y + height / c.scale / 2 - height / next / 2,
       };
     });
+  if (focusIndex >= 0) return <ProjectFlow project={projects[focusIndex]!} selectedId={selectedId} onSelect={onSelect} attention={attention} query={query} onBack={() => focus(null)} />;
   return (
     <div className={`world ${paused ? "motion-paused" : ""}`}>
       <div className="world-caption">
@@ -359,18 +361,20 @@ export function World({
           e.currentTarget.setPointerCapture(e.pointerId);
         }}
         onPointerMove={(e) => {
-          if (!drag.current || !ref.current) return;
+          const start = drag.current;
+          if (!start || !ref.current) return;
           const scale = Math.max(
             width / camera.scale / ref.current.clientWidth,
             height / camera.scale / ref.current.clientHeight,
           );
-          setCamera((c) => ({
-            ...c,
-            x: drag.current!.cameraX - (e.clientX - drag.current!.x) * scale,
-            y: drag.current!.cameraY - (e.clientY - drag.current!.y) * scale,
-          }));
+          const x = start.cameraX - (e.clientX - start.x) * scale;
+          const y = start.cameraY - (e.clientY - start.y) * scale;
+          setCamera((c) => ({ ...c, x, y }));
         }}
         onPointerUp={() => {
+          drag.current = null;
+        }}
+        onLostPointerCapture={() => {
           drag.current = null;
         }}
         onPointerCancel={() => {
