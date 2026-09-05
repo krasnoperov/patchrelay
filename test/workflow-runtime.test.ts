@@ -111,6 +111,48 @@ test("workflow projection derives authority epoch from delegation churn", () => 
   }
 });
 
+test("terminal workflow projection closes stale authority waits", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const pending = makeIssue(db, {
+      delegatedToPatchRelay: false,
+    });
+    reconcileWorkflowTasksForIssue(db, pending);
+    assert.equal(db.workflowTasks.listOpenTasks(pending.projectId, pending.linearIssueId)[0]?.taskId, "wait:authority");
+
+    const issue = makeIssue(db, {
+      delegatedToPatchRelay: false,
+      currentLinearState: "Canceled",
+      currentLinearStateType: "canceled",
+      workflowOutcome: "failed",
+    });
+    const reconciled = reconcileWorkflowTasksForIssue(db, issue);
+
+    assert.equal(reconciled.snapshot.status, "failed");
+    assert.deepEqual(reconciled.snapshot.openTasks, []);
+    assert.deepEqual(db.workflowTasks.listOpenTasks(issue.projectId, issue.linearIssueId), []);
+
+    const pendingDone = makeIssue(db, {
+      linearIssueId: "issue-done",
+      delegatedToPatchRelay: false,
+    });
+    reconcileWorkflowTasksForIssue(db, pendingDone);
+    const done = makeIssue(db, {
+      linearIssueId: "issue-done",
+      delegatedToPatchRelay: false,
+      currentLinearState: "Done",
+      currentLinearStateType: "completed",
+      workflowOutcome: "completed",
+    });
+    const doneReconciled = reconcileWorkflowTasksForIssue(db, done);
+
+    assert.equal(doneReconciled.snapshot.status, "done");
+    assert.deepEqual(db.workflowTasks.listOpenTasks(done.projectId, done.linearIssueId), []);
+  } finally {
+    cleanup();
+  }
+});
+
 test("implementation task waits when blockers are unresolved", () => {
   const { db, cleanup } = createDb();
   try {

@@ -3,6 +3,22 @@ import type { WorkflowSnapshot, WorkflowTask } from "./workflow-model.ts";
 
 export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks">): WorkflowTask[] {
   const tasks: WorkflowTask[] = [];
+  const issue = snapshot.context;
+  if (snapshot.status === "failed") {
+    return [];
+  }
+  if (snapshot.status === "done") {
+    if (snapshot.authority.delegated && issue.inputInboxContext) {
+      tasks.push({
+        id: "run:input",
+        type: "run",
+        runType: issue.inputInboxContext.runType,
+        reason: "Unconsumed human input reopens completed workflow work",
+        requirements: issue.inputInboxContext.requirements,
+      });
+    }
+    return tasks;
+  }
   const collaborationInput = snapshot.context.inputInboxContext?.runType === "collaboration"
     ? snapshot.context.inputInboxContext
     : undefined;
@@ -28,22 +44,6 @@ export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks"
       type: "wait",
       reason: "A run is already active",
     }];
-  }
-  const issue = snapshot.context;
-  if (snapshot.status === "done") {
-    if (issue.inputInboxContext) {
-      tasks.push({
-        id: "run:input",
-        type: "run",
-        runType: issue.inputInboxContext.runType,
-        reason: "Unconsumed human input reopens completed workflow work",
-        requirements: issue.inputInboxContext.requirements,
-      });
-    }
-    return tasks;
-  }
-  if (snapshot.status === "failed") {
-    return [];
   }
   const prArtifact = snapshot.artifacts.find((artifact) => artifact.type === "pr");
   const prState = prArtifact?.state;
