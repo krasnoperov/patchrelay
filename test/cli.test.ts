@@ -835,8 +835,20 @@ test("cli help explains the setup sequence and default behavior", async () => {
   assert.match(stdout.read(), /Mental model:/);
   assert.match(stdout.read(), /status \[issueKey\]/);
   assert.match(stdout.read(), /logs \[issueKey\]/);
+  assert.match(stdout.read(), /sequence-check \[--base <ref>\] \[--json\]/);
   assert.doesNotMatch(stdout.read(), /issue watch/);
   assert.doesNotMatch(stdout.read(), /patchrelay cluster/);
+});
+
+test("cli exposes sequence-check help through both supported help forms", async () => {
+  for (const args of [["help", "sequence-check"], ["sequence-check", "--help"]]) {
+    const stdout = createBufferStream();
+    const stderr = createBufferStream();
+    assert.equal(await runCli(args, { stdout: stdout.stream, stderr: stderr.stream }), 0);
+    assert.equal(stderr.read(), "");
+    assert.match(stdout.read(), /Verify that the current branch shares no unlanded history/);
+    assert.match(stdout.read(), /--base <ref>/);
+  }
 });
 
 test("cli linear and repo help print the current command surface", async () => {
