@@ -94,6 +94,7 @@ export class TrackedIssueListQuery {
     blockedByKeys: string[];
     readyForExecution: boolean;
     currentLinearState?: string;
+    currentLinearStateType?: string;
     activeRunType?: string;
     runnableTaskRunType?: string;
     latestRunType?: string;
@@ -260,6 +261,7 @@ export class TrackedIssueListQuery {
         blockedByKeys,
         readyForExecution,
         ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
+        ...(row.current_linear_state_type !== null ? { currentLinearStateType: String(row.current_linear_state_type) } : {}),
         ...(effectiveActiveRunType ? { activeRunType: effectiveActiveRunType } : {}),
         ...(runnableWorkflowTask?.runType ? { runnableTaskRunType: runnableWorkflowTask.runType } : {}),
         ...(row.latest_run_type !== null ? { latestRunType: String(row.latest_run_type) } : {}),

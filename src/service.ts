@@ -509,6 +509,7 @@ export class PatchRelayService {
     blockedByKeys: string[];
     readyForExecution: boolean;
     currentLinearState?: string;
+    currentLinearStateType?: string;
     activeRunType?: string;
     runnableTaskRunType?: string;
     latestRunType?: string;

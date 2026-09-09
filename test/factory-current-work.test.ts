@@ -23,6 +23,29 @@ test("current work retains old open PRs, recent merges, and active implementatio
   assert.deepEqual(tasks.filter(t => t.issueKey).map(t => t.issueKey), ["APP-1"]);
 });
 
+test("completed and canceled no-PR issues never appear in intake", () => {
+  const issues = [
+    issue({ issueKey: "APP-DONE", phase: "done", currentLinearState: "Done", currentLinearStateType: "completed" }),
+    issue({ issueKey: "APP-CANCELED", phase: "failed", currentLinearState: "Canceled", currentLinearStateType: "canceled" }),
+  ];
+  const tasks = buildCurrentFactoryProjects(configs, issues, [], [], [{ repo, available: true, prs: [] }], now)[0]!.tasks;
+  assert.deepEqual(tasks, []);
+});
+
+test("terminal Linear state remains visible when local work explicitly reopens it", () => {
+  const tasks = buildCurrentFactoryProjects(configs, [
+    issue({
+      issueKey: "APP-REOPENED",
+      phase: "implementing",
+      currentLinearState: "Done",
+      currentLinearStateType: "completed",
+      runnableTaskRunType: "implementation",
+    }),
+  ], [], [], [{ repo, available: true, prs: [] }], now)[0]!.tasks;
+  assert.deepEqual(tasks.map(task => task.issueKey), ["APP-REOPENED"]);
+  assert.equal(tasks[0]!.station, "implementation");
+});
+
 test("current GitHub head clears stale repair state, while matching queue and review observations remain actionable", () => {
   const queues = [{ repo, prNumber: 2, headSha: "current", status: "queued", position: 500, updatedAt: "2026-09-05T10:00:00Z" }];
   const reviews = [{ repo, prNumber: 2, headSha: "current", status: "completed", conclusion: "declined", updatedAt: "2026-09-05T10:00:00Z" }];

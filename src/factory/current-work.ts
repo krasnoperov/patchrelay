@@ -2,6 +2,7 @@ import type { ProjectConfig } from "../types.ts";
 import { buildFactoryProjects, type FactoryIssue, type QueueObservation, type ReviewObservation } from "./model.ts";
 import { RECENT_WORK_MS, type FactoryRepositoryPrs } from "./github.ts";
 import type { FactoryTask } from "./types.ts";
+import { isTerminalLinearState } from "../linear-state.ts";
 
 export function buildCurrentFactoryProjects(
   configs: Pick<ProjectConfig, "id" | "github">[], issues: FactoryIssue[],
@@ -13,7 +14,11 @@ export function buildCurrentFactoryProjects(
     .map(pr => [`${r.repo}#${pr.number}`, { ...pr, repo: r.repo }] as const)));
   const projectRepos = new Map(configs.map(c => [c.id, c.github?.repoFullName]));
   const currentIssues = issues.flatMap(issue => {
-    if (issue.prNumber === undefined) return issue.phase !== "done" && (issue.activeRunType || Date.parse(issue.updatedAt) >= cutoff) ? [issue] : [];
+    if (issue.prNumber === undefined) {
+      const terminalInLinear = isTerminalLinearState(issue.currentLinearStateType, issue.currentLinearState);
+      const hasLocalWork = issue.activeRunType !== undefined || issue.runnableTaskRunType !== undefined;
+      return hasLocalWork || (!terminalInLinear && issue.phase !== "done" && Date.parse(issue.updatedAt) >= cutoff) ? [issue] : [];
+    }
     const pr = prs.get(`${projectRepos.get(issue.projectId)}#${issue.prNumber}`);
     if (!pr) return [];
     const sameHead = pr.head.sha === issue.prHeadSha;
