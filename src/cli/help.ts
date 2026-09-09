@@ -33,6 +33,7 @@ export function rootHelpText(): string {
     "  repo show <github-repo> [--json]                          Show one linked repository",
     "  repo unlink <github-repo> [--json]                        Remove one linked repository",
     "  repo sync [github-repo] [--json]                          Clone missing repositories or fetch origin",
+    "  sequence-check [--base <ref>] [--json]                    Verify independent ancestry before publishing a PR",
     "  status [issueKey] [--follow] [--trace] [--json]         Show service health or one agent's current state",
     "  logs [issueKey] [--follow] [--lines <count>] [--json]   Show service logs; issue filter is best-effort",
     "  issue open <issueKey> [--print] [--json]                Open Codex in the issue worktree",
@@ -76,6 +77,7 @@ export function rootHelpText(): string {
     "  patchrelay help issue",
     "  patchrelay help service",
     "  patchrelay help maintenance",
+    "  patchrelay help sequence-check",
   ].join("\n");
 }
 

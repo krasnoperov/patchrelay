@@ -183,7 +183,7 @@ export async function runCli(
   const json = parsed.flags.get("json") === true;
   if (command === "help") {
     const topic = commandArgs[0];
-    if (topic === "linear" || topic === "repo" || topic === "issue" || topic === "service" || topic === "maintenance") {
+    if (topic === "linear" || topic === "repo" || topic === "issue" || topic === "service" || topic === "maintenance" || topic === "sequence-check") {
       writeOutput(stdout, `${helpTextFor(topic)}\n`);
       return 0;
     }
@@ -205,7 +205,7 @@ export async function runCli(
         ? "linear"
         : command === "repo"
           ? "repo"
-        : command === "issue" || command === "service" || command === "maintenance"
+        : command === "issue" || command === "service" || command === "maintenance" || command === "sequence-check"
           ? command
           : "root";
     writeOutput(
