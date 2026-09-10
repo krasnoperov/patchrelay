@@ -57,10 +57,12 @@ test("the bundled suite covers rejected and repaired heads across repositories",
     "inventory-1155-fixed-head",
     "subtitles-2516-recovery-head",
     "subtitles-2516-fixed-head",
+    "makefx-5-complete-first-pass",
   ]);
   assert.deepEqual(cases.map((entry) => entry.expectedVerdict), [
     "request_changes", "approve", "request_changes", "request_changes",
-    "request_changes", "request_changes", "request_changes", "approve",
+    "request_changes", "request_changes", "request_changes", "approve", "request_changes",
   ]);
-  assert.deepEqual(cases.map((entry) => entry.maximumConcerns), [1, 0, 3, 3, 1, 1, 2, 0]);
+  assert.deepEqual(cases.map((entry) => entry.maximumConcerns), [1, 0, 3, 3, 1, 1, 2, 0, 20]);
+  assert.equal(cases.at(-1)?.mustReport.length, 8);
 });

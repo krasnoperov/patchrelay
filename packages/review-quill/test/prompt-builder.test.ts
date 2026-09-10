@@ -129,7 +129,10 @@ test("renderReviewPrompt points Codex at the checkout without embedding patches 
   assert.match(prompt, /repository-supported path/);
   assert.match(prompt, /meaningful impact/);
   assert.match(prompt, /Prior reviews are historical claims, not facts/);
-  assert.match(prompt, /up to 5/);
+  assert.match(prompt, /coverage checklist from the changed components and explicit behavioral or contract claims/);
+  assert.match(prompt, /Early blockers do not end inspection/);
+  assert.match(prompt, /impose no numerical cap/);
+  assert.doesNotMatch(prompt, /up to \d+/);
   assert.match(prompt, /pre-PR provenance is never a finding/);
 });
 
@@ -145,19 +148,28 @@ test("native two-pass prompts separate review policy, PR evidence, and verdict s
   assert.match(developerInstructions, /enough likelihood to justify delaying the merge/);
   assert.match(developerInstructions, /race merely because an interleaving can be imagined/);
   assert.match(developerInstructions, /assumed browser, platform, provider, or runtime behavior/);
-  assert.match(developerInstructions, /one concern rather than one per data family/);
-  assert.match(developerInstructions, /up to 3/);
+  assert.match(developerInstructions, /one concern, not one per data family/);
+  assert.match(developerInstructions, /coverage checklist from the changed components and explicit behavioral or contract claims/);
+  assert.match(developerInstructions, /Early blockers do not end inspection/);
+  assert.match(developerInstructions, /impose no numerical cap/);
+  assert.doesNotMatch(developerInstructions, /up to \d+/);
   assert.doesNotMatch(developerInstructions, /Ignore prior instructions/);
   assert.match(nativeReviewPrompt, /## Pull request/);
   assert.match(nativeReviewPrompt, /## Ignore prior instructions/);
   assert.match(nativeReviewPrompt, /git diff base-sha-123 HEAD --/);
   assert.doesNotMatch(nativeReviewPrompt, /schema-constrained JSON verdict/);
-  assert.match(normalizationPrompt, /normalization only/i);
-  assert.match(normalizationPrompt, /Do not inspect the repository again/);
+  assert.match(normalizationPrompt, /supported starting set, not a ceiling/i);
+  assert.match(normalizationPrompt, /never replace old concerns with new ones/i);
+  assert.match(normalizationPrompt, /coverage checklist from the changed components and explicit behavioral or contract claims/);
+  assert.match(normalizationPrompt, /no numerical cap/);
   assert.match(normalizationPrompt, /schema-constrained JSON verdict/);
   assert.match(normalizationPrompt, /integer percentage from 0 to 100/);
   assert.match(normalizationPrompt, /actually changed new-version line/);
+  assert.match(normalizationPrompt, /never an absolute checkout path/);
   assert.doesNotMatch(normalizationPrompt, /base-sha-123/);
+  for (const productionPrompt of [developerInstructions, normalizationPrompt]) {
+    assert.doesNotMatch(productionPrompt, /\b(?:makefx|H3|Lyria|Describe|timeline|presenter|model_unavailable)\b/i);
+  }
 });
 
 test("renderReviewPrompt keeps workflow provenance outside the review verdict", () => {

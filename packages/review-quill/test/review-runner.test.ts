@@ -155,7 +155,7 @@ test("ReviewRunner performs native review before schema-constrained normalizatio
   assert.deepEqual(threadStarts, [{ cwd: "/tmp/native-review", developerInstructions: "stable review policy" }]);
   assert.deepEqual(reviewStarts, [{ threadId: "native-thread", instructions: "review exact base..HEAD" }]);
   assert.equal(turnStarts.length, 1);
-  assert.match(turnStarts[0]?.input ?? "", /normalization only/i);
+  assert.match(turnStarts[0]?.input ?? "", /supported starting set, not a ceiling/i);
   assert.deepEqual(turnStarts[0]?.outputSchema, REVIEW_VERDICT_JSON_SCHEMA);
   assert.equal(result.reviewTurnId, "review-turn");
   assert.equal(result.turnId, "normalization-turn");
