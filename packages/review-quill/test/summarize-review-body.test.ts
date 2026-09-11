@@ -33,11 +33,11 @@ test("summarizeReviewBody truncates prose but still ends on the verdict line", (
   assert.ok((excerpt?.length ?? 0) <= 1500);
 });
 
-test("summarizeReviewBody bounds an oversized verdict line", () => {
-  const excerpt = summarizeReviewBody(`**Verdict: ${"x".repeat(2_000)}`);
+test("summarizeReviewBody preserves an oversized verdict line without truncation", () => {
+  const verdict = `**Verdict: ${"x".repeat(2_000)}`;
+  const excerpt = summarizeReviewBody(verdict);
 
-  assert.equal(excerpt?.length, 1_500);
-  assert.match(excerpt ?? "", /^\*\*Verdict:/);
+  assert.equal(excerpt, verdict);
 });
 
 test("summarizeReviewBody falls back to plain truncation when no verdict line is present", () => {

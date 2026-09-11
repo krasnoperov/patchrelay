@@ -45,10 +45,6 @@ export function summarizeReviewBody(body: string | undefined): string | undefine
   if (!verdictLine) {
     return `${normalized.slice(0, PRIOR_REVIEW_EXCERPT_LIMIT - 3)}...`;
   }
-  if (verdictLine.length >= PRIOR_REVIEW_EXCERPT_LIMIT) {
-    return verdictLine.slice(0, PRIOR_REVIEW_EXCERPT_LIMIT);
-  }
-
   // Reserve room for the verdict line and a separator so the blocker survives
   // truncation even if the main prose runs long.
   const separator = " ... ";
