@@ -12,6 +12,7 @@ import type {
 // could be seen, which let consecutive rounds contradict each other because
 // each round only ever saw the prior round's *intro* as context.
 const PRIOR_REVIEW_EXCERPT_LIMIT = 1500;
+export const RENDERED_CONVERSATION_CLAIM_LIMIT = 5;
 const VERDICT_LINE_REGEX = /\*\*Verdict:[^\n]*/;
 
 export function extractVerdictLine(body: string): string | undefined {
@@ -44,6 +45,9 @@ export function summarizeReviewBody(body: string | undefined): string | undefine
   if (!verdictLine) {
     return `${normalized.slice(0, PRIOR_REVIEW_EXCERPT_LIMIT - 3)}...`;
   }
+  if (verdictLine.length >= PRIOR_REVIEW_EXCERPT_LIMIT) {
+    return verdictLine.slice(0, PRIOR_REVIEW_EXCERPT_LIMIT);
+  }
 
   // Reserve room for the verdict line and a separator so the blocker survives
   // truncation even if the main prose runs long.
@@ -54,6 +58,12 @@ export function summarizeReviewBody(body: string | undefined): string | undefine
     return verdictLine;
   }
   return `${prefix}${separator}${verdictLine}`;
+}
+
+export function selectReviewVisibleConversationClaims(
+  claims: PullRequestConversationClaim[],
+): PullRequestConversationClaim[] {
+  return claims.slice(-RENDERED_CONVERSATION_CLAIM_LIMIT);
 }
 
 function summarizePriorClaim(

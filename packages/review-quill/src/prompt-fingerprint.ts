@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { selectReviewVisibleConversationClaims } from "./prompt-context/github-context.ts";
 import type { PullRequestConversationClaim, PullRequestSummary } from "./types.ts";
 
 export function buildPromptFingerprint(
@@ -10,7 +11,7 @@ export function buildPromptFingerprint(
     title: pr.title,
     body: pr.body ?? "",
     labels: [...pr.labels].sort(),
-    conversationClaims: conversationClaims.map((claim) => ({
+    conversationClaims: selectReviewVisibleConversationClaims(conversationClaims).map((claim) => ({
       authorLogin: claim.authorLogin ?? "",
       authorAssociation: claim.authorAssociation ?? "",
       createdAt: claim.createdAt,

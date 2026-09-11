@@ -1,4 +1,5 @@
 import { renderDiffInventoryLines } from "../diff-context/index.ts";
+import { selectReviewVisibleConversationClaims } from "../prompt-context/github-context.ts";
 import type { ReviewContext } from "../types.ts";
 
 export const REVIEW_QUILL_PROMPT_SECTION_IDS = [
@@ -21,8 +22,6 @@ interface ReviewPromptSection {
   id: ReviewPromptSectionId | "extra-instructions";
   content: string;
 }
-
-const RENDERED_CONVERSATION_CLAIM_LIMIT = 5;
 
 function outputContractSection(): ReviewPromptSection {
   return {
@@ -72,7 +71,7 @@ function appendGuidanceSections(sections: ReviewPromptSection[], context: Omit<R
 }
 
 function appendConversationClaims(sections: ReviewPromptSection[], context: Omit<ReviewContext, "prompt">): void {
-  const claims = (context.promptContext.conversationClaims ?? []).slice(-RENDERED_CONVERSATION_CLAIM_LIMIT);
+  const claims = selectReviewVisibleConversationClaims(context.promptContext.conversationClaims ?? []);
   if (claims.length === 0) return;
   sections.push({
     id: "conversation-claims",

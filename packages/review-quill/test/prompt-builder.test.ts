@@ -8,6 +8,7 @@ import {
   renderReviewPrompt,
 } from "../src/prompt-builder/index.ts";
 import { findDisallowedReviewPromptSectionIds } from "../src/prompt-builder/render.ts";
+import { buildPromptFingerprint } from "../src/prompt-fingerprint.ts";
 import type { ReviewContext } from "../src/types.ts";
 
 function baseContext(): Omit<ReviewContext, "prompt"> {
@@ -273,7 +274,7 @@ test("review prompts apply newer trusted decisions without inventing replacement
   }
 });
 
-test("review prompts fingerprint all trusted comments but render only the newest bounded set", () => {
+test("review prompts fingerprint and render the same newest bounded conversation set", () => {
   const context = baseContext();
   context.promptContext.conversationClaims = Array.from({ length: 7 }, (_, index) => ({
     authorLogin: "author",
@@ -286,6 +287,14 @@ test("review prompts fingerprint all trusted comments but render only the newest
   assert.doesNotMatch(prompt, /Decision 2/);
   assert.match(prompt, /Decision 3/);
   assert.match(prompt, /Decision 7/);
+
+  const editedHiddenClaims = context.promptContext.conversationClaims.map((claim, index) => (
+    index === 0 ? { ...claim, excerpt: "Edited hidden decision" } : claim
+  ));
+  assert.equal(
+    buildPromptFingerprint(context.pr, context.promptContext.conversationClaims),
+    buildPromptFingerprint(context.pr, editedHiddenClaims),
+  );
 });
 
 test("renderReviewPrompt keeps the static prompt budget small", () => {
