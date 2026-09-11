@@ -22,6 +22,7 @@ function evalCase(overrides: Partial<ReviewEvalCase> = {}): ReviewEvalCase {
     reviewDocs: [],
     mustReport: [["screen reader", "focusable", "mark", "note"]],
     mustNotReport: [["persistent card", "hover"]],
+    conversationClaims: [],
     priorReviewClaims: [],
     notes: "",
     ...overrides,

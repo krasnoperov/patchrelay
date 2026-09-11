@@ -101,6 +101,7 @@ function baseContext(): Omit<ReviewContext, "prompt"> {
       guidanceDocs: [
         { path: "REVIEW_WORKFLOW.md", text: "Focus on correctness and regressions." },
       ],
+      conversationClaims: [],
       priorReviewClaims: [
         { authorLogin: "review-quill", state: "COMMENTED", commitId: "oldsha", excerpt: "Earlier note" },
       ],
@@ -125,13 +126,13 @@ test("renderReviewPrompt points Codex at the checkout without embedding patches 
   assert.match(prompt, /## Prior review claims to verify/);
   assert.match(prompt, /Linked issue keys: TST-28/);
   assert.match(prompt, /## Review rules/);
-  assert.match(prompt, /concrete input, state, or sequence/);
+  assert.match(prompt, /concrete input\/state\/sequence/);
   assert.match(prompt, /repository-supported path/);
   assert.match(prompt, /meaningful impact/);
-  assert.match(prompt, /Prior reviews are historical claims, not facts/);
-  assert.match(prompt, /coverage checklist from the changed components and explicit behavioral or contract claims/);
+  assert.match(prompt, /Prior reviews are claims to revalidate/);
+  assert.match(prompt, /Check changed components and explicit contracts/);
   assert.match(prompt, /Early blockers do not end inspection/);
-  assert.match(prompt, /impose no numerical cap/);
+  assert.match(prompt, /with no cap/);
   assert.doesNotMatch(prompt, /up to \d+/);
   assert.match(prompt, /pre-PR provenance is never a finding/);
 });
@@ -220,7 +221,7 @@ test("renderFollowUpReviewPrompt carries policy and inventory without patch bodi
   assert.doesNotMatch(prompt, /```diff/);
 });
 
-test("review prompts keep the PR description authoritative over a conflicting prior review", () => {
+test("review prompts keep intended scope authoritative over a conflicting prior review", () => {
   const context = baseContext();
   context.pr.body = [
     "## Goal",
@@ -239,10 +240,33 @@ test("review prompts keep the PR description authoritative over a conflicting pr
 
   for (const prompt of [renderReviewPrompt(context), renderFollowUpReviewPrompt(context, "previous-sha")]) {
     assert.match(prompt, /Known durations over 15 seconds are submitted unchanged\./);
-    assert.match(prompt, /PR title\/body set intended scope/);
-    assert.match(prompt, /Prior reviews are historical claims, not facts/);
+    assert.match(prompt, /PR authors and maintainers define scope via PR body and newer trusted conversation/);
+    assert.match(prompt, /Prior reviews are claims to revalidate/);
     assert.doesNotMatch(prompt, /Authoritative task/);
     assert.doesNotMatch(prompt, /PatchRelay/);
+  }
+});
+
+test("review prompts apply newer trusted decisions without inventing replacement requirements", () => {
+  const context = baseContext();
+  context.pr.body = "Preserve the legacy path when the new path fails.";
+  context.promptContext.conversationClaims = [{
+    authorLogin: "change-author[bot]",
+    createdAt: "2026-07-18T10:04:00Z",
+    excerpt: "The new path replaces the legacy path. Failures complete the step. The 25 unit increase is approved.",
+  }];
+
+  for (const prompt of [
+    renderReviewPrompt(context),
+    renderFollowUpReviewPrompt(context, "previous-sha"),
+    `${renderReviewDeveloperInstructions(context)}\n${renderNativeReviewPrompt(context)}`,
+  ]) {
+    assert.match(prompt, /## Trusted PR conversation context/);
+    assert.ok(prompt.indexOf("Preserve the legacy path") < prompt.indexOf("The new path replaces the legacy path"));
+    assert.match(prompt, /later explicit scope, acceptance, threshold, or tradeoff decision supersedes conflicting older PR or linked-issue text/);
+    assert.match(prompt, /Do not invent fallback, retry, compatibility, degradation, or continued-operation requirements absent a repository contract/);
+    assert.match(prompt, /Replaced paths may be removed/);
+    assert.match(prompt, /Do not relitigate explicitly approved thresholds or budgets/);
   }
 });
 

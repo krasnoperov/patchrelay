@@ -32,6 +32,9 @@ Nits: forbid
 
 ## Must not report
 - rare race; theoretical
+
+## PR conversation claims
+- The revised path intentionally replaces the old path.
 `, "utf8");
 
     const parsed = await loadEvalCase(path.join(directory, "sample.case.md"));
@@ -40,6 +43,7 @@ Nits: forbid
     assert.deepEqual(parsed.reviewDocs, ["REVIEW_WORKFLOW.md"]);
     assert.deepEqual(parsed.mustReport, [["reachable input", "data loss"]]);
     assert.deepEqual(parsed.mustNotReport, [["rare race", "theoretical"]]);
+    assert.deepEqual(parsed.conversationClaims, ["The revised path intentionally replaces the old path."]);
     assert.equal(parsed.forbidNits, true);
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -58,11 +62,15 @@ test("the bundled suite covers rejected and repaired heads across repositories",
     "subtitles-2516-recovery-head",
     "subtitles-2516-fixed-head",
     "makefx-5-complete-first-pass",
+    "usertold-1503-author-scope",
+    "makefx-29-supported-failure-envelope",
   ]);
   assert.deepEqual(cases.map((entry) => entry.expectedVerdict), [
     "request_changes", "approve", "request_changes", "request_changes",
     "request_changes", "request_changes", "request_changes", "approve", "request_changes",
+    "request_changes", "request_changes",
   ]);
-  assert.deepEqual(cases.map((entry) => entry.maximumConcerns), [1, 0, 3, 3, 1, 1, 2, 0, 20]);
-  assert.equal(cases.at(-1)?.mustReport.length, 8);
+  assert.deepEqual(cases.map((entry) => entry.maximumConcerns), [1, 0, 3, 3, 1, 1, 2, 0, 20, 6, 8]);
+  assert.equal(cases.find((entry) => entry.id === "makefx-5-complete-first-pass")?.mustReport.length, 8);
+  assert.equal(cases.find((entry) => entry.id === "makefx-29-supported-failure-envelope")?.forbidNits, false);
 });

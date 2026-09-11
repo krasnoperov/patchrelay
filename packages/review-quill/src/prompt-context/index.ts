@@ -17,6 +17,7 @@ export async function buildPromptContext(
   const guidanceDocs = await loadRepoGuidanceDocs(workspace.worktreePath, reviewDocs, [pr.title, pr.body ?? ""]);
   return {
     guidanceDocs,
+    conversationClaims: githubContext.conversationClaims,
     priorReviewClaims: githubContext.priorReviewClaims,
     followUpReviewClaims: githubContext.followUpReviewClaims,
     issueKeys: detectIssueKeys(pr),

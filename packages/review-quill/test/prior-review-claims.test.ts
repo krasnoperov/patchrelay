@@ -3,9 +3,10 @@ import test from "node:test";
 import {
   buildFollowUpHumanClaims,
   buildGitHubPromptContext,
+  buildPullRequestConversationClaims,
   buildPriorReviewClaims,
 } from "../src/prompt-context/github-context.ts";
-import type { PullRequestReviewRecord } from "../src/types.ts";
+import type { PullRequestConversationCommentRecord, PullRequestReviewRecord } from "../src/types.ts";
 
 function review(overrides: Partial<PullRequestReviewRecord>): PullRequestReviewRecord {
   return {
@@ -123,20 +124,54 @@ test("buildFollowUpHumanClaims requires reviewer identity and a valid completion
   assert.deepEqual(buildFollowUpHumanClaims(reviews, "review-quill", "invalid"), []);
 });
 
-test("buildGitHubPromptContext fetches reviews once for full and follow-up claims", async () => {
-  let calls = 0;
+test("buildPullRequestConversationClaims keeps recent author and collaborator context in chronological order", () => {
+  const comments: PullRequestConversationCommentRecord[] = [
+    { id: 1, authorLogin: "linear-code[bot]", authorAssociation: "NONE", createdAt: "2026-07-18T10:00:00Z", body: "Old generated acceptance criteria." },
+    { id: 2, authorLogin: "app/change-author", authorAssociation: "NONE", createdAt: "2026-07-18T10:01:00Z", body: "The new path replaces the old path." },
+    { id: 3, authorLogin: "maintainer", authorAssociation: "MEMBER", createdAt: "2026-07-18T10:02:00Z", body: "The larger limit is approved." },
+    { id: 4, authorLogin: "visitor", authorAssociation: "CONTRIBUTOR", createdAt: "2026-07-18T10:03:00Z", body: "Keep the old path as fallback." },
+    { id: 5, authorLogin: "change-author[bot]", authorAssociation: "NONE", createdAt: "2026-07-18T10:04:00Z", body: "Failures advance to the next stage." },
+  ];
+
+  const claims = buildPullRequestConversationClaims(comments, "change-author[bot]");
+
+  assert.deepEqual(claims.map((claim) => claim.authorLogin), ["app/change-author", "maintainer", "change-author[bot]"]);
+  assert.deepEqual(claims.map((claim) => claim.createdAt), [
+    "2026-07-18T10:01:00Z",
+    "2026-07-18T10:02:00Z",
+    "2026-07-18T10:04:00Z",
+  ]);
+});
+
+test("buildPullRequestConversationClaims ignores empty, undated, and untrusted comments", () => {
+  assert.deepEqual(buildPullRequestConversationClaims([
+    { id: 1, authorLogin: "author", createdAt: "invalid", body: "Decision" },
+    { id: 2, authorLogin: "author", createdAt: "2026-07-18T10:00:00Z", body: "   " },
+    { id: 3, authorLogin: "stranger", authorAssociation: "NONE", createdAt: "2026-07-18T10:00:00Z", body: "Decision" },
+  ], "author"), []);
+});
+
+test("buildGitHubPromptContext fetches reviews and conversation once", async () => {
+  let reviewCalls = 0;
+  let conversationCalls = 0;
   const context = await buildGitHubPromptContext({
     listPullRequestReviews: async () => {
-      calls += 1;
+      reviewCalls += 1;
       return [review({
         authorLogin: "alice",
         submittedAt: "2026-07-18T10:01:00Z",
         body: "New human evidence",
       })];
     },
-  } as never, "owner/repo", { number: 7 } as never, "review-quill", "2026-07-18T10:00:00Z");
+    listPullRequestConversationComments: async () => {
+      conversationCalls += 1;
+      return [{ id: 1, authorLogin: "alice", authorAssociation: "OWNER", createdAt: "2026-07-18T10:02:00Z", body: "Updated scope" }];
+    },
+  } as never, "owner/repo", { number: 7, authorLogin: "pr-author" } as never, "review-quill", "2026-07-18T10:00:00Z");
 
-  assert.equal(calls, 1);
+  assert.equal(reviewCalls, 1);
+  assert.equal(conversationCalls, 1);
+  assert.equal(context.conversationClaims[0]?.excerpt, "Updated scope");
   assert.equal(context.priorReviewClaims.length, 1);
   assert.equal(context.followUpReviewClaims.length, 1);
 });

@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import type {
   CheckRunRecord,
+  PullRequestConversationCommentRecord,
   PullRequestFile,
   PullRequestReviewCommentRecord,
   PullRequestReviewRecord,
@@ -387,6 +388,28 @@ export class GitHubClient {
       ...(typeof comment.commit_id === "string" ? { commitId: comment.commit_id } : {}),
       ...(typeof (comment.user as Record<string, unknown> | undefined)?.login === "string"
         ? { authorLogin: String((comment.user as Record<string, unknown>).login) }
+        : {}),
+      ...(typeof comment.created_at === "string" ? { createdAt: comment.created_at } : {}),
+    }));
+  }
+
+  async listPullRequestConversationComments(
+    repoFullName: string,
+    prNumber: number,
+  ): Promise<PullRequestConversationCommentRecord[]> {
+    const encodedRepo = repoFullName.split("/").map(encodeURIComponent).join("/");
+    const comments = await this.request<Array<Record<string, unknown>>>(
+      repoFullName,
+      `/repos/${encodedRepo}/issues/${prNumber}/comments?per_page=100`,
+    );
+    return comments.map((comment) => ({
+      id: Number(comment.id),
+      ...(typeof comment.body === "string" ? { body: comment.body } : {}),
+      ...(typeof (comment.user as Record<string, unknown> | undefined)?.login === "string"
+        ? { authorLogin: String((comment.user as Record<string, unknown>).login) }
+        : {}),
+      ...(typeof comment.author_association === "string"
+        ? { authorAssociation: comment.author_association }
         : {}),
       ...(typeof comment.created_at === "string" ? { createdAt: comment.created_at } : {}),
     }));

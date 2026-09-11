@@ -100,6 +100,11 @@ export async function runEvalCase(params: {
     promptCustomization: mergePromptCustomization(params.config.prompting, repoCustomization),
     promptContext: {
       guidanceDocs,
+      conversationClaims: evalCase.conversationClaims.map((excerpt, index) => ({
+        authorLogin: "pr-author",
+        createdAt: new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(),
+        excerpt,
+      })),
       priorReviewClaims: evalCase.priorReviewClaims.map((excerpt) => ({ excerpt })),
       issueKeys: [],
     },

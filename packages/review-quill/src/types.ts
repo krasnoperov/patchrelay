@@ -127,10 +127,25 @@ export interface PullRequestReviewCommentRecord {
   createdAt?: string;
 }
 
+export interface PullRequestConversationCommentRecord {
+  id: number;
+  body?: string;
+  authorLogin?: string;
+  authorAssociation?: string;
+  createdAt?: string;
+}
+
 export interface PriorReviewClaim {
   authorLogin?: string;
   state?: string;
   commitId?: string;
+  excerpt: string;
+}
+
+export interface PullRequestConversationClaim {
+  authorLogin?: string;
+  authorAssociation?: string;
+  createdAt: string;
   excerpt: string;
 }
 
@@ -194,6 +209,7 @@ export interface ReviewDiffContext {
 
 export interface PromptContext {
   guidanceDocs: GuidanceDoc[];
+  conversationClaims?: PullRequestConversationClaim[];
   priorReviewClaims: PriorReviewClaim[];
   followUpReviewClaims?: PriorReviewClaim[];
   issueKeys: string[];

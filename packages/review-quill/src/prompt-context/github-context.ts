@@ -1,11 +1,18 @@
 import type { GitHubClient } from "../github-client.ts";
-import type { PriorReviewClaim, PullRequestSummary, PullRequestReviewRecord } from "../types.ts";
+import type {
+  PriorReviewClaim,
+  PullRequestConversationClaim,
+  PullRequestConversationCommentRecord,
+  PullRequestSummary,
+  PullRequestReviewRecord,
+} from "../types.ts";
 
 // review-quill bodies can run ~1.5k chars; the verdict sentence (which names
 // the actual blocker) lives at the very end. 280 chars clipped before it
 // could be seen, which let consecutive rounds contradict each other because
 // each round only ever saw the prior round's *intro* as context.
 const PRIOR_REVIEW_EXCERPT_LIMIT = 1500;
+const CONVERSATION_CLAIM_LIMIT = 5;
 const VERDICT_LINE_REGEX = /\*\*Verdict:[^\n]*/;
 
 export function extractVerdictLine(body: string): string | undefined {
@@ -72,8 +79,37 @@ function summarizePriorClaim(
 const SELF_CLAIM_FRESH_START_THRESHOLD = 3;
 
 function normalizeLogin(login: string | undefined): string | undefined {
-  const normalized = login?.trim().replace(/\[bot\]$/i, "").toLowerCase();
+  const normalized = login?.trim().replace(/^app\//i, "").replace(/\[bot\]$/i, "").toLowerCase();
   return normalized || undefined;
+}
+
+const TRUSTED_AUTHOR_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+
+export function buildPullRequestConversationClaims(
+  comments: PullRequestConversationCommentRecord[],
+  prAuthorLogin: string | undefined,
+): PullRequestConversationClaim[] {
+  const normalizedPrAuthor = normalizeLogin(prAuthorLogin);
+  return comments
+    .flatMap((comment) => {
+      const author = normalizeLogin(comment.authorLogin);
+      const createdAtMs = comment.createdAt ? Date.parse(comment.createdAt) : Number.NaN;
+      const excerpt = summarizeReviewBody(comment.body);
+      const association = comment.authorAssociation?.toUpperCase();
+      const isPrAuthor = Boolean(author && normalizedPrAuthor && author === normalizedPrAuthor);
+      const isMaintainer = Boolean(association && TRUSTED_AUTHOR_ASSOCIATIONS.has(association));
+      if ((!isPrAuthor && !isMaintainer) || !Number.isFinite(createdAtMs) || !excerpt) return [];
+      return [{ comment, createdAtMs, excerpt }];
+    })
+    .sort((left, right) => right.createdAtMs - left.createdAtMs)
+    .slice(0, CONVERSATION_CLAIM_LIMIT)
+    .reverse()
+    .map(({ comment, excerpt }) => ({
+      ...(comment.authorLogin ? { authorLogin: comment.authorLogin } : {}),
+      ...(comment.authorAssociation ? { authorAssociation: comment.authorAssociation } : {}),
+      createdAt: comment.createdAt!,
+      excerpt,
+    }));
 }
 
 export function buildFollowUpHumanClaims(
@@ -192,9 +228,17 @@ export async function buildGitHubPromptContext(
   pr: PullRequestSummary,
   selfLogin?: string,
   priorAttemptCompletedAt?: string,
-): Promise<{ priorReviewClaims: PriorReviewClaim[]; followUpReviewClaims: PriorReviewClaim[] }> {
-  const priorReviews = await github.listPullRequestReviews(repoFullName, pr.number);
+): Promise<{
+  conversationClaims: PullRequestConversationClaim[];
+  priorReviewClaims: PriorReviewClaim[];
+  followUpReviewClaims: PriorReviewClaim[];
+}> {
+  const [priorReviews, conversationComments] = await Promise.all([
+    github.listPullRequestReviews(repoFullName, pr.number),
+    github.listPullRequestConversationComments(repoFullName, pr.number),
+  ]);
   return {
+    conversationClaims: buildPullRequestConversationClaims(conversationComments, pr.authorLogin),
     priorReviewClaims: buildPriorReviewClaims(priorReviews, selfLogin),
     followUpReviewClaims: buildFollowUpHumanClaims(priorReviews, selfLogin, priorAttemptCompletedAt),
   };

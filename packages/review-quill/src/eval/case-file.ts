@@ -20,6 +20,7 @@ export interface ReviewEvalCase {
   reviewDocs: string[];
   mustReport: string[][];
   mustNotReport: string[][];
+  conversationClaims: string[];
   priorReviewClaims: string[];
   notes: string;
 }
@@ -28,6 +29,7 @@ const SECTION_NAMES = new Set([
   "Review docs",
   "Must report",
   "Must not report",
+  "PR conversation claims",
   "Prior review claims",
   "Notes",
 ]);
@@ -135,6 +137,7 @@ export async function loadEvalCase(filePath: string): Promise<ReviewEvalCase> {
     reviewDocs: parseList((sections.get("Review docs") ?? []).join("\n")).flat(),
     mustReport: parseList((sections.get("Must report") ?? []).join("\n"), true),
     mustNotReport: parseList((sections.get("Must not report") ?? []).join("\n"), true),
+    conversationClaims: parseList((sections.get("PR conversation claims") ?? []).join("\n")).flat(),
     priorReviewClaims: parseList((sections.get("Prior review claims") ?? []).join("\n")).flat(),
     notes: (sections.get("Notes") ?? []).join("\n").trim(),
   };
