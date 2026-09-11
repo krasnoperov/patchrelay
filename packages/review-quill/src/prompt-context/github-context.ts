@@ -12,7 +12,6 @@ import type {
 // could be seen, which let consecutive rounds contradict each other because
 // each round only ever saw the prior round's *intro* as context.
 const PRIOR_REVIEW_EXCERPT_LIMIT = 1500;
-const CONVERSATION_CLAIM_LIMIT = 5;
 const VERDICT_LINE_REGEX = /\*\*Verdict:[^\n]*/;
 
 export function extractVerdictLine(body: string): string | undefined {
@@ -102,7 +101,6 @@ export function buildPullRequestConversationClaims(
       return [{ comment, createdAtMs, excerpt }];
     })
     .sort((left, right) => right.createdAtMs - left.createdAtMs)
-    .slice(0, CONVERSATION_CLAIM_LIMIT)
     .reverse()
     .map(({ comment, excerpt }) => ({
       ...(comment.authorLogin ? { authorLogin: comment.authorLogin } : {}),

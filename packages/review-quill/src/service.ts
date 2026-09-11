@@ -41,6 +41,7 @@ import { evaluateReviewEligibility } from "./review-eligibility.ts";
 import { ReviewSemaphore } from "./review-semaphore.ts";
 import { waitForReviewHeadStability, type ReviewHeadStabilityWait } from "./review-head-stabilizer.ts";
 import { buildPromptFingerprint } from "./prompt-fingerprint.ts";
+import { buildPullRequestConversationClaims } from "./prompt-context/github-context.ts";
 import { ReviewExecutionTiming } from "./review-execution-timing.ts";
 import { selectPriorReviewThread, type PriorReviewThreadCandidate } from "./prior-review-thread-selector.ts";
 
@@ -634,11 +635,19 @@ export class ReviewQuillService {
       }, "Skipping review execution during Codex capacity pause");
       return;
     }
-    const promptFingerprint = buildPromptFingerprint(pr);
+    let promptFingerprint = buildPromptFingerprint(pr);
     const existingInputChanged = existingAttempt !== undefined
       && existingAttempt.prBaseSha !== pr.baseSha;
     let priorThreadCandidate: PriorReviewThreadCandidate | undefined;
     if (this.config.codex.forkPriorReviewThread) {
+      const conversationComments = await this.github.listPullRequestConversationComments(
+        repo.repoFullName,
+        pr.number,
+      );
+      promptFingerprint = buildPromptFingerprint(
+        pr,
+        buildPullRequestConversationClaims(conversationComments, pr.authorLogin),
+      );
       const latestAttempt = this.store.getLatestDifferentHeadAttempt(repo.repoFullName, pr.number, pr.headSha);
       let latestTranscript;
       if (latestAttempt?.threadId) {

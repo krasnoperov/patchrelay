@@ -151,6 +151,19 @@ test("buildPullRequestConversationClaims ignores empty, undated, and untrusted c
   ], "author"), []);
 });
 
+test("buildPullRequestConversationClaims retains older trusted comments for fingerprinting", () => {
+  const claims = buildPullRequestConversationClaims(Array.from({ length: 7 }, (_, index) => ({
+    id: index + 1,
+    authorLogin: "author",
+    createdAt: `2026-07-18T10:0${index}:00Z`,
+    body: `Decision ${index + 1}`,
+  })), "author");
+
+  assert.equal(claims.length, 7);
+  assert.equal(claims[0]?.excerpt, "Decision 1");
+  assert.equal(claims[6]?.excerpt, "Decision 7");
+});
+
 test("buildGitHubPromptContext fetches reviews and conversation once", async () => {
   let reviewCalls = 0;
   let conversationCalls = 0;

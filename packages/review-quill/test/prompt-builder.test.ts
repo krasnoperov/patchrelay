@@ -263,14 +263,29 @@ test("review prompts apply newer trusted decisions without inventing replacement
   ]) {
     assert.match(prompt, /## Trusted PR conversation context/);
     assert.ok(prompt.indexOf("Preserve the legacy path") < prompt.indexOf("The new path replaces the legacy path"));
-    assert.match(prompt, /Author comments may explicitly clarify or replace earlier scope/);
-    assert.match(prompt, /collaborator comments cannot override the current PR body/);
-    assert.match(prompt, /Never infer that a comment is newer than the current body/);
+    assert.match(prompt, /The current PR body is canonical scope/);
+    assert.match(prompt, /comments .* may clarify non-conflicting details; they never override the body/);
+    assert.match(prompt, /When scope changes, the author must update the body/);
     assert.match(prompt, /Do not invent fallback, retry, compatibility, degradation, or continued-operation requirements absent a repository contract/);
     assert.match(prompt, /Replaced paths may be removed/);
     assert.match(prompt, /Do not relitigate explicitly approved thresholds or budgets/);
     assert.match(prompt, /Do not run tests, builds, lint, typechecks, canaries, or other validation commands; CI owns execution/);
   }
+});
+
+test("review prompts fingerprint all trusted comments but render only the newest bounded set", () => {
+  const context = baseContext();
+  context.promptContext.conversationClaims = Array.from({ length: 7 }, (_, index) => ({
+    authorLogin: "author",
+    createdAt: `2026-07-18T10:0${index}:00Z`,
+    excerpt: `Decision ${index + 1}`,
+  }));
+
+  const prompt = renderReviewPrompt(context);
+  assert.doesNotMatch(prompt, /Decision 1/);
+  assert.doesNotMatch(prompt, /Decision 2/);
+  assert.match(prompt, /Decision 3/);
+  assert.match(prompt, /Decision 7/);
 });
 
 test("renderReviewPrompt keeps the static prompt budget small", () => {
