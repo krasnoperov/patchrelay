@@ -106,8 +106,7 @@ export function buildPullRequestConversationClaims(
       if ((!isPrAuthor && !isMaintainer) || !Number.isFinite(createdAtMs) || !excerpt) return [];
       return [{ comment, createdAtMs, excerpt }];
     })
-    .sort((left, right) => right.createdAtMs - left.createdAtMs)
-    .reverse()
+    .sort((left, right) => left.createdAtMs - right.createdAtMs || left.comment.id - right.comment.id)
     .map(({ comment, excerpt }) => ({
       ...(comment.authorLogin ? { authorLogin: comment.authorLogin } : {}),
       ...(comment.authorAssociation ? { authorAssociation: comment.authorAssociation } : {}),

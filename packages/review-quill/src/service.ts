@@ -787,11 +787,12 @@ export class ReviewQuillService {
       // rendering. Persist the fingerprint of that exact snapshot so the next
       // follow-up selection is keyed to what Codex actually reviewed, rather
       // than the earlier preflight snapshot.
+      const reviewedPromptFingerprint = buildPromptFingerprint(
+        prepared.context.pr,
+        prepared.context.promptContext.conversationClaims,
+      );
       this.store.updateAttempt(attempt.id, {
-        promptFingerprint: buildPromptFingerprint(
-          prepared.context.pr,
-          prepared.context.promptContext.conversationClaims,
-        ),
+        promptFingerprint: reviewedPromptFingerprint,
         prBaseSha: prepared.context.pr.baseSha,
         diffBaseSha: prepared.context.workspace.baseRef,
       });
@@ -875,6 +876,32 @@ export class ReviewQuillService {
           currentHeadSha: currentPr.headSha,
           action: publicationDisposition.action,
         }, "Skipping stale review publication");
+        return;
+      }
+      const currentConversationComments = await this.github.listPullRequestConversationComments(
+        repo.repoFullName,
+        pr.number,
+      );
+      const currentConversationClaims = buildPullRequestConversationClaims(
+        currentConversationComments,
+        currentPr.authorLogin,
+      );
+      const currentPromptFingerprint = buildPromptFingerprint(currentPr, currentConversationClaims);
+      if (currentPromptFingerprint !== reviewedPromptFingerprint) {
+        this.store.updateAttempt(attempt.id, {
+          status: "cancelled",
+          conclusion: "skipped",
+          summary: "PR scope context changed while the review was running; a fresh review is required",
+          threadId: result.threadId,
+          turnId: result.turnId,
+          externalCheckRunId: null,
+          completedAt: new Date().toISOString(),
+        });
+        this.logger.info({
+          repo: repo.repoFullName,
+          prNumber: pr.number,
+          headSha: pr.headSha,
+        }, "Skipping stale review after prompt context changed");
         return;
       }
       timing?.beginPublication();

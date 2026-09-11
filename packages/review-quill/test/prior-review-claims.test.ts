@@ -164,6 +164,15 @@ test("buildPullRequestConversationClaims retains older trusted comments for fing
   assert.equal(claims[6]?.excerpt, "Decision 7");
 });
 
+test("buildPullRequestConversationClaims orders equal timestamps by comment id", () => {
+  const claims = buildPullRequestConversationClaims([
+    { id: 22, authorLogin: "author", createdAt: "2026-07-18T10:00:00Z", body: "Second" },
+    { id: 21, authorLogin: "author", createdAt: "2026-07-18T10:00:00Z", body: "First" },
+  ], "author");
+
+  assert.deepEqual(claims.map((claim) => claim.excerpt), ["First", "Second"]);
+});
+
 test("buildGitHubPromptContext fetches reviews and conversation once", async () => {
   let reviewCalls = 0;
   let conversationCalls = 0;

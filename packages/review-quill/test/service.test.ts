@@ -1288,6 +1288,97 @@ test("failed Codex reviews persist the rendered prompt fingerprint and retain Co
   assert.equal(timingLog.fields.publicationMs, undefined);
 });
 
+test("fresh review skips publication when trusted conversation changes during execution", async () => {
+  let storedAttempt: Record<string, unknown> | undefined;
+  let submitted = false;
+  const pr = {
+    number: 9,
+    title: "Honor author decisions",
+    body: "Canonical scope",
+    authorLogin: "author",
+    headSha: "reviewed-head",
+    baseSha: "main-sha",
+    state: "OPEN",
+    isDraft: false,
+    labels: [],
+  };
+  const service = buildParallelTestService({
+    headStabilizationMs: 0,
+    store: {
+      createAttempt: (params: Record<string, unknown>) => {
+        storedAttempt = { id: 51, ...params };
+        return storedAttempt;
+      },
+      updateAttempt: (_id: number, params: Record<string, unknown>) => {
+        storedAttempt = { ...storedAttempt, ...params };
+        return storedAttempt;
+      },
+      setAttemptTitle: () => undefined,
+    },
+    github: {
+      getPullRequest: async () => pr,
+      listPullRequestConversationComments: async () => [{
+        id: 2,
+        authorLogin: "author",
+        createdAt: "2026-07-18T10:02:00Z",
+        body: "Updated while review was running",
+      }],
+      listPullRequestReviews: async () => [],
+      submitReview: async () => { submitted = true; },
+    },
+    runner: {
+      review: async () => ({
+        threadId: "review-thread",
+        turnId: "review-turn",
+        verdict: {
+          walkthrough: "",
+          architectural_concerns: [],
+          findings: [],
+          verdict: "approve",
+          verdict_reason: "No blockers.",
+        },
+      }),
+    },
+  });
+  (service as unknown as {
+    buildContext: () => Promise<{ context: unknown; dispose: () => Promise<void> }>;
+  }).buildContext = async () => ({
+    context: {
+      pr,
+      repo: { repoFullName: "krasnoperov/alpha" },
+      workspace: { baseRef: "main-sha" },
+      diff: { inventory: [], patches: [], suppressed: [] },
+      promptContext: {
+        conversationClaims: [{
+          authorLogin: "author",
+          createdAt: "2026-07-18T10:01:00Z",
+          excerpt: "Scope when review started",
+        }],
+      },
+    },
+    dispose: async () => undefined,
+  });
+
+  await (service as unknown as {
+    executeReview: (repo: unknown, pr: unknown) => Promise<void>;
+  }).executeReview({
+    repoId: "alpha",
+    repoFullName: "krasnoperov/alpha",
+    baseBranch: "main",
+    requiredChecks: [],
+    excludeBranches: [],
+    reviewDocs: [],
+    diffIgnore: [],
+    diffSummarizeOnly: [],
+    patchBodyBudgetTokens: 5_000,
+  }, pr);
+
+  assert.equal(submitted, false);
+  assert.equal(storedAttempt?.status, "cancelled");
+  assert.equal(storedAttempt?.conclusion, "skipped");
+  assert.match(String(storedAttempt?.summary), /scope context changed/i);
+});
+
 test("dispatchReview re-checks the live head after stabilization", async () => {
   let releaseWait!: () => void;
   let executionCount = 0;
