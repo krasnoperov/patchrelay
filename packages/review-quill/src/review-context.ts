@@ -36,8 +36,9 @@ export async function resolvePromptPullRequest(params: {
 export function revalidatePriorThreadForPrompt(
   candidate: PriorReviewThreadCandidate | undefined,
   promptPr: PullRequestSummary,
+  conversationClaims: ReviewContext["promptContext"]["conversationClaims"] = [],
 ): PriorReviewThreadCandidate | undefined {
-  return candidate?.promptFingerprint === buildPromptFingerprint(promptPr) ? candidate : undefined;
+  return candidate?.promptFingerprint === buildPromptFingerprint(promptPr, conversationClaims) ? candidate : undefined;
 }
 
 function mergePromptCustomization(
@@ -90,7 +91,6 @@ export async function buildReviewContext(params: {
     // fingerprint; title/body edits during workspace preparation must start a
     // full fresh review instead of anchoring a bounded follow-up to stale
     // context.
-    const priorThread = revalidatePriorThreadForPrompt(params.priorThread, promptPr);
     const diff = await buildDiffContext(params.repo, materialized.workspace);
     const promptContext = await buildPromptContext(
       params.github,
@@ -99,7 +99,12 @@ export async function buildReviewContext(params: {
       materialized.workspace,
       params.repo.reviewDocs,
       params.selfLogin,
-      priorThread?.completedAt,
+      params.priorThread?.completedAt,
+    );
+    const priorThread = revalidatePriorThreadForPrompt(
+      params.priorThread,
+      promptPr,
+      promptContext.conversationClaims,
     );
     const repoPromptCustomization = loadReviewQuillRepoPrompting({
       repoRoot: materialized.workspace.worktreePath,

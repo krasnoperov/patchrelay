@@ -779,7 +779,10 @@ export class ReviewQuillService {
       // follow-up selection is keyed to what Codex actually reviewed, rather
       // than the earlier preflight snapshot.
       this.store.updateAttempt(attempt.id, {
-        promptFingerprint: buildPromptFingerprint(prepared.context.pr),
+        promptFingerprint: buildPromptFingerprint(
+          prepared.context.pr,
+          prepared.context.promptContext.conversationClaims,
+        ),
         prBaseSha: prepared.context.pr.baseSha,
         diffBaseSha: prepared.context.workspace.baseRef,
       });

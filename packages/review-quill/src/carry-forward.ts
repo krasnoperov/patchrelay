@@ -10,6 +10,7 @@ import type {
 import { gitPatchId } from "./review-workspace/git.ts";
 import { materializeReviewWorkspace } from "./review-workspace/materialize.ts";
 import { buildPromptFingerprint } from "./prompt-fingerprint.ts";
+import { buildPullRequestConversationClaims } from "./prompt-context/github-context.ts";
 import { classifyPublicationDisposition } from "./review-publication-policy.ts";
 
 // Default opt-out label. A PR carrying this label always re-runs the
@@ -143,6 +144,7 @@ export async function republishCarryForward(
   candidate: ReviewAttemptRecord,
   identity: ChangeIdentity,
   deps: CarryForwardDeps,
+  promptFingerprint = buildPromptFingerprint(pr),
 ): Promise<ReviewAttemptRecord> {
   if (!candidate.reviewBody || !candidate.reviewEvent) {
     throw new Error(`republishCarryForward requires reviewBody and reviewEvent (attempt ${candidate.id})`);
@@ -171,7 +173,7 @@ export async function republishCarryForward(
   const attemptFields = {
     status: "completed" as const,
     conclusion: "approved" as const,
-    promptFingerprint: buildPromptFingerprint(pr),
+    promptFingerprint,
     patchId: identity.patchId,
     prBaseSha: identity.prBaseSha,
     diffBaseSha: identity.diffBaseSha,
@@ -221,7 +223,16 @@ export async function tryCarryForward(
   }
 
   const { identity } = computed;
-  const candidate = lookupCarryForwardCandidate(repo, pr.number, identity, deps.store, buildPromptFingerprint(pr));
+  let conversationComments;
+  try {
+    conversationComments = await deps.github.listPullRequestConversationComments(repo.repoFullName, pr.number);
+  } catch (error) {
+    await computed.dispose();
+    throw error;
+  }
+  const conversationClaims = buildPullRequestConversationClaims(conversationComments, pr.authorLogin);
+  const promptFingerprint = buildPromptFingerprint(pr, conversationClaims);
+  const candidate = lookupCarryForwardCandidate(repo, pr.number, identity, deps.store, promptFingerprint);
   if (!candidate || !candidate.reviewBody || !candidate.reviewEvent) {
     return { kind: "no_candidate", prepared: computed };
   }
@@ -242,7 +253,26 @@ export async function tryCarryForward(
       }, "Skipping stale carry-forward publication");
       return { kind: "input_changed", currentPr: revalidation.currentPr };
     }
-    const inserted = await republishCarryForward(repo, pr, candidate, identity, deps);
+    const currentConversationComments = await deps.github.listPullRequestConversationComments(
+      repo.repoFullName,
+      pr.number,
+    );
+    const currentConversationClaims = buildPullRequestConversationClaims(
+      currentConversationComments,
+      revalidation.currentPr.authorLogin,
+    );
+    const currentPromptFingerprint = buildPromptFingerprint(
+      revalidation.currentPr,
+      currentConversationClaims,
+    );
+    if (currentPromptFingerprint !== promptFingerprint) {
+      deps.logger.info({
+        repo: repo.repoFullName,
+        prNumber: pr.number,
+      }, "Skipping carry-forward after prompt context changed");
+      return { kind: "input_changed", currentPr: revalidation.currentPr };
+    }
+    const inserted = await republishCarryForward(repo, pr, candidate, identity, deps, promptFingerprint);
     return { kind: "carried_forward", attempt: inserted };
   } finally {
     await computed.dispose();

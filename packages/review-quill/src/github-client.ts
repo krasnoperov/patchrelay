@@ -398,10 +398,15 @@ export class GitHubClient {
     prNumber: number,
   ): Promise<PullRequestConversationCommentRecord[]> {
     const encodedRepo = repoFullName.split("/").map(encodeURIComponent).join("/");
-    const comments = await this.request<Array<Record<string, unknown>>>(
-      repoFullName,
-      `/repos/${encodedRepo}/issues/${prNumber}/comments?per_page=100`,
-    );
+    const comments: Array<Record<string, unknown>> = [];
+    for (let page = 1; ; page += 1) {
+      const batch = await this.request<Array<Record<string, unknown>>>(
+        repoFullName,
+        `/repos/${encodedRepo}/issues/${prNumber}/comments?per_page=100&page=${page}`,
+      );
+      comments.push(...batch);
+      if (batch.length < 100) break;
+    }
     return comments.map((comment) => ({
       id: Number(comment.id),
       ...(typeof comment.body === "string" ? { body: comment.body } : {}),

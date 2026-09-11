@@ -81,3 +81,25 @@ test("metadata refresh invalidates a prior-thread candidate selected from the di
     promptFingerprint: buildPromptFingerprint(promptPr),
   }, promptPr)?.threadId, "source-thread");
 });
+
+test("new trusted conversation context invalidates a prior review thread", () => {
+  const pr = basePr();
+  const candidate = {
+    sourceAttemptId: 17,
+    threadId: "source-thread",
+    lastTurnId: "source-turn",
+    priorHeadSha: "prior-head",
+    promptFingerprint: buildPromptFingerprint(pr),
+  };
+  const claims = [{
+    authorLogin: "author",
+    createdAt: "2026-07-18T10:02:00Z",
+    excerpt: "Updated scope",
+  }];
+
+  assert.equal(revalidatePriorThreadForPrompt(candidate, pr, claims), undefined);
+  assert.equal(revalidatePriorThreadForPrompt({
+    ...candidate,
+    promptFingerprint: buildPromptFingerprint(pr, claims),
+  }, pr, claims)?.threadId, "source-thread");
+});

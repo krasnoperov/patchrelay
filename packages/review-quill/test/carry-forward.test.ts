@@ -109,6 +109,21 @@ test("carry-forward lookup requires an approved stored verdict and matching prom
     ),
     undefined,
   );
+  assert.equal(
+    lookupCarryForwardCandidate(
+      makeRepo(),
+      7,
+      identity,
+      store,
+      buildPromptFingerprint(makePr(), [{
+        authorLogin: "author",
+        createdAt: "2026-07-18T10:02:00Z",
+        excerpt: "Updated scope",
+      }]),
+    ),
+    undefined,
+    "new trusted conversation context requires a fresh review",
+  );
   store.close();
 });
 

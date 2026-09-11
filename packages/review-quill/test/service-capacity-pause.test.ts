@@ -102,6 +102,7 @@ function buildCapacityTestHarness(reviewError: () => Error) {
       listOpenPullRequests: async () => [openPullRequest()],
       getPullRequest: async () => openPullRequest(),
       listPullRequestReviews: async () => [],
+      listPullRequestConversationComments: async () => [],
       listCheckRuns: async () => [{ name: "verify", status: "completed", conclusion: "success" }],
     } as never,
     {
@@ -121,6 +122,7 @@ function buildCapacityTestHarness(reviewError: () => Error) {
       pr: openPullRequest(),
       workspace: { worktreePath: "/tmp/review-quill-capacity-test" },
       diff: { inventory: [], patches: [], suppressed: [] },
+      promptContext: { conversationClaims: [] },
     },
     dispose: async () => {},
   });

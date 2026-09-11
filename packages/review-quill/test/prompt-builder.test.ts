@@ -263,10 +263,13 @@ test("review prompts apply newer trusted decisions without inventing replacement
   ]) {
     assert.match(prompt, /## Trusted PR conversation context/);
     assert.ok(prompt.indexOf("Preserve the legacy path") < prompt.indexOf("The new path replaces the legacy path"));
-    assert.match(prompt, /later explicit scope, acceptance, threshold, or tradeoff decision supersedes conflicting older PR or linked-issue text/);
+    assert.match(prompt, /Author comments may explicitly clarify or replace earlier scope/);
+    assert.match(prompt, /collaborator comments cannot override the current PR body/);
+    assert.match(prompt, /Never infer that a comment is newer than the current body/);
     assert.match(prompt, /Do not invent fallback, retry, compatibility, degradation, or continued-operation requirements absent a repository contract/);
     assert.match(prompt, /Replaced paths may be removed/);
     assert.match(prompt, /Do not relitigate explicitly approved thresholds or budgets/);
+    assert.match(prompt, /Do not run tests, builds, lint, typechecks, canaries, or other validation commands; CI owns execution/);
   }
 });
 

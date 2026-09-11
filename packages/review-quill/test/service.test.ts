@@ -1235,6 +1235,13 @@ test("failed Codex reviews persist the rendered prompt fingerprint and retain Co
         pr: renderedPromptPr,
         workspace: { baseRef: "main-sha" },
         diff: { inventory: [], patches: [], suppressed: [] },
+        promptContext: {
+          conversationClaims: [{
+            authorLogin: "author",
+            createdAt: "2026-07-18T10:02:00Z",
+            excerpt: "Exact scope context rendered into the prompt.",
+          }],
+        },
       },
       dispose: async () => undefined,
     };
@@ -1268,7 +1275,11 @@ test("failed Codex reviews persist the rendered prompt fingerprint and retain Co
 
   assert.deepEqual(errorLogs, []);
   assert.equal(storedAttempt?.status, "failed");
-  assert.equal(storedAttempt?.promptFingerprint, buildPromptFingerprint(renderedPromptPr));
+  assert.equal(storedAttempt?.promptFingerprint, buildPromptFingerprint(renderedPromptPr, [{
+    authorLogin: "author",
+    createdAt: "2026-07-18T10:02:00Z",
+    excerpt: "Exact scope context rendered into the prompt.",
+  }]));
   const timingLog = infoLogs.find((entry) => entry.message === "Review execution timing");
   assert.ok(timingLog);
   assert.equal(timingLog.fields.phase, "codex_review");
