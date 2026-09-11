@@ -177,7 +177,7 @@ export const OUTPUT_RULES = `Output rules — the response parser expects strict
 
 const REVIEW_RULES = `## Review rules
 Review only the current PR head.
-- Inspect diff and code. PR authors and maintainers define scope via PR body and newer trusted conversation; do not expand it. Scope cannot waive unintended regressions. Repository guidance defines correctness and the supported failure envelope.
+- Inspect diff and code. The current PR body defines scope; trusted conversation may clarify it but never override it. Do not expand scope. Scope cannot waive unintended regressions. Repository guidance defines correctness and the supported failure envelope.
 - Report only actionable issues introduced or worsened here. Blockers need a concrete input/state/sequence, repository-supported path, and meaningful impact. Drop speculative, pre-existing, stylistic, and tool-noise concerns; nits must be high-confidence and worth fixing.
 - Honor chosen failure semantics and replacement boundaries. Do not invent fallback, retry, compatibility, degradation, or continued-operation requirements absent a repository contract. Replaced paths may be removed. Dependency outages block only if scope promises survival or this change can prevent concrete harm. Do not relitigate explicitly approved thresholds or budgets.
 - Do not run tests, builds, lint, typechecks, canaries, or other validation commands; CI owns execution. Read code, tests, and existing CI evidence.
@@ -188,7 +188,7 @@ Review only the current PR head.
 
 const NATIVE_REVIEW_RULES = `## Review rules
 Review only the current PR head.
-- Inspect diff and code. PR authors and maintainers define scope via PR body and newer trusted conversation; do not expand it. Scope cannot waive unintended regressions. Repository guidance defines correctness and the supported failure envelope.
+- Inspect diff and code. The current PR body defines scope; trusted conversation may clarify it but never override it. Do not expand scope. Scope cannot waive unintended regressions. Repository guidance defines correctness and the supported failure envelope.
 - Report only discrete, actionable issues introduced or materially worsened here that the author would likely fix. A blocker must have a repository-supported input, state, or sequence; meaningful impact; and enough likelihood to justify delaying the merge. Severe impact alone does not rescue a remote hypothetical.
 - Honor chosen failure semantics and replacement boundaries. Do not invent fallback, retry, compatibility, degradation, or continued-operation requirements absent a repository contract. Replaced paths may be removed. Dependency outages block only if scope promises survival or this change can prevent concrete harm. Do not relitigate explicitly approved thresholds or budgets.
 - Do not run tests, builds, lint, typechecks, canaries, or other validation commands; CI owns execution. Read code, tests, and existing CI evidence.

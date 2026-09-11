@@ -240,7 +240,7 @@ test("review prompts keep intended scope authoritative over a conflicting prior 
 
   for (const prompt of [renderReviewPrompt(context), renderFollowUpReviewPrompt(context, "previous-sha")]) {
     assert.match(prompt, /Known durations over 15 seconds are submitted unchanged\./);
-    assert.match(prompt, /PR authors and maintainers define scope via PR body and newer trusted conversation/);
+    assert.match(prompt, /The current PR body defines scope; trusted conversation may clarify it but never override it/);
     assert.match(prompt, /Prior reviews are claims to revalidate/);
     assert.doesNotMatch(prompt, /Authoritative task/);
     assert.doesNotMatch(prompt, /PatchRelay/);
