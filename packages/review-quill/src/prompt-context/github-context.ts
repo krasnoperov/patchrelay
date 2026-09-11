@@ -12,7 +12,7 @@ import type {
 // could be seen, which let consecutive rounds contradict each other because
 // each round only ever saw the prior round's *intro* as context.
 const PRIOR_REVIEW_EXCERPT_LIMIT = 1500;
-export const RENDERED_CONVERSATION_CLAIM_LIMIT = 5;
+export const RENDERED_CONVERSATION_CLAIM_LIMIT = 20;
 const VERDICT_LINE_REGEX = /\*\*Verdict:[^\n]*/;
 
 export function extractVerdictLine(body: string): string | undefined {

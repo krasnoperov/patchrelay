@@ -276,17 +276,17 @@ test("review prompts apply newer trusted decisions without inventing replacement
 
 test("review prompts fingerprint and render the same newest bounded conversation set", () => {
   const context = baseContext();
-  context.promptContext.conversationClaims = Array.from({ length: 7 }, (_, index) => ({
+  context.promptContext.conversationClaims = Array.from({ length: 22 }, (_, index) => ({
     authorLogin: "author",
     createdAt: `2026-07-18T10:0${index}:00Z`,
     excerpt: `Decision ${index + 1}`,
   }));
 
   const prompt = renderReviewPrompt(context);
-  assert.doesNotMatch(prompt, /Decision 1/);
-  assert.doesNotMatch(prompt, /Decision 2/);
-  assert.match(prompt, /Decision 3/);
-  assert.match(prompt, /Decision 7/);
+  assert.doesNotMatch(prompt, /: Decision 1\n/);
+  assert.doesNotMatch(prompt, /: Decision 2\n/);
+  assert.match(prompt, /: Decision 3\n/);
+  assert.match(prompt, /: Decision 22\n/);
 
   const editedHiddenClaims = context.promptContext.conversationClaims.map((claim, index) => (
     index === 0 ? { ...claim, excerpt: "Edited hidden decision" } : claim
