@@ -150,7 +150,9 @@ test("notification handler interrupts a stuck git push command", async () => {
       linearIssueId: issue.linearIssueId,
       runType: "implementation",
     });
-    db.runs.updateRunThread(run.id, { threadId: "thread-push", turnId: "turn-push" });
+    // Item notifications can arrive before startTurn has persisted the run's
+    // turn ID, so their protocol-level turnId must drive the watchdog.
+    db.runs.updateRunThread(run.id, { threadId: "thread-push" });
     db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,

@@ -56,7 +56,9 @@ export class RunNotificationHandler {
       this.activeThreadId = threadId;
     }
 
-    const turnId = extractTurnId(notification.params);
+    const turnId = typeof notification.params.turnId === "string"
+      ? notification.params.turnId
+      : extractTurnId(notification.params);
     const run = this.db.runs.getRunByThreadId(threadId, turnId);
     if (!run) {
       if (notification.method === "turn/completed") {
