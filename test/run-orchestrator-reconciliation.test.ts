@@ -3205,6 +3205,51 @@ test("completed notification for a released run is ignored", async () => {
   }
 });
 
+test("late completion for a released run keeps a reused thread subscribed for its newer run", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-notification-reused-thread-"));
+  try {
+    const unsubscribedThreads: string[] = [];
+    const { db, orchestrator } = createOrchestrator(baseDir, undefined, {
+      startThread: async () => ({ threadId: "thread-reused" }),
+      steerTurn: async () => undefined,
+      unsubscribeThread: async (threadId: string) => { unsubscribedThreads.push(threadId); },
+      readThread: async () => ({ id: "thread-reused", turns: [] }),
+    });
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-reused-thread",
+      issueKey: "USE-REUSED-THREAD",
+      workflowOutcome: undefined,
+    });
+    const oldRun = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.updateRunThread(oldRun.id, { threadId: "thread-reused", turnId: "turn-old" });
+    db.runs.finishRun(oldRun.id, { status: "released", failureReason: "superseded" });
+
+    const newRun = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.updateRunThread(newRun.id, { threadId: "thread-reused", turnId: "turn-new" });
+
+    await orchestrator.handleCodexNotification({
+      method: "turn/completed",
+      params: { threadId: "thread-reused", turn: { id: "turn-old", status: "completed" } },
+    });
+
+    assert.deepEqual(unsubscribedThreads, []);
+    assert.equal(db.runs.getRunById(newRun.id)?.status, "running");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("reconciliation repairs stale undelegated local state from live Linear before releasing an active run", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-delegation-authority-"));
   try {

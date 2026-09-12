@@ -56,7 +56,7 @@ export class RunNotificationHandler {
       this.activeThreadId = threadId;
     }
 
-    const turnId = typeof notification.params.turnId === "string" ? notification.params.turnId : undefined;
+    const turnId = extractTurnId(notification.params);
     const run = this.db.runs.getRunByThreadId(threadId, turnId);
     if (!run) {
       if (notification.method === "turn/completed") {
@@ -229,6 +229,14 @@ export class RunNotificationHandler {
 
   private async unsubscribeCompletedThread(threadId: string, runId?: number): Promise<void> {
     if (!this.options.unsubscribeThread) return;
+    const activeOwner = this.db.runs.getRunByThreadId(threadId);
+    if (activeOwner && (activeOwner.status === "queued" || activeOwner.status === "running") && activeOwner.id !== runId) {
+      this.logger.info(
+        { threadId, completedRunId: runId, activeRunId: activeOwner.id },
+        "Keeping Codex thread subscribed for newer active run",
+      );
+      return;
+    }
     try {
       await this.options.unsubscribeThread(threadId);
     } catch (error) {
