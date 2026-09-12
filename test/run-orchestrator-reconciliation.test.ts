@@ -85,6 +85,7 @@ function createOrchestrator(
     startThreadForIssueTriage?: () => Promise<{ id: string; cwd: string; preview: string; status: string; turns: Array<unknown> }>;
     startThread: () => Promise<{ threadId: string }>;
     steerTurn: () => Promise<undefined>;
+    unsubscribeThread?: (threadId: string) => Promise<void>;
     readThread: (threadId: string) => Promise<{ id: string; turns: Array<{ id: string; status: string; items: Array<unknown> }> }>;
   },
 ) {
@@ -2666,9 +2667,11 @@ test("live completion and reconciliation both reject review_fix runs that never 
     mkdirSync(liveDir, { recursive: true });
     mkdirSync(reconcileDir, { recursive: true });
 
+    const liveUnsubscribedThreads: string[] = [];
     const liveSetup = createOrchestrator(liveDir, undefined, {
       startThread: async () => ({ threadId: "thread-review-parity-live" }),
       steerTurn: async () => undefined,
+      unsubscribeThread: async (threadId: string) => { liveUnsubscribedThreads.push(threadId); },
       readThread: async () => ({
         id: "thread-review-parity-live",
         turns: [{ id: "turn-review-parity-live", status: "completed", items: [] }],
@@ -2725,9 +2728,11 @@ test("live completion and reconciliation both reject review_fix runs that never 
       },
     });
 
+    const reconcileUnsubscribedThreads: string[] = [];
     const reconcileSetup = createOrchestrator(reconcileDir, undefined, {
       startThread: async () => ({ threadId: "thread-review-parity-reconcile" }),
       steerTurn: async () => undefined,
+      unsubscribeThread: async (threadId: string) => { reconcileUnsubscribedThreads.push(threadId); },
       readThread: async () => ({
         id: "thread-review-parity-reconcile",
         turns: [{ id: "turn-review-parity-reconcile", status: "completed", items: [] }],
@@ -2789,6 +2794,8 @@ test("live completion and reconciliation both reject review_fix runs that never 
       reconcileSetup.db.runs.getRunById(reconcileRun.id)?.failureReason ?? "",
       /same SHA back to review/,
     );
+    assert.deepEqual(liveUnsubscribedThreads, ["thread-review-parity-live"]);
+    assert.deepEqual(reconcileUnsubscribedThreads, ["thread-review-parity-reconcile"]);
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });

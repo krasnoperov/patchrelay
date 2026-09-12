@@ -18,6 +18,7 @@ const DEFAULT_PUBLISH_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 
 interface RunNotificationHandlerOptions {
   interruptTurn?: ((options: { threadId: string; turnId: string }) => Promise<void>) | undefined;
+  unsubscribeThread?: ((threadId: string) => Promise<unknown>) | undefined;
   publishCommandTimeoutMs?: number | undefined;
   deferCapacityLimitedRun?: ((params: CapacityDeferralParams) => void) | undefined;
 }
@@ -57,9 +58,17 @@ export class RunNotificationHandler {
 
     const turnId = typeof notification.params.turnId === "string" ? notification.params.turnId : undefined;
     const run = this.db.runs.getRunByThreadId(threadId, turnId);
-    if (!run) return;
+    if (!run) {
+      if (notification.method === "turn/completed") {
+        await this.unsubscribeCompletedThread(threadId);
+      }
+      return;
+    }
     if (run.status !== "running") {
       this.logger.info({ runId: run.id, status: run.status, issueId: run.linearIssueId }, "Ignoring Codex notification for inactive run");
+      if (notification.method === "turn/completed") {
+        await this.unsubscribeCompletedThread(threadId, run.id);
+      }
       return;
     }
     if (!this.heartbeatIssueSessionLease(run.projectId, run.linearIssueId)) {
@@ -82,6 +91,9 @@ export class RunNotificationHandler {
           }
         }
       }
+      if (notification.method === "turn/completed") {
+        await this.unsubscribeCompletedThread(threadId, run.id);
+      }
       return;
     }
 
@@ -97,18 +109,47 @@ export class RunNotificationHandler {
     if (notification.method !== "turn/completed") return;
     this.clearPublishWatchdogsForThread(threadId);
 
-    const thread = await this.readThreadWithRetry(threadId);
-    const issue = this.db.issues.getIssue(run.projectId, run.linearIssueId);
-    if (!issue) return;
+    try {
+      const thread = await this.readThreadWithRetry(threadId);
+      const issue = this.db.issues.getIssue(run.projectId, run.linearIssueId);
+      if (!issue) return;
 
-    const completedTurnId = extractTurnId(notification.params);
-    const status = resolveRunCompletionStatus(notification.params);
+      const completedTurnId = extractTurnId(notification.params);
+      const status = resolveRunCompletionStatus(notification.params);
 
-    if (status === "failed") {
-      const turnErrorMessage = extractTurnErrorMessage(notification.params);
-      const failureReason = buildFailedTurnFailureReason(turnErrorMessage);
-      if (run.runType === "collaboration") {
-        this.runFinalizer.finalizeFailedCollaborationRun({
+      if (status === "failed") {
+        const turnErrorMessage = extractTurnErrorMessage(notification.params);
+        const failureReason = buildFailedTurnFailureReason(turnErrorMessage);
+        if (run.runType === "collaboration") {
+          this.runFinalizer.finalizeFailedCollaborationRun({
+            run,
+            issue,
+            thread,
+            threadId,
+            ...(completedTurnId ? { completedTurnId } : {}),
+            failureReason,
+          });
+          this.activeThreadId = undefined;
+          return;
+        }
+        // A capacity outage (usage limit / rate limit / quota) is not evidence
+        // about the work: defer the same workflow task behind a backoff instead of
+        // consuming an attempt budget or escalating. Only an actual error
+        // message classifies — interrupted turns stay on their own path.
+        const capacity = classifyCodexFailure(turnErrorMessage);
+        if (capacity.kind === "capacity" && this.options.deferCapacityLimitedRun) {
+          this.options.deferCapacityLimitedRun({
+            run,
+            issue,
+            failureReason,
+            capacity,
+            threadId,
+            ...(completedTurnId ? { turnId: completedTurnId } : {}),
+          });
+          this.activeThreadId = undefined;
+          return;
+        }
+        const recovered = await this.runFinalizer.recoverFailedImplementationRun({
           run,
           issue,
           thread,
@@ -116,98 +157,86 @@ export class RunNotificationHandler {
           ...(completedTurnId ? { completedTurnId } : {}),
           failureReason,
         });
-        this.activeThreadId = undefined;
-        return;
-      }
-      // A capacity outage (usage limit / rate limit / quota) is not evidence
-      // about the work: defer the same workflow task behind a backoff instead of
-      // consuming an attempt budget or escalating. Only an actual error
-      // message classifies — interrupted turns stay on their own path.
-      const capacity = classifyCodexFailure(turnErrorMessage);
-      if (capacity.kind === "capacity" && this.options.deferCapacityLimitedRun) {
-        this.options.deferCapacityLimitedRun({
-          run,
-          issue,
-          failureReason,
-          capacity,
-          threadId,
-          ...(completedTurnId ? { turnId: completedTurnId } : {}),
+        if (recovered) {
+          this.activeThreadId = undefined;
+          return;
+        }
+
+        const workflowOutcome = resolveFailureOutcome(run.runType);
+        const failureUpdate = {
+          projectId: run.projectId,
+          linearIssueId: run.linearIssueId,
+          activeRunId: null,
+          workflowOutcome,
+          workflowOutcomeReason: `run_failed:${run.runType}`,
+        };
+        const updated = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, (lease) => {
+          const commit = this.db.issueSessions.commitIssueState({
+            writer: WRITER,
+            lease,
+            // The issue row was read before awaiting the failed-run recovery;
+            // only clear the slot if it still belongs to this run.
+            expectedVersion: issue.version,
+            update: failureUpdate,
+            onConflict: (current) => (current.activeRunId === run.id ? failureUpdate : undefined),
+          });
+          if (commit.outcome !== "applied") return false;
+          this.db.runs.finishRun(run.id, {
+            status: "failed",
+            threadId,
+            ...(completedTurnId ? { turnId: completedTurnId } : {}),
+            failureReason,
+          });
+          return true;
         });
+        if (!updated) {
+          this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Skipping failed-turn cleanup after losing issue-session lease");
+          this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+          return;
+        }
+        this.feed?.publish({
+          level: "error",
+          kind: "turn",
+          issueKey: issue.issueKey,
+          projectId: run.projectId,
+          stage: run.runType,
+          status: "failed",
+          summary: `Turn failed for ${run.runType}`,
+        });
+        const failedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
+        void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType));
+        void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
+        this.linearSync.clearProgress(run.id);
         this.activeThreadId = undefined;
+        this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
         return;
       }
-      const recovered = await this.runFinalizer.recoverFailedImplementationRun({
+
+      await this.runFinalizer.finalizeCompletedRun({
+        source: "notification",
         run,
         issue,
         thread,
         threadId,
         ...(completedTurnId ? { completedTurnId } : {}),
-        failureReason,
       });
-      if (recovered) {
-        this.activeThreadId = undefined;
-        return;
-      }
-
-      const workflowOutcome = resolveFailureOutcome(run.runType);
-      const failureUpdate = {
-        projectId: run.projectId,
-        linearIssueId: run.linearIssueId,
-        activeRunId: null,
-        workflowOutcome,
-        workflowOutcomeReason: `run_failed:${run.runType}`,
-      };
-      const updated = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, (lease) => {
-        const commit = this.db.issueSessions.commitIssueState({
-          writer: WRITER,
-          lease,
-          // The issue row was read before awaiting the failed-run recovery;
-          // only clear the slot if it still belongs to this run.
-          expectedVersion: issue.version,
-          update: failureUpdate,
-          onConflict: (current) => (current.activeRunId === run.id ? failureUpdate : undefined),
-        });
-        if (commit.outcome !== "applied") return false;
-        this.db.runs.finishRun(run.id, {
-          status: "failed",
-          threadId,
-          ...(completedTurnId ? { turnId: completedTurnId } : {}),
-          failureReason,
-        });
-        return true;
-      });
-      if (!updated) {
-        this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Skipping failed-turn cleanup after losing issue-session lease");
-        this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
-        return;
-      }
-      this.feed?.publish({
-        level: "error",
-        kind: "turn",
-        issueKey: issue.issueKey,
-        projectId: run.projectId,
-        stage: run.runType,
-        status: "failed",
-        summary: `Turn failed for ${run.runType}`,
-      });
-      const failedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
-      void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType));
-      void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
-      this.linearSync.clearProgress(run.id);
       this.activeThreadId = undefined;
-      this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
-      return;
+    } finally {
+      this.activeThreadId = undefined;
+      await this.unsubscribeCompletedThread(threadId, run.id);
     }
+  }
 
-    await this.runFinalizer.finalizeCompletedRun({
-      source: "notification",
-      run,
-      issue,
-      thread,
-      threadId,
-      ...(completedTurnId ? { completedTurnId } : {}),
-    });
-    this.activeThreadId = undefined;
+  private async unsubscribeCompletedThread(threadId: string, runId?: number): Promise<void> {
+    if (!this.options.unsubscribeThread) return;
+    try {
+      await this.options.unsubscribeThread(threadId);
+    } catch (error) {
+      this.logger.warn(
+        { threadId, ...(runId === undefined ? {} : { runId }), error: error instanceof Error ? error.message : String(error) },
+        "Failed to unsubscribe completed Codex thread",
+      );
+    }
   }
 
   private observePublishCommand(

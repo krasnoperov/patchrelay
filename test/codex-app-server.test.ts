@@ -13,6 +13,7 @@ class FakeChildProcess extends EventEmitter {
   readonly threadStartParams: Array<Record<string, unknown>> = [];
   readonly threadGoalSetParams: Array<Record<string, unknown>> = [];
   readonly turnInterruptParams: Array<Record<string, unknown>> = [];
+  readonly threadUnsubscribeParams: Array<Record<string, unknown>> = [];
 
   constructor(private readonly scenario: string) {
     super();
@@ -194,6 +195,12 @@ class FakeChildProcess extends EventEmitter {
           ok: true,
         },
       });
+      return;
+    }
+
+    if (message.method === "thread/unsubscribe") {
+      this.threadUnsubscribeParams.push(((message.params as Record<string, unknown>) ?? {}));
+      this.sendStdout({ jsonrpc: "2.0", id: message.id, result: { status: "unsubscribed" } });
       return;
     }
 
@@ -400,6 +407,9 @@ test("CodexAppServerClient handles initialize, approval requests, notifications,
         turnId: "turn-2",
       },
     ]);
+
+    assert.equal(await client.unsubscribeThread("thread-1"), "unsubscribed");
+    assert.deepEqual(child.threadUnsubscribeParams, [{ threadId: "thread-1" }]);
 
     const thread = await client.readThread("thread-1");
     assert.equal(thread.id, "thread-1");

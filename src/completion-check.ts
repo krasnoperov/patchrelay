@@ -14,6 +14,7 @@ interface CodexLike {
   forkThreadForCompletionCheck(threadId: string): Promise<CodexThreadSummary>;
   startTurn(options: { threadId: string; cwd?: string; input: string }): Promise<{ threadId: string; turnId: string; status: string }>;
   readThread(threadId: string, includeTurns?: boolean): Promise<CodexThreadSummary>;
+  unsubscribeThread?(threadId: string): Promise<unknown>;
 }
 
 export interface CompletionCheckExecution extends CompletionCheckResult {
@@ -64,35 +65,46 @@ export class CompletionCheckService {
     }
 
     const fork = await this.codex.forkThreadForCompletionCheck(threadId);
-    const turn = await this.codex.startTurn({
-      threadId: fork.id,
-      ...(fork.cwd ? { cwd: fork.cwd } : {}),
-      input: buildCompletionCheckPrompt(params),
-    });
-    await params.onStarted?.({ threadId: fork.id, turnId: turn.turnId });
+    try {
+      const turn = await this.codex.startTurn({
+        threadId: fork.id,
+        ...(fork.cwd ? { cwd: fork.cwd } : {}),
+        input: buildCompletionCheckPrompt(params),
+      });
+      await params.onStarted?.({ threadId: fork.id, turnId: turn.turnId });
 
-    const completedThread = await this.waitForTurn(fork.id, turn.turnId);
-    const completedTurn = getThreadTurns(completedThread).find((entry) => entry.id === turn.turnId);
-    const latestMessage = completedTurn?.items
-      .filter((item): item is Extract<typeof completedTurn.items[number], { type: "agentMessage" }> => item.type === "agentMessage")
-      .at(-1)?.text;
+      const completedThread = await this.waitForTurn(fork.id, turn.turnId);
+      const completedTurn = getThreadTurns(completedThread).find((entry) => entry.id === turn.turnId);
+      const latestMessage = completedTurn?.items
+        .filter((item): item is Extract<typeof completedTurn.items[number], { type: "agentMessage" }> => item.type === "agentMessage")
+        .at(-1)?.text;
 
-    const parsed = parseCompletionCheckResult(latestMessage);
-    if (!parsed) {
-      this.logger.warn({ runId: params.run.id, issueKey: params.issue.issueKey, threadId: fork.id, turnId: turn.turnId }, "Completion check returned invalid JSON");
+      const parsed = parseCompletionCheckResult(latestMessage);
+      if (!parsed) {
+        this.logger.warn({ runId: params.run.id, issueKey: params.issue.issueKey, threadId: fork.id, turnId: turn.turnId }, "Completion check returned invalid JSON");
+        return {
+          outcome: "failed",
+          summary: "No PR was found, and the completion check returned an invalid result.",
+          threadId: fork.id,
+          turnId: turn.turnId,
+        };
+      }
+
       return {
-        outcome: "failed",
-        summary: "No PR was found, and the completion check returned an invalid result.",
+        ...parsed,
         threadId: fork.id,
         turnId: turn.turnId,
       };
+    } finally {
+      try {
+        await this.codex.unsubscribeThread?.(fork.id);
+      } catch (error) {
+        this.logger.warn(
+          { runId: params.run.id, issueKey: params.issue.issueKey, threadId: fork.id, error: error instanceof Error ? error.message : String(error) },
+          "Failed to unsubscribe completion-check Codex thread",
+        );
+      }
     }
-
-    return {
-      ...parsed,
-      threadId: fork.id,
-      turnId: turn.turnId,
-    };
   }
 
   private async waitForTurn(threadId: string, turnId: string): Promise<CodexThreadSummary> {

@@ -43,6 +43,7 @@ export class RunReconciler {
     private readonly resolveRepoFullName: (projectId: string) => string | undefined = () => undefined,
     private readonly feed?: OperatorEventFeed,
     private readonly telemetry: PatchRelayTelemetry = noopTelemetry,
+    private readonly unsubscribeThread?: ((threadId: string) => Promise<unknown>) | undefined,
   ) {}
 
   async reconcile(params: {
@@ -212,7 +213,11 @@ export class RunReconciler {
 
     const latestTurn = getThreadTurns(thread).at(-1);
     if (latestTurn?.status === "interrupted") {
-      await this.failurePolicy.handleInterruptedRun(run, effectiveIssue);
+      try {
+        await this.failurePolicy.handleInterruptedRun(run, effectiveIssue);
+      } finally {
+        await this.unsubscribeCompletedThread(run.threadId, run.id);
+      }
       return;
     }
 
@@ -224,32 +229,52 @@ export class RunReconciler {
     if (latestTurn?.status === "failed") {
       const capacity = classifyCodexFailure(latestTurn.error?.message ?? undefined);
       if (capacity.kind === "capacity") {
-        this.failurePolicy.deferCapacityLimitedRun({
-          run,
-          issue: effectiveIssue,
-          failureReason: buildFailedTurnFailureReason(latestTurn.error?.message ?? undefined),
-          capacity,
-          threadId: run.threadId,
-          ...(latestTurn.id ? { turnId: latestTurn.id } : {}),
-        });
+        try {
+          this.failurePolicy.deferCapacityLimitedRun({
+            run,
+            issue: effectiveIssue,
+            failureReason: buildFailedTurnFailureReason(latestTurn.error?.message ?? undefined),
+            capacity,
+            threadId: run.threadId,
+            ...(latestTurn.id ? { turnId: latestTurn.id } : {}),
+          });
+        } finally {
+          await this.unsubscribeCompletedThread(run.threadId, run.id);
+        }
         return;
       }
     }
 
     if (latestTurn?.status === "completed") {
-      await this.runFinalizer.finalizeCompletedRun({
-        source: "reconciliation",
-        run,
-        issue: effectiveIssue,
-        thread,
-        threadId: run.threadId,
-        ...(latestTurn.id ? { completedTurnId: latestTurn.id } : {}),
-      });
+      try {
+        await this.runFinalizer.finalizeCompletedRun({
+          source: "reconciliation",
+          run,
+          issue: effectiveIssue,
+          thread,
+          threadId: run.threadId,
+          ...(latestTurn.id ? { completedTurnId: latestTurn.id } : {}),
+        });
+      } finally {
+        await this.unsubscribeCompletedThread(run.threadId, run.id);
+      }
       return;
     }
 
     if (acquiredRecoveryLease) {
       this.releaseLease(run.projectId, run.linearIssueId);
+    }
+  }
+
+  private async unsubscribeCompletedThread(threadId: string, runId: number): Promise<void> {
+    if (!this.unsubscribeThread) return;
+    try {
+      await this.unsubscribeThread(threadId);
+    } catch (error) {
+      this.logger.warn(
+        { threadId, runId, error: error instanceof Error ? error.message : String(error) },
+        "Failed to unsubscribe reconciled Codex thread",
+      );
     }
   }
 

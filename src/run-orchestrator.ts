@@ -200,6 +200,7 @@ export class RunOrchestrator {
       feed,
       {
         interruptTurn: (options) => codex.interruptTurn(options),
+        unsubscribeThread: (threadId) => codex.unsubscribeThread(threadId),
         // Lazy: the failure policy is constructed just below.
         deferCapacityLimitedRun: (params) => this.runFailurePolicy.deferCapacityLimitedRun(params),
       },
@@ -231,6 +232,7 @@ export class RunOrchestrator {
       (projectId) => this.config.projects.find((project) => project.id === projectId)?.github?.repoFullName,
       feed,
       telemetry,
+      (threadId) => codex.unsubscribeThread(threadId),
     );
     this.runTaskPlanner = new RunTaskPlanner(db, logger);
     this.linearIssueProjection = new LinearIssueProjectionService(db, linearProvider, logger);

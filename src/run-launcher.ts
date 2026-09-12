@@ -468,7 +468,8 @@ export class RunLauncher {
       const resumeThread = params.runType === "collaboration"
         ? params.resumeThread && previousRun?.runType === "collaboration"
         : params.resumeThread;
-      if (shouldReuseIssueThread({ existingThreadId: params.issue.threadId, compactThread, resumeThread })) {
+      const reuseIssueThread = shouldReuseIssueThread({ existingThreadId: params.issue.threadId, compactThread, resumeThread });
+      if (reuseIssueThread) {
         threadId = params.issue.threadId!;
       } else {
         const thread = params.runType === "collaboration"
@@ -488,6 +489,9 @@ export class RunLauncher {
       this.db.runs.updateLaunchPhase(params.run.id, "thread_started");
 
       try {
+        if (reuseIssueThread) {
+          await this.codex.resumeThread(threadId, params.worktreePath);
+        }
         const turn = await startTurnAfterInitialGoal({
           codex: this.codex,
           threadId,
