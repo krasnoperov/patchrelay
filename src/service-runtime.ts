@@ -78,6 +78,7 @@ export class ServiceRuntime {
         if (error instanceof IssueRunCapacityFullError) {
           return {
             delayMs: this.getIssueRunCapacityRetryDelayMs(),
+            allowPriorityPromotion: true,
             logLevel: "debug",
             message: "Issue run capacity is full; keeping item queued for retry",
           };
@@ -115,8 +116,8 @@ export class ServiceRuntime {
     this.webhookQueue.enqueue(eventId, options);
   }
 
-  enqueueIssue(projectId: string, issueId: string): void {
-    this.issueQueue.enqueue({ projectId, issueId });
+  enqueueIssue(projectId: string, issueId: string, options?: { priority?: boolean }): void {
+    this.issueQueue.enqueue({ projectId, issueId }, options);
   }
 
   setLinearConnected(connected: boolean): void {

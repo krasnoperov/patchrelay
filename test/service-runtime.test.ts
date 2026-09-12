@@ -216,6 +216,39 @@ test("service runtime retries issue queue items that hit a transient SQLite lock
   assert.deepEqual(processedIssues, [{ projectId: "app", issueId: "issue-locked-once" }]);
 });
 
+test("service runtime does not shorten SQLite lock backoff when capacity timers fire", async () => {
+  const codex = new FakeCodexClient();
+  let activeRuns = 0;
+  let lockedAttempts = 0;
+
+  const runtime = new ServiceRuntime(
+    codex as never,
+    pino({ enabled: false }),
+    { async reconcileActiveRuns() {} },
+    { listIssuesReadyForExecution: () => [], countActiveIssueRuns: () => activeRuns },
+    { async processWebhookEvent() {} },
+    {
+      async processIssue(item) {
+        if (item.issueId === "issue-locked") {
+          lockedAttempts += 1;
+          throw new Error("database is locked");
+        }
+      },
+    },
+    { maxActiveIssueRuns: 1, issueRunCapacityRetryDelayMs: 20 },
+  );
+
+  runtime.enqueueIssue("app", "issue-locked", { priority: true });
+  await flushQueue();
+  assert.equal(lockedAttempts, 1);
+
+  activeRuns = 1;
+  runtime.enqueueIssue("app", "issue-capacity");
+  await delay(100);
+
+  assert.equal(lockedAttempts, 1);
+});
+
 test("service runtime prioritizes urgent webhook items without introducing a second processing lane", async () => {
   const codex = new FakeCodexClient();
   const processedWebhooks: number[] = [];
@@ -235,6 +268,61 @@ test("service runtime prioritizes urgent webhook items without introducing a sec
   await flushQueue();
 
   assert.deepEqual(processedWebhooks, [99, 41, 42]);
+});
+
+test("service runtime moves an already queued issue to the front when it becomes urgent", async () => {
+  const codex = new FakeCodexClient();
+  const processedIssues: RuntimeIssueQueueItem[] = [];
+
+  const runtime = new ServiceRuntime(
+    codex as never,
+    pino({ enabled: false }),
+    { async reconcileActiveRuns() {} },
+    { listIssuesReadyForExecution: () => [] },
+    { async processWebhookEvent() {} },
+    { async processIssue(item) { processedIssues.push(item); } },
+  );
+
+  runtime.enqueueIssue("app", "issue-1");
+  runtime.enqueueIssue("app", "issue-2");
+  runtime.enqueueIssue("app", "issue-2", { priority: true });
+  await flushQueue();
+
+  assert.deepEqual(processedIssues, [
+    { projectId: "app", issueId: "issue-2" },
+    { projectId: "app", issueId: "issue-1" },
+  ]);
+});
+
+test("service runtime promotes a capacity-delayed issue when it becomes urgent", async () => {
+  const codex = new FakeCodexClient();
+  const processedIssues: RuntimeIssueQueueItem[] = [];
+  let activeRuns = 1;
+
+  const runtime = new ServiceRuntime(
+    codex as never,
+    pino({ enabled: false }),
+    { async reconcileActiveRuns() {} },
+    { listIssuesReadyForExecution: () => [], countActiveIssueRuns: () => activeRuns },
+    { async processWebhookEvent() {} },
+    { async processIssue(item) { processedIssues.push(item); activeRuns += 1; } },
+    { maxActiveIssueRuns: 1, issueRunCapacityRetryDelayMs: 100 },
+  );
+
+  runtime.enqueueIssue("app", "issue-normal");
+  runtime.enqueueIssue("app", "issue-delayed");
+  await flushQueue();
+  assert.deepEqual(processedIssues, []);
+
+  await delay(25);
+  runtime.enqueueIssue("app", "issue-delayed", { priority: true });
+  await flushQueue();
+  assert.deepEqual(processedIssues, []);
+
+  activeRuns = 0;
+  await delay(100);
+
+  assert.deepEqual(processedIssues, [{ projectId: "app", issueId: "issue-delayed" }]);
 });
 
 test("service runtime clears ready state on stop and preserves codex status in readiness", async () => {
