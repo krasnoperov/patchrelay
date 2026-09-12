@@ -216,6 +216,39 @@ test("service runtime retries issue queue items that hit a transient SQLite lock
   assert.deepEqual(processedIssues, [{ projectId: "app", issueId: "issue-locked-once" }]);
 });
 
+test("service runtime does not shorten SQLite lock backoff when capacity timers fire", async () => {
+  const codex = new FakeCodexClient();
+  let activeRuns = 0;
+  let lockedAttempts = 0;
+
+  const runtime = new ServiceRuntime(
+    codex as never,
+    pino({ enabled: false }),
+    { async reconcileActiveRuns() {} },
+    { listIssuesReadyForExecution: () => [], countActiveIssueRuns: () => activeRuns },
+    { async processWebhookEvent() {} },
+    {
+      async processIssue(item) {
+        if (item.issueId === "issue-locked") {
+          lockedAttempts += 1;
+          throw new Error("database is locked");
+        }
+      },
+    },
+    { maxActiveIssueRuns: 1, issueRunCapacityRetryDelayMs: 20 },
+  );
+
+  runtime.enqueueIssue("app", "issue-locked", { priority: true });
+  await flushQueue();
+  assert.equal(lockedAttempts, 1);
+
+  activeRuns = 1;
+  runtime.enqueueIssue("app", "issue-capacity");
+  await delay(100);
+
+  assert.equal(lockedAttempts, 1);
+});
+
 test("service runtime prioritizes urgent webhook items without introducing a second processing lane", async () => {
   const codex = new FakeCodexClient();
   const processedWebhooks: number[] = [];

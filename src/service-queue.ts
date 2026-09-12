@@ -8,6 +8,7 @@ interface QueueEntry<T> {
 
 export interface SerialWorkQueueRetryDecision {
   delayMs: number;
+  allowPriorityPromotion?: boolean;
   logLevel?: "debug" | "warn";
   message?: string;
 }
@@ -19,7 +20,11 @@ export interface SerialWorkQueueOptions<T> {
 export class SerialWorkQueue<T> {
   private readonly items: Array<QueueEntry<T>> = [];
   private readonly queuedKeys = new Set<string>();
-  private readonly delayedEntries = new Map<string, { entry: QueueEntry<T>; timer: ReturnType<typeof setTimeout> }>();
+  private readonly delayedEntries = new Map<string, {
+    entry: QueueEntry<T>;
+    timer: ReturnType<typeof setTimeout>;
+    allowPriorityPromotion: boolean;
+  }>();
   private pending = false;
 
   constructor(
@@ -56,11 +61,13 @@ export class SerialWorkQueue<T> {
         } else if (existingIndex === -1) {
           const delayed = this.delayedEntries.get(key);
           if (delayed) {
-            clearTimeout(delayed.timer);
-            this.delayedEntries.delete(key);
             delayed.entry.priority = true;
-            this.items.unshift(delayed.entry);
-            this.ensureDrain();
+            if (delayed.allowPriorityPromotion) {
+              clearTimeout(delayed.timer);
+              this.delayedEntries.delete(key);
+              this.items.unshift(delayed.entry);
+              this.ensureDrain();
+            }
           }
         }
       }
@@ -79,7 +86,7 @@ export class SerialWorkQueue<T> {
     this.ensureDrain();
   }
 
-  private scheduleRetry(entry: QueueEntry<T>, delayMs: number): void {
+  private scheduleRetry(entry: QueueEntry<T>, retry: SerialWorkQueueRetryDecision): void {
     const key = this.getKey?.(entry.item);
     if (key && this.queuedKeys.has(key)) {
       return;
@@ -96,16 +103,16 @@ export class SerialWorkQueue<T> {
       }
       this.enqueueEntry(entry);
       this.promoteDelayedPriorities();
-    }, delayMs);
+    }, retry.delayMs);
     if (key) {
-      this.delayedEntries.set(key, { entry, timer });
+      this.delayedEntries.set(key, { entry, timer, allowPriorityPromotion: retry.allowPriorityPromotion === true });
     }
     timer.unref?.();
   }
 
   private promoteDelayedPriorities(): void {
     for (const [key, delayed] of this.delayedEntries) {
-      if (!delayed.entry.priority) {
+      if (!delayed.entry.priority || !delayed.allowPriorityPromotion) {
         continue;
       }
       clearTimeout(delayed.timer);
@@ -147,7 +154,7 @@ export class SerialWorkQueue<T> {
             { item: entry.item, error: err.message, attempt: nextAttempt, retryDelayMs: retry.delayMs },
             retry.message ?? "Queue item processing failed; retrying",
           );
-          this.scheduleRetry({ item: entry.item, attempt: nextAttempt, priority: entry.priority }, retry.delayMs);
+          this.scheduleRetry({ item: entry.item, attempt: nextAttempt, priority: entry.priority }, retry);
           continue;
         }
         this.logger.error({ item: entry.item, error: err.message, stack: err.stack }, "Queue item processing failed");

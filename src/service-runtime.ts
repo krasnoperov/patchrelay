@@ -78,6 +78,7 @@ export class ServiceRuntime {
         if (error instanceof IssueRunCapacityFullError) {
           return {
             delayMs: this.getIssueRunCapacityRetryDelayMs(),
+            allowPriorityPromotion: true,
             logLevel: "debug",
             message: "Issue run capacity is full; keeping item queued for retry",
           };
