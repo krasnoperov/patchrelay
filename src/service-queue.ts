@@ -18,6 +18,7 @@ export interface SerialWorkQueueOptions<T> {
 export class SerialWorkQueue<T> {
   private readonly items: Array<QueueEntry<T>> = [];
   private readonly queuedKeys = new Set<string>();
+  private readonly delayedEntries = new Map<string, { entry: QueueEntry<T>; timer: ReturnType<typeof setTimeout> }>();
   private pending = false;
 
   constructor(
@@ -46,6 +47,14 @@ export class SerialWorkQueue<T> {
           if (existing) {
             this.items.unshift(existing);
           }
+        } else if (existingIndex === -1) {
+          const delayed = this.delayedEntries.get(key);
+          if (delayed) {
+            clearTimeout(delayed.timer);
+            this.delayedEntries.delete(key);
+            this.items.unshift(delayed.entry);
+            this.ensureDrain();
+          }
         }
       }
       return;
@@ -60,12 +69,7 @@ export class SerialWorkQueue<T> {
       this.queuedKeys.add(key);
     }
 
-    if (!this.pending) {
-      this.pending = true;
-      queueMicrotask(() => {
-        void this.drain();
-      });
-    }
+    this.ensureDrain();
   }
 
   private scheduleRetry(entry: QueueEntry<T>, delayMs: number): void {
@@ -78,11 +82,26 @@ export class SerialWorkQueue<T> {
     }
     const timer = setTimeout(() => {
       if (key) {
+        this.delayedEntries.delete(key);
+      }
+      if (key) {
         this.queuedKeys.delete(key);
       }
       this.enqueueEntry(entry);
     }, delayMs);
+    if (key) {
+      this.delayedEntries.set(key, { entry, timer });
+    }
     timer.unref?.();
+  }
+
+  private ensureDrain(): void {
+    if (!this.pending) {
+      this.pending = true;
+      queueMicrotask(() => {
+        void this.drain();
+      });
+    }
   }
 
   private async drain(): Promise<void> {

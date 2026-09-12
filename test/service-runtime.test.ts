@@ -261,6 +261,33 @@ test("service runtime moves an already queued issue to the front when it becomes
   ]);
 });
 
+test("service runtime promotes a capacity-delayed issue when it becomes urgent", async () => {
+  const codex = new FakeCodexClient();
+  const processedIssues: RuntimeIssueQueueItem[] = [];
+  let activeRuns = 1;
+
+  const runtime = new ServiceRuntime(
+    codex as never,
+    pino({ enabled: false }),
+    { async reconcileActiveRuns() {} },
+    { listIssuesReadyForExecution: () => [], countActiveIssueRuns: () => activeRuns },
+    { async processWebhookEvent() {} },
+    { async processIssue(item) { processedIssues.push(item); activeRuns += 1; } },
+    { maxActiveIssueRuns: 1, issueRunCapacityRetryDelayMs: 1_000 },
+  );
+
+  runtime.enqueueIssue("app", "issue-delayed");
+  await flushQueue();
+  assert.deepEqual(processedIssues, []);
+
+  activeRuns = 0;
+  runtime.enqueueIssue("app", "issue-normal");
+  runtime.enqueueIssue("app", "issue-delayed", { priority: true });
+  await flushQueue();
+
+  assert.deepEqual(processedIssues, [{ projectId: "app", issueId: "issue-delayed" }]);
+});
+
 test("service runtime clears ready state on stop and preserves codex status in readiness", async () => {
   const codex = new FakeCodexClient();
   const runtime = new ServiceRuntime(
