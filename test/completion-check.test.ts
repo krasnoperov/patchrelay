@@ -5,6 +5,7 @@ import { CompletionCheckService, extractCompletionCheck } from "../src/completio
 
 test("completion check parses wrapped JSON from the forked thread", async () => {
   let capturedPrompt = "";
+  const unsubscribedThreads: string[] = [];
   const service = new CompletionCheckService({
     async forkThreadForCompletionCheck() {
       return { id: "fork-1", preview: "", cwd: "/tmp/completion-check", status: "idle", turns: [] };
@@ -37,6 +38,9 @@ test("completion check parses wrapped JSON from the forked thread", async () => 
         ],
       };
     },
+    async unsubscribeThread(threadId) {
+      unsubscribedThreads.push(threadId);
+    },
   }, pino({ enabled: false }));
 
   const result = await service.run({
@@ -60,6 +64,7 @@ test("completion check parses wrapped JSON from the forked thread", async () => 
   assert.equal(result.recommendedReply, "Approved: update the routing.");
   assert.equal(result.threadId, "fork-1");
   assert.equal(result.turnId, "turn-1");
+  assert.deepEqual(unsubscribedThreads, ["fork-1"]);
   assert.match(capturedPrompt, /Do not run commands, call tools, edit files, or inspect the repository\./);
   assert.match(capturedPrompt, /Return exactly one JSON object and no extra prose\./);
   assert.match(capturedPrompt, /Bias rules:/);

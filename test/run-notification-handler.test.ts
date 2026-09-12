@@ -58,6 +58,7 @@ test("notification handler keeps completion authoritative when Linear progress r
 
     const warnings: Array<Record<string, unknown>> = [];
     const finalized: Array<Record<string, unknown>> = [];
+    const unsubscribedThreads: string[] = [];
     const handler = new RunNotificationHandler(
       db,
       {
@@ -85,6 +86,8 @@ test("notification handler keeps completion authoritative when Linear progress r
       (_projectId, _linearIssueId, fn) => fn({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId: "lease-1" }),
       () => true,
       () => {},
+      undefined,
+      { unsubscribeThread: async (threadId) => { unsubscribedThreads.push(threadId); } },
     );
 
     const progressNotification: CodexNotification = {
@@ -120,6 +123,7 @@ test("notification handler keeps completion authoritative when Linear progress r
     assert.equal(finalized.length, 1);
     assert.equal(finalized[0]?.source, "notification");
     assert.equal(finalized[0]?.threadId, "thread-1");
+    assert.deepEqual(unsubscribedThreads, ["thread-1"]);
     assert.equal(warnings.length, 2);
     assert.equal(warnings[0]?.error, "no such table: issues");
     assert.equal(warnings[0]?.method, "item/started");
@@ -146,7 +150,9 @@ test("notification handler interrupts a stuck git push command", async () => {
       linearIssueId: issue.linearIssueId,
       runType: "implementation",
     });
-    db.runs.updateRunThread(run.id, { threadId: "thread-push", turnId: "turn-push" });
+    // Item notifications can arrive before startTurn has persisted the run's
+    // turn ID, so their protocol-level turnId must drive the watchdog.
+    db.runs.updateRunThread(run.id, { threadId: "thread-push" });
     db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,

@@ -348,6 +348,11 @@ export class CodexAppServerClient extends EventEmitter {
     return response.data.map((thread) => this.mapThread(thread));
   }
 
+  async unsubscribeThread(threadId: string): Promise<"notLoaded" | "notSubscribed" | "unsubscribed"> {
+    const response = (await this.sendRequest("thread/unsubscribe", { threadId })) as { status: "notLoaded" | "notSubscribed" | "unsubscribed" };
+    return response.status;
+  }
+
   async steerTurn(options: SteerTurnOptions): Promise<void> {
     await this.sendRequest("turn/steer", {
       threadId: options.threadId,

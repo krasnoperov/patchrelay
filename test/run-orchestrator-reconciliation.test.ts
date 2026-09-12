@@ -85,6 +85,7 @@ function createOrchestrator(
     startThreadForIssueTriage?: () => Promise<{ id: string; cwd: string; preview: string; status: string; turns: Array<unknown> }>;
     startThread: () => Promise<{ threadId: string }>;
     steerTurn: () => Promise<undefined>;
+    unsubscribeThread?: (threadId: string) => Promise<void>;
     readThread: (threadId: string) => Promise<{ id: string; turns: Array<{ id: string; status: string; items: Array<unknown> }> }>;
   },
 ) {
@@ -2666,9 +2667,11 @@ test("live completion and reconciliation both reject review_fix runs that never 
     mkdirSync(liveDir, { recursive: true });
     mkdirSync(reconcileDir, { recursive: true });
 
+    const liveUnsubscribedThreads: string[] = [];
     const liveSetup = createOrchestrator(liveDir, undefined, {
       startThread: async () => ({ threadId: "thread-review-parity-live" }),
       steerTurn: async () => undefined,
+      unsubscribeThread: async (threadId: string) => { liveUnsubscribedThreads.push(threadId); },
       readThread: async () => ({
         id: "thread-review-parity-live",
         turns: [{ id: "turn-review-parity-live", status: "completed", items: [] }],
@@ -2725,9 +2728,11 @@ test("live completion and reconciliation both reject review_fix runs that never 
       },
     });
 
+    const reconcileUnsubscribedThreads: string[] = [];
     const reconcileSetup = createOrchestrator(reconcileDir, undefined, {
       startThread: async () => ({ threadId: "thread-review-parity-reconcile" }),
       steerTurn: async () => undefined,
+      unsubscribeThread: async (threadId: string) => { reconcileUnsubscribedThreads.push(threadId); },
       readThread: async () => ({
         id: "thread-review-parity-reconcile",
         turns: [{ id: "turn-review-parity-reconcile", status: "completed", items: [] }],
@@ -2789,6 +2794,8 @@ test("live completion and reconciliation both reject review_fix runs that never 
       reconcileSetup.db.runs.getRunById(reconcileRun.id)?.failureReason ?? "",
       /same SHA back to review/,
     );
+    assert.deepEqual(liveUnsubscribedThreads, ["thread-review-parity-live"]);
+    assert.deepEqual(reconcileUnsubscribedThreads, ["thread-review-parity-reconcile"]);
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });
@@ -3194,6 +3201,51 @@ test("completed notification for a released run is ignored", async () => {
     assert.equal(untouchedIssue?.activeRunId, undefined);
   } finally {
     process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("late completion for a released run keeps a reused thread subscribed for its newer run", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-notification-reused-thread-"));
+  try {
+    const unsubscribedThreads: string[] = [];
+    const { db, orchestrator } = createOrchestrator(baseDir, undefined, {
+      startThread: async () => ({ threadId: "thread-reused" }),
+      steerTurn: async () => undefined,
+      unsubscribeThread: async (threadId: string) => { unsubscribedThreads.push(threadId); },
+      readThread: async () => ({ id: "thread-reused", turns: [] }),
+    });
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-reused-thread",
+      issueKey: "USE-REUSED-THREAD",
+      workflowOutcome: undefined,
+    });
+    const oldRun = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.updateRunThread(oldRun.id, { threadId: "thread-reused", turnId: "turn-old" });
+    db.runs.finishRun(oldRun.id, { status: "released", failureReason: "superseded" });
+
+    const newRun = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.updateRunThread(newRun.id, { threadId: "thread-reused", turnId: "turn-new" });
+
+    await orchestrator.handleCodexNotification({
+      method: "turn/completed",
+      params: { threadId: "thread-reused", turn: { id: "turn-old", status: "completed" } },
+    });
+
+    assert.deepEqual(unsubscribedThreads, []);
+    assert.equal(db.runs.getRunById(newRun.id)?.status, "running");
+  } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
