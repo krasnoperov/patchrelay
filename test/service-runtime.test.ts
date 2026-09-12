@@ -273,17 +273,21 @@ test("service runtime promotes a capacity-delayed issue when it becomes urgent",
     { listIssuesReadyForExecution: () => [], countActiveIssueRuns: () => activeRuns },
     { async processWebhookEvent() {} },
     { async processIssue(item) { processedIssues.push(item); activeRuns += 1; } },
-    { maxActiveIssueRuns: 1, issueRunCapacityRetryDelayMs: 1_000 },
+    { maxActiveIssueRuns: 1, issueRunCapacityRetryDelayMs: 100 },
   );
 
+  runtime.enqueueIssue("app", "issue-normal");
   runtime.enqueueIssue("app", "issue-delayed");
   await flushQueue();
   assert.deepEqual(processedIssues, []);
 
-  activeRuns = 0;
-  runtime.enqueueIssue("app", "issue-normal");
+  await delay(25);
   runtime.enqueueIssue("app", "issue-delayed", { priority: true });
   await flushQueue();
+  assert.deepEqual(processedIssues, []);
+
+  activeRuns = 0;
+  await delay(100);
 
   assert.deepEqual(processedIssues, [{ projectId: "app", issueId: "issue-delayed" }]);
 });

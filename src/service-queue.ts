@@ -3,6 +3,7 @@ import type { Logger } from "pino";
 interface QueueEntry<T> {
   item: T;
   attempt: number;
+  priority: boolean;
 }
 
 export interface SerialWorkQueueRetryDecision {
@@ -29,7 +30,7 @@ export class SerialWorkQueue<T> {
   ) {}
 
   enqueue(item: T, options?: { priority?: boolean }): void {
-    this.enqueueEntry({ item, attempt: 0 }, options);
+    this.enqueueEntry({ item, attempt: 0, priority: options?.priority === true }, options);
   }
 
   size(): number {
@@ -38,20 +39,26 @@ export class SerialWorkQueue<T> {
 
   private enqueueEntry(entry: QueueEntry<T>, options?: { priority?: boolean }): void {
     const { item } = entry;
+    const priority = options?.priority === true || entry.priority;
+    entry.priority = priority;
     const key = this.getKey?.(item);
     if (key && this.queuedKeys.has(key)) {
-      if (options?.priority) {
+      if (priority) {
         const existingIndex = this.items.findIndex((queued) => this.getKey?.(queued.item) === key);
         if (existingIndex > 0) {
           const [existing] = this.items.splice(existingIndex, 1);
           if (existing) {
+            existing.priority = true;
             this.items.unshift(existing);
           }
+        } else if (existingIndex === 0) {
+          this.items[0]!.priority = true;
         } else if (existingIndex === -1) {
           const delayed = this.delayedEntries.get(key);
           if (delayed) {
             clearTimeout(delayed.timer);
             this.delayedEntries.delete(key);
+            delayed.entry.priority = true;
             this.items.unshift(delayed.entry);
             this.ensureDrain();
           }
@@ -60,7 +67,7 @@ export class SerialWorkQueue<T> {
       return;
     }
 
-    if (options?.priority) {
+    if (priority) {
       this.items.unshift(entry);
     } else {
       this.items.push(entry);
@@ -88,11 +95,24 @@ export class SerialWorkQueue<T> {
         this.queuedKeys.delete(key);
       }
       this.enqueueEntry(entry);
+      this.promoteDelayedPriorities();
     }, delayMs);
     if (key) {
       this.delayedEntries.set(key, { entry, timer });
     }
     timer.unref?.();
+  }
+
+  private promoteDelayedPriorities(): void {
+    for (const [key, delayed] of this.delayedEntries) {
+      if (!delayed.entry.priority) {
+        continue;
+      }
+      clearTimeout(delayed.timer);
+      this.delayedEntries.delete(key);
+      this.queuedKeys.delete(key);
+      this.enqueueEntry(delayed.entry);
+    }
   }
 
   private ensureDrain(): void {
@@ -127,7 +147,7 @@ export class SerialWorkQueue<T> {
             { item: entry.item, error: err.message, attempt: nextAttempt, retryDelayMs: retry.delayMs },
             retry.message ?? "Queue item processing failed; retrying",
           );
-          this.scheduleRetry({ item: entry.item, attempt: nextAttempt }, retry.delayMs);
+          this.scheduleRetry({ item: entry.item, attempt: nextAttempt, priority: entry.priority }, retry.delayMs);
           continue;
         }
         this.logger.error({ item: entry.item, error: err.message, stack: err.stack }, "Queue item processing failed");
