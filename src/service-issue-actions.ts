@@ -11,6 +11,7 @@ import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { ServiceRuntime } from "./service-runtime.ts";
 import type { AppConfig } from "./types.ts";
 import { deriveIssuePhase, type IssuePhase } from "./issue-phase.ts";
+import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
 const WRITER = "service-issue-actions";
 
@@ -125,8 +126,12 @@ export class ServiceIssueActions {
       status: "retry",
       summary: `Retry queued: ${retryTarget.runType}`,
     });
+    const updatedIssue = this.db.issues.getIssue(issue.projectId, issue.linearIssueId);
+    if (updatedIssue) {
+      reconcileWorkflowTasksForIssue(this.db, updatedIssue);
+    }
     if (hasRunnableWorkflowTask(this.db, issue.projectId, issue.linearIssueId)) {
-      this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
+      this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId, { priority: true });
     }
     return { issueKey, runType: retryTarget.runType };
   }

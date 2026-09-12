@@ -208,6 +208,14 @@ test("retryIssue preserves branch upkeep retries for requested-changes issues", 
       WHERE project_id = ? AND linear_issue_id = ?
     `).run("branch_upkeep", issue.projectId, issue.linearIssueId);
 
+    const enqueues: Array<{ projectId: string; issueId: string; priority?: boolean }> = [];
+    const runtime = (service as unknown as {
+      runtime: { enqueueIssue(projectId: string, issueId: string, options?: { priority?: boolean }): void };
+    }).runtime;
+    runtime.enqueueIssue = (projectId, issueId, options) => {
+      enqueues.push({ projectId, issueId, priority: options?.priority });
+    };
+
     const result = service.retryIssue("USE-2");
 
     assert.deepEqual(result, { issueKey: "USE-2", runType: "branch_upkeep" });
@@ -219,6 +227,7 @@ test("retryIssue preserves branch upkeep retries for requested-changes issues", 
     const latestEvent = events.at(-1);
     assert.equal(latestEvent?.eventType, "review_changes_requested");
     assert.match(latestEvent?.eventJson ?? "", /branch upkeep/i);
+    assert.deepEqual(enqueues, [{ projectId: issue.projectId, issueId: issue.linearIssueId, priority: true }]);
   } finally {
     db?.close();
     rmSync(baseDir, { recursive: true, force: true });

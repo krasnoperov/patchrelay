@@ -115,8 +115,8 @@ export class ServiceRuntime {
     this.webhookQueue.enqueue(eventId, options);
   }
 
-  enqueueIssue(projectId: string, issueId: string): void {
-    this.issueQueue.enqueue({ projectId, issueId });
+  enqueueIssue(projectId: string, issueId: string, options?: { priority?: boolean }): void {
+    this.issueQueue.enqueue({ projectId, issueId }, options);
   }
 
   setLinearConnected(connected: boolean): void {
