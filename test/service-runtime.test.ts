@@ -237,6 +237,30 @@ test("service runtime prioritizes urgent webhook items without introducing a sec
   assert.deepEqual(processedWebhooks, [99, 41, 42]);
 });
 
+test("service runtime moves an already queued issue to the front when it becomes urgent", async () => {
+  const codex = new FakeCodexClient();
+  const processedIssues: RuntimeIssueQueueItem[] = [];
+
+  const runtime = new ServiceRuntime(
+    codex as never,
+    pino({ enabled: false }),
+    { async reconcileActiveRuns() {} },
+    { listIssuesReadyForExecution: () => [] },
+    { async processWebhookEvent() {} },
+    { async processIssue(item) { processedIssues.push(item); } },
+  );
+
+  runtime.enqueueIssue("app", "issue-1");
+  runtime.enqueueIssue("app", "issue-2");
+  runtime.enqueueIssue("app", "issue-2", { priority: true });
+  await flushQueue();
+
+  assert.deepEqual(processedIssues, [
+    { projectId: "app", issueId: "issue-2" },
+    { projectId: "app", issueId: "issue-1" },
+  ]);
+});
+
 test("service runtime clears ready state on stop and preserves codex status in readiness", async () => {
   const codex = new FakeCodexClient();
   const runtime = new ServiceRuntime(

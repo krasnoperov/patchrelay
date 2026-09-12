@@ -39,6 +39,15 @@ export class SerialWorkQueue<T> {
     const { item } = entry;
     const key = this.getKey?.(item);
     if (key && this.queuedKeys.has(key)) {
+      if (options?.priority) {
+        const existingIndex = this.items.findIndex((queued) => this.getKey?.(queued.item) === key);
+        if (existingIndex > 0) {
+          const [existing] = this.items.splice(existingIndex, 1);
+          if (existing) {
+            this.items.unshift(existing);
+          }
+        }
+      }
       return;
     }
 
