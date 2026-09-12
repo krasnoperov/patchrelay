@@ -397,7 +397,7 @@ test("CodexAppServerClient handles initialize, approval requests, notifications,
     assert.deepEqual(child.turnInterruptParams, [
       {
         threadId: "thread-1",
-        expectedTurnId: "turn-2",
+        turnId: "turn-2",
       },
     ]);
 

@@ -182,18 +182,30 @@ export class CodexAppServerClient extends EventEmitter {
     this.stopping = true;
     this.started = false;
 
+    let didExit = false;
     const exited = new Promise<void>((resolve) => {
-      child.on("close", () => resolve());
+      child.once("close", () => {
+        didExit = true;
+        resolve();
+      });
     });
-    child.kill("SIGTERM");
-    this.child = undefined;
+    this.signalProcessTree(child, "SIGTERM");
 
-    // Wait for the child to exit, but don't block shutdown forever.
+    // A wedged app-server can retain MCP and command children. Escalate instead
+    // of returning while that process tree is still alive.
     const timeout = new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, 10_000);
       timer.unref?.();
     });
     await Promise.race([exited, timeout]);
+    if (!didExit) {
+      this.logger.warn("Codex app-server did not stop after SIGTERM; sending SIGKILL");
+      this.signalProcessTree(child, "SIGKILL");
+      await exited;
+    }
+    if (this.child === child) {
+      this.child = undefined;
+    }
   }
 
   async startThread(options: StartThreadOptions): Promise<CodexThreadSummary> {
@@ -353,7 +365,7 @@ export class CodexAppServerClient extends EventEmitter {
   async interruptTurn(options: InterruptTurnOptions): Promise<void> {
     await this.sendRequest("turn/interrupt", {
       threadId: options.threadId,
-      expectedTurnId: options.turnId,
+      turnId: options.turnId,
     });
   }
 
@@ -440,6 +452,9 @@ export class CodexAppServerClient extends EventEmitter {
     this.logger.info({ command: launch.command, args: launch.args }, "Starting Codex app-server");
     this.child = this.spawnProcess(launch.command, launch.args, {
       stdio: ["pipe", "pipe", "pipe"],
+      // Own the complete Codex/MCP/command process tree so shutdown and
+      // recovery can terminate descendants instead of only the app-server.
+      detached: process.platform !== "win32",
       ...(this.childEnvProvider ? { env: this.childEnvProvider() } : {}),
     }) as ChildProcessWithoutNullStreams;
 
@@ -529,6 +544,9 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   private async ensureRunningForRequest(method: string): Promise<void> {
+    if (this.stopping) {
+      throw new Error("Codex app-server is stopping");
+    }
     if (this.child?.stdin) {
       return;
     }
@@ -539,6 +557,19 @@ export class CodexAppServerClient extends EventEmitter {
     if (!this.child?.stdin) {
       throw new Error("Codex app-server is not running");
     }
+  }
+
+  private signalProcessTree(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
+    if (process.platform !== "win32" && child.pid !== undefined) {
+      try {
+        process.kill(-child.pid, signal);
+        return;
+      } catch {
+        // Fall through when the process has already exited or was not made a
+        // process-group leader by a custom spawn implementation.
+      }
+    }
+    child.kill(signal);
   }
 
   private writeMessage(message: Record<string, unknown>): void {

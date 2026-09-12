@@ -25,6 +25,7 @@ interface RunNotificationHandlerOptions {
 export class RunNotificationHandler {
   private activeThreadId: string | undefined;
   private readonly publishCommandWatchdogs = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly lostLeaseInterrupts = new Set<number>();
 
   constructor(
     private readonly db: PatchRelayDatabase,
@@ -62,7 +63,25 @@ export class RunNotificationHandler {
       return;
     }
     if (!this.heartbeatIssueSessionLease(run.projectId, run.linearIssueId)) {
-      this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Ignoring Codex notification after losing issue-session lease");
+      if (!this.lostLeaseInterrupts.has(run.id)) {
+        this.lostLeaseInterrupts.add(run.id);
+        this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Stopping Codex turn after losing issue-session lease");
+        const activeTurnId = turnId ?? run.turnId;
+        if (this.options.interruptTurn && activeTurnId) {
+          try {
+            await this.options.interruptTurn({ threadId, turnId: activeTurnId });
+          } catch (error) {
+            this.logger.warn(
+              {
+                runId: run.id,
+                issueId: run.linearIssueId,
+                error: error instanceof Error ? error.message : String(error),
+              },
+              "Failed to stop Codex turn after losing issue-session lease",
+            );
+          }
+        }
+      }
       return;
     }
 

@@ -298,3 +298,70 @@ test("notification handler clears git push watchdog when the command completes",
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("notification handler interrupts a lost-lease turn once", async () => {
+  const { baseDir, db } = createDatabase();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "project-1",
+      linearIssueId: "issue-lost-lease",
+      issueKey: "TST-LEASE",
+      workflowOutcome: undefined,
+      delegatedToPatchRelay: true,
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-lost-lease", turnId: "turn-lost-lease" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+
+    const interrupts: Array<{ threadId: string; turnId: string }> = [];
+    const warnings: string[] = [];
+    const handler = new RunNotificationHandler(
+      db,
+      {
+        info: () => {},
+        warn: (_payload: Record<string, unknown>, message: string) => warnings.push(message),
+      } as unknown as Logger,
+      {
+        maybeEmitProgress: () => {},
+        syncCodexPlan: async () => {},
+        emitActivity: async () => {},
+        syncSession: async () => {},
+        clearProgress: () => {},
+      } as never,
+      {
+        finalizeCompletedRun: async () => {},
+        recoverFailedImplementationRun: async () => false,
+      } as never,
+      async (threadId) => createThread(threadId),
+      () => undefined,
+      () => false,
+      () => {},
+      undefined,
+      {
+        interruptTurn: async (options) => interrupts.push(options),
+      },
+    );
+
+    const notification: CodexNotification = {
+      method: "item/started",
+      params: { threadId: "thread-lost-lease", turnId: "turn-lost-lease" },
+    };
+    await handler.handle(notification);
+    await handler.handle(notification);
+
+    assert.deepEqual(interrupts, [{ threadId: "thread-lost-lease", turnId: "turn-lost-lease" }]);
+    assert.deepEqual(warnings, ["Stopping Codex turn after losing issue-session lease"]);
+  } finally {
+    db.close();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
