@@ -101,3 +101,17 @@ test("latest different-head lookup returns the newest row for live transcript lo
   assert.equal(result?.id, newest.id);
   store.close();
 });
+
+test("approved baseline lookup ignores a newer declined attempt", () => {
+  const store = new SqliteStore(":memory:");
+  const approved = store.createAttempt({
+    repoFullName: "owner/repo", prNumber: 7, headSha: "head-1", status: "completed", conclusion: "approved",
+  });
+  store.createAttempt({
+    repoFullName: "owner/repo", prNumber: 7, headSha: "head-2", status: "completed", conclusion: "declined",
+  });
+
+  const result = store.getLatestApprovedDifferentHeadAttempt("owner/repo", 7, "head-3");
+  assert.equal(result?.id, approved.id);
+  store.close();
+});

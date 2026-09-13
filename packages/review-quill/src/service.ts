@@ -648,7 +648,11 @@ export class ReviewQuillService {
         pr,
         buildPullRequestConversationClaims(conversationComments, pr.authorLogin),
       );
-      const latestAttempt = this.store.getLatestDifferentHeadAttempt(repo.repoFullName, pr.number, pr.headSha);
+      // An approval is the durable review baseline. Later review claims are
+      // included in the current prompt, but a fresh declined attempt must not
+      // erase the approved context for patch-equivalent repair follow-ups.
+      const latestAttempt = this.store.getLatestApprovedDifferentHeadAttempt(repo.repoFullName, pr.number, pr.headSha)
+        ?? this.store.getLatestDifferentHeadAttempt(repo.repoFullName, pr.number, pr.headSha);
       let latestTranscript;
       if (latestAttempt?.threadId) {
         try {

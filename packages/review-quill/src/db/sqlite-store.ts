@@ -138,6 +138,22 @@ export class SqliteStore {
     return row ? mapAttempt(row) : undefined;
   }
 
+  getLatestApprovedDifferentHeadAttempt(
+    repoFullName: string,
+    prNumber: number,
+    headSha: string,
+  ): ReviewAttemptRecord | undefined {
+    const row = this.db.prepare(`
+      SELECT ${ATTEMPT_COLUMNS}
+      FROM review_attempts
+      WHERE repo_full_name = ? AND pr_number = ? AND head_sha <> ?
+        AND status = 'completed' AND conclusion = 'approved'
+      ORDER BY id DESC
+      LIMIT 1
+    `).get(repoFullName, prNumber, headSha) as Record<string, unknown> | undefined;
+    return row ? mapAttempt(row) : undefined;
+  }
+
   // Finds an approved attempt with the same patch-id (any prior head) that
   // has a stored body+event we can re-emit on the new head SHA.
   findApprovedAttemptByPatchId(
