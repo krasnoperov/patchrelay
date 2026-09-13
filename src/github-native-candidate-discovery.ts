@@ -32,6 +32,7 @@ export async function discoverGitHubNativeCandidateRepairs(params: {
   config: AppConfig;
   isTracked: (projectId: string, prNumber: number) => boolean;
   runCommand?: typeof execCommand;
+  onCommandError?: (context: { repoFullName: string; error: string }) => void;
 }): Promise<GitHubNativeCandidateRepair[]> {
   const runCommand = params.runCommand ?? execCommand;
   const repairs: GitHubNativeCandidateRepair[] = [];
@@ -39,8 +40,17 @@ export async function discoverGitHubNativeCandidateRepairs(params: {
   for (const project of params.config.projects) {
     const repoFullName = project.github?.repoFullName;
     if (!repoFullName) continue;
+    const safeRunCommand: typeof execCommand = async (command, args, options) => {
+      try {
+        return await runCommand(command, args, options);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        params.onCommandError?.({ repoFullName, error: message });
+        return { stdout: "", stderr: message, exitCode: 1 };
+      }
+    };
     const baseBranch = resolveMergeQueueProtocol(project).baseBranch ?? "main";
-    const refs = await runCommand("gh", [
+    const refs = await safeRunCommand("gh", [
       "api",
       `repos/${repoFullName}/git/matching-refs/heads/merge-steward/${baseBranch}/pr-`,
       "--paginate",
@@ -55,7 +65,7 @@ export async function discoverGitHubNativeCandidateRepairs(params: {
 
     for (const prNumber of prNumbers) {
       if (params.isTracked(project.id, prNumber)) continue;
-      const prResult = await runCommand("gh", [
+      const prResult = await safeRunCommand("gh", [
         "pr", "view", String(prNumber),
         "--repo", repoFullName,
         "--json", "state,isDraft,title,url,headRefName,headRefOid,baseRefName,reviewDecision,reviews",
@@ -87,7 +97,7 @@ export async function discoverGitHubNativeCandidateRepairs(params: {
         repoFullName,
         ref: pr.headRefOid,
         requiredChecks,
-        runCommand,
+        runCommand: safeRunCommand,
       });
       if (branchChecks?.kind !== "green") continue;
       const candidate = await readIntegrationCandidateState({
@@ -96,7 +106,7 @@ export async function discoverGitHubNativeCandidateRepairs(params: {
         prNumber,
         approvedHeadSha: pr.headRefOid,
         requiredChecks,
-        runCommand,
+        runCommand: safeRunCommand,
       });
       if (candidate?.kind !== "conflicted" && candidate?.kind !== "failed") continue;
 

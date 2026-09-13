@@ -54,6 +54,7 @@ function isDuplicateProbe(
 export class QueueHealthMonitor {
   private readonly probeFailureFeedTimes = new Map<string, number>();
   private readonly inReviewStuckFeedTimes = new Map<string, number>();
+  private readonly candidateDiscoveryFailureLogTimes = new Map<string, number>();
 
   constructor(
     private readonly db: PatchRelayDatabase,
@@ -82,6 +83,12 @@ export class QueueHealthMonitor {
     const repairs = await discoverGitHubNativeCandidateRepairs({
       config: this.config,
       isTracked: (projectId, prNumber) => Boolean(this.db.issues.getIssueByProjectPrNumber(projectId, prNumber)),
+      onCommandError: ({ repoFullName, error }) => {
+        const lastLoggedAt = this.candidateDiscoveryFailureLogTimes.get(repoFullName) ?? 0;
+        if (Date.now() - lastLoggedAt < QUEUE_HEALTH_PROBE_FAILURE_COOLDOWN_MS) return;
+        this.candidateDiscoveryFailureLogTimes.set(repoFullName, Date.now());
+        this.logger.warn({ repoFullName, error }, "Queue health: GitHub-native candidate discovery failed");
+      },
     });
     for (const repair of repairs) {
       const subjectId = githubNativeSubjectId(repair.repoFullName, repair.prNumber);
