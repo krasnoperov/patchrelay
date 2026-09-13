@@ -23,7 +23,7 @@ export type QueueEntryStatus =
 export const TERMINAL_STATUSES: QueueEntryStatus[] = ["merged", "evicted", "dequeued"];
 
 export type PostMergeStatus = "pending" | "pass" | "fail" | "unknown";
-export type CandidateKind = "head" | "integration";
+export type CandidateKind = "head" | "integration" | "integration_repair";
 
 export interface QueueEntry {
   id: string;
@@ -88,6 +88,7 @@ export type FailureClass =
   | "main_broken"
   | "branch_local"
   | "integration_conflict"
+  | "feature_changed"
   | "policy_blocked";
 
 export type CheckConclusion = "success" | "failure" | "pending" | "neutral" | "skipped";

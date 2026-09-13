@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { shouldReconcileWebhook } from "../src/webhook-handler.ts";
+import { normalizeWebhook, shouldReconcileWebhook } from "../src/webhook-handler.ts";
 
 const repos = [
   { repoFullName: "owner/immediate", waitForGreenChecks: false },
@@ -27,4 +27,13 @@ test("shouldReconcileWebhook still reconciles pull requests and green-gated chec
     shouldReconcileWebhook({ type: "check_run", repoFullName: "owner/gated" }, repos),
     { reconcile: true },
   );
+});
+
+test("push events wake reconciliation for candidate ref changes", () => {
+  const event = normalizeWebhook("push", {
+    repository: { full_name: "owner/repo" },
+    ref: "refs/heads/merge-steward/main/pr-104",
+  });
+  assert.deepEqual(event, { type: "push", repoFullName: "owner/repo" });
+  assert.deepEqual(shouldReconcileWebhook(event!, [{ repoFullName: "owner/repo", waitForGreenChecks: false }]), { reconcile: true });
 });

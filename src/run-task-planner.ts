@@ -132,9 +132,10 @@ export class RunTaskPlanner {
     let dedupeKey: string;
     let eventContext = context;
     switch (runType) {
+      case "integration_repair":
       case "queue_repair":
         eventType = "merge_steward_incident";
-        dedupeKey = `${dedupeScope ?? "workflow"}:queue_repair:${issue.linearIssueId}:${issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown-sha"}`;
+        dedupeKey = `${dedupeScope ?? "workflow"}:${runType}:${issue.linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.lastGitHubFailureHeadSha ?? "unknown-sha"}`;
         break;
       case "ci_repair":
         eventType = "settled_red_ci";
@@ -188,7 +189,7 @@ export class RunTaskPlanner {
       return `CI repair budget exhausted (${ciRepairBudget} attempts)`;
     }
     const queueRepairBudget = getQueueRepairBudget(project);
-    if (runType === "queue_repair" && issue.queueRepairAttempts >= queueRepairBudget) {
+    if ((runType === "integration_repair" || runType === "queue_repair") && issue.queueRepairAttempts >= queueRepairBudget) {
       return `Queue repair budget exhausted (${queueRepairBudget} attempts)`;
     }
     const reviewFixBudget = getReviewFixBudget(project);
@@ -212,7 +213,7 @@ export class RunTaskPlanner {
       if (runType === "ci_repair") {
         return { projectId: issue.projectId, linearIssueId: issue.linearIssueId, ciRepairAttempts: record.ciRepairAttempts + 1 };
       }
-      if (runType === "queue_repair") {
+      if (runType === "integration_repair" || runType === "queue_repair") {
         return { projectId: issue.projectId, linearIssueId: issue.linearIssueId, queueRepairAttempts: record.queueRepairAttempts + 1 };
       }
       if (isRequestedChangesRunType(runType)) {

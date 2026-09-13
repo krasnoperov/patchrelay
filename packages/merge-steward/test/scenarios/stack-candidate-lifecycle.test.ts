@@ -59,7 +59,7 @@ describe("stack candidate lifecycle", () => {
     h.assertInvariants();
   });
 
-  it("blocks only the failed stack, lets an independent PR land, then recovers after parent re-admission", async () => {
+  it("retains a failed stack and prevents later roots from bypassing it", async () => {
     let checkEvaluation = 0;
     const h = await createHarness({
       speculativeDepth: 4,
@@ -77,36 +77,11 @@ describe("stack candidate lifecycle", () => {
 
     await h.runUntilStable({ maxTicks: 20 });
 
-    assert.equal(h.entries.find((entry) => entry.prNumber === 30)?.status, "evicted");
-    assert.ok(h.merged.includes(40), "independent work must not sit behind a failed stack");
+    assert.equal(h.entries.find((entry) => entry.prNumber === 30)?.status, "validating");
+    assert.ok(!h.merged.includes(40), "a later root must not bypass the retained queue head");
     const blocked = h.entries.find((entry) => entry.prNumber === 31)!;
     assert.notEqual(blocked.status, "merged");
-    assert.match(blocked.waitDetail ?? "", /stack parent broken-parent is evicted/);
-    assert.equal(
-      h.reconcileEvents.filter((event) =>
-        event.prNumber === 31 && event.action === "stack_dependency_waiting").length,
-      1,
-      "unchanged dependency state should not emit on every tick",
-    );
-    const blockedHead = blocked.headSha;
-    const mainAfterIndependent = await h.gitSim.headSha("main");
-    assert.equal(
-      await h.gitSim.isAncestor(blockedHead, mainAfterIndependent),
-      false,
-      "an independent root must rebuild without the now-blocked child",
-    );
-
-    // Model the repaired attempt as a fresh branch tip based on current main.
-    await h.gitSim.deleteBranch("broken-parent");
-    await h.enqueue({
-      number: 30,
-      branch: "broken-parent",
-      files: [{ path: "repair.ts", content: "fixed" }],
-    });
-    await h.runUntilStable({ maxTicks: 30 });
-
-    assert.deepEqual(h.merged, [40, 30, 31]);
-    assert.equal(h.entries.filter((entry) => entry.prNumber === 30 && entry.status === "merged").length, 1);
+    assert.equal(h.evicted.length, 0);
     h.assertInvariants();
   });
 

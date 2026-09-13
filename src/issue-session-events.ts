@@ -284,7 +284,7 @@ export const NON_ACTIONABLE_SESSION_EVENTS = new Set<IssueSessionEventType>([
   "run_released_authority",
 ]);
 
-const RUN_TYPES = new Set<RunType>(["implementation", "collaboration", "review_fix", "branch_upkeep", "ci_repair", "queue_repair"]);
+const RUN_TYPES = new Set<RunType>(["implementation", "collaboration", "review_fix", "branch_upkeep", "ci_repair", "integration_repair", "queue_repair"]);
 
 function parseRunType(value: unknown): RunType | undefined {
   return typeof value === "string" && RUN_TYPES.has(value as RunType) ? value as RunType : undefined;
@@ -339,13 +339,13 @@ export function deriveSessionInputPlan(
     if (!typed) continue;
     switch (typed.eventType) {
       case "merge_steward_incident":
-        runType = "queue_repair";
+        runType = typed.payload?.candidateBranch ? "integration_repair" : "queue_repair";
         workflowReason = "merge_steward_incident";
         eventIds = [event.id];
         Object.assign(context, typed.payload ?? {});
         break;
       case "settled_red_ci":
-        if (runType !== "queue_repair") {
+        if (runType !== "integration_repair" && runType !== "queue_repair") {
           runType = "ci_repair";
           workflowReason = "settled_red_ci";
           eventIds = [event.id];
@@ -356,7 +356,7 @@ export function deriveSessionInputPlan(
         if (isStaleRequestedChangesEvent(issue, typed.payload)) {
           break;
         }
-        if (runType !== "queue_repair" && runType !== "ci_repair") {
+        if (runType !== "integration_repair" && runType !== "queue_repair" && runType !== "ci_repair") {
           runType = typed.payload?.branchUpkeepRequired === true ? "branch_upkeep" : "review_fix";
           workflowReason = typed.payload?.branchUpkeepRequired === true ? "branch_upkeep" : "review_changes_requested";
           eventIds = [event.id];

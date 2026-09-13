@@ -1,90 +1,32 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createHarness, type SimPR } from "../harness.ts";
+import { createHarness } from "../harness.ts";
 
-describe("eviction reporting", () => {
-  it("conflict eviction produces incident with failureClass and context", async () => {
-    const prA: SimPR = {
-      number: 1,
-      branch: "feat-a",
-      files: [{ path: "shared.ts", content: "version A" }],
-    };
-    const prB: SimPR = {
-      number: 2,
-      branch: "feat-b",
-      files: [{ path: "shared.ts", content: "version B" }],
-    };
-
+describe("ordinary integration failures are not eviction incidents", () => {
+  it("keeps a conflict in the queue and exposes repair through ancestry", async () => {
     const h = await createHarness({ ciRule: () => "pass", maxRetries: 0 });
-    await h.enqueue(prA);
-    await h.enqueue(prB);
+    await h.enqueue({ number: 1, branch: "feat-a", files: [{ path: "shared.ts", content: "A" }] });
+    await h.enqueue({ number: 2, branch: "feat-b", files: [{ path: "shared.ts", content: "B" }] });
     await h.runUntilStable({ maxTicks: 30 });
 
-    assert.ok(h.merged.includes(1));
-    assert.strictEqual(h.entryStatus(prB), "evicted");
-
-    // Check the incident record.
-    const entry = h.entries.find((e) => e.prNumber === 2)!;
-    const incidents = h.store.listIncidents(entry.id);
-    assert.strictEqual(incidents.length, 1);
-
-    const incident = incidents[0]!;
-    assert.strictEqual(incident.failureClass, "integration_conflict");
-    assert.strictEqual(incident.outcome, "open");
-    assert.strictEqual(incident.context.version, 1);
-    assert.strictEqual(incident.context.failureClass, "integration_conflict");
-    assert.ok(incident.context.baseSha.length > 0);
-    assert.ok(incident.context.prHeadSha.length > 0);
-
-    h.assertInvariants();
+    const entry = h.entries.find((candidate) => candidate.prNumber === 2)!;
+    assert.equal(entry.status, "validating");
+    assert.equal(entry.candidateRef, "merge-steward/main/pr-2");
+    assert.equal(await h.gitSim.isAncestor(entry.headSha, entry.candidateSha!), false);
+    assert.equal(h.store.listIncidents(entry.id).length, 0);
+    assert.equal(h.evictions.length, 0);
   });
 
-  it("CI failure eviction produces incident with failedChecks", async () => {
-    const prA: SimPR = { number: 1, branch: "feat-a", files: [{ path: "a.ts", content: "a" }] };
-
-    const h = await createHarness({
-      ciRule: () => "fail",
-      maxRetries: 0,
-      flakyRetries: 0,
-    });
-    await h.enqueue(prA);
+  it("keeps a settled CI failure on a workspace", async () => {
+    const h = await createHarness({ ciRule: () => "fail", maxRetries: 0, flakyRetries: 0 });
+    await h.enqueue({ number: 7, branch: "feat-failing", files: [{ path: "bad.ts", content: "bad" }] });
     await h.runUntilStable({ maxTicks: 20 });
 
-    assert.strictEqual(h.entryStatus(prA), "evicted");
-
-    const entry = h.entries.find((e) => e.prNumber === 1)!;
-    const incidents = h.store.listIncidents(entry.id);
-    assert.strictEqual(incidents.length, 1);
-    assert.strictEqual(incidents[0]!.outcome, "open");
-
-    // Eviction was reported.
-    assert.strictEqual(h.evictions.length, 1);
-
-    h.assertInvariants();
-  });
-
-  it("incident is queryable by ID", async () => {
-    const prA: SimPR = {
-      number: 1,
-      branch: "feat-a",
-      files: [{ path: "shared.ts", content: "version A" }],
-    };
-    const prB: SimPR = {
-      number: 2,
-      branch: "feat-b",
-      files: [{ path: "shared.ts", content: "version B" }],
-    };
-
-    const h = await createHarness({ ciRule: () => "pass", maxRetries: 0 });
-    await h.enqueue(prA);
-    await h.enqueue(prB);
-    await h.runUntilStable({ maxTicks: 30 });
-
-    const entry = h.entries.find((e) => e.prNumber === 2)!;
-    const incidents = h.store.listIncidents(entry.id);
-    const byId = h.store.getIncident(incidents[0]!.id);
-    assert.ok(byId);
-    assert.strictEqual(byId.id, incidents[0]!.id);
-    assert.strictEqual(byId.entryId, entry.id);
+    const entry = h.entries[0]!;
+    assert.equal(entry.status, "validating");
+    assert.equal(entry.candidateRef, "merge-steward/main/pr-7");
+    assert.match(entry.waitDetail ?? "", /awaits repair/);
+    assert.equal(h.store.listIncidents(entry.id).length, 0);
+    assert.equal(h.evictions.length, 0);
   });
 });

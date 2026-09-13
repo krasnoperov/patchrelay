@@ -13,6 +13,7 @@ const WORKFLOW_FILES: Record<RunType, string> = {
   review_fix: "REVIEW_WORKFLOW.md",
   branch_upkeep: "REVIEW_WORKFLOW.md",
   ci_repair: "IMPLEMENTATION_WORKFLOW.md",
+  integration_repair: "IMPLEMENTATION_WORKFLOW.md",
   queue_repair: "IMPLEMENTATION_WORKFLOW.md",
 };
 
@@ -389,6 +390,21 @@ function buildQueueRepairContext(context?: RunContext): string {
   return lines.filter(Boolean).join("\n");
 }
 
+function buildIntegrationRepairContext(context?: RunContext): string {
+  return [
+    "Integration repair on a Merge Steward candidate workspace.",
+    "The PR head is an approved, frozen feature artifact. Do not checkout, rebase, commit to, or push the PR branch.",
+    context?.candidateBranch ? `Candidate branch: ${context.candidateBranch}` : "",
+    context?.candidateSha ? `Observed candidate SHA: ${context.candidateSha}` : "",
+    context?.approvedHeadSha ? `Frozen approved PR head: ${context.approvedHeadSha}` : "",
+    context?.integrationFailureKind === "conflict"
+      ? "The candidate ref does not yet contain the approved head. Merge the approved head into this candidate, resolve conflicts while preserving the approved feature, commit, and push this candidate branch."
+      : "The candidate contains the approved head but its required CI is settled red. Diagnose and repair only the integration result, then commit and push this candidate branch.",
+    "Push with a normal non-force push. If rejected as non-fast-forward, stop: Merge Steward moved the prospective base and the stale repair must not be published.",
+    "Do not open a PR and do not post a label or comment as a control signal. The pushed candidate ref is the signal.",
+  ].filter(Boolean).join("\n");
+}
+
 function buildFollowUpContextLines(issue: IssueRecord, runType: RunType, context?: RunContext): string[] {
   const prContext = derivePrDisplayContext(issue);
   const workflowReason = context?.workflowReason;
@@ -520,6 +536,9 @@ function buildCurrentContext(runType: RunType, issue: IssueRecord, context?: Run
     case "queue_repair":
       lines.push(buildQueueRepairContext(context));
       break;
+    case "integration_repair":
+      lines.push(buildIntegrationRepairContext(context));
+      break;
     default:
       break;
   }
@@ -579,7 +598,7 @@ function buildPrePushSelfReviewSection(target: "new_pr" | "existing_pr", runType
     "Do not widen scope for optional cleanup. If the issue explicitly allows a non-PR outcome, complete that outcome clearly; otherwise publish before stopping.",
   );
 
-  if (runType === "review_fix" || runType === "branch_upkeep" || runType === "ci_repair" || runType === "queue_repair") {
+  if (runType === "review_fix" || runType === "branch_upkeep" || runType === "ci_repair" || runType === "integration_repair" || runType === "queue_repair") {
     lines.push(
       "On reactive repair runs, do not publish broad revert stacks or unrelated workflow/package-manager/docs churn. If that seems necessary, stop and surface the blocker instead.",
     );
@@ -614,6 +633,21 @@ function buildPublicationContract(
       "Proceed against the default base only when the JSON recommendation is `open_pr_against_main`. If it is `blocked_open_pr_ancestry`, rebuild this issue's commits on the named base and rerun the check before publishing.",
       "",
       ...buildPrePushSelfReviewSection("new_pr", runType),
+    ].join("\n");
+  }
+
+  if (runType === "integration_repair") {
+    return [
+      "## Publish",
+      "",
+      `Publish only to the integration candidate branch \`${context?.candidateBranch ?? "shown in Current Context"}\` using a normal non-force push.`,
+      "Never push, force-push, rebase, or otherwise update the frozen PR branch.",
+      "Do not open another PR. Do not use labels, comments, check failures, or service messages as routing commands.",
+      "If the push is rejected as non-fast-forward, do not force it: stop and report that the candidate became stale so reconciliation can restart from GitHub truth.",
+      "After a successful candidate push, stop and report the candidate commit. GitHub webhooks will wake Review Quill, CI, and Merge Steward.",
+      "Keep the repair limited to integration. If preserving the feature requires changing its approved behavior, stop without pushing and report that the feature must return to implementation.",
+      "",
+      ...buildPrePushSelfReviewSection("existing_pr", runType),
     ].join("\n");
   }
 

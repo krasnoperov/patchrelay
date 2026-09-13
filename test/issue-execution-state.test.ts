@@ -45,6 +45,11 @@ const TABLE: Row[] = [
     expected: { kind: "undelegated", downstreamMayContinue: false },
   },
   {
+    name: "candidate-only integration repair remains active without feature delegation",
+    input: { delegatedToPatchRelay: false, workflowOutcome: undefined, activeRunId: 5, activeRunType: "integration_repair" },
+    expected: { kind: "running", run: { activeRunId: 5, runType: "integration_repair", phase: "working" } },
+  },
+  {
     name: "plain active run",
     input: { workflowOutcome: undefined, activeRunId: 7, activeRunType: "implementation" },
     expected: { kind: "running", run: { activeRunId: 7, runType: "implementation", phase: "working" } },

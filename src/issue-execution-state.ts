@@ -224,12 +224,13 @@ export function deriveIssueExecutionState(params: IssueExecutionStateInput): Iss
     return { kind: "terminal", outcome: "failed" };
   }
 
-  // Undelegation pauses automation for any non-finished issue and outranks
-  // every other answer (including an active run, which keeps executing but
-  // is reported as paused-with-downstream-continuation where relevant).
+  // Undelegation pauses feature work. A candidate-only integration repair is
+  // authorized by the exact approved, green PR head and remains visible as an
+  // active run even when the Linear issue itself is not delegated.
   if (
     params.delegatedToPatchRelay === false
     && params.workflowOutcome === undefined
+    && params.activeRunType !== "integration_repair"
   ) {
     const downstreamMayContinue = hasOpenPr(params.prNumber, params.prState) && params.prReviewState === "approved";
     return { kind: "undelegated", downstreamMayContinue };

@@ -278,7 +278,7 @@ test("triggerReconcile retires active attempts for merged pull requests", async 
   assert.equal(updates.length, 1);
 });
 
-test("triggerReconcile dismisses a same-head approval whose captured base changed", async () => {
+test("triggerReconcile preserves a frozen same-head approval when the base changes", async () => {
   const attempt = {
     id: 227,
     repoFullName: "krasnoperov/subtitles",
@@ -291,7 +291,6 @@ test("triggerReconcile dismisses a same-head approval whose captured base change
     updatedAt: "2026-04-12T00:01:00.000Z",
   } as const;
   const dismissed: number[] = [];
-  let dismissalFailure = false;
   const pr = {
     number: 16,
     title: "Retargeted stacked child",
@@ -351,7 +350,6 @@ test("triggerReconcile dismisses a same-head approval whose captured base change
         commitId: "same-head",
       }],
       dismissReview: async (_repo: string, _prNumber: number, reviewId: number) => {
-        if (dismissalFailure) throw new Error("GitHub 503");
         dismissed.push(reviewId);
       },
     } as never,
@@ -368,67 +366,7 @@ test("triggerReconcile dismisses a same-head approval whose captured base change
 
   await service.triggerReconcile();
 
-  assert.deepEqual(dismissed, [77]);
-
-  let disposeCalls = 0;
-  let dispatchCalls = 0;
-  (service as unknown as {
-    evaluateEligibility: () => Promise<{ eligible: true }>;
-    carryForward: () => Promise<{
-      kind: "no_candidate";
-      prepared: {
-        identity: { patchId: string; prBaseSha: string; diffBaseSha: string };
-        workspace: Record<string, never>;
-        dispose: () => Promise<void>;
-      };
-    }>;
-    dispatchReview: () => Promise<void>;
-    discoverRepo: (repo: unknown) => Promise<void>;
-  }).evaluateEligibility = async () => ({ eligible: true });
-  (service as unknown as {
-    carryForward: () => Promise<{
-      kind: "no_candidate";
-      prepared: {
-        identity: { patchId: string; prBaseSha: string; diffBaseSha: string };
-        workspace: Record<string, never>;
-        dispose: () => Promise<void>;
-      };
-    }>;
-  }).carryForward = async () => ({
-    kind: "no_candidate",
-    prepared: {
-      identity: {
-        patchId: "patch",
-        prBaseSha: "new-parent",
-        diffBaseSha: "new-parent",
-      },
-      workspace: {},
-      dispose: async () => {
-        disposeCalls += 1;
-      },
-    },
-  });
-  (service as unknown as { dispatchReview: () => Promise<void> }).dispatchReview = async () => {
-    dispatchCalls += 1;
-  };
-  dismissalFailure = true;
-
-  await assert.rejects(
-    (service as unknown as { discoverRepo: (repo: unknown) => Promise<void> }).discoverRepo({
-      repoId: "subtitles",
-      repoFullName: "krasnoperov/subtitles",
-      baseBranch: "main",
-      requiredChecks: [],
-      excludeBranches: [],
-      reviewDocs: [],
-      diffIgnore: [],
-      diffSummarizeOnly: [],
-      patchBodyBudgetTokens: 5_000,
-    }),
-    /Could not invalidate Review Quill approval 77.*GitHub 503/,
-  );
-  assert.equal(disposeCalls, 1, "prepared worktree must be disposed on dismissal failure");
-  assert.equal(dispatchCalls, 0, "fresh review must not dispatch while the stale approval remains active");
+  assert.deepEqual(dismissed, []);
 });
 
 test("executeReview skips stale heads before starting Codex review work", async () => {

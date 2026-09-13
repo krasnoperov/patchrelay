@@ -56,16 +56,13 @@ describe("observability: reconciler event stream", () => {
     );
     assert.ok(conflictEvents.length > 0, "should emit integration_build_conflict for PR #2");
 
-    const evictEvents = h.reconcileEvents.filter(
-      (e) => e.prNumber === 2 && e.action === "evicted",
-    );
-    assert.ok(evictEvents.length > 0, "should emit evicted for PR #2");
-    assert.strictEqual(evictEvents[0]!.failureClass, "integration_conflict");
+    assert.equal(h.entryStatus(prConflict), "validating");
+    assert.equal(h.evicted.length, 0);
 
     h.assertInvariants();
   });
 
-  it("non-spinning retry emits retry_gated", async () => {
+  it("non-spinning repair wait does not rebuild the same conflict", async () => {
     const prConflict: SimPR = { number: 2, branch: "feat-conflict", files: [{ path: "shared.ts", content: "conflict" }] };
     const prOriginal: SimPR = { number: 1, branch: "feat-orig", files: [{ path: "shared.ts", content: "original" }] };
 
@@ -76,10 +73,10 @@ describe("observability: reconciler event stream", () => {
     // Run until A merges and B conflicts, then keep ticking.
     for (let i = 0; i < 15; i++) await h.tick();
 
-    const gatedEvents = h.reconcileEvents.filter(
-      (e) => e.prNumber === 2 && e.action === "retry_gated",
+    const conflicts = h.reconcileEvents.filter(
+      (e) => e.prNumber === 2 && e.action === "integration_build_conflict",
     );
-    assert.ok(gatedEvents.length > 0, "should emit retry_gated when base unchanged");
+    assert.equal(conflicts.length, 1);
 
     h.assertInvariants();
   });
@@ -107,7 +104,7 @@ describe("observability: reconciler event stream", () => {
     h.assertInvariants();
   });
 
-  it("eviction cascade emits invalidated for downstream entries", async () => {
+  it("failed candidate repair hold invalidates downstream entries", async () => {
     const h = await createHarness({
       ciRule: (files) => files.includes("b.ts") ? "fail" : "pass",
       speculativeDepth: 3,
@@ -119,7 +116,7 @@ describe("observability: reconciler event stream", () => {
     await h.enqueue(prC);
     await h.runUntilStable({ maxTicks: 40 });
 
-    // B fails CI → evicted. C should be invalidated.
+    // B fails CI and is retained; C must be invalidated and wait behind it.
     const invalidEvents = h.reconcileEvents.filter(
       (e) => e.prNumber === 3 && e.action === "invalidated",
     );

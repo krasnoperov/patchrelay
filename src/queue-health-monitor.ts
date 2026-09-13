@@ -4,6 +4,8 @@ import type { IssueRecord } from "./db-types.ts";
 import type { AppConfig } from "./types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
+import { readIntegrationCandidateState } from "./integration-candidate-state.ts";
+import { getGateCheckNames } from "./github-webhook-policy.ts";
 import { serializeRunContext, type RunContext } from "./run-context.ts";
 import { execCommand } from "./utils.ts";
 import type { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
@@ -111,15 +113,13 @@ export class QueueHealthMonitor {
 
     let pr: {
       state?: string;
-      mergeable?: string;
-      mergeStateStatus?: string;
       headRefOid?: string;
     };
     try {
       const { stdout } = await execCommand("gh", [
         "pr", "view", String(issue.prNumber),
         "--repo", project.github.repoFullName,
-        "--json", "state,mergeable,mergeStateStatus,headRefOid",
+        "--json", "state,headRefOid",
       ], { timeoutMs: 10_000 });
       pr = JSON.parse(stdout) as typeof pr;
     } catch (error) {
@@ -162,40 +162,49 @@ export class QueueHealthMonitor {
 
     if (pr.state !== "OPEN") return;
 
-    const isDirty = pr.mergeStateStatus === "DIRTY" || pr.mergeable === "CONFLICTING";
-    let hasEvictionCheckRun = false;
-    if (!isDirty) {
-      try {
-        const { stdout: checksOut } = await execCommand("gh", [
-          "api", `repos/${project.github.repoFullName}/commits/${pr.headRefOid}/check-runs`,
-          "--jq", `.check_runs[] | select(.name == "${protocol.evictionCheckName}" and .conclusion == "failure") | .name`,
-        ], { timeoutMs: 10_000 });
-        hasEvictionCheckRun = checksOut.trim().length > 0;
-      } catch {
-        // Best-effort check.
-      }
+    if (!pr.headRefOid) return;
+    const candidate = await readIntegrationCandidateState({
+      repoFullName: project.github.repoFullName,
+      baseBranch: protocol.baseBranch ?? "main",
+      prNumber: issue.prNumber,
+      approvedHeadSha: pr.headRefOid,
+      requiredChecks: getGateCheckNames(project),
+    });
+    if (!candidate || candidate.kind === "absent" || candidate.kind === "pending" || candidate.kind === "green") {
+      return;
     }
 
-    if (isDirty || hasEvictionCheckRun) {
-      const headRefOid = pr.headRefOid ?? "unknown";
-      const reason = hasEvictionCheckRun ? "queue_eviction_missed" : "preemptive_conflict";
-      const signature = hasEvictionCheckRun
-        ? `same_head_queue_eviction:${headRefOid}`
-        : `preemptive_queue_conflict:${headRefOid}`;
+    if (candidate.kind === "conflicted" || candidate.kind === "failed") {
+      const reason = candidate.kind === "conflicted" ? "candidate_conflict" : "candidate_ci_failed";
+      const signature = `integration:${candidate.candidateSha}:${reason}`;
       const workflowRunContext: RunContext = {
         source: "queue_health_monitor",
         failureReason: reason,
-        failureHeadSha: headRefOid,
+        failureHeadSha: candidate.candidateSha,
         failureSignature: signature,
-        ...(hasEvictionCheckRun
+        candidateBranch: candidate.branch,
+        candidateSha: candidate.candidateSha,
+        approvedHeadSha: candidate.approvedHeadSha,
+        integrationFailureKind: candidate.kind === "conflicted" ? "conflict" : "candidate_ci",
+        ...(candidate.kind === "failed"
           ? {
-              requiresFreshHead: true,
-              promptContext: [
-                `merge-steward/queue is already failed on PR #${issue.prNumber} at head ${headRefOid}.`,
-                "merge-steward will not re-admit the same evicted head SHA.",
-                "Preserve the approved diff, but publish a new head SHA on the existing PR branch before finishing.",
-                "If rebasing onto the current base produces no content change, create an empty queue-kick commit.",
-              ].join(" "),
+              ciSnapshot: {
+                headSha: candidate.candidateSha,
+                gateCheckStatus: "failure" as const,
+                capturedAt: new Date().toISOString(),
+                failedChecks: candidate.failedChecks.map((check) => ({
+                  name: check.name ?? "unknown",
+                  status: "failure" as const,
+                  ...(check.conclusion ? { conclusion: check.conclusion } : {}),
+                  ...(check.detailsUrl ? { detailsUrl: check.detailsUrl } : {}),
+                })),
+                checks: candidate.checks.map((check) => ({
+                  name: check.name ?? "unknown",
+                  status: candidate.failedChecks.includes(check) ? "failure" as const : "success" as const,
+                  ...(check.conclusion ? { conclusion: check.conclusion } : {}),
+                  ...(check.detailsUrl ? { detailsUrl: check.detailsUrl } : {}),
+                })),
+              },
             }
           : {}),
       };
@@ -209,21 +218,27 @@ export class QueueHealthMonitor {
         update: {
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
+          // Bind the candidate incident to the same live PR head used by the
+          // authority gate, including for older tracked rows that missed a
+          // pull_request webhook.
+          prHeadSha: candidate.approvedHeadSha,
           lastGitHubFailureSource: "queue_eviction",
-          lastGitHubFailureHeadSha: headRefOid,
+          // queue_eviction is retained as the persisted compatibility bucket;
+          // GitHub candidate state, not this value, is the control protocol.
+          lastGitHubFailureHeadSha: candidate.candidateSha,
           lastGitHubFailureSignature: signature,
           lastGitHubFailureContextJson: serializeRunContext(workflowRunContext, "queue health repair context"),
-          lastAttemptedFailureHeadSha: headRefOid,
+          lastAttemptedFailureHeadSha: candidate.candidateSha,
           lastAttemptedFailureSignature: signature,
         },
       });
       const probed = probedCommit.outcome === "applied" ? probedCommit.issue : issue;
       this.advancer.advanceIdleIssue(probed, {
-        workflowIntent: workflowRunIntent("queue_repair", workflowRunContext),
+        workflowIntent: workflowRunIntent("integration_repair", workflowRunContext),
       });
       this.logger.info(
-        { issueKey: issue.issueKey, prNumber: issue.prNumber, headRefOid, reason },
-        "Queue health: queue issue detected, dispatching repair",
+        { issueKey: issue.issueKey, prNumber: issue.prNumber, candidateSha: candidate.candidateSha, candidateBranch: candidate.branch, reason },
+        "Queue health: integration candidate needs repair",
       );
       this.feed?.publish({
         level: "warn",
@@ -231,10 +246,10 @@ export class QueueHealthMonitor {
         issueKey: issue.issueKey,
         projectId: issue.projectId,
         stage: "repairing_queue",
-        status: hasEvictionCheckRun ? "queue_health_eviction_detected" : "queue_health_conflict_detected",
-        summary: hasEvictionCheckRun
-          ? `Queue health: missed eviction detected on PR #${issue.prNumber}, dispatching repair`
-          : `Queue health: merge conflict detected on PR #${issue.prNumber}, dispatching preemptive repair`,
+        status: candidate.kind === "failed" ? "candidate_ci_failure_detected" : "candidate_conflict_detected",
+        summary: candidate.kind === "failed"
+          ? `Integration candidate CI failed for PR #${issue.prNumber}; dispatching candidate-only repair`
+          : `Integration candidate conflicts for PR #${issue.prNumber}; dispatching candidate-only repair`,
       });
     }
   }

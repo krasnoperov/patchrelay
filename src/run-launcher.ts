@@ -110,7 +110,7 @@ export function shouldFreshenWorktreeBeforeLaunch(params: {
   if (shouldPreserveDirtyWorktreeBeforeLaunch(params)) {
     return false;
   }
-  if (params.runType === "queue_repair") {
+  if (params.runType === "integration_repair" || params.runType === "queue_repair") {
     return false;
   }
   if (params.runType === "review_fix") {
@@ -134,6 +134,7 @@ export function shouldPreserveDirtyWorktreeBeforeLaunch(params: {
       || params.runType === "branch_upkeep"
       || params.runType === "ci_repair"
       || params.runType === "queue_repair"
+      || params.runType === "integration_repair"
   );
 }
 
@@ -236,8 +237,15 @@ export class RunLauncher {
     const issueRef = sanitizePathSegment(params.issue.issueKey ?? params.issue.linearIssueId);
     const slug = params.issue.title ? slugify(params.issue.title) : "";
     const branchSuffix = slug ? `${issueRef}-${slug}` : issueRef;
-    const branchName = params.issue.branchName ?? `${params.project.branchPrefix}/${branchSuffix}`;
-    const worktreePath = params.issue.worktreePath ?? `${params.project.worktreeRoot}/${issueRef}`;
+    const { branchName, worktreePath } = resolveRunWorkspace({
+      runType: params.runType,
+      candidateBranch: params.effectiveContext?.candidateBranch,
+      issueBranch: params.issue.branchName,
+      issueWorktreePath: params.issue.worktreePath,
+      defaultBranch: `${params.project.branchPrefix}/${branchSuffix}`,
+      defaultWorktreePath: `${params.project.worktreeRoot}/${issueRef}`,
+      integrationWorktreePath: `${params.project.worktreeRoot}/${issueRef}-integration`,
+    });
 
     if (params.runType === "collaboration") {
       return {
@@ -318,8 +326,7 @@ export class RunLauncher {
           projectId: params.item.projectId,
           linearIssueId: params.item.issueId,
           activeRunId: created.id,
-          branchName: params.branchName,
-          worktreePath: params.worktreePath,
+          ...(params.runType === "integration_repair" ? {} : { branchName: params.branchName, worktreePath: params.worktreePath }),
           ...(params.runType === "collaboration"
             ? {}
             : {
@@ -327,7 +334,7 @@ export class RunLauncher {
                 workflowOutcomeReason: null,
                 inputRequestKind: null,
               }),
-          ...((params.runType === "ci_repair" || params.runType === "queue_repair") && failureSignature
+          ...((params.runType === "ci_repair" || params.runType === "integration_repair" || params.runType === "queue_repair") && failureSignature
             ? {
                 lastAttemptedFailureSignature: failureSignature,
                 lastAttemptedFailureHeadSha: failureHeadSha ?? null,
@@ -607,4 +614,23 @@ export class RunLauncher {
     throw error;
   }
 
+}
+
+export function resolveRunWorkspace(params: {
+  runType: RunType;
+  candidateBranch?: string | undefined;
+  issueBranch?: string | undefined;
+  issueWorktreePath?: string | undefined;
+  defaultBranch: string;
+  defaultWorktreePath: string;
+  integrationWorktreePath: string;
+}): { branchName: string; worktreePath: string } {
+  const candidateBranch = params.runType === "integration_repair" ? params.candidateBranch : undefined;
+  if (candidateBranch) {
+    return { branchName: candidateBranch, worktreePath: params.integrationWorktreePath };
+  }
+  return {
+    branchName: params.issueBranch ?? params.defaultBranch,
+    worktreePath: params.issueWorktreePath ?? params.defaultWorktreePath,
+  };
 }

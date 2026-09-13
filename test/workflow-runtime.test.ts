@@ -111,6 +111,44 @@ test("workflow projection derives authority epoch from delegation churn", () => 
   }
 });
 
+test("approved green PR grants candidate-only integration authority while feature work stays undelegated", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const issue = makeIssue(db, {
+      delegatedToPatchRelay: false,
+      prNumber: 104,
+      prState: "open",
+      prIsDraft: false,
+      prHeadSha: "approved-head",
+      prReviewState: "approved",
+      prCheckStatus: "success",
+      lastGitHubFailureSource: "queue_eviction",
+      lastGitHubFailureHeadSha: "candidate-before",
+      lastGitHubFailureSignature: "integration:candidate-before:candidate_ci_failed",
+      lastGitHubFailureContextJson: JSON.stringify({
+        source: "queue_health_monitor",
+        candidateBranch: "merge-steward/main/pr-104",
+        candidateSha: "candidate-before",
+        approvedHeadSha: "approved-head",
+        integrationFailureKind: "candidate_ci",
+      }),
+    });
+    const reconciled = reconcileWorkflowTasksForIssue(db, issue);
+    const task = reconciled.snapshot.openTasks[0];
+
+    assert.equal(reconciled.snapshot.authority.delegated, false);
+    assert.equal(task?.id, "run:integration_repair");
+    assert.equal(evaluateTaskStart(reconciled.snapshot, task!).action, "start");
+    assert.equal(new RunTaskPlanner(db).resolveRunTask(issue)?.runType, "integration_repair");
+
+    const redFeatureHead = makeIssue(db, { delegatedToPatchRelay: false, prCheckStatus: "failed" });
+    const redSnapshot = projectWorkflowSnapshot({ issue: redFeatureHead, observations: [] });
+    assert.equal(redSnapshot.openTasks[0]?.id, "wait:authority");
+  } finally {
+    cleanup();
+  }
+});
+
 test("terminal workflow projection closes stale authority waits", () => {
   const { db, cleanup } = createDb();
   try {

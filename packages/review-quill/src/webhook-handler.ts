@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 export interface ReviewQuillWebhookEvent {
-  type: "pull_request" | "check_run" | "check_suite";
+  type: "pull_request" | "check_run" | "check_suite" | "push";
   repoFullName: string;
   prNumber?: number;
 }
@@ -41,6 +41,10 @@ export function normalizeWebhook(eventType: string, payload: Record<string, unkn
       type: eventType,
       repoFullName,
     };
+  }
+
+  if (eventType === "push") {
+    return { type: "push", repoFullName };
   }
 
   return undefined;

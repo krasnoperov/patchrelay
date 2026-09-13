@@ -1,6 +1,6 @@
 import type { MergeResult, QueueEntry } from "./types.ts";
 import type { ReconcileContext } from "./reconciler-core.ts";
-import { CLEAN_CI, CLEAR_CANDIDATE, emit, isRetryGated, ref, candidateRefName } from "./reconciler-core.ts";
+import { CLEAN_CI, CLEAR_CANDIDATE, emit, ref, candidateRefName } from "./reconciler-core.ts";
 import { evictEntry } from "./reconciler-evict.ts";
 import { describeOpenPrAncestors, findUnlandedOpenPrAncestors } from "./open-pr-ancestry.ts";
 
@@ -12,6 +12,22 @@ export async function prepareEntry(
 ): Promise<void> {
   emit(ctx, entry, "fetch_started");
   await ctx.git.fetch();
+
+  const predecessorNeedsRepair = prevEntry?.lastFailedBaseSha !== null
+    && prevEntry?.lastFailedBaseSha !== undefined
+    && prevEntry?.ciRunId !== null
+    && prevEntry?.ciRunId !== undefined;
+  if (prevEntry?.candidateSha && (
+    predecessorNeedsRepair
+    || !await ctx.git.isAncestor(prevEntry.headSha, prevEntry.candidateSha)
+  )) {
+    const detail = `predecessor PR #${prevEntry.prNumber} is awaiting integration repair`;
+    if (entry.waitDetail !== detail) {
+      emit(ctx, entry, "stack_dependency_waiting", { detail });
+      ctx.store.transition(entry.id, "preparing_head", { waitDetail: detail }, detail);
+    }
+    return;
+  }
 
   const base = isHead ? ref(ctx, ctx.baseBranch) : prevEntry?.candidateSha ?? null;
   if (!base) return;
@@ -45,24 +61,6 @@ export async function prepareEntry(
   // Preparing/validating the head never waits on main's CI. The exact
   // candidate includes current main and is gated solely by its own checks.
   //
-  // The conflict cache applies at every lookahead depth. A downstream child
-  // otherwise rebuilds the same impossible merge on every reconcile tick
-  // while its predecessor is still validating.
-  if (isRetryGated(entry, baseSha)) {
-    emit(ctx, entry, "retry_gated", {
-      baseSha,
-      detail: "same base and head already produced a deterministic conflict",
-    });
-    if (isHead) {
-      await evictEntry(ctx, entry, "integration_conflict");
-    } else if (entry.waitDetail !== "deterministic conflict; waiting for prospective base to change") {
-      ctx.store.transition(entry.id, "preparing_head", {
-        waitDetail: "deterministic conflict; waiting for prospective base to change",
-      }, "deterministic conflict cached; waiting for prospective base to change");
-    }
-    return;
-  }
-
   // A remote merge can advance main before GitHub's PR API reports `merged`.
   // The PR head is then already contained in main, so building and testing an
   // "integration" candidate would only reproduce the current main commit.
@@ -106,7 +104,7 @@ export async function prepareEntry(
     return;
   }
 
-  const specName = candidateRefName(entry.id);
+  const specName = candidateRefName(ctx.baseBranch, entry.prNumber);
   emit(ctx, entry, "integration_build_started", { candidateRef: specName, baseSha, ...(prevEntry ? { dependsOn: prevEntry.id } : {}) });
 
   const branchSuffix = entry.branch.replace(/^.*\//, "").replace(/-/g, " ");
@@ -130,17 +128,21 @@ export async function prepareEntry(
 
   if (!result.success) {
     emit(ctx, entry, "integration_build_conflict", { baseSha, conflictFiles: result.conflictFiles });
-    if (isHead) {
-      await evictEntry(ctx, entry, "integration_conflict",
-        result.conflictFiles ? { conflictFiles: result.conflictFiles } : undefined);
-    } else {
-      ctx.store.transition(entry.id, "preparing_head", {
-        baseSha,
-        lastFailedBaseSha: baseSha,
-        ...CLEAN_CI,
-        ...CLEAR_CANDIDATE,
-      }, `deterministic conflict cached for ${baseSha.slice(0, 8)} and head ${entry.headSha.slice(0, 8)}`);
-    }
+    // buildSpeculative deliberately leaves the local workspace ref at the
+    // prospective base. Publish it so PatchRelay can derive the repair from
+    // GitHub ancestry alone and add a merge commit with a non-force push.
+    await ctx.git.push(specName, true);
+    ctx.store.transition(entry.id, "validating", {
+      baseSha,
+      ...CLEAN_CI,
+      candidateKind: "integration",
+      candidatePolicyFingerprint: ctx.policy.getFingerprint(),
+      candidateRef: specName,
+      candidateSha: baseSha,
+      candidateBasedOn: isHead ? null : prevEntry!.id,
+      lastFailedBaseSha: baseSha,
+      waitDetail: `integration conflict; workspace awaits repair${result.conflictFiles?.length ? ` in ${result.conflictFiles.join(", ")}` : ""}`,
+    }, `integration workspace published at ${baseSha.slice(0, 12)} for conflict repair`);
     return;
   }
 

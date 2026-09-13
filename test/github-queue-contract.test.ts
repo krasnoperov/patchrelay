@@ -149,7 +149,7 @@ function resolveRuntimeTask(db: PatchRelayDatabase, projectId: string, issueId: 
   return new RunTaskPlanner(db).resolveRunTask(issue);
 }
 
-test("queue eviction check_run queues queue_repair with explicit provenance", async () => {
+test("legacy queue check payload is inert and cannot command PatchRelay", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-queue-"));
   try {
     const { db, handler } = createHandler(baseDir);
@@ -192,34 +192,11 @@ test("queue eviction check_run queues queue_repair with explicit provenance", as
 
     const issue = db.getIssue("usertold", "issue-1");
     const workflowTask = resolveRuntimeTask(db, "usertold", "issue-1");
-    assertIssuePhase(issue, "repairing_queue");
+    assertIssuePhase(issue, "pr_open");
     assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-1"), undefined);
-    assert.equal(workflowTask?.runType, "queue_repair");
-    assert.equal(workflowTask?.workflowReason, "run:queue_repair");
-    const pending = workflowTask?.context ?? {};
-    assert.equal(pending.failureReason, "queue_eviction");
-    assert.equal(pending.checkName, "merge-steward/queue");
-    assert.equal(pending.checkUrl, "https://github.com/owner/repo/actions/runs/42");
-    assert.equal(pending.failureHeadSha, "sha-42");
-    assert.equal(pending.failureSignature, "queue_eviction::sha-42::merge-steward/queue");
-    assert.equal(pending.incidentId, "incident-42");
-    assert.equal(pending.incidentUrl, "https://queue.example.com/queue/incidents/incident-42");
-    assert.equal(pending.incidentTitle, "Queue eviction: rebase conflict");
-    assert.equal(pending.incidentSummary, "PR #42 was evicted from the merge queue.");
-    assert.deepEqual(pending.incidentContext, {
-      version: 1,
-      failureClass: "integration_conflict",
-      baseSha: "base-123",
-      prHeadSha: "sha-42",
-      queuePosition: 1,
-      baseBranch: "main",
-      branch: "feat-queue",
-      issueKey: "USE-1",
-      conflictFiles: ["src/conflicted.ts"],
-      failedChecks: [{ name: "test", conclusion: "failure", url: "https://github.com/owner/repo/checks/1" }],
-      retryHistory: [{ at: "2026-03-31T00:00:00.000Z", baseSha: "base-122", outcome: "ci_failed_retry" }],
-    });
-    assert.equal(issue?.lastQueueIncidentJson !== undefined, true);
+    assert.equal(workflowTask, undefined);
+    assert.equal(issue?.lastGitHubFailureSource, undefined);
+    assert.equal(issue?.lastQueueIncidentJson, undefined);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -326,7 +303,7 @@ test("default gate fallback recognizes verify and enqueues CI repair", async () 
   }
 });
 
-test("queue eviction falls back to minimal context when incident payload is malformed", async () => {
+test("malformed legacy queue check payload is inert", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-queue-malformed-"));
   try {
     const { db, handler } = createHandler(baseDir);
@@ -358,15 +335,8 @@ test("queue eviction falls back to minimal context when incident payload is malf
 
     const workflowTask = resolveRuntimeTask(db, "usertold", "issue-3");
     assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-3"), undefined);
-    assert.equal(workflowTask?.runType, "queue_repair");
-    const pending = workflowTask?.context ?? {};
-    assert.equal(pending.failureReason, "queue_eviction");
-    assert.equal(pending.checkName, "merge-steward/queue");
-    assert.equal(pending.checkUrl, "https://github.com/owner/repo/actions/runs/43");
-    assert.equal(pending.failureHeadSha, "sha-43");
-    assert.equal(pending.incidentUrl, "https://queue.example.com/queue/incidents/incident-43");
-    assert.equal(pending.incidentTitle, "Queue eviction: rebase conflict");
-    assert.equal(pending.incidentSummary, "Malformed steward payload fallback");
+    assert.equal(workflowTask, undefined);
+    assert.equal(db.getIssue("usertold", "issue-3")?.lastGitHubFailureSource, undefined);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

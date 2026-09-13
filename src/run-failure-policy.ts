@@ -45,12 +45,12 @@ function buildAttemptRefundFields(
 ): AttemptRefundFields | undefined {
   const counter = runType === "ci_repair" && issue.ciRepairAttempts > 0
     ? { ciRepairAttempts: issue.ciRepairAttempts - 1 }
-    : runType === "queue_repair" && issue.queueRepairAttempts > 0
+    : (runType === "integration_repair" || runType === "queue_repair") && issue.queueRepairAttempts > 0
       ? { queueRepairAttempts: issue.queueRepairAttempts - 1 }
       : isRequestedChangesRunType(runType) && issue.reviewFixAttempts > 0
         ? { reviewFixAttempts: issue.reviewFixAttempts - 1 }
         : undefined;
-  const provenance = runType === "ci_repair" || runType === "queue_repair"
+  const provenance = runType === "ci_repair" || runType === "integration_repair" || runType === "queue_repair"
     ? {
         lastAttemptedFailureHeadSha: null,
         lastAttemptedFailureSignature: null,

@@ -44,6 +44,11 @@ import { buildPromptFingerprint } from "./prompt-fingerprint.ts";
 import { buildPullRequestConversationClaims } from "./prompt-context/github-context.ts";
 import { ReviewExecutionTiming } from "./review-execution-timing.ts";
 import { selectPriorReviewThread, type PriorReviewThreadCandidate } from "./prior-review-thread-selector.ts";
+import {
+  executeIntegrationReview,
+  parseIntegrationCandidateRef,
+  selectIntegrationReviewCandidate,
+} from "./integration-review.ts";
 
 /** Default cap on parallel review executions. Review Quill shares one
  *  Codex app-server and one git cache per repository, so the default
@@ -74,6 +79,7 @@ export class ReviewQuillService {
   private readonly inFlightReviews = new Map<string, Promise<void>>();
   private readonly inFlightReviewSignals = new Map<string, AbortController>();
   private readonly inFlightReviewTimings = new Map<string, ReviewExecutionTiming>();
+  private readonly inFlightIntegrationReviews = new Map<string, Promise<void>>();
   private readonly semaphore: ReviewSemaphore;
   private readonly reconciler: AttemptReconciler;
   /**
@@ -137,7 +143,10 @@ export class ReviewQuillService {
     this.stopping = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
-    const workers = Array.from(this.inFlightReviews.values());
+    const workers = [
+      ...this.inFlightReviews.values(),
+      ...this.inFlightIntegrationReviews.values(),
+    ];
     for (const controller of this.inFlightReviewSignals.values()) {
       controller.abort("Review Quill service is stopping before review completed.");
     }
@@ -501,17 +510,18 @@ export class ReviewQuillService {
         }
       }
 
-      // Decide whether this PR needs a fresh review run, attempting
-      // carry-forward first when eligible. Dismiss stale decisive reviews
-      // only after the identity decision, but never preserve a same-head
-      // verdict whose captured base no longer matches GitHub.
+      // Decide whether this PR needs a fresh feature review, attempting
+      // patch-id carry-forward first when eligible. A completed approval on
+      // this exact feature head is frozen: base movement is handled by the
+      // integration candidate and must not reopen substantive review.
       let needsExecution = false;
       let identity: ChangeIdentity | undefined;
       let preparedChange: PreparedReviewChange | undefined;
       let dismissalPr = pr;
       let inputChangedDuringCarryForward = false;
       const exactInputAttempt = existing?.prBaseSha === pr.baseSha;
-      if (existing && exactInputAttempt && !["failed", "cancelled", "superseded"].includes(existing.status)) {
+      const frozenFeatureApproval = existing?.status === "completed" && existing.conclusion === "approved";
+      if (existing && (exactInputAttempt || frozenFeatureApproval) && !["failed", "cancelled", "superseded"].includes(existing.status)) {
         // Exact head and base input — already reviewed or in flight.
       } else if (!eligibility.eligible) {
         // Ineligible — nothing to publish.
@@ -540,11 +550,10 @@ export class ReviewQuillService {
         dismissalPr.headSha,
       );
       const invalidateCurrentHead = dismissalAttempt !== undefined
+        && dismissalAttempt.conclusion !== "approved"
         && dismissalAttempt.prBaseSha !== dismissalPr.baseSha;
-      // A decisive review is valid only for the exact head+base input it saw.
-      // Dismiss same-head verdicts before asynchronous re-review when the base
-      // changed; otherwise Merge Steward could observe the old approval in the
-      // gap. A carry-forward race is reconciled from its freshly-read PR truth.
+      // Non-approved same-head verdicts may still be invalidated when their
+      // captured base changes. Approved feature heads deliberately survive it.
       try {
         await this.reconciler.dismissStaleDecisiveReviews(
           repo,
@@ -582,9 +591,68 @@ export class ReviewQuillService {
       }
     }
 
+    await this.discoverIntegrationReviews(repo, prs);
+
     this.setPendingReviews(repo.repoId, pendingForRepo);
     this.runtime.repoLastReconciledAt[repo.repoFullName] = new Date().toISOString();
     delete this.runtime.repoLastReconcileErrors[repo.repoFullName];
+  }
+
+  private async discoverIntegrationReviews(
+    repo: ReviewQuillRepositoryConfig,
+    prs: PullRequestSummary[],
+  ): Promise<void> {
+    // Preserve compatibility with lightweight GitHub fakes used by callers
+    // while making the real client reconcile candidate refs on startup and
+    // every webhook/timer pass.
+    if (typeof this.github.listIntegrationCandidateRefs !== "function") return;
+    const refs = await this.github.listIntegrationCandidateRefs(repo.repoFullName);
+    const prsByNumber = new Map(prs.map((pr) => [pr.number, pr]));
+    for (const rawRef of refs) {
+      const parsed = parseIntegrationCandidateRef(rawRef);
+      if (!parsed) continue;
+      const pr = prsByNumber.get(parsed.prNumber);
+      if (!pr || parsed.baseBranch !== pr.baseRefName) continue;
+      const candidate = await selectIntegrationReviewCandidate({
+        github: this.github,
+        repoFullName: repo.repoFullName,
+        pr,
+        candidate: parsed,
+        ...(this.reviewerLogin ? { reviewerLogin: this.reviewerLogin } : {}),
+      });
+      if (!candidate || this.codexCapacityPause.isPaused()) continue;
+      const key = `${repo.repoFullName}::${candidate.ref}::${candidate.candidateSha}`;
+      if (this.inFlightIntegrationReviews.has(key)) continue;
+      const work = (async () => {
+        let release: (() => void) | undefined;
+        try {
+          release = await this.semaphore.acquire();
+          if (this.stopping || this.codexCapacityPause.isPaused()) return;
+          await executeIntegrationReview({
+            github: this.github,
+            runner: this.runner,
+            logger: this.logger,
+            repo,
+            pr,
+            candidate,
+            prompting: this.config.prompting,
+            ...(this.reviewerLogin ? { reviewerLogin: this.reviewerLogin } : {}),
+          });
+        } catch (error) {
+          if (error instanceof CodexCapacityError) this.codexCapacityPause.enter(error);
+          this.logger.error({
+            repo: repo.repoFullName,
+            prNumber: pr.number,
+            candidateSha: candidate.candidateSha,
+            error: error instanceof Error ? error.message : String(error),
+          }, "Integration review failed");
+        } finally {
+          release?.();
+          this.inFlightIntegrationReviews.delete(key);
+        }
+      })();
+      this.inFlightIntegrationReviews.set(key, work);
+    }
   }
 
   private decorateAttempt(attempt: ReviewAttemptRecord): ReviewAttemptRecord {

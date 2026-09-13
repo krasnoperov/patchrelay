@@ -1,6 +1,8 @@
 # review-quill
 
-Self-hosted review gate for agent-written and human-written PRs. Review Quill pairs well with a coding agent because it runs both narrow and wide review passes: changed lines first, then the surrounding system contracts where misalignments often hide.
+Self-hosted review gate for agent-written and human-written PRs. Review Quill
+runs substantive feature review on PR heads and narrow preservation review when
+an agent repairs an approved feature inside a Merge Steward candidate.
 
 Independent of PatchRelay. Pairs with `merge-steward`; neither requires the other.
 
@@ -8,7 +10,12 @@ For the background story and design trade-offs, read [review-quill: a strict rev
 
 ## What it does
 
-The point is invariant protection before merge. Coding agents are good at the requested change and weaker at noticing when two parts of the system now disagree: code no longer matches its documented contract, a new abstraction is bypassed by an untouched path, or a caller still relies on the old behavior. Review Quill is the second pass: it stays scoped to what the PR changed, reads the real repo for surrounding evidence, and sends concrete `REQUEST_CHANGES` feedback the agent can fix and resubmit. Each attempt is fresh and head-SHA-keyed, stale attempts are superseded when a new push arrives, and approvals carry forward only when the patch identity proves the change is not really new.
+The point is invariant protection before merge. Feature review stays scoped to
+what the PR changed while reading surrounding contracts. After approval, moving
+`main` does not trigger the same feature review again. If PatchRelay resolves a
+merge conflict or candidate-test failure, Review Quill checks only whether that
+integration repair preserved the approved feature and publishes a SHA-bound
+`review-quill/integration` result.
 
 For each eligible PR head:
 
@@ -22,6 +29,13 @@ For each eligible PR head:
 7. Publishes an ordinary GitHub `APPROVE` or `REQUEST_CHANGES` review.
 8. Supersedes stale attempts and interrupts running review turns when the PR
    head or captured base changes first.
+
+For repaired integration candidates it instead materializes
+`merge-steward/<base>/pr-<number>`, compares it with the frozen approved head and
+prospective base, and publishes `review-quill/integration`. Clean mechanical
+candidates do not receive another feature review. Any effective approval on
+the exact current PR head, including a human approval, may establish the frozen
+baseline; approval on an older head may not.
 
 The review runs against the real working tree at that SHA, not the GitHub files API.
 
@@ -95,9 +109,9 @@ Codex owns the full review transcript. Review Quill stores only thread/turn iden
 
 Three services, distinct ownership, GitHub as the shared bus:
 
-- `patchrelay` — delegated implementation, branch upkeep, issue/worktree orchestration
-- `review-quill` — PR review publication
-- `merge-steward` — queue admission, speculative validation, landing
+- `patchrelay` — feature implementation plus candidate-only integration repair
+- `review-quill` — feature review plus integration-preservation checks
+- `merge-steward` — queue admission, candidate refs, speculative validation, landing
 
 ## Reference
 

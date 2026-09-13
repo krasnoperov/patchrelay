@@ -24,18 +24,20 @@ describe("re-admission after terminal state", () => {
     h.assertInvariants();
   });
 
-  it("re-enqueue after eviction succeeds and merges", async () => {
+  it("re-enqueue after explicitly dequeuing a blocked integration succeeds and merges", async () => {
     const pr: SimPR = { number: 1, branch: "feat-a", files: [{ path: "shared.ts", content: "A" }] };
     const blocker: SimPR = { number: 2, branch: "feat-b", files: [{ path: "shared.ts", content: "B" }] };
 
-    // Set up: blocker merges first, PR conflicts and gets evicted (maxRetries: 0)
+    // Set up: blocker merges first and the PR waits for conflict repair.
     const h = await createHarness({ ciRule: () => "pass", maxRetries: 0 });
     await h.enqueue(blocker);
     await h.enqueue(pr);
     await h.runUntilStable({ maxTicks: 30 });
 
     assert.deepStrictEqual(h.merged, [2]);
-    assert.ok(h.evicted.includes(1), "PR 1 should be evicted");
+    assert.equal(h.entryStatus(pr), "validating");
+    h.dequeueByPR(1);
+    assert.equal(h.entryStatus(pr), "dequeued");
 
     // Re-enqueue PR 1 with fresh content that doesn't conflict
     const entry2 = await h.enqueue({ number: 1, branch: "feat-a-v2", files: [{ path: "a-only.ts", content: "no conflict" }] });

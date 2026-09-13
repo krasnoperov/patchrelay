@@ -7,7 +7,7 @@ const prB: SimPR = { number: 2, branch: "feat-b", files: [{ path: "b.ts", conten
 const prC: SimPR = { number: 3, branch: "feat-c", files: [{ path: "c.ts", content: "c" }] };
 
 describe("mid-chain CI failure", () => {
-  it("evicts PR with persistent CI failure after repair budget exhausted", async () => {
+  it("retains PR with persistent CI failure and blocks later landing", async () => {
     const h = await createHarness({
       // b.ts always fails CI.
       ciRule: (files) => (files.includes("b.ts") ? "fail" : "pass"),
@@ -20,10 +20,20 @@ describe("mid-chain CI failure", () => {
 
     // A should merge (a.ts passes).
     assert.ok(h.merged.includes(1), "PR #1 should merge");
-    // B should be evicted (b.ts always fails, budget exhausted).
-    assert.strictEqual(h.entryStatus(prB), "evicted");
-    // C should merge (c.ts passes, B was evicted so C becomes head).
-    assert.ok(h.merged.includes(3), "PR #3 should merge after #2 evicted");
+    assert.strictEqual(h.entryStatus(prB), "validating");
+    assert.ok(h.entries.find((entry) => entry.prNumber === 2)?.candidateRef);
+    assert.ok(!h.merged.includes(3), "PR #3 must not bypass #2");
+    assert.deepEqual(h.evicted, []);
+    const blocked = h.entries.find((entry) => entry.prNumber === 2)!;
+    h.store.transition(blocked.id, blocked.status, { waitDetail: "presentation text changed" });
+    const cRunsBefore = h.reconcileEvents.filter((event) =>
+      event.prNumber === 3 && event.action === "ci_triggered").length;
+    for (let i = 0; i < 5; i++) await h.tick();
+    assert.equal(
+      h.reconcileEvents.filter((event) => event.prNumber === 3 && event.action === "ci_triggered").length,
+      cRunsBefore,
+      "C must not rebuild or rerun while B still awaits repair",
+    );
 
     h.assertInvariants();
   });

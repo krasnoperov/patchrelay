@@ -2,7 +2,9 @@
 
 Self-hosted merge queue for bot-managed and human-managed GitHub pull requests. Merge Steward turns reviewed PRs into a tested landing train: it runs CI on the exact future `main` SHAs, validates several PRs in parallel, and fast-forwards through the green sequence as soon as it is safe.
 
-Independent of PatchRelay. Communicates through GitHub only — PRs, reviews, checks, labels, branches. Pairs with `review-quill`; neither requires the other.
+Independent of PatchRelay. Communicates through GitHub state only — PRs,
+reviews, candidate refs, ancestry, and checks. Labels and comments are not
+control messages. Pairs with `review-quill`; neither requires the other.
 
 For the background story and design trade-offs, read [merge-steward: speculative integration, parallel validation, fast-forward landing](https://blog.krasnoperov.me/posts/merge-steward).
 
@@ -14,11 +16,19 @@ The queue keeps delivery fast without pretending branch CI is always enough. For
 
 1. A PR becomes eligible when GitHub says it is approved and its required checks are green.
 2. The steward notices through webhook wakeups or startup reconcile scans, and admits the PR to the queue.
-3. It resolves the exact future-`main` candidate. If the prospective base is an ancestor of the PR head, the candidate is that already-tested head SHA. Otherwise it builds a cumulative integration commit.
+3. It freezes the approved PR head and resolves the exact future-`main`
+   candidate. If the prospective base is its ancestor, that head is the
+   candidate. Otherwise it publishes
+   `merge-steward/<base>/pr-<number>` as a cumulative integration workspace.
 4. It validates checks on that exact SHA. Only newly-created integration candidates trigger synthetic CI.
 5. Immediately before landing, it refreshes policy, approval, head, checks, and ancestry, then non-force pushes the same immutable SHA to `main`. It never substitutes a mutable branch ref.
-6. On CI failure: retry (gated on base SHA change), then evict with a durable incident record and GitHub check run.
-7. PatchRelay, the `ship-pr` skill, or any agent sees the check run failure and fixes the branch; when CI passes again the PR can be re-admitted.
+6. On conflict, the workspace remains at the prospective base; PatchRelay
+   derives the missing ancestry and non-force pushes a resolved candidate.
+7. On candidate-CI failure, PatchRelay repairs the candidate rather than the PR
+   branch. Review Quill verifies only that an agent repair preserved the
+   approved feature.
+8. Ordinary integration failures retain queue position. Feature implementation
+   reopens only when integration review proves the feature must change.
 
 This is structural, not an optional fast path. An exact head is safe precisely
 when it already contains the prospective base; if it does not, Merge Steward
@@ -26,7 +36,10 @@ creates and tests the integration candidate. Checks never move between SHAs.
 
 ## Use with your own agent
 
-For an agent that drives PRs through the queue and reacts to evictions / failing checks without running PatchRelay's full harness, install the [`ship-pr`](https://github.com/krasnoperov/patchrelay-agents) skill from the companion Claude Code marketplace:
+For an agent that drives PRs through the queue and reacts to candidate state and
+failing checks without running PatchRelay's full harness, install the
+[`ship-pr`](https://github.com/krasnoperov/patchrelay-agents) skill from the
+companion Claude Code marketplace:
 
 ```
 /plugin marketplace add krasnoperov/patchrelay-agents
@@ -73,7 +86,7 @@ Each repository reconcile tick is bounded by `reconcileStaleAfterMs` (five minut
 | Code | Meaning |
 |-|-|
 | 0 | merged / approved with green required checks |
-| 2 | changes_requested / failing required checks / evicted / closed |
+| 2 | changes_requested / integration review requires feature rework / policy failure / closed |
 | 3 | still in flight (queued, preparing, validating, merging, pending) |
 | 4 | `--wait` timed out |
 | 1 | usage or configuration error |
@@ -95,10 +108,14 @@ The real gate is:
 
 Independent services, GitHub as the shared bus:
 
-1. PatchRelay moves an issue to `awaiting_queue` when the linked PR is approved and green, and may add the configured queue label as an admission nudge.
-2. The steward admits from fresh GitHub truth, lands the PR, or evicts and creates the eviction check run (default `merge-steward/queue`).
-3. PatchRelay watches for that check run failure and triggers `queue_repair`.
-4. After repair, PatchRelay pushes a new head; the steward re-admits only after the new head is approved and green.
+1. The steward admits an open PR when GitHub shows an approved head and green
+   branch checks; no label is required.
+2. It publishes a self-describing candidate ref. Missing approved-head ancestry
+   means conflict repair; settled red candidate checks mean test repair.
+3. PatchRelay derives either condition from GitHub and non-force pushes only the
+   candidate ref.
+4. Review Quill publishes `review-quill/integration` when PatchRelay changed the
+   candidate. The steward lands the exact green SHA when that check is satisfied.
 
 Neither service calls the other's API.
 

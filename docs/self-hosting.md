@@ -230,7 +230,8 @@ If you want Linear itself to be part of your trust boundary, configure `trusted_
 
 Each automated repository should contain:
 
-- `IMPLEMENTATION_WORKFLOW.md` — guidance for implementation, CI repair, and queue repair runs
+- `IMPLEMENTATION_WORKFLOW.md` — guidance for implementation, branch-CI repair,
+  and integration-candidate repair runs
 - `REVIEW_WORKFLOW.md` — guidance for review fix runs
 
 These files are the repo-local workflow guidance PatchRelay points Codex at during each run. They should explain what the agent is allowed to do in that repository, what validation is required, and how to finish the work.

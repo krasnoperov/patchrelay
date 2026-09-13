@@ -267,7 +267,7 @@ function shouldRenderAuthorPhase(
   if (state.kind === "ready") return true;
   if (state.kind === "running") {
     const noPr = issue.prNumber === undefined && !issue.prUrl;
-    return noPr || state.run.runType === "implementation" || state.run.runType === "ci_repair" || state.run.runType === "queue_repair" || state.run.runType === "branch_upkeep";
+    return noPr || state.run.runType === "implementation" || state.run.runType === "ci_repair" || state.run.runType === "integration_repair" || state.run.runType === "queue_repair" || state.run.runType === "branch_upkeep";
   }
   return false;
 }

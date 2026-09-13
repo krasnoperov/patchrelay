@@ -1,246 +1,222 @@
 # PR delivery pipeline
 
-Three independent services handle the path from "PR exists" to "merged on `main`":
+PatchRelay, review-quill, and merge-steward form one delivery pipeline with two
+separate tracks:
 
-- **patchrelay** develops code and produces pull requests. Owns issue worktrees, agent runs (implementation, review fix, CI repair), and Linear session UX.
-- **review-quill** reviews every merge-ready head and publishes an ordinary GitHub `APPROVE` or `REQUEST_CHANGES` review.
-- **merge-steward** admits approved, green PRs into a serial landing queue, resolves and validates the exact future-`main` SHA, and fast-forwards.
+- **Feature track** — implement and substantively review the PR branch.
+- **Integration track** — compose the frozen approved head with prospective
+  `main`, repair only that composition, validate it, and land it.
 
-Neither downstream service calls the other's API, and neither calls patchrelay. GitHub is the shared bus — PR state, reviews, checks, and branch changes are the protocol. Each service is independently usable; a repo can adopt any subset.
-
-For the *mental model* (three roles, four primitives, the carry-forward and eviction rules), see [concepts.md](./concepts.md).
-
-For the *concrete shared artifacts and ownership boundaries*, see [github-queue-contract.md](./github-queue-contract.md).
-
-## Why split the pipeline
-
-The merge queue is a deterministic control problem that should keep making progress even when agent execution is unavailable, degraded, or expensive.
-
-Observed behavior showed patchrelay spent far more work on orchestration churn (173/232 runs in an early batch) than on real code repair. Splitting the queue from the agent harness:
-
-- keeps the model where it helps (issue implementation and repair)
-- removes it from the part that most needs simple, restart-safe, auditable control (queue advancement)
-- allows the steward to be a pure reconciliation loop
-
-PR review was split out for the same reason: it has its own decision surface (approve/decline), its own failure mode (stale reviews on an old head), and its own natural frequency. Running it as a dedicated service keeps each loop simple.
-
-See the design docs for the full analysis: [design-docs/merge-steward.md](./design-docs/merge-steward.md), [design-docs/review-quill.md](./design-docs/review-quill.md).
+The services share no private API. GitHub PRs, reviews, refs, ancestry, and
+SHA-bound checks are the protocol. A webhook is only a reconcile wakeup.
 
 ## End-to-end lifecycle
 
 ```mermaid
 sequenceDiagram
-    participant A as Author<br/>(patchrelay / human)
+    participant P as PatchRelay
     participant GH as GitHub
-    participant RQ as Reviewer<br/>(review-quill)
-    participant MS as Lander<br/>(merge-steward)
+    participant RQ as Review Quill
+    participant MS as Merge Steward
+    participant CI as CI
 
-    A->>GH: Push branch, open PR
-    GH-->>RQ: webhook: PR opened / head updated
+    P->>GH: Push feature head / open PR
+    GH-->>CI: Branch checks
+    GH-->>RQ: Feature head changed
+    RQ->>GH: APPROVE or REQUEST_CHANGES on feature head
 
-    alt Same patch_id as a prior approved attempt (carry-forward)
-        RQ->>GH: Re-publish prior verdict (no Codex turn spent)
-    else New patch_id
-        RQ->>GH: Checkout head SHA in throwaway worktree
-        RQ->>GH: Submit APPROVE / REQUEST_CHANGES review
+    loop Until approved and branch CI green
+        GH-->>P: Current PR review and check truth
+        P->>GH: Push substantive feature repair
     end
 
-    Note over A,MS: If APPROVE + required checks green:
-    GH-->>MS: webhook: review approved / checks green
-    MS->>GH: Admit to queue (DB record)
-    MS->>MS: Resolve exact head or integration candidate
-    opt Integration candidate
-        MS->>GH: Push temporary candidate ref and run CI
-        GH-->>MS: webhook: check_suite completed
+    Note over P,MS: Approved feature head is frozen
+    GH-->>MS: Reconcile wakeup
+    MS->>GH: Publish cumulative candidate ref
+
+    alt Automatic integration succeeds
+        MS->>CI: Validate exact candidate SHA
+    else Integration conflicts
+        Note over GH,P: Candidate ref remains at prospective base
+        GH-->>P: Reconcile wakeup
+        P->>GH: Non-force push resolved candidate
+        GH-->>RQ: Repaired candidate SHA
+        RQ->>GH: review-quill/integration check
+        GH-->>CI: Validate exact candidate SHA
     end
 
-    alt Current policy green on exact candidate
-        MS->>GH: Fast-forward push candidate SHA → main
-        Note over MS,GH: main now points at the tested SHA
-    else Candidate cannot be validated
-        MS->>GH: Retry (if base SHA changed) or evict + emit merge-steward/queue check_run
-        GH-->>A: eviction check_run visible on PR
-        A->>GH: Fix branch, push new head → loop restarts
+    alt Candidate CI fails
+        GH-->>P: Reconcile wakeup
+        P->>GH: Non-force push candidate repair
+        GH-->>RQ: Review integration preservation
+        GH-->>CI: Validate new exact SHA
     end
+
+    MS->>GH: Refresh approval, ancestry, checks, and main
+    MS->>GH: Non-force push exact tested SHA to main
 ```
 
-This sequence is built on four primitives described in [concepts.md](./concepts.md): commits and trees, an exact landing candidate, `patch_id`, and fast-forward landing.
+## Feature track
 
-## Queue state machine
+PatchRelay owns the PR branch until it is approved and green. Review findings
+and branch-CI failures may produce multiple feature heads and multiple review
+rounds. A requested-changes repair must push a genuinely new head before review
+continues.
+
+Review Quill may carry a verdict through a patch-equivalent commit rewrite by
+`patch_id`. A changed feature patch receives a fresh review. Once admitted to
+integration, the approved feature head is immutable; movement of `main` is not
+a reason to rewrite it.
+
+## Integration track
+
+Merge Steward maintains a cumulative speculative train:
+
+```text
+main + A         -> CI
+main + A + B     -> CI
+main + A + B + C -> CI
+```
+
+Each synthetic candidate uses a self-describing workspace ref:
+
+```text
+merge-steward/<base-branch>/pr-<number>
+```
+
+The ref is mutable integration state; checks and landing authorization bind to
+its immutable current SHA.
+
+### Clean candidate
+
+When the merge is mechanical and clean, Merge Steward pushes the candidate and
+runs candidate CI. It does not request another substantive feature review.
+
+### Conflict candidate
+
+When construction conflicts, Merge Steward leaves the workspace ref at the
+prospective base. PatchRelay detects that the ref does not contain the approved
+PR head, repeats the merge, resolves the conflict, and non-force pushes the
+candidate. It never changes the feature branch.
+
+### Candidate-CI repair
+
+When required checks settle red on a candidate containing the approved head,
+PatchRelay diagnoses and repairs that candidate. Infra-only failures may rerun
+on the same SHA; code repair creates a new candidate SHA. If the candidate was
+the approved head and had no synthetic ref, Merge Steward first publishes its
+workspace at that head.
+
+Any candidate changed by PatchRelay receives the narrow
+`review-quill/integration` check. This review asks whether the repair preserved
+the approved feature. A success continues integration. A failure discards the
+candidate and returns the task to feature implementation and full review.
+
+For a tracked PR, exact-head approval from any GitHub reviewer (human or app)
+and green branch CI grant PatchRelay candidate-only integration authority even
+when the Linear issue is not delegated. PatchRelay still has no authority to
+modify the PR branch or implement additional feature behavior.
+
+## Queue behavior while repairing
+
+For `A -> B -> C`, B remains in the queue while it is repaired:
+
+- A may land;
+- C cannot land before B;
+- already-running C validation may finish;
+- a new B SHA invalidates and rebuilds C;
+- when B has no candidate because of a conflict, C waits for a valid B base.
+
+Ordinary conflict or candidate-test failure does not cause Merge Steward to
+skip B and rebuild the train without it.
+
+## State machine
 
 ```mermaid
 stateDiagram-v2
-    [*] --> queued: admit
-    queued --> preparing_head: becomes head
-    preparing_head --> validating: candidate resolved
-    preparing_head --> evicted: conflict or retry budget exhausted
-    validating --> merging: CI passed
-    validating --> preparing_head: CI failed, retry
-    validating --> evicted: retry budget exhausted
-    merging --> merged: fast-forward push succeeded
-    merging --> preparing_head: push rejected (main advanced)
-    merging --> evicted: budget exhausted after push failure
-    queued --> dequeued: operator intervention
+    [*] --> queued: approved feature + green branch CI
+    queued --> preparing: dependency-ready
+    preparing --> validating: clean candidate
+    preparing --> blocked_integration: conflict workspace published
+    blocked_integration --> validating: PatchRelay pushes candidate
+    validating --> repairing_integration: settled candidate failure
+    repairing_integration --> validating: PatchRelay pushes repair
+    validating --> landing: exact SHA green and integration review satisfied
+    landing --> merged: non-force push succeeds
+    landing --> preparing: main or predecessor advanced
+    validating --> feature_rework: integration review says feature changed
+    feature_rework --> [*]
+    queued --> dequeued: explicit operator action
     merged --> [*]
-    evicted --> [*]
-    dequeued --> [*]
 ```
 
-States:
+The operational states are derived from GitHub truth even when names are also
+stored locally for audit and UI.
 
-| State | Meaning |
-|-|-|
-| `queued` | Admitted; waiting in line |
-| `preparing_head` | Resolving the candidate against `main` or the preceding candidate |
-| `validating` | Evaluating checks on the immutable candidate SHA |
-| `merging` | Revalidating approval + attempting fast-forward push to `main` |
-| `merged` | Done — `main` now points at the tested SHA |
-| `evicted` | Failed after retries; durable incident created, GitHub check run emitted |
-| `dequeued` | Manually removed by an operator |
+## Exact-SHA CI reuse
 
-## What this pipeline eliminates
+The pipeline distinguishes two proofs:
 
-The pipeline is built around five rules that fall out of the four primitives. Each rule maps to a specific class of waste that was directly observed in production transcripts before the exact-candidate rollout:
+- branch CI says the approved feature head is ready for integration;
+- candidate CI says the exact prospective `main` is safe to land.
 
-| Rule | Where it lives | Waste it eliminates |
-|-|-|-|
-| Carry the verdict by `patch_id` plus immutable diff base | review-quill `service.ts` carry-forward gate | Re-review after commit-only rewrites with unchanged review input |
-| Don't originate redundant pushes | patchrelay run-finalizer (`shouldNotPublish` + post-hoc `patch_id` detection) | Cosmetic re-pushes that dismiss approvals |
-| Branch CI is metadata once In Merge Queue | patchrelay state-machine table + workflow-task derivation guard | `ci_repair` runs fired on flaky branch CI while the lander already has the PR |
-| Cancel a run when an approval lands on the run's source SHA | patchrelay `superseded` RunStatus + finalizer publication block | Mid-run race where a fresh approval is dismissed by a still-running review-fix push |
-| Validate the exact commit that will become main | merge-steward candidate selection plus exact-SHA checks | Re-testing an already-valid head, or landing a commit different from the one tested |
+If the candidate is the feature head itself, reuse branch CI. Otherwise validate
+the synthetic candidate. A successful required check is reused only for the
+same SHA, check policy, and trusted producer. Once the exact tested SHA becomes
+`main`, repeating the same heavy suite adds no landing evidence; post-merge CI
+should be informational or perform a different deploy/smoke responsibility.
 
-Three sequencing tiers prevent integration conflicts upstream of the rules above. See [concepts.md](./concepts.md#sequencing--three-tiers-for-predictable-conflicts).
+## Landing
 
-## Production proof points
+Immediately before push, Merge Steward refreshes:
 
-The exact-candidate rollout is intentionally observable through ordinary PatchRelay runtime state: Linear issue state, GitHub webhook transitions, and the `runs` table. A healthy repair path should read as a small story:
+- PR state and frozen approved head;
+- current prospective base and predecessor ancestry;
+- required-check policy and exact-SHA results;
+- integration-review check when PatchRelay changed the candidate;
+- current `main`.
+
+It then non-force pushes the candidate object ID, not the mutable ref name. A
+race advances only the integration loop: rebuild against the new base, preserve
+feature approval, and validate the new exact candidate.
+
+## Failure boundary
+
+Repair in the integration track:
+
+- textual merge conflict;
+- compile or test failure created by integration;
+- stale prospective base;
+- changed predecessor candidate;
+- infrastructure or flaky failure.
+
+Return to the feature track only when:
+
+- integration review proves the approved behavior materially changed;
+- product intent is ambiguous;
+- repository policy requires feature rework;
+- the configured integration-repair budget is exhausted;
+- an operator explicitly removes or redirects the change.
+
+## Operational diagnosis
+
+The first source of truth is GitHub:
 
 ```text
-review-quill requests changes
-PatchRelay starts review_fix
-PatchRelay pushes a fresh PR head
-review-quill approves the new head
-merge-steward admits, validates, and merges
+PR head and review
+candidate ref and ancestry
+checks on candidate SHA
+current main and predecessor refs
 ```
 
-Recent production runs showed that path on real LearnSpeakRepeat work:
+Local dashboards and databases explain queue order, attempts, and history, but
+they do not carry cross-service commands. A restart or lost webhook converges by
+reading the same GitHub facts again.
 
-| Issue | What happened | Result |
-|-|-|-|
-| `LSR-373` | requested changes on PR #724, followed by `review_fix` runs | fresh head, approval, merge |
-| `LSR-374` | requested changes on PR #722, followed by `review_fix` runs | fresh head, approval, merge |
-| `LSR-375` | queue conflict on PR #726, followed by `queue_repair` | rebased fresh head, approval, merge |
-| `USE-206` | repeated requested-changes repair attempts on PR #355 | no-push attempts were blocked, pushed repairs continued |
+## Related documentation
 
-The important failure mode is now explicit. If a requested-changes run finishes without moving the remote PR head past the blocking review SHA, PatchRelay marks the run failed instead of handing the same head back to review. That failure means the guard worked: the system protected the reviewer from being asked to reconsider an unchanged head.
-
-Look for this failure reason when auditing production:
-
-```text
-Requested-changes run finished for PR #<n> without pushing a new head past blocking review SHA <sha>;
-PatchRelay must not hand the same SHA back to review.
-```
-
-## Failure and repair handoff
-
-When the queue head fails, the steward classifies the failure before acting:
-
-- **Flaky / infra** — retry CI without agent repair
-- **Branch-local** — evict and report via `merge-steward/queue` check run
-- **Integration conflict** — evict and report via check run
-
-On eviction, the steward creates a durable incident record and a GitHub check run with failure details. Any agent with access to the branch sees the check run failure and can repair:
-
-- **patchrelay** sees the check run, triggers a `queue_repair` run, fixes the branch, pushes a new head.
-- **[ship-pr](https://github.com/krasnoperov/patchrelay-agents) skill** (supervised mode) — an agent running in Claude Code / Cursor / Codex CLI interprets `merge-steward pr status --wait` exit-2 `evicted`, reads `merge-steward queue show --pr <num>` for the incident, fixes the branch, pushes.
-- **Human** — reads the check run output and refreshes the branch manually.
-
-In all three cases, the steward re-admits the PR from fresh GitHub truth once the fresh head is approved and green again.
-
-```text
-Steward evicts PR → creates check run with failure context
-Agent (patchrelay | ship-pr | human) → fixes the branch → pushes a fresh head
-Steward → re-admits from fresh GitHub truth
-```
-
-When a PR is stuck or evicted, start with:
-
-```bash
-merge-steward pr status
-merge-steward queue show --pr <num>
-merge-steward service logs --lines 100
-patchrelay status APP-123
-```
-
-Escalate to a human when the incident points at product ambiguity, broken credentials, branch protection policy, an unhealthy `main`, or repeated semantic failures.
-
-## Repository settings
-
-### Branch protection rules
-
-Configure branch protection on the base branch (e.g., `main`):
-
-| Setting | Value |
-|-|-|
-| Require a pull request before merging | Enabled |
-| Require approvals | 1 (or more) |
-| Require status checks to pass before merging | Enabled |
-| Status checks that are required | Your CI job name (e.g., `test`) |
-| Require branches to be up to date before merging | **Enabled** |
-| Dismiss stale pull request approvals when new commits are pushed | **Disabled** |
-| Require approval of the most recent reviewable push | **Disabled** |
-
-If the branch restricts who can push, allow the Merge Steward GitHub App to
-push to the protected branch. The steward lands by fast-forwarding `main` to
-the exact already-tested candidate SHA; it does not press GitHub's merge
-button.
-
-**Why "Dismiss stale approvals" can stay disabled:** immediately before
-landing, the steward verifies approval on the current PR head and validates the
-exact landing candidate.
-
-**Why "Require approval of the most recent reviewable push" can stay
-disabled:** the approval gate is the reviewed PR head plus exact-candidate
-validation, not a second human review of a temporary integration ref.
-
-If you want machine review to count toward merge admission, include `review-quill/verdict` in the required checks.
-
-### GitHub webhooks
-
-Each service has its own GitHub webhook:
-
-- **patchrelay** — its own GitHub webhook for PR, review, and check events that drive reactive repair loops. Events: Push, Pull request, Pull request review, Check suite, Check run.
-- **review-quill** — its own GitHub App webhook. Events: Pull request, Check run, Check suite.
-- **merge-steward** — its own GitHub App webhook. Events: Pull requests, Pull request reviews, Check suites, Pushes, Branch protection rules, Repository rulesets.
-
-See each service's operator reference for the specific App permission set and webhook URL.
-
-## Setup
-
-Each service bootstraps independently:
-
-```bash
-# patchrelay (the harness)
-patchrelay init https://patchrelay.example.com
-
-# review-quill (PR review)
-review-quill init https://review.example.com
-review-quill repo attach owner/repo
-
-# merge-steward (the queue)
-merge-steward init https://queue.example.com
-merge-steward repo attach owner/repo
-```
-
-For service-specific configuration, see:
-
-- [docs/review-quill.md](./review-quill.md) — operator reference
-- [docs/merge-steward.md](./merge-steward.md) — operator reference
-- [docs/self-hosting.md](./self-hosting.md) — patchrelay install and ingress
-
-## Read more
-
-- [github-queue-contract.md](./github-queue-contract.md) — shared GitHub artifacts
-- [design-docs/merge-steward.md](./design-docs/merge-steward.md) — why the split and the core invariants
-- [design-docs/review-quill.md](./design-docs/review-quill.md) — review service design rationale
+- [Concepts](./concepts.md)
+- [GitHub queue contract](./github-queue-contract.md)
+- [Merge Steward design](./design-docs/merge-steward.md)
+- [Review Quill](./review-quill.md)
+- [PatchRelay architecture](./architecture.md)

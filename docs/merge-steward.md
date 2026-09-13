@@ -51,9 +51,9 @@ The file `attach` writes looks like:
   "clonePath": "~/.local/state/merge-steward/repos/app",
   "maxRetries": 2,
   "flakyRetries": 1,
+  "speculativeDepth": 10,
+  "integrationRepairBudget": 10,
   "pollIntervalMs": 30000,
-  "admissionLabel": "queue",
-  "mergeQueueCheckName": "merge-steward/queue",
   "server": { "bind": "127.0.0.1", "port": 8790 },
   "database": { "path": "~/.local/state/merge-steward/app.sqlite" }
 }
@@ -65,11 +65,11 @@ The file `attach` writes looks like:
 | `repoFullName` | GitHub `owner/repo` |
 | `baseBranch` | Target branch for merges (usually `main`) |
 | `clonePath` | Local clone directory (created on first run) |
-| `maxRetries` | Rebase/CI retry attempts before eviction |
+| `maxRetries` | Deterministic reconcile retry budget |
 | `flakyRetries` | CI-only retries, separate from `maxRetries` |
+| `speculativeDepth` | Maximum cumulative candidates validated in parallel |
+| `integrationRepairBudget` | Agent repair attempts before human escalation or removal |
 | `pollIntervalMs` | Reconciliation loop interval |
-| `admissionLabel` | Optional GitHub label used as a manual admission nudge |
-| `mergeQueueCheckName` | Name of the check run emitted on eviction |
 
 ## GitHub App configuration
 
@@ -79,7 +79,7 @@ Required **repository permissions**:
 |-|-|-|
 | Contents | Read and write | Fast-forward `main` to tested candidate SHAs |
 | Pull requests | Read and write | |
-| Checks | Read and write | Emit eviction check runs |
+| Checks | Read-only | Read exact-SHA CI and integration-review conclusions |
 | Metadata | Read-only | |
 | Administration | Read-only | Discover branch rules and required checks without a user token |
 
@@ -154,7 +154,7 @@ On startup, the steward reconciles GitHub branch protection for every attached r
 | Code | Meaning |
 |-|-|
 | 0 | merged / approved with green required checks |
-| 2 | changes_requested / failing required checks / evicted / closed |
+| 2 | changes_requested / feature rework required / policy failure / closed |
 | 3 | still in flight (queued, preparing, validating, merging, pending) |
 | 4 | `--wait` timed out before a terminal state |
 | 1 | usage or configuration error |
@@ -198,11 +198,11 @@ git fetch
 
 # 2. Clean up any leftover from a previous attempt
 git worktree remove --force <wt-path>
-git branch -D mq-spec-<entry-id>
+git branch -D merge-steward/<base>/pr-<number>
 git worktree prune
 
 # 3. Create an isolated worktree at the base (main, or the previous entry's spec)
-git worktree add -B mq-spec-<entry-id> <wt-path> <base>
+git worktree add -B merge-steward/<base>/pr-<number> <wt-path> <base>
 
 # 4. Use the steward's bot identity for the merge commit
 git -C <wt-path> config user.name  <bot-name>
@@ -218,13 +218,17 @@ git -C <wt-path> rev-parse HEAD
 git worktree remove --force <wt-path>
 ```
 
-If the `merge` step hits a conflict, the steward first tries to auto-resolve lockfile-only conflicts by regenerating them (`tryAutoResolveConflict`). Otherwise it aborts the merge, destroys the spec branch, and either retries (on base-SHA change) or evicts the entry with an `integration_conflict` incident.
+If the merge conflicts, the steward aborts the uncommitted merge but preserves
+the self-describing workspace ref at the prospective base. Because that ref does
+not contain the frozen approved PR head, PatchRelay can derive that integration
+repair is required. PatchRelay repeats the merge in its own worktree, resolves
+it, commits, and makes a non-force push to the same ref.
 
 ### Step 2 — validate the exact SHA
 
 ```bash
 # Integration candidates need a temporary ref so GitHub Actions can test them
-git push --force-with-lease origin mq-spec-<entry-id>
+git push --force-with-lease origin merge-steward/<base>/pr-<number>
 ```
 
 Head candidates reuse the checks already attached to their exact SHA.
@@ -232,6 +236,10 @@ Integration candidates trigger CI on the candidate SHA. Required check
 identity includes both context name and the producing GitHub App when policy
 provides it. Missing, pending, skipped, wrong-App, or ambiguous duplicate runs
 fail closed; a uniquely newer rerun supersedes its older run.
+
+If an exact-head candidate needs an integration-only test repair, the steward
+materializes its self-describing workspace ref at that head before PatchRelay
+writes anything. The approved PR branch remains frozen.
 
 ### Step 3 — revalidate and fast-forward main
 
@@ -252,13 +260,16 @@ git push origin <candidate-sha>:main
 
 That is the actual "merge" — **no `gh pr merge` button is ever pressed**. What lands on `main` is byte-for-byte the tree that CI validated. This is why the steward needs `Contents: Read and write` on the GitHub App and must be allowed to push to protected branches.
 
-If the push is rejected (main advanced, policy changed), the steward either refreshes its cached policy + retries, or increments the retry counter. Push failures that exhaust the retry budget evict the entry.
+If the push is rejected because `main` advanced, the steward rebuilds the
+integration candidate against the new prospective base. Feature approval stays
+valid. Policy or repeated operational failures may escalate, but do not
+silently rewrite the feature branch.
 
 ### Step 4 — post-merge cleanup
 
 ```bash
 # Delete the spec branch
-git push origin --delete mq-spec-<entry-id>
+git push origin --delete merge-steward/<base>/pr-<number>
 
 # Delete the PR's head branch (the PR is already merged, branch is cosmetic)
 # Done via GitHub API, not shell git
@@ -286,7 +297,9 @@ downstream candidate only when the new `main` remains its ancestor.
 
 ```
 queued → preparing_head → validating → merging → merged
-                                              → evicted (on failure after retries)
+                    ↘ blocked_integration ↗
+                         ↕
+                  repairing_integration
 ```
 
 | State | Meaning |
@@ -294,9 +307,10 @@ queued → preparing_head → validating → merging → merged
 | `queued` | Waiting in line |
 | `preparing_head` | Resolving an exact-head or integration candidate |
 | `validating` | Evaluating checks on the immutable candidate SHA |
+| `blocked_integration` | Workspace exists at prospective base; PatchRelay must integrate the frozen head |
+| `repairing_integration` | PatchRelay owns the next non-force candidate push |
 | `merging` | Revalidation + fast-forward landing |
 | `merged` | Done |
-| `evicted` | Failed after retry budget; incident created |
 | `dequeued` | Manually removed |
 
 ## Merge gate
@@ -306,6 +320,7 @@ The real gate is:
 - GitHub says the PR review state is approved
 - configured required checks are green
 - the exact candidate passes current policy
+- `review-quill/integration` passes when PatchRelay changed the candidate
 - current `main` is an ancestor of that candidate
 - the candidate's merge base with every other open PR is already contained by current `main`
 
@@ -333,7 +348,10 @@ the exact already-tested SHA.
 
 ## Dashboard
 
-`merge-steward dashboard` is the primary operator surface. The overview screen shows all configured projects with project-level queue health, readable stats, and a compact queue chain. Press `Enter` on a project for the detail view (queue entries, recent events, incidents for evicted PRs, live GitHub-required checks).
+`merge-steward dashboard` is the primary operator surface. The overview screen
+shows all configured projects with project-level queue health, candidate
+ancestry, repair state, and live GitHub-required checks. Press `Enter` on a
+project for queue-entry history and current candidate facts.
 
 Controls: `j`/`k` or arrows move selection; `Enter` opens; `Esc` returns; `a` toggles active-vs-all in project view; `r` reconciles; `d` dequeues; `q` quits.
 
@@ -343,11 +361,14 @@ Use `--repo <id>` to open the project detail view directly, `--pr <num>` to pres
 
 The steward and PatchRelay are independent services that communicate only through GitHub:
 
-1. PatchRelay reaches `awaiting_queue` when the linked PR is approved and green, and may add the configured queue label as an admission nudge.
-2. The steward admits from fresh GitHub truth, then either lands the PR or evicts it and creates the configured eviction check run (default `merge-steward/queue`).
-3. PatchRelay watches for that check run failure and triggers `queue_repair`.
-4. After repair, PatchRelay pushes a new head.
-5. The steward re-admits the PR after the new head is approved and green.
+1. The steward admits from an open PR's approved head and green branch checks;
+   no label is required.
+2. It publishes `merge-steward/<base>/pr-<number>` for a synthetic candidate.
+3. PatchRelay derives conflict repair when that ref lacks approved-head ancestry,
+   and test repair when required checks on its candidate SHA settle red.
+4. PatchRelay non-force pushes only the candidate ref.
+5. Review Quill publishes `review-quill/integration` on an agent-modified
+   candidate; the steward lands the exact green SHA when the train permits.
 
 Neither service calls the other's API. See [merge-queue.md](./merge-queue.md) for the contract.
 
@@ -382,13 +403,15 @@ The gateway binds its HTTP port before repo initialization finishes. Each repo i
 | Is the service alive? | `merge-steward service status` |
 | What is the queue doing right now? | `merge-steward dashboard` (or `queue status --repo <id>` in a shell) |
 | Why is this PR stuck? | `merge-steward pr status` inside its checkout, then `queue show --pr <num>` |
-| Eviction happened — why? | `merge-steward queue show --pr <num>` (events + incidents) |
+| Integration is blocked — why? | Inspect candidate ancestry and checks, then `merge-steward queue show --pr <num>` |
 | Queue looks frozen, no webhook activity | `merge-steward service logs --lines 100` |
 | Required checks not enforced as expected | `merge-steward doctor --repo <id>` reports current GitHub policy |
 
 ## Current gaps
 
-The queue already supports cumulative speculative validation, cascade invalidation, bounded retry, durable incidents, eviction check runs, and re-admission from fresh GitHub truth.
+The target queue retains cumulative speculative validation, cascade
+invalidation, bounded retry, and durable audit events while replacing eviction
+handoffs with repairable GitHub candidate workspaces.
 
 Known gaps:
 

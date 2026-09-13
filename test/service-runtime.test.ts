@@ -451,6 +451,29 @@ test("service runtime continues reconciling active runs after startup", async ()
   await runtime.stop();
 });
 
+test("requestReconcile wakes candidate reconciliation without waiting for the periodic timer", async () => {
+  const codex = new FakeCodexClient();
+  let reconcileCalls = 0;
+  const runtime = new ServiceRuntime(
+    codex as never,
+    pino({ enabled: false }),
+    { async reconcileActiveRuns() { reconcileCalls += 1; } },
+    { listIssuesReadyForExecution: () => [] },
+    { async processWebhookEvent() {} },
+    { async processIssue() {} },
+    { reconcileIntervalMs: 60_000 },
+  );
+
+  await runtime.start();
+  await flushQueue();
+  const startupCalls = reconcileCalls;
+  runtime.requestReconcile();
+  await flushQueue();
+
+  assert.equal(reconcileCalls, startupCalls + 1);
+  await runtime.stop();
+});
+
 test("service runtime does not wait for the first reconciliation pass before returning from start", async () => {
   const codex = new FakeCodexClient();
   let releaseReconcile: (() => void) | undefined;

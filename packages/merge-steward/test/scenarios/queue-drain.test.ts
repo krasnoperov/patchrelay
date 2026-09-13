@@ -6,8 +6,8 @@ const prA: SimPR = { number: 1, branch: "feat-a", files: [{ path: "a.ts", conten
 const prB: SimPR = { number: 2, branch: "feat-b", files: [{ path: "b.ts", content: "b" }] };
 const prC: SimPR = { number: 3, branch: "feat-c", files: [{ path: "c.ts", content: "c" }] };
 
-describe("queue drain under adversarial conditions", () => {
-  it("drains queue via eviction when all PRs fail CI", async () => {
+describe("queue blocking under adversarial conditions", () => {
+  it("keeps the first failing PR repairable and preserves the rest of the queue", async () => {
     const h = await createHarness({
       ciRule: () => "fail",
       maxRetries: 1,
@@ -18,14 +18,14 @@ describe("queue drain under adversarial conditions", () => {
     await h.enqueue(prC);
     await h.runUntilStable({ maxTicks: 60 });
 
-    // Queue must drain — nothing stuck.
-    assert.strictEqual(h.activeEntries.length, 0, "Queue should be fully drained");
-    assert.strictEqual(h.evicted.length, 3, "All 3 PRs should be evicted");
+    assert.strictEqual(h.activeEntries.length, 3);
+    assert.strictEqual(h.entryStatus(prA), "validating");
+    assert.strictEqual(h.evicted.length, 0);
     assert.strictEqual(h.merged.length, 0, "Nothing should merge");
     h.assertInvariants();
   });
 
-  it("mixes merged and evicted when some pass and some fail", async () => {
+  it("lands the green prefix then waits on the first failing candidate", async () => {
     const h = await createHarness({
       ciRule: (files) => {
         // Only b.ts fails.
@@ -40,9 +40,9 @@ describe("queue drain under adversarial conditions", () => {
     await h.runUntilStable({ maxTicks: 50 });
 
     assert.ok(h.merged.includes(1), "PR #1 should merge");
-    assert.ok(h.merged.includes(3), "PR #3 should merge");
-    assert.strictEqual(h.entryStatus(prB), "evicted");
-    assert.strictEqual(h.activeEntries.length, 0);
+    assert.ok(!h.merged.includes(3), "PR #3 must not bypass #2");
+    assert.strictEqual(h.entryStatus(prB), "validating");
+    assert.strictEqual(h.activeEntries.length, 2);
     h.assertInvariants();
   });
 });

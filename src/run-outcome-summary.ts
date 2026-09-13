@@ -28,6 +28,7 @@ export function buildRunOutcomeSummary(params: {
       return summarizeReviewFix(params.facts);
     case "ci_repair":
       return summarizeCiRepair(params.facts);
+    case "integration_repair":
     case "queue_repair":
       return summarizeQueueRepair(params.facts);
     case "branch_upkeep":

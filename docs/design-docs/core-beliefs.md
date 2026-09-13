@@ -37,7 +37,10 @@ PatchRelay manages a controlled loop per issue:
 context -> action -> verification -> follow-up or completion
 ```
 
-Do not collapse distinct loops into "ask the agent again." Implementation, review fixes, CI repair, queue repair, and orchestration have different entry conditions, prompts, retry budgets, success criteria, and escalation paths.
+Do not collapse distinct loops into "ask the agent again." Implementation,
+review fixes, branch-CI repair, integration-candidate repair, and orchestration
+have different entry conditions, workspaces, prompts, retry budgets, success
+criteria, and escalation paths.
 
 ## Legibility includes validation surfaces
 
@@ -60,7 +63,9 @@ It should not reduce Linear to a generic backlog poller.
 ## Worktrees are the isolation primitive
 
 Each issue should have a durable worktree that survives multiple runs.
-The same worktree should be reused for implementation, review fixes, CI repair, and queue repair whenever possible.
+The feature worktree should be reused for implementation, review fixes, and
+branch-CI repair. Integration repair deliberately uses a separate candidate
+worktree so the frozen approved PR head cannot be rewritten.
 
 ## GitHub is the canonical delivery truth
 
@@ -70,7 +75,10 @@ PatchRelay should reflect that truth back into Linear rather than inventing a pa
 ## Queue failures are first-class
 
 A change is not finished when the PR is green.
-Merge Steward owns queue ordering and landing. PatchRelay must treat queue failures as a normal part of the issue lifecycle and react to steward evictions with repair runs.
+Merge Steward owns queue ordering and landing. PatchRelay treats integration
+conflicts and candidate-test failures as normal non-terminal states, derives
+them from candidate refs and checks, and repairs the candidate without changing
+the approved PR branch.
 
 ## Strict boundaries help agents move faster
 

@@ -74,8 +74,9 @@ merge-steward views should keep the queue order central:
 - head-of-line entry
 - entries behind the head
 - native entry status
-- latest incident for evicted entries
-- whether external repair appears to have happened through a new head SHA
+- prospective base and candidate ancestry
+- whether PatchRelay owns a candidate-only integration repair
+- exact candidate checks and `review-quill/integration` when required
 
 Failure text should say what happened and who owns the next move: steward retry, PatchRelay repair, PR owner, or operator.
 

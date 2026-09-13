@@ -97,6 +97,7 @@ export type ReactiveWorkflowEventType =
  */
 export function reactiveWorkflowEventType(runType: RunType): ReactiveWorkflowEventType {
   switch (runType) {
+    case "integration_repair":
     case "queue_repair":
       return "merge_steward_incident";
     case "ci_repair":
@@ -118,7 +119,7 @@ export function reactiveWorkflowEventType(runType: RunType): ReactiveWorkflowEve
  */
 export function buildRepairWorkflowDedupeKey(params: {
   scope: string;
-  runType: "queue_repair" | "ci_repair";
+  runType: "integration_repair" | "queue_repair" | "ci_repair";
   linearIssueId: string;
   signature?: string | undefined;
   prHeadSha?: string | undefined;

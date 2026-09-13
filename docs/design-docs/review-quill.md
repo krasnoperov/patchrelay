@@ -1,133 +1,123 @@
 # Review Quill
 
-`review-quill` is the dedicated PR review service in the PatchRelay stack.
+Review Quill supplies two deliberately different gates:
 
-It answers one narrow question for each reviewable PR head:
+1. substantive feature review on a PR head;
+2. narrow integration-preservation review on a candidate that PatchRelay
+   changed after approval.
 
-- should this exact head SHA be approved or receive requested changes?
+It is read-only with respect to repository contents and publishes all verdicts
+through GitHub.
 
-The service is separate from:
-
-- `patchrelay`, which owns delegated implementation and branch upkeep
-- `merge-steward`, which owns queue admission, speculative validation, and landing
-
-For install and operator commands, see [../review-quill.md](../review-quill.md).
-
-## Responsibility Split
+## Responsibility split
 
 | System | Owns |
 |-|-|
-| PatchRelay | delegated implementation, review-fix runs, branch-local CI repair, queue repair |
-| review-quill | review eligibility, review execution, verdict publication, review reconciliation |
-| merge-steward | merge gate admission, queue lifecycle, speculative validation, landing |
-| GitHub | PR truth, review truth, status-check truth, branch protection |
+| PatchRelay | Feature implementation and repairs in feature or candidate workspaces. |
+| Review Quill | Feature correctness verdicts and integration-preservation verdicts. |
+| Merge Steward | Candidate construction, speculative order, validation, and landing. |
+| GitHub | PR, review, ref, ancestry, and SHA-bound check truth. |
 
-## Core Contract
+No service calls another service's API. Push and check webhooks wake Review
+Quill; current GitHub state determines whether either review is needed.
 
-Each review attempt is keyed by:
+## Feature review
 
-- repository
-- PR number
-- head SHA
+For each reviewable PR head, Review Quill asks:
 
-Review attempts are fresh, read-only, and tied to one PR head. If a newer head appears before publication, the old attempt is cancelled or superseded rather than publishing stale feedback.
+> Is this feature implementation correct and consistent with its stated and
+> repository contracts?
 
-The service publishes:
+The attempt is keyed to repository, PR, and exact head SHA and publishes an
+ordinary GitHub `APPROVE`, `REQUEST_CHANGES`, or `COMMENT`. A newer feature
+head supersedes an older in-flight attempt.
 
-- an ordinary GitHub PR review: `APPROVE` or `REQUEST_CHANGES`
-- a `review-quill/verdict` check run when configured for deterministic branch protection
+`patch_id` is a limited carry-forward optimization: an identical feature patch
+may reuse an approved verdict, while a changed patch receives fresh substantive
+review. Once an approved head enters integration, target-branch movement alone
+does not reopen feature review.
 
-`review-quill/verdict` is optional unless a repository makes it part of required checks. `merge-steward` can admit from GitHub PR review truth plus configured required checks, then performs its own integrated CI gate before landing.
+## Integration review
 
-## Eligibility
+Review Quill watches self-describing refs:
 
-Eligibility is always recomputed from fresh GitHub truth.
+```text
+merge-steward/<base-branch>/pr-<number>
+```
 
-By default, a PR head is reviewable when:
+A mechanically generated clean candidate needs candidate CI but no second
+feature review. When PatchRelay changes a candidate after a merge conflict or
+candidate-test failure, Review Quill asks:
 
-- the PR is open
-- the PR is not draft
-- the head SHA is known
-- the branch is not excluded
-- no current valid review-quill attempt already covers that head
+> Does this candidate still contain the already-approved feature with the same
+> behavior and contract, while correctly composing it with the prospective
+> base?
 
-Repositories may opt into `waitForGreenChecks`, in which case configured required checks must be settled green before review.
+The context contains:
 
-Do not treat a single webhook as authoritative. Webhooks trigger reconciliation; GitHub truth decides eligibility.
+- the frozen approved PR head and its feature review;
+- the prospective base;
+- changes introduced on the base since the feature branch diverged;
+- the repaired candidate and its exact diff/ancestry;
+- relevant repository guidance and candidate test results.
 
-## Runtime Shape
+The output is the `review-quill/integration` check on the exact candidate SHA:
 
-Each review attempt:
+- `success` — the integration repair preserved the approved feature;
+- `failure` — the repair materially changed feature behavior or contract and
+  the PR must return to implementation.
 
-1. materializes an ephemeral checkout at the exact PR head SHA
-2. builds local diff context against the base branch
-3. loads repo review guidance
-4. starts a fresh Codex app-server review thread
-5. parses a structured verdict
-6. publishes through the service, not directly from the model
-7. disposes of the temporary workspace
+This is not a new architecture review of the feature. Prior approved concerns
+remain closed unless the integration repair changed the corresponding code or
+contract.
 
-The durable runtime record is the review attempt, not a long-lived issue session.
+## Material-change boundary
 
-Do not use PatchRelay-style thread steering for reviews.
+Integration review fails when the candidate changes feature acceptance
+criteria, public API, schema, security, billing, persistence, permissions,
+error behavior, or feature-owned test expectations. Conflict composition,
+imports adapted to the new base, canonical regeneration of derived files, and
+test repair that preserves the approved behavior may pass.
 
-## Prompt Context
+Tests and textual conflict resolution are evidence, not proof by themselves;
+the reviewer inspects the interaction surface when an agent changed it.
 
-The review prompt should include:
+## Eligibility and reconciliation
 
-- PR title and body
-- base branch
-- current head SHA
-- immutable diff command plus changed-file inventory; Codex inspects patches and surrounding code from the checkout
-- prior formal PR reviews as concise claims to verify
-- the automatically loaded `AGENTS.md` chain plus paths to configured review guidance, normally `REVIEW_WORKFLOW.md`
-- detected issue keys from PR title, body, or branch
+Feature review is eligible when the PR is open, non-draft, and has a new
+reviewable head. Integration review is eligible when:
 
-The prompt must keep GitHub truth authoritative and review only the current head SHA.
+- a candidate ref maps to an open PR with any effective approval on its exact
+  current head, including a human approval;
+- the candidate contains the frozen approved head;
+- PatchRelay authored changes in the candidate;
+- no decisive integration check covers the current candidate SHA.
 
-## Diff Context
+Webhooks are never authoritative. Startup and periodic reconciliation reproduce
+the same eligibility decision from GitHub refs, ancestry, commits, reviews, and
+checks.
 
-Build diff context locally from the checked-out repository:
+## Runtime shape
 
-- file inventory from `git diff <base>...HEAD`
-- reviewable patches within budget
-- summarized entries for generated, noisy, or oversized files
+Each attempt materializes an ephemeral checkout at the exact reviewed SHA,
+loads repository guidance, runs Codex with the correct review scope, validates
+structured output, publishes through the GitHub App, and disposes of the
+workspace. A stale SHA is never published.
 
-Common summarize-only paths include lockfiles, `dist/**`, `build/**`, `coverage/**`, maps, minified JS, and snapshots.
+## Publication and landing rules
 
-## Publication Rules
+- Feature verdicts are ordinary GitHub PR reviews on the feature head.
+- Integration verdicts are `review-quill/integration` checks on candidate
+  SHAs.
+- A successful integration check is reusable only for that exact SHA.
+- Merge Steward may land an agent-modified candidate only when that check and
+  required candidate CI are green.
+- A failed integration check returns the work to the feature track; ordinary
+  candidate CI failure remains repairable inside integration.
 
-For an eligible PR head, publish one of:
+## Non-goals
 
-- `APPROVE`
-- `REQUEST_CHANGES`
-
-Review output should separate blocking findings from non-blocking notes and ground findings in the current diff.
-
-Before every side effect, re-check that:
-
-- the attempt still owns its lease
-- the PR still points at the reviewed head SHA
-- the attempt has not been superseded
-
-## Data Model
-
-The service stores only workflow truth:
-
-- webhook deliveries for dedupe
-- repository config
-- review attempts
-- external check-run ids
-- append-only review events
-- Codex thread ids for forensic lookup
-
-Raw Codex transcripts stay in Codex session files; see [codex-session-source-forensics.md](./codex-session-source-forensics.md).
-
-## Non-Goals
-
-- direct code fixes
-- committing or pushing
-- merge queue ownership
-- cross-repo review batching
-- stack-aware review semantics
-- human reviewer assignment workflows
+- fixing or pushing code;
+- owning queue order or landing;
+- re-reviewing an unchanged feature because `main` advanced;
+- using labels, comments, or direct service calls as workflow commands.

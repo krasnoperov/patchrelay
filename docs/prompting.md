@@ -80,7 +80,9 @@ Stable harness behavior lives in Codex `developerInstructions`, including:
 
 - stay in scope
 - publish code-delivery work before stopping
-- repair on the existing PR branch
+- repair feature review and branch CI on the existing PR branch
+- repair integration conflicts and candidate CI only in the Merge Steward
+  candidate worktree; never push those repairs to the approved PR branch
 - brief reviewer-minded self-review before publishing
 
 The per-turn PatchRelay prompt is intentionally lean and usually contains only:

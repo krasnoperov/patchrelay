@@ -1,31 +1,130 @@
 import type { QueueEntry } from "./types.ts";
 import type { ReconcileContext } from "./reconciler-core.ts";
-import { emit, ref } from "./reconciler-core.ts";
-import { classifyFailure } from "./classify.ts";
+import { CLEAN_CI, CLEAR_CANDIDATE, INTEGRATION_REVIEW_CHECK, candidateRefName, emit, ref } from "./reconciler-core.ts";
 import { evictEntry, invalidateDownstream } from "./reconciler-evict.ts";
 import { evaluateCheckPolicy, formatRequiredCheck } from "./check-policy.ts";
 
-async function evictFailedCandidate(
+async function holdForIntegrationRepair(
   ctx: ReconcileContext,
   entry: QueueEntry,
   allActive: QueueEntry[],
   index: number,
   checks: Awaited<ReturnType<ReconcileContext["github"]["listChecksForRef"]>>,
 ): Promise<void> {
-  const failedChecks = checks
+  let candidateRef = entry.candidateRef;
+  if (!candidateRef) {
+    candidateRef = candidateRefName(ctx.baseBranch, entry.prNumber);
+    await ctx.specBuilder.createWorkspace(candidateRef, entry.candidateSha ?? entry.headSha);
+    await ctx.git.push(candidateRef, true);
+  }
+  const failed = checks
     .filter((check) => check.conclusion === "failure" || check.conclusion === "skipped")
-    .map((check) => ({
-      name: check.name,
-      conclusion: check.conclusion,
-      ...(check.url ? { url: check.url } : {}),
-    }));
-  const mainChecks = await ctx.github.listChecksForRef(ref(ctx, ctx.baseBranch));
-  const failureClass = checks.some((check) => check.conclusion === "skipped")
-    ? "policy_blocked"
-    : classifyFailure(checks, mainChecks);
-  await evictEntry(ctx, entry, failureClass, { failedChecks });
-  if (index >= 0) {
-    await invalidateDownstream(ctx, allActive, index);
+    .map((check) => check.name)
+    .join(", ");
+  ctx.store.transition(entry.id, "validating", {
+    candidateKind: "integration",
+    ciRunId: entry.ciRunId ?? `head:${entry.candidateSha ?? entry.headSha}`,
+    candidateRef,
+    candidateSha: entry.candidateSha ?? entry.headSha,
+    candidateBasedOn: entry.candidateBasedOn,
+    lastFailedBaseSha: entry.baseSha,
+    waitDetail: `candidate CI failed; integration workspace awaits repair${failed ? ` (${failed})` : ""}`,
+  }, "candidate retained for integration repair");
+  if (index >= 0) await invalidateDownstream(ctx, allActive, index);
+}
+
+async function refreshIntegrationWorkspace(
+  ctx: ReconcileContext,
+  entry: QueueEntry,
+  allActive: QueueEntry[],
+  index: number,
+): Promise<QueueEntry | null> {
+  if (!entry.candidateRef) return entry;
+  await ctx.git.fetch();
+  const liveSha = await ctx.git.headSha(ref(ctx, entry.candidateRef));
+
+  const dependency = entry.candidateBasedOn ? ctx.store.getEntry(entry.candidateBasedOn) : null;
+  const expectedBaseSha = dependency && dependency.status !== "merged"
+    ? dependency.candidateSha
+    : await ctx.git.headSha(ref(ctx, ctx.baseBranch));
+  if (!expectedBaseSha || !await ctx.git.isAncestor(expectedBaseSha, liveSha)) {
+    emit(ctx, entry, "invalidated", { detail: "integration workspace no longer descends from its prospective base" });
+    ctx.store.transition(entry.id, "preparing_head", { ...CLEAN_CI, ...CLEAR_CANDIDATE }, "stale integration workspace; rebuilding");
+    if (index >= 0) await invalidateDownstream(ctx, allActive, index);
+    return null;
+  }
+
+  if (liveSha !== entry.candidateSha) {
+    emit(ctx, entry, "candidate_selected", {
+      candidateRef: entry.candidateRef,
+      candidateKind: "integration_repair",
+      candidateSha: liveSha,
+      baseSha: expectedBaseSha,
+      detail: "external non-force integration repair detected",
+    });
+    ctx.store.transition(entry.id, "validating", {
+      baseSha: expectedBaseSha,
+      ...CLEAN_CI,
+      candidateKind: "integration_repair",
+      candidatePolicyFingerprint: ctx.policy.getFingerprint(),
+      candidateRef: entry.candidateRef,
+      candidateSha: liveSha,
+      candidateBasedOn: entry.candidateBasedOn,
+      lastFailedBaseSha: entry.lastFailedBaseSha ?? entry.baseSha,
+      waitDetail: "integration repair detected; validating exact candidate",
+    }, `integration workspace advanced to ${liveSha.slice(0, 12)}`);
+    if (index >= 0) await invalidateDownstream(ctx, allActive, index);
+    return ctx.store.getEntry(entry.id) ?? null;
+  }
+  return entry;
+}
+
+async function integrationReviewStatus(
+  ctx: ReconcileContext,
+  entry: QueueEntry,
+): Promise<"pass" | "pending" | "fail"> {
+  if (entry.candidateKind !== "integration_repair") return "pass";
+  const checks = await ctx.github.listChecksForRef(entry.candidateSha!);
+  return evaluateCheckPolicy(
+    [{ name: INTEGRATION_REVIEW_CHECK, appId: null }],
+    false,
+    checks,
+  ).status;
+}
+
+async function acceptPassingIntegrationCandidate(
+  ctx: ReconcileContext,
+  entry: QueueEntry,
+  allActive: QueueEntry[],
+  index: number,
+  isLandingHead: boolean,
+  ciRunId: string,
+): Promise<void> {
+  const reviewStatus = await integrationReviewStatus(ctx, entry);
+  if (reviewStatus === "pending") {
+    ctx.store.transition(entry.id, "validating", {
+      waitDetail: `waiting for ${INTEGRATION_REVIEW_CHECK} on repaired candidate`,
+    }, `waiting for ${INTEGRATION_REVIEW_CHECK}`);
+    return;
+  }
+  if (reviewStatus === "fail") {
+    await evictEntry(ctx, entry, "feature_changed");
+    if (index >= 0) await invalidateDownstream(ctx, allActive, index);
+    return;
+  }
+  emit(ctx, entry, "ci_passed", {
+    ciRunId,
+    candidateKind: entry.candidateKind ?? undefined,
+    candidateSha: entry.candidateSha ?? undefined,
+    policyFingerprint: entry.candidatePolicyFingerprint ?? undefined,
+  });
+  if (isLandingHead) {
+    ctx.store.transition(entry.id, "merging", { lastFailedBaseSha: null, waitDetail: null }, "CI and integration review passed, ready to merge");
+  } else if (entry.lastFailedBaseSha) {
+    ctx.store.transition(entry.id, "validating", {
+      lastFailedBaseSha: null,
+      waitDetail: null,
+    }, "integration repair validated for speculative descendants");
   }
 }
 
@@ -62,7 +161,7 @@ async function requestBoundedRerun(
       detail: `candidate rerun unavailable (${attempt}/${ctx.flakyRetries}): ${detail}`,
     });
     if (attempt >= ctx.flakyRetries) {
-      await evictFailedCandidate(ctx, entry, params.allActive, params.index, params.checks);
+      await holdForIntegrationRepair(ctx, entry, params.allActive, params.index, params.checks);
     } else {
       ctx.store.transition(entry.id, "validating", {
         ciRetries: attempt,
@@ -80,6 +179,19 @@ export async function checkValidation(
   index: number,
   isLandingHead: boolean,
 ): Promise<void> {
+  const refreshed = await refreshIntegrationWorkspace(ctx, entry, allActive, index);
+  if (!refreshed) return;
+  entry = refreshed;
+
+  if (entry.candidateRef && !await ctx.git.isAncestor(entry.headSha, entry.candidateSha!)) {
+    return;
+  }
+  if (entry.candidateRef && entry.candidateKind === "integration" && entry.lastFailedBaseSha && entry.ciRunId) {
+    // The same failed SHA is intentionally quiescent until PatchRelay moves
+    // the workspace ref. Do not manufacture another CI run on every wakeup.
+    return;
+  }
+
   if (entry.candidateKind === "head") {
     const checks = await ctx.github.listChecksForRef(entry.candidateSha ?? entry.headSha);
     const evaluation = evaluateCheckPolicy(
@@ -115,7 +227,7 @@ export async function checkValidation(
         });
         return;
       }
-      await evictFailedCandidate(ctx, entry, allActive, index, checks);
+      await holdForIntegrationRepair(ctx, entry, allActive, index, checks);
       return;
     }
 
@@ -134,6 +246,23 @@ export async function checkValidation(
   if (!entry.ciRunId) {
     const branch = entry.candidateRef ?? entry.branch;
     const sha = entry.candidateSha ?? entry.headSha;
+    const existingChecks = (await ctx.github.listChecksForRef(sha))
+      .filter((check) => check.name.toLowerCase() !== INTEGRATION_REVIEW_CHECK);
+    if (existingChecks.length > 0) {
+      const evaluation = evaluateCheckPolicy(
+        ctx.policy.getRequiredCheckRules(),
+        ctx.policy.shouldRequireAllChecksOnEmptyRequiredSet(),
+        existingChecks,
+      );
+      if (evaluation.status === "pass") {
+        await acceptPassingIntegrationCandidate(ctx, entry, allActive, index, isLandingHead, `checks:${sha}`);
+      } else if (evaluation.status === "pending") {
+        emit(ctx, entry, "ci_pending", { detail: "existing exact-SHA checks pending" });
+      } else {
+        await holdForIntegrationRepair(ctx, entry, allActive, index, existingChecks);
+      }
+      return;
+    }
     const runId = await ctx.ci.triggerRun(branch, sha);
     emit(ctx, entry, "ci_triggered", { ciRunId: runId });
     ctx.store.transition(entry.id, "validating", { ciRunId: runId }, `CI triggered: ${runId.slice(0, 12)}`);
@@ -148,15 +277,7 @@ export async function checkValidation(
       break;
 
     case "pass":
-      emit(ctx, entry, "ci_passed", {
-        ciRunId: entry.ciRunId,
-        candidateKind: entry.candidateKind ?? undefined,
-        candidateSha: entry.candidateSha ?? undefined,
-        policyFingerprint: entry.candidatePolicyFingerprint ?? undefined,
-      });
-      if (isLandingHead) {
-        ctx.store.transition(entry.id, "merging", undefined, "CI passed, ready to merge");
-      }
+      await acceptPassingIntegrationCandidate(ctx, entry, allActive, index, isLandingHead, entry.ciRunId);
       break;
 
     case "fail": {
@@ -177,7 +298,7 @@ export async function checkValidation(
       } else {
         const sha = entry.candidateSha ?? entry.headSha;
         const checks = await ctx.github.listChecksForRef(sha);
-        await evictFailedCandidate(ctx, entry, allActive, index, checks);
+        await holdForIntegrationRepair(ctx, entry, allActive, index, checks);
       }
       break;
     }

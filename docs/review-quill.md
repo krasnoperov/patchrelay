@@ -1,6 +1,9 @@
 # review-quill operator reference
 
-Full setup, configuration, and troubleshooting reference for `review-quill`: the review gate that pairs with coding agents by checking both the narrow diff and wider system context for misalignments, sending fixes back through ordinary GitHub reviews, and carrying approval forward only when the patch identity is unchanged. For the high-level pitch, see the [package README](../packages/review-quill/README.md). For the background story, see [review-quill: a strict reviewer for your coding agent](https://blog.krasnoperov.me/posts/review-quill); for the broader gate framing, see [The gates, not the autonomy](https://blog.krasnoperov.me/posts/gates-not-autonomy). For design rationale, see [design-docs/review-quill.md](./design-docs/review-quill.md).
+Full setup, configuration, and troubleshooting reference for `review-quill`.
+It has two review surfaces: substantive feature review on the PR head, and a
+narrow integration-preservation review on repaired Merge Steward candidates.
+For the high-level pitch, see the [package README](../packages/review-quill/README.md).
 
 ## Install and bootstrap
 
@@ -24,11 +27,11 @@ Required **repository permissions**:
 |-|-|-|
 | Contents | Read-only | Materialize managed checkouts at the reviewed head SHA |
 | Pull requests | Read and write | Submit `APPROVE` / `REQUEST_CHANGES` reviews |
-| Checks | Read and write | Create and update `review-quill/verdict` check runs |
+| Checks | Read and write | Create and update feature verdict and `review-quill/integration` check runs |
 | Actions | Read-only | Observe CI state |
 | Metadata | Read-only | |
 
-Required **webhook events**: `Pull request`, `Check run`, `Check suite`.
+Required **webhook events**: `Pull request`, `Check run`, `Check suite`, `Push`.
 
 Recommended secret storage — encrypted systemd credentials:
 
@@ -142,20 +145,20 @@ Codex remains the source of truth for the full review transcript. SQLite stores 
 
 ## Carry-forward
 
-review-quill caches approved verdicts so a head SHA change that preserves both
-the patch and its effective immutable diff base does not trigger a fresh review
-run. A changed base forces a fresh review even when the patch hash matches. The
-cache key is the change identity computed by the algorithm in
-[github-queue-contract.md](./github-queue-contract.md#identity-algorithm).
+Review Quill caches approved feature verdicts by `patch_id`. A head rewrite
+that preserves the feature patch may reuse the verdict; a changed feature patch
+receives a new substantive review. Movement of `main` after approval does not
+force feature review. Merge Steward evaluates the new base by building an exact
+integration candidate instead.
 
 ```mermaid
 flowchart TD
     head[New head SHA observed]
-    elig{Eligible?<br/>labels + checks}
+    elig{Feature head eligible?}
     mat[Materialise workspace<br/>resolve PR base ref]
-    id[Compute patch_id against<br/>GitHub's structured PR base]
+    id[Compute feature patch_id]
     nocache{No-cache label?}
-    lookup{Approved attempt<br/>with same identity<br/>+ stored body?}
+    lookup{Approved attempt<br/>with same patch_id<br/>+ stored body?}
     republish[Re-publish stored review_body / review_event<br/>against new SHA<br/>insert carry-forward attempt row]
     fresh[Run reviewer]
     skip[Skip — not yet ready]
@@ -171,22 +174,42 @@ flowchart TD
     lookup -- miss --> fresh
 ```
 
-Three properties worth knowing:
+Properties worth knowing:
 
 - **PR-base-ref aware.** Materialisation reads the PR's GitHub-reported base ref, not the repo default. For a stacked PR (`B.base = A.branch`), the diff base — and so `patch_id` — is computed against the parent PR's head, not main.
 - **Stored, not fetched.** The rendered `review_body` and `review_event` (`APPROVE` / `REQUEST_CHANGES` / `COMMENT`) are stored on each `review_attempts` row so carry-forward can re-publish without a GitHub round-trip.
-- **Complete cache key.** Carry-forward rows always include `review_body` and `review_event`, so a cache hit can be republished without another model run.
+- **Base movement belongs to integration.** An approved feature head is frozen
+  while Merge Steward composes it with prospective `main`; the feature reviewer
+  is not asked to repeat the same review because the target branch advanced.
+- **Complete cache entry.** Carry-forward rows include `review_body` and
+  `review_event`, so a cache hit can be republished without another model run.
 
 A PR carrying the configured no-cache label (default `review:no-cache`) is always re-reviewed even when the patch is unchanged.
 
-## Review surface
+## Review surfaces
 
-Review Quill has one review surface: the exact PR head diffed against GitHub's
-structured PR base. It captures `base.ref` and `base.sha`, resolves the
-merge-base to an immutable SHA for the run, and includes the captured base in
-deduplication and pre-publication revalidation. A stacked child therefore
-excludes its parent's changes naturally. Integration conflicts remain Merge
-Steward's responsibility, where the exact landing tree is built and tested.
+### Feature review
+
+The feature surface is the exact PR head diffed against GitHub's structured PR
+base. It produces an ordinary GitHub `APPROVE`, `REQUEST_CHANGES`, or `COMMENT`.
+A stacked child excludes its parent's changes naturally.
+
+### Integration review
+
+The integration surface is a candidate ref named
+`merge-steward/<base>/pr-<number>` that PatchRelay changed after a conflict or
+candidate-test failure. Review Quill reads the approved PR head, prospective
+base, and resulting candidate and answers only whether integration preserved
+the approved implementation.
+
+It publishes `review-quill/integration` on the exact candidate SHA:
+
+- `success` means integration preserved the approved feature;
+- `failure` means the repair materially changed feature behavior or contract
+  and the PR must return to implementation and substantive review.
+
+A clean mechanically generated candidate does not receive another feature
+review. Candidate CI remains responsible for behavioral integration evidence.
 
 ## Operator-visible bus
 
@@ -197,6 +220,8 @@ review-quill reads and writes the following GitHub artifacts.
 | No-cache PR label | Read | `review:no-cache` |
 | GitHub PR review (`APPROVE` / `REQUEST_CHANGES` / `COMMENT`) | Write | — |
 | `review-quill/verdict` check_run | Write | `review-quill/verdict` |
+| Integration candidate ref | Read | `merge-steward/<base>/pr-<number>` |
+| Integration preservation check | Write | `review-quill/integration` |
 
 ## Troubleshooting
 

@@ -42,7 +42,7 @@ describe("speculative cascade merge", () => {
     h.assertInvariants();
   });
 
-  it("evicting B rebuilds C without A", async () => {
+  it("retaining B prevents C from bypassing the failed candidate", async () => {
     const h = await createHarness({
       ciRule: (files) => files.includes("b.ts") ? "fail" : "pass",
       speculativeDepth: 3,
@@ -54,15 +54,11 @@ describe("speculative cascade merge", () => {
 
     await h.runUntilStable({ maxTicks: 30 });
 
-    // A merges, B is evicted (CI fails), C rebuilds and merges
+    // A merges; B is retained for repair and C remains behind it.
     assert.ok(h.merged.includes(1), "A should merge");
-    assert.ok(h.merged.includes(3), "C should merge after rebuild");
-    assert.ok(h.evicted.includes(2), "B should be evicted");
-
-    // Verify merge order: A first, then C
-    const aIdx = h.merged.indexOf(1);
-    const cIdx = h.merged.indexOf(3);
-    assert.ok(aIdx < cIdx, "A should merge before C");
+    assert.ok(!h.merged.includes(3), "C must not bypass B");
+    assert.equal(h.entryStatus(prB), "validating");
+    assert.equal(h.evicted.length, 0);
 
     h.assertInvariants();
   });

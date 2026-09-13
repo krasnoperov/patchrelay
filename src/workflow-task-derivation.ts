@@ -1,5 +1,22 @@
 import { isCurrentHeadRequestedChanges } from "./reactive-workflow-intent.ts";
+import { hasIntegrationDeliveryAuthority } from "./integration-delivery-authority.ts";
 import type { WorkflowSnapshot, WorkflowTask } from "./workflow-model.ts";
+
+function integrationRepairTask(snapshot: Omit<WorkflowSnapshot, "openTasks">): WorkflowTask | undefined {
+  if (!hasIntegrationDeliveryAuthority(snapshot)) return undefined;
+  const issue = snapshot.context;
+  return {
+    id: "run:integration_repair",
+    type: "run",
+    runType: "integration_repair",
+    reason: "Approved integration candidate requires repair",
+    requirements: {
+      ...issue.failureContext,
+      failureSignature: issue.lastGitHubFailureSignature,
+      failureHeadSha: issue.lastGitHubFailureHeadSha,
+    },
+  };
+}
 
 export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks">): WorkflowTask[] {
   const tasks: WorkflowTask[] = [];
@@ -32,6 +49,8 @@ export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks"
     }];
   }
   if (!snapshot.authority.delegated) {
+    const deliveryTask = integrationRepairTask(snapshot);
+    if (deliveryTask) return [deliveryTask];
     return [{
       id: "wait:authority",
       type: "wait",
@@ -187,11 +206,17 @@ export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks"
   }
 
   if (queueRepairSignalled) {
+    const integrationRepair = typeof issue.failureContext?.candidateBranch === "string";
+    const authorizedIntegrationTask = integrationRepairTask(snapshot);
+    if (authorizedIntegrationTask) {
+      tasks.push(authorizedIntegrationTask);
+      return tasks;
+    }
     tasks.push({
-      id: "run:queue_repair",
+      id: integrationRepair ? "run:integration_repair" : "run:queue_repair",
       type: "run",
-      runType: "queue_repair",
-      reason: "Merge queue eviction requires repair",
+      runType: integrationRepair ? "integration_repair" : "queue_repair",
+      reason: integrationRepair ? "Integration candidate requires repair" : "Legacy merge queue eviction requires repair",
       requirements: {
         ...issue.failureContext,
         failureSignature: issue.lastGitHubFailureSignature,

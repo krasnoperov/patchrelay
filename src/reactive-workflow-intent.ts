@@ -16,7 +16,7 @@ export interface ReactiveWorkflowIntentInput {
 }
 
 export interface ReactiveWorkflowIntent {
-  runType: Extract<RunType, "review_fix" | "branch_upkeep" | "ci_repair" | "queue_repair">;
+  runType: Extract<RunType, "review_fix" | "branch_upkeep" | "ci_repair" | "integration_repair" | "queue_repair">;
   workflowReason: "review_changes_requested" | "branch_upkeep" | "settled_red_ci" | "merge_steward_incident";
 }
 

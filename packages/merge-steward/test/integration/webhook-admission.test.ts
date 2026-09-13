@@ -223,7 +223,7 @@ describe("webhook admission integration", () => {
     assert.strictEqual(status.entries[0]!.status, "queued");
   });
 
-  it("admits a PR when only the priority queue label is added and records it as priority", async () => {
+  it("uses a presentation-label webhook only as an eligibility wakeup", async () => {
     const store = new MemoryStore();
     const githubSim = new GitHubSim();
     const logger = pino({ level: "silent" });
@@ -258,11 +258,11 @@ describe("webhook admission integration", () => {
     };
     assert.strictEqual(status.entries.length, 1);
     assert.strictEqual(status.entries[0]!.prNumber, 120);
-    assert.strictEqual(status.entries[0]!.priority, 1);
+    assert.strictEqual(status.entries[0]!.priority, 0);
     assert.strictEqual(status.entries[0]!.status, "queued");
   });
 
-  it("promotes an already-queued PR when queue:priority is added later", async () => {
+  it("does not reorder an already-queued PR when a presentation label is added", async () => {
     const store = new MemoryStore();
     const githubSim = new GitHubSim();
     const logger = pino({ level: "silent" });
@@ -308,12 +308,12 @@ describe("webhook admission integration", () => {
     const status = await (await fetch(`${address}/repos/test-repo/queue/status`)).json() as {
       entries: Array<{ prNumber: number; priority: number; status: string }>;
     };
-    assert.deepStrictEqual(status.entries.map((entry) => entry.prNumber), [202, 201]);
-    assert.strictEqual(status.entries[0]!.priority, 1);
+    assert.deepStrictEqual(status.entries.map((entry) => entry.prNumber), [201, 202]);
+    assert.strictEqual(status.entries[0]!.priority, 0);
     assert.strictEqual(status.entries[1]!.priority, 0);
   });
 
-  it("demotes a queued priority PR when queue:priority is removed", async () => {
+  it("does not change queue order when a presentation label is removed", async () => {
     const store = new MemoryStore();
     const githubSim = new GitHubSim();
     const logger = pino({ level: "silent" });
@@ -347,10 +347,10 @@ describe("webhook admission integration", () => {
       });
     }
 
-    githubSim.removeLabel(212, "queue:priority");
+    githubSim.removeLabel(212, "queue");
     const demoteBody = webhookBody({
       action: "unlabeled",
-      label: { name: "queue:priority" },
+      label: { name: "queue" },
       pull_request: { number: 212, head: { ref: "feat-priority", sha: "sha-212" } },
     });
     await fetch(`${address}/webhooks/github`, {

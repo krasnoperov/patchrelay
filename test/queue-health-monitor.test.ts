@@ -214,9 +214,9 @@ exit 1`;
   }
 });
 
-// ─── DIRTY downstream-waiting PR → queue_repair ───────────────────
+// ─── Candidate ancestry, not PR mergeability, derives repair ───────
 
-test("reconcileQueueHealth dispatches queue_repair for DIRTY downstream-waiting PR", { concurrency: false }, async () => {
+test("reconcileQueueHealth grants an undelegated approved PR candidate-only repair authority", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "qhm-dirty-"));
   let oldPath: string | undefined;
   try {
@@ -225,21 +225,35 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   printf '{"state":"OPEN","mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"deadbeef"}'
   exit 0
 fi
+if [ "$1" = "api" ] && [[ "$2" == *"/git/ref/heads/merge-steward/main/pr-42" ]]; then
+  printf 'candidatebase\n'
+  exit 0
+fi
+if [ "$1" = "api" ] && [[ "$2" == *"/compare/deadbeef...candidatebase" ]]; then
+  printf 'diverged\n'
+  exit 0
+fi
 exit 1`;
     const harness = createTestHarness(baseDir, ghScript);
     oldPath = harness.oldPath;
-    insertQueuedIssue(harness.db);
+    insertQueuedIssue(harness.db, { delegatedToPatchRelay: false });
 
     await harness.reconcileQueueHealth();
 
     const issue = harness.db.getIssue("proj", "issue-1");
-    assertIssuePhase(issue, "repairing_queue");
+    assert.equal(issue?.delegatedToPatchRelay, false);
+    assert.equal(issue?.prHeadSha, "deadbeef");
+    // The persisted issue alone remains paused; the runnable task below is the
+    // separately authorized candidate-only work and is what the dispatcher uses.
+    assertIssuePhase(issue, "paused");
     const workflowTask = harness.db.issueSessions.peekPendingSessionInputPlanForDiagnostics("proj", "issue-1");
-    assert.equal(workflowTask?.runType, "queue_repair");
+    assert.equal(workflowTask?.runType, "integration_repair");
     const ctx = workflowTask?.context ?? {};
     assert.equal(ctx.source, "queue_health_monitor");
-    assert.equal(ctx.failureReason, "preemptive_conflict");
-    assert.equal(ctx.failureHeadSha, "deadbeef");
+    assert.equal(ctx.failureReason, "candidate_conflict");
+    assert.equal(ctx.failureHeadSha, "candidatebase");
+    assert.equal(ctx.candidateBranch, "merge-steward/main/pr-42");
+    assert.equal(ctx.approvedHeadSha, "deadbeef");
     assert.deepEqual(harness.enqueueCalls, [{ projectId: "proj", issueId: "issue-1" }]);
   } finally {
     process.env.PATH = oldPath;
@@ -249,7 +263,7 @@ exit 1`;
 
 // ─── DIRTY without label → queue_repair for downstream upkeep ─────
 
-test("reconcileQueueHealth dispatches queue_repair for DIRTY PR without label metadata", { concurrency: false }, async () => {
+test("reconcileQueueHealth ignores PR DIRTY state when candidate ref is absent", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "qhm-dirty-no-label-"));
   let oldPath: string | undefined;
   try {
@@ -257,6 +271,10 @@ test("reconcileQueueHealth dispatches queue_repair for DIRTY PR without label me
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   printf '{"state":"OPEN","mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"deadbeef"}'
   exit 0
+fi
+if [ "$1" = "api" ]; then
+  printf 'HTTP 404: Not Found\n' >&2
+  exit 1
 fi
 exit 1`;
     const harness = createTestHarness(baseDir, ghScript);
@@ -266,9 +284,9 @@ exit 1`;
     await harness.reconcileQueueHealth();
 
     const issue = harness.db.getIssue("proj", "issue-1");
-    assertIssuePhase(issue, "repairing_queue");
-    assert.equal(harness.db.issueSessions.peekPendingSessionInputPlanForDiagnostics("proj", "issue-1")?.runType, "queue_repair");
-    assert.deepEqual(harness.enqueueCalls, [{ projectId: "proj", issueId: "issue-1" }]);
+    assertIssuePhase(issue, "awaiting_queue");
+    assert.equal(harness.db.issueSessions.peekPendingSessionInputPlanForDiagnostics("proj", "issue-1"), undefined);
+    assert.deepEqual(harness.enqueueCalls, []);
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });
@@ -301,9 +319,9 @@ exit 1`;
   }
 });
 
-// ─── Stale queue eviction — same head needs explicit new SHA ─────
+// ─── Settled candidate CI failure ──────────────────────────────────
 
-test("reconcileQueueHealth dispatches fresh-head queue_repair for stale queue eviction check", { concurrency: false }, async () => {
+test("reconcileQueueHealth dispatches integration_repair for settled red candidate CI", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "qhm-stale-eviction-"));
   let oldPath: string | undefined;
   try {
@@ -312,8 +330,16 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   printf '{"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"UNSTABLE","headRefOid":"evictedhead"}'
   exit 0
 fi
-if [ "$1" = "api" ]; then
-  printf 'merge-steward/queue\n'
+if [ "$1" = "api" ] && [[ "$2" == *"/git/ref/heads/merge-steward/main/pr-42" ]]; then
+  printf 'candidate-red\n'
+  exit 0
+fi
+if [ "$1" = "api" ] && [[ "$2" == *"/compare/evictedhead...candidate-red" ]]; then
+  printf 'ahead\n'
+  exit 0
+fi
+if [ "$1" = "api" ] && [[ "$2" == *"/commits/candidate-red/check-runs" ]]; then
+  printf 'Tests\tcompleted\tfailure\thttps://checks/1\n'
   exit 0
 fi
 exit 1`;
@@ -329,11 +355,10 @@ exit 1`;
     const issue = harness.db.getIssue("proj", "issue-1");
     assertIssuePhase(issue, "repairing_queue");
     const workflowTask = harness.db.issueSessions.peekPendingSessionInputPlanForDiagnostics("proj", "issue-1");
-    assert.equal(workflowTask?.runType, "queue_repair");
-    assert.equal(workflowTask?.context.failureReason, "queue_eviction_missed");
-    assert.equal(workflowTask?.context.failureSignature, "same_head_queue_eviction:evictedhead");
-    assert.equal(workflowTask?.context.requiresFreshHead, true);
-    assert.match(String(workflowTask?.context.promptContext), /will not re-admit the same evicted head SHA/);
+    assert.equal(workflowTask?.runType, "integration_repair");
+    assert.equal(workflowTask?.context.failureReason, "candidate_ci_failed");
+    assert.equal(workflowTask?.context.failureSignature, "integration:candidate-red:candidate_ci_failed");
+    assert.equal(workflowTask?.context.candidateSha, "candidate-red");
     assert.deepEqual(harness.enqueueCalls, [{ projectId: "proj", issueId: "issue-1" }]);
   } finally {
     process.env.PATH = oldPath;
@@ -341,15 +366,23 @@ exit 1`;
   }
 });
 
-// ─── Deduplication — same headRefOid ──────────────────────────────
+// ─── Deduplication — same candidate SHA ───────────────────────────
 
-test("reconcileQueueHealth deduplicates on same headRefOid", { concurrency: false }, async () => {
+test("reconcileQueueHealth deduplicates on same candidate SHA", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "qhm-dedup-"));
   let oldPath: string | undefined;
   try {
     const ghScript = `
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   printf '{"state":"OPEN","mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"deadbeef","labels":[{"name":"queue"}]}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [[ "$2" == *"/git/ref/heads/merge-steward/main/pr-42" ]]; then
+  printf 'candidatebase\n'
+  exit 0
+fi
+if [ "$1" = "api" ] && [[ "$2" == *"/compare/deadbeef...candidatebase" ]]; then
+  printf 'diverged\n'
   exit 0
 fi
 exit 1`;
@@ -361,7 +394,7 @@ exit 1`;
     await harness.reconcileQueueHealth();
     const after1 = harness.db.getIssue("proj", "issue-1");
     assertIssuePhase(after1, "repairing_queue");
-    assert.equal(harness.db.issueSessions.peekPendingSessionInputPlanForDiagnostics("proj", "issue-1")?.runType, "queue_repair");
+    assert.equal(harness.db.issueSessions.peekPendingSessionInputPlanForDiagnostics("proj", "issue-1")?.runType, "integration_repair");
 
     // Reset state to awaiting_queue to simulate the issue coming back
     // (e.g. repair completed but conflict remains with same head)

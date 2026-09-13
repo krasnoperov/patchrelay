@@ -11,7 +11,9 @@ The harness is not a generic prompt runner. It is the deterministic orchestratio
 1. **Agent legibility over cleverness** — the system should be easy for an agent to reason about without studying the internals.
 2. **Flat, direct orchestration over layered abstraction** — orchestrators, handlers, and service shells stay narrow; extract by responsibility before layering. See [architecture-guardrails.md](./architecture-guardrails.md) for the extraction rules.
 3. **Persistent issue workspaces** — one durable worktree per issue lifecycle, resumed across iterations.
-4. **Repair loops as first-class workflows** — `implementation`, `review_fix`, `ci_repair`, `queue_repair` have distinct context, entry conditions, and success criteria, not one generic "try again."
+4. **Repair loops as first-class workflows** — `implementation`, `review_fix`,
+   `ci_repair`, and `integration_repair` have distinct workspaces, entry
+   conditions, and success criteria, not one generic "try again."
 5. **Repository-local guidance as the source of truth** — `IMPLEMENTATION_WORKFLOW.md`, `REVIEW_WORKFLOW.md`, and repo-local docs define how the agent should work in that repo.
 
 The decisions behind these priorities are captured in [design-docs/core-beliefs.md](./design-docs/core-beliefs.md).
@@ -61,7 +63,7 @@ flowchart TB
   GH --> RQ
   GH --> MS
   RQ -->|review| GH
-  MS -->|merge / evict| GH
+  MS -->|candidate refs / merge| GH
 ```
 
 ## Source layout
@@ -198,7 +200,8 @@ Delegated in Linear
 -> PatchRelay marks PR ready when implementation is complete
 -> review-quill reviews ready PRs with green CI
 -> merge-steward queues ready PRs with green CI and approval
--> If requested changes, red CI, or merge-steward incident lands on a linked delegated PR, PatchRelay resumes the same branch
+-> If requested changes or branch CI fail, PatchRelay resumes the feature branch
+-> If a candidate ref shows a conflict or red candidate CI, PatchRelay repairs that separate integration workspace
 -> Merged → done
 ```
 
@@ -230,20 +233,30 @@ Behavior:
 
 This loop must not start while the issue is undelegated, even though GitHub check state should still be recorded.
 
-#### Queue repair loop
+#### Integration repair loop
 
 Triggered by:
 
-- merge-steward eviction — a `merge-steward/queue` check run with failure status
+- a self-describing `merge-steward/<base>/pr-<number>` ref that does not contain
+  the frozen approved PR head; or
+- settled required-check failure on a candidate containing that head.
 
 Behavior:
 
-- PatchRelay detects the check run failure and starts a `queue_repair` run in the same worktree
-- Codex reads the steward's failure context, fixes the code, pushes
-- PatchRelay returns the issue to queue wait; the steward re-admits after a fresh approved, green head is visible in GitHub
-- budget: 2 attempts before escalation
+- PatchRelay starts an `integration_repair` run in a candidate worktree, not the
+  persistent feature worktree;
+- Codex repeats/resolves the merge or repairs candidate tests;
+- PatchRelay makes an ordinary non-force push to the candidate ref and never
+  pushes the approved PR branch;
+- a stale non-fast-forward push is discarded and retried from current GitHub
+  state;
+- Review Quill publishes `review-quill/integration` on an agent-modified
+  candidate before Merge Steward may land it;
+- budget exhaustion escalates without pretending the feature review failed.
 
-This loop must also respect `delegatedToPatchRelay`. merge-steward may continue reporting queue truth on undelegated PRs, but PatchRelay should only repair when authority is restored.
+This loop respects `delegatedToPatchRelay`. Merge Steward can continue queue
+reconciliation for an undelegated PR, but PatchRelay writes no repair until
+authority is restored.
 
 ## Workflow Model
 
@@ -283,8 +296,9 @@ stateDiagram-v2
     pr_open --> repairing_ci: branch CI fails (and not in queue)
     repairing_ci --> pr_open: ci_repair pushes new head
     pr_open --> awaiting_queue: approved + green
-    awaiting_queue --> repairing_queue: merge-steward/queue eviction
-    repairing_queue --> pr_open: queue_repair pushes new head
+    awaiting_queue --> repairing_integration: candidate conflict or candidate CI failure
+    repairing_integration --> awaiting_queue: candidate ref advanced
+    awaiting_queue --> implementing: integration review proves feature changed
     awaiting_queue --> done: main fast-forwarded
 
     awaiting_input --> [*]
@@ -295,17 +309,22 @@ stateDiagram-v2
 
 ### Mapping to Linear workflow states
 
-PatchRelay maps the derived `IssuePhase` onto the four-state Linear vocabulary the operator already reads. See [concepts.md](./concepts.md#four-states) for the model and the per-state owners.
+PatchRelay maps the derived `IssuePhase` onto the Linear vocabulary the operator
+already reads. See [concepts.md](./concepts.md#workflow-states) for the model and
+the per-state owners.
 
 | Linear state | Derived phases |
 |-|-|
-| In Progress | `implementing`, `changes_requested`, `repairing_ci`, `repairing_queue` |
+| In Progress | `implementing`, `changes_requested`, `repairing_ci` |
 | In Review | `pr_open` (review pending or approved-but-CI-not-yet-green) |
-| In Deploy | `awaiting_queue` (merge-steward queue entry exists) |
+| In Deploy | `awaiting_queue`, `repairing_integration` (approved feature is in the integration track) |
 | Done | `done` |
 | Cancelled | `failed` (closed-without-merge variant) |
 
-The mapping is rendered from `IssueExecutionState` plus PR facts in `src/linear-workflow-state-sync.ts`. When a project's Linear workflow does not include an In Deploy state, the issue stays in In Review with the configured `queued-for-deploy` sub-label so operators can distinguish "in review, awaiting verdict" from "in review, queued for landing." The label name is configurable via project config; see [github-queue-contract.md](./github-queue-contract.md#configurable-names-per-service).
+The mapping is rendered from `IssueExecutionState` plus GitHub PR and candidate
+facts in `src/linear-workflow-state-sync.ts`. When a project's Linear workflow
+does not include an In Deploy state, the issue stays in In Review. Labels may
+decorate that state for humans but never drive it.
 
 ### Run lifecycle and `superseded` cancellation
 
@@ -375,9 +394,14 @@ The GitHub fact projector and workflow-task derivation both consult a `failureSo
 | `failureSource` | Source | Routes to |
 |-|-|-|
 | `branch_ci` | A required check on the PR head | `repairing_ci` (only when *not* In Deploy) |
-| `queue_eviction` | The configured eviction check (`merge-steward/queue`) | `repairing_queue` |
+| `candidate_conflict` | Candidate ref lacks the approved PR head ancestry | `repairing_integration` |
+| `candidate_ci` | A required check on the candidate SHA | `repairing_integration` |
+| `integration_review` | `review-quill/integration` failed on candidate SHA | feature rework / `implementing` |
 
-While the issue is **In Deploy** (display state `awaiting_queue`), `branch_ci` failures are metadata only: no `ci_repair` task is launched. The lander owns an immutable candidate SHA; branch CI on some other SHA does not block landing. The only signal that returns the issue to In Progress in this window is the `queue_eviction` source.
+While the issue is in the integration track, branch CI on the frozen PR head is
+metadata. Candidate ancestry and candidate checks determine integration work.
+Conflict and test failure remain in that track; only a failed integration review
+returns the issue to feature implementation.
 
 Classification happens in GitHub fact derivation (which calls `isQueueEvictionFailure` once and forwards the result) and is enforced again in workflow-task derivation so the display projection and the workflow-task path cannot drift.
 
@@ -460,7 +484,8 @@ Observability is intentionally split by surface:
 
 The target repository (the one PatchRelay is implementing for) should contain:
 
-- `IMPLEMENTATION_WORKFLOW.md` — guidance for implementation, CI repair, and queue repair runs
+- `IMPLEMENTATION_WORKFLOW.md` — guidance for implementation, branch-CI repair,
+  and integration-candidate repair runs
 - `REVIEW_WORKFLOW.md` — guidance for review fix runs
 
 The run orchestrator points Codex at these files from the lean per-run scaffold rather than inlining them into every turn. Keep them short and action-oriented. See [prompting.md](./prompting.md) for how they compose with `developerInstructions` and the built-in scaffold.
@@ -470,7 +495,8 @@ The run orchestrator points Codex at these files from the lean per-run scaffold 
 - One owning agent per issue branch keeps coordination manageable.
 - Delegation does not automatically imply "this issue must own a branch and PR"; tracker and orchestration issues may complete without opening code.
 - The same worktree is resumed for all iterations of an issue — not a fresh clone per run.
-- Queue failures are integration problems, not just CI failures — they get their own `queue_repair` loop.
+- Queue failures are integration problems, not feature failures — they get a
+  separate candidate worktree and `integration_repair` loop.
 - The repository is part of the harness. If an agent cannot rediscover a rule in-repo, the rule is operationally weak. Keep root docs navigational and treat deeper `docs/` material as the durable system of record.
 - Historical designs are reference material only unless reaffirmed in current docs.
 - Preserve compact verification evidence (failing check names, review comments, queue incidents) rather than replaying ever-growing transcripts.

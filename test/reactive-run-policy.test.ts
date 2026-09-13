@@ -81,6 +81,40 @@ process.exit(1);
   return fakeBin;
 }
 
+function stubIntegrationGh(baseDir: string, params: {
+  prHeadSha: string;
+  candidateSha?: string;
+  comparisonStatus?: string;
+  failRefRead?: boolean;
+}): string {
+  const fakeBin = path.join(baseDir, "bin");
+  const ghPath = path.join(fakeBin, "gh");
+  mkdirSync(fakeBin, { recursive: true });
+  writeFileSync(ghPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "pr" && args[1] === "view") {
+  process.stdout.write(${JSON.stringify(JSON.stringify({
+    headRefOid: params.prHeadSha,
+    state: "OPEN",
+    reviewDecision: "APPROVED",
+    mergeable: "MERGEABLE",
+    mergeStateStatus: "CLEAN",
+  }))});
+  process.exit(0);
+}
+if (args[0] === "api" && args[1].includes("/git/ref/heads/")) {
+  ${params.failRefRead ? "process.stderr.write('not found'); process.exit(1);" : `process.stdout.write(${JSON.stringify(params.candidateSha ?? "")}); process.exit(0);`}
+}
+if (args[0] === "api" && args[1].includes("/compare/")) {
+  process.stdout.write(${JSON.stringify(params.comparisonStatus ?? "behind")});
+  process.exit(0);
+}
+process.exit(1);
+`, "utf8");
+  chmodSync(ghPath, 0o755);
+  return fakeBin;
+}
+
 function setupPolicy(baseDir: string) {
   const config = createConfig(baseDir);
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
@@ -116,6 +150,96 @@ function baseIssue() {
     lastGitHubFailureCheckName: "merge-steward/queue",
   };
 }
+
+function integrationIssue() {
+  return {
+    ...baseIssue(),
+    prHeadSha: "approved-head",
+    lastGitHubFailureHeadSha: "candidate-before",
+    lastGitHubFailureSignature: "integration:candidate-before:candidate_ci_failed",
+    lastGitHubFailureContextJson: JSON.stringify({
+      source: "queue_health_monitor",
+      candidateBranch: "merge-steward/main/pr-59",
+      candidateSha: "candidate-before",
+      approvedHeadSha: "approved-head",
+      integrationFailureKind: "candidate_ci",
+    }),
+  };
+}
+
+test("verifyReactiveRunAdvancedBranch accepts only an advanced candidate containing the frozen approved head", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-integration-repair-ok-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = stubIntegrationGh(baseDir, {
+      prHeadSha: "approved-head",
+      candidateSha: "candidate-after",
+      comparisonStatus: "ahead",
+    });
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+    const { db, policy } = setupPolicy(baseDir);
+    const issue = db.upsertIssue(integrationIssue());
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "integration_repair",
+    });
+
+    assert.equal(await policy.verifyReactiveRunAdvancedBranch(run, issue), undefined);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyReactiveRunAdvancedBranch rejects a candidate that advanced without the approved feature", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-integration-repair-ancestry-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = stubIntegrationGh(baseDir, {
+      prHeadSha: "approved-head",
+      candidateSha: "candidate-after",
+      comparisonStatus: "behind",
+    });
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+    const { db, policy } = setupPolicy(baseDir);
+    const issue = db.upsertIssue(integrationIssue());
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "integration_repair",
+    });
+
+    assert.match(await policy.verifyReactiveRunAdvancedBranch(run, issue) ?? "", /does not contain approved head/);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyReactiveRunAdvancedBranch fails closed when the candidate ref cannot be read", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-integration-repair-unverified-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = stubIntegrationGh(baseDir, { prHeadSha: "approved-head", failRefRead: true });
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+    const { db, policy } = setupPolicy(baseDir);
+    const issue = db.upsertIssue(integrationIssue());
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "integration_repair",
+    });
+
+    assert.match(await policy.verifyReactiveRunAdvancedBranch(run, issue) ?? "", /could not be verified on GitHub/);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
 
 test("verifyReactiveRunAdvancedBranch treats queue_repair no-op as success when the PR is no longer dirty", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reactive-noop-ok-"));

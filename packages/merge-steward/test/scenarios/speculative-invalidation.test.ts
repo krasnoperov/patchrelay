@@ -6,7 +6,7 @@ const prA: SimPR = { number: 1, branch: "feat-a", files: [{ path: "a.ts", conten
 const prC: SimPR = { number: 3, branch: "feat-c", files: [{ path: "c.ts", content: "c" }] };
 
 describe("speculative cascade invalidation", () => {
-  it("evicting mid-chain invalidates downstream and C still merges", async () => {
+  it("a mid-chain repair hold invalidates downstream without letting C bypass", async () => {
     // B always fails CI. A and C should merge.
     const prB: SimPR = { number: 2, branch: "feat-b", files: [{ path: "b.ts", content: "b" }] };
 
@@ -21,13 +21,13 @@ describe("speculative cascade invalidation", () => {
     await h.runUntilStable({ maxTicks: 40 });
 
     assert.ok(h.merged.includes(1), "A should merge");
-    assert.strictEqual(h.entryStatus(prB), "evicted", "B should be evicted (CI always fails)");
-    assert.ok(h.merged.includes(3), "C should merge (rebuilt spec without B)");
+    assert.strictEqual(h.entryStatus(prB), "validating", "B should await repair");
+    assert.ok(!h.merged.includes(3), "C must not bypass B");
 
     h.assertInvariants();
   });
 
-  it("conflict in spec branch evicts and rebuilds downstream", async () => {
+  it("conflict in spec branch remains repairable", async () => {
     // B and C both modify shared.ts. B merges, C conflicts.
     const prBConflict: SimPR = { number: 2, branch: "feat-b-shared", files: [{ path: "shared.ts", content: "B" }] };
     const prCConflict: SimPR = { number: 3, branch: "feat-c-shared", files: [{ path: "shared.ts", content: "C" }] };
@@ -45,7 +45,8 @@ describe("speculative cascade invalidation", () => {
     // A merges, B merges (no conflict with A). C conflicts with B.
     assert.ok(h.merged.includes(1), "A should merge");
     assert.ok(h.merged.includes(2), "B should merge");
-    assert.strictEqual(h.entryStatus(prCConflict), "evicted", "C should be evicted (conflicts with B)");
+    assert.strictEqual(h.entryStatus(prCConflict), "validating", "C should await repair");
+    assert.equal(h.evicted.length, 0);
 
     h.assertInvariants();
   });

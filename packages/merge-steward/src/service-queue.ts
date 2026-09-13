@@ -174,13 +174,9 @@ export class MergeStewardQueueCommands {
         return false;
       }
 
-      let labels: string[] = [];
-      try {
-        labels = await this.github.listLabels(prNumber);
-      } catch (error) {
-        this.logger.debug({ prNumber, err: error }, "Could not read labels for priority detection; continuing without priority label");
-      }
-      const priority = labels.includes(this.config.priorityQueueLabel) ? 1 : 0;
+      // Admission and ordering are derived from review/check/PR truth. Labels
+      // remain available for presentation but are not control inputs.
+      const priority = 0;
 
       const checks = await this.github.listChecks(prNumber);
       const requiredCheckRules = this.policy.getRequiredCheckRules();

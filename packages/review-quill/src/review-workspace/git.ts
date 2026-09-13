@@ -66,6 +66,23 @@ export async function gitFetchReviewRefs(
   ], token);
 }
 
+export async function gitFetchIntegrationRefs(
+  cachePath: string,
+  candidateRef: string,
+  prNumber: number,
+  token: string,
+): Promise<void> {
+  await runGit([
+    "-C",
+    cachePath,
+    "fetch",
+    "--force",
+    "origin",
+    `${candidateRef}:refs/remotes/integration/candidate`,
+    `refs/pull/${prNumber}/head:refs/remotes/pull/${prNumber}/head`,
+  ], token);
+}
+
 export async function gitWorktreeAddDetached(cachePath: string, worktreePath: string, ref: string): Promise<void> {
   await runGit(["-C", cachePath, "worktree", "add", "--detach", "--force", worktreePath, ref]);
 }

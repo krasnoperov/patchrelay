@@ -26,6 +26,7 @@ import { settleRun } from "./run-settlement.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 import { COMPLETION_CHECK_CONTINUE_OBSERVATION } from "./workflow-model.ts";
 import { projectWorkflowSnapshot } from "./workflow-snapshot.ts";
+import { runUsesIntegrationDeliveryAuthority } from "./integration-delivery-authority.ts";
 import {
   finalizeCompletedCollaborationRun,
   finalizeFailedCollaborationRun,
@@ -225,6 +226,7 @@ export class RunFinalizer {
             : typeof payload.checkName === "string" ? { failingCheckName: payload.checkName } : {}),
           ...(typeof payload.summary === "string" ? { failureSummary: payload.summary } : {}),
         };
+      case "integration_repair":
       case "queue_repair":
         return {
           ...facts,
@@ -370,10 +372,15 @@ export class RunFinalizer {
       blockerCount: this.db.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId),
       childCount: this.db.issues.listCanonicalChildIssues(issue.projectId, issue.linearIssueId).length,
     });
-    if (!workflowSnapshot.authority.delegated) {
+    const candidateOnlyAuthority = runUsesIntegrationDeliveryAuthority(workflowSnapshot, run.runType);
+    if (!workflowSnapshot.authority.delegated && !candidateOnlyAuthority) {
       return "authority revoked before run completion";
     }
-    if (run.authorityEpoch > 0 && workflowSnapshot.authority.epoch > run.authorityEpoch) {
+    if (
+      !candidateOnlyAuthority
+      && run.authorityEpoch > 0
+      && workflowSnapshot.authority.epoch > run.authorityEpoch
+    ) {
       return `authority epoch changed from ${run.authorityEpoch} to ${workflowSnapshot.authority.epoch}`;
     }
     return undefined;
@@ -461,7 +468,12 @@ export class RunFinalizer {
     message: string,
   ): RunContext {
     const previousContext = parseObjectJson(issue.lastGitHubFailureContextJson) as Partial<RunContext> | undefined;
-    const instruction = run.runType === "queue_repair"
+    const instruction = run.runType === "integration_repair"
+      ? [
+          "PatchRelay is retrying because the previous integration repair completed without advancing its candidate ref.",
+          "Push a scoped commit to the candidate branch with a normal non-force push; never update the frozen PR branch.",
+        ].join(" ")
+      : run.runType === "queue_repair"
       ? [
           "PatchRelay is retrying because the previous queue repair completed without publishing a newer PR head or proving the queue incident self-resolved.",
           "Before finishing, either publish a newer head on the existing PR branch or verify that GitHub no longer reports the PR as dirty against the queue/base truth.",
@@ -486,7 +498,7 @@ export class RunFinalizer {
     issue: IssueRecord;
     message: string;
   }): boolean {
-    if (params.run.runType !== "ci_repair" && params.run.runType !== "queue_repair") {
+    if (params.run.runType !== "ci_repair" && params.run.runType !== "integration_repair" && params.run.runType !== "queue_repair") {
       return false;
     }
     const factUpdate = resolvePostRunFactUpdate(params.issue, params.run, { outcome: "recovered" });
@@ -558,7 +570,7 @@ export class RunFinalizer {
         ...(params.run.runType === "ci_repair" && record.ciRepairAttempts > 0
           ? { ciRepairAttempts: record.ciRepairAttempts - 1 }
           : {}),
-        ...(params.run.runType === "queue_repair" && record.queueRepairAttempts > 0
+        ...((params.run.runType === "integration_repair" || params.run.runType === "queue_repair") && record.queueRepairAttempts > 0
           ? { queueRepairAttempts: record.queueRepairAttempts - 1 }
           : {}),
         ...((params.run.runType === "review_fix" || params.run.runType === "branch_upkeep") && record.reviewFixAttempts > 0

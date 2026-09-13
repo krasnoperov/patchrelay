@@ -19,6 +19,9 @@ import type { RunContext } from "./run-context.ts";
 import type { AppConfig } from "./types.ts";
 import type { PostRunFollowUp } from "./run-completion-policy.ts";
 import { workflowRunIntent } from "./workflow-intent.ts";
+import { execCommand } from "./utils.ts";
+import { parseRunContext } from "./run-context.ts";
+import { readRemotePrState } from "./remote-pr-state.ts";
 
 const WRITER = "reactive-run-policy";
 
@@ -50,13 +53,54 @@ export class ReactiveRunPolicy {
   ) {}
 
   async verifyReactiveRunAdvancedBranch(run: RunRecord, issue: IssueRecord): Promise<string | undefined> {
-    if (run.runType !== "ci_repair" && run.runType !== "queue_repair") {
+    if (run.runType !== "ci_repair" && run.runType !== "integration_repair" && run.runType !== "queue_repair") {
       return undefined;
     }
     if (!issue.prNumber || issue.prState !== "open" || !issue.lastGitHubFailureHeadSha) {
       return undefined;
     }
     try {
+      if (run.runType === "integration_repair") {
+        const context = parseRunContext(issue.lastGitHubFailureContextJson, "integration repair context");
+        const project = this.config.projects.find((entry) => entry.id === run.projectId);
+        if (!context?.candidateBranch || !project?.github?.repoFullName) return undefined;
+        const pr = await readRemotePrState(project.github.repoFullName, issue.prNumber);
+        if (context.approvedHeadSha && pr?.headRefOid !== context.approvedHeadSha) {
+          return `Integration repair must preserve frozen PR head ${context.approvedHeadSha.slice(0, 8)}, but GitHub reports ${pr?.headRefOid?.slice(0, 8) ?? "no head"}`;
+        }
+        const ref = await execCommand("gh", [
+          "api",
+          `repos/${project.github.repoFullName}/git/ref/heads/${context.candidateBranch}`,
+          "--jq",
+          ".object.sha",
+        ], { timeoutMs: 10_000 });
+        if (ref.exitCode !== 0) {
+          return `Integration repair finished but candidate ${context.candidateBranch} could not be verified on GitHub`;
+        }
+        const currentCandidateSha = ref.stdout.trim();
+        if (!currentCandidateSha) {
+          return `Integration repair finished but candidate ${context.candidateBranch} has no verifiable GitHub SHA`;
+        }
+        if (currentCandidateSha === issue.lastGitHubFailureHeadSha) {
+          return `Integration repair finished but candidate ${context.candidateBranch} is still on failing SHA ${issue.lastGitHubFailureHeadSha.slice(0, 8)}`;
+        }
+        if (context.approvedHeadSha) {
+          const comparison = await execCommand("gh", [
+            "api",
+            `repos/${project.github.repoFullName}/compare/${context.approvedHeadSha}...${currentCandidateSha}`,
+            "--jq",
+            ".status",
+          ], { timeoutMs: 10_000 });
+          if (comparison.exitCode !== 0) {
+            return `Integration repair advanced ${context.candidateBranch}, but approved-head ancestry could not be verified on GitHub`;
+          }
+          const status = comparison.stdout.trim().toLowerCase();
+          if (status !== "ahead" && status !== "identical") {
+            return `Integration repair advanced ${context.candidateBranch}, but candidate ${currentCandidateSha.slice(0, 8)} does not contain approved head ${context.approvedHeadSha.slice(0, 8)}`;
+          }
+        }
+        return undefined;
+      }
       const snapshot = await readReactivePrSnapshot(this.config, run.projectId, issue.prNumber);
       if (!snapshot || snapshot.prState !== "open") return undefined;
       if (!snapshot.headSha || snapshot.headSha !== issue.lastGitHubFailureHeadSha) return undefined;
@@ -77,6 +121,9 @@ export class ReactiveRunPolicy {
         prNumber: issue.prNumber,
         error: error instanceof Error ? error.message : String(error),
       }, "Failed to verify PR head advancement after repair");
+      if (run.runType === "integration_repair") {
+        return `Integration repair completion could not be verified: ${error instanceof Error ? error.message : String(error)}`;
+      }
       return undefined;
     }
   }
@@ -162,6 +209,9 @@ export class ReactiveRunPolicy {
   }
 
   async verifyReactiveRunStayedInScope(run: RunRecord, issue: IssueRecord): Promise<string | undefined> {
+    // Candidate-only integration scope is reviewed by review-quill/integration.
+    // This PR-head delta guard must not inspect or constrain the frozen branch.
+    if (run.runType === "integration_repair") return undefined;
     if (run.runType !== "ci_repair" && run.runType !== "review_fix" && run.runType !== "queue_repair" && run.runType !== "branch_upkeep") {
       return undefined;
     }
@@ -478,7 +528,7 @@ function resolveReactiveBaselineHead(
   if (run.runType === "review_fix" || run.runType === "branch_upkeep") {
     return run.sourceHeadSha;
   }
-  if (run.runType === "ci_repair" || run.runType === "queue_repair") {
+  if (run.runType === "ci_repair" || run.runType === "integration_repair" || run.runType === "queue_repair") {
     return issue.lastGitHubFailureHeadSha;
   }
   return undefined;

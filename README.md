@@ -10,8 +10,8 @@ This repository ships **three independent services**. Install one, two, or all t
 
 | Service | Package | Role |
 |-|-|-|
-| [`patchrelay`](./) | `pnpm add -g patchrelay` | Linear-driven harness that runs Codex sessions inside your real repos. Fully autonomous on webhooks: implementation, review fix, CI repair, queue repair. |
-| [`review-quill`](./packages/review-quill) | `pnpm add -g review-quill` | Review gate that pairs with coding agents. Runs narrow and wide review passes, catches system misalignments the first pass missed, and sends fixes back through normal GitHub reviews. |
+| [`patchrelay`](./) | `pnpm add -g patchrelay` | Linear-driven harness that runs Codex sessions inside your real repos: implementation, review fixes, branch-CI repair, and repair of separate integration candidates. |
+| [`review-quill`](./packages/review-quill) | `pnpm add -g review-quill` | Substantive feature review on PR heads plus narrow preservation review after an agent changes an integration candidate. |
 | [`merge-steward`](./packages/merge-steward) | `pnpm add -g merge-steward` | Turns reviewed PRs into a tested landing train: CI on exact future `main` SHAs, parallel validation for several PRs, and fast-forward landing through the green sequence. |
 
 Common setups:
@@ -22,9 +22,14 @@ Common setups:
 
 ### What this buys you
 
-- **PRs ship tested against the latest `main`.** The queue re-validates on the integrated SHA at admission time, and retries if `main` moves during validation. No more "green yesterday, broken today."
+- **PRs ship as the exact tested future `main`.** The queue freezes the approved
+  feature head, validates a cumulative integration candidate, and lands that
+  same SHA. Moving `main` rebuilds integration evidence without reopening the
+  feature review.
 - **Review catches real misalignments before merge.** The reviewer checks both the changed lines and the surrounding system contract, so conflicts between code, docs, tests, callers, and shared abstractions get sent back while the PR is still cheap for the agent to fix.
-- **Many PR failures have mechanical fixes an agent can handle.** Requested changes like a rename, a missing null check, a new test, refreshing against `main`, resolving a conflict surfaced by speculation, or rerunning a flaky job. Both services publish structured failure reasons (inline review comments, failing check names, queue incidents) an agent can act on directly.
+- **Integration failures do not rewrite approved features.** PatchRelay resolves
+  conflicts and candidate-test failures on self-describing Merge Steward refs.
+  Review Quill checks only whether that repair preserved the approved feature.
 - **No prerequisites beyond GitHub.** A GitHub App, a webhook, and `pnpm add -g` per service.
 
 ## Use with your own agent
@@ -68,7 +73,8 @@ When one Linear team owns issues for multiple repositories, include `--project <
 
 Each repo needs two workflow files for repo-specific run behavior:
 
-- `IMPLEMENTATION_WORKFLOW.md` — implementation, CI repair, queue repair runs
+- `IMPLEMENTATION_WORKFLOW.md` — implementation, branch-CI repair, and
+  integration-candidate repair runs
 - `REVIEW_WORKFLOW.md` — review fix runs
 
 Keep them short, action-oriented, human-authored. Durable machine-level policy belongs in Codex `developer_instructions`; workflow files are for repo-local behavior and validation. See [prompting.md](./docs/prompting.md) for how the built-in scaffold composes them.
@@ -80,8 +86,12 @@ Full install, ingress, and GitHub/Linear app setup: [self-hosting.md](./docs/sel
 1. A human delegates an issue to the PatchRelay Linear app.
 2. PatchRelay verifies the webhook, routes the issue to the right local repo, prepares a durable worktree, and launches an implementation run through `codex app-server`.
 3. PatchRelay persists thread ids, run state, and observations so work stays inspectable and restartable.
-4. GitHub webhooks drive reactive repair loops — CI repair on check failures, review fix on requested changes, queue repair on merge-steward evictions.
-5. `review-quill` reviews ready PRs; `merge-steward` admits approved, green PRs and delivers them by speculative integration.
+4. GitHub webhooks wake reconcilers; each service derives work from current PR,
+   review, candidate-ref, ancestry, and check truth.
+5. Any effective GitHub approval on the exact green feature head lets
+   `merge-steward` freeze it and build a speculative train. PatchRelay may then
+   repair only its integration candidate without pushing the feature branch,
+   even when the tracked Linear issue is not delegated.
 6. An operator can take over inside the same worktree at any time.
 
 ### PR ownership in Linear
@@ -98,7 +108,9 @@ Two separate services handle review and delivery. Both are independent, GitHub-n
 
 ### review-quill
 
-Review gate that pairs with coding agents. It checks both the narrow diff and wider system context for misalignments, sends fixes back through ordinary GitHub reviews, and carries approval forward when a rebase leaves the patch unchanged. By default it reviews as soon as the head updates; it can optionally wait for configured checks to go green first.
+Review gate with two scopes: full feature review on PR heads and narrow
+integration-preservation review on agent-repaired candidate SHAs. A moving
+`main` does not by itself trigger another feature review.
 
 ```bash
 review-quill init https://review.example.com
@@ -110,7 +122,10 @@ See the [review-quill package README](./packages/review-quill/README.md) for the
 
 ### merge-steward
 
-Merge queue with speculative integration. It turns reviewed PRs into a tested landing train: CI runs on the exact future `main` SHAs, several PRs validate in parallel, and `main` fast-forwards through the green sequence as soon as it is safe. Evictions produce a durable incident and a GitHub check run — the signal an agent uses to trigger a repair.
+Merge queue with speculative integration. It turns frozen approved PR heads
+into cumulative future-`main` candidates, validates several in parallel, and
+fast-forwards through the green sequence. Conflicts and candidate-test failures
+remain in the integration track and are repaired on candidate refs.
 
 ```bash
 merge-steward init https://queue.example.com
@@ -123,13 +138,13 @@ See the [merge-steward package README](./packages/merge-steward/README.md) for t
 
 ## Docs
 
-- [Concepts](./docs/concepts.md) — the shared mental model (three roles, four primitives, four states, carry-forward, eviction). Start here.
+- [Concepts](./docs/concepts.md) — the shared mental model: two tracks, frozen feature approval, integration workspaces, and exact-SHA landing. Start here.
 - [Blog: patchrelay](https://blog.krasnoperov.me/posts/patchrelay) · [review-quill](https://blog.krasnoperov.me/posts/review-quill) · [merge-steward](https://blog.krasnoperov.me/posts/merge-steward) · [the gates, not the autonomy](https://blog.krasnoperov.me/posts/gates-not-autonomy)
 - [Self-hosting and deployment](./docs/self-hosting.md) — install, ingress, OAuth and GitHub App setup
 - [Architecture](./docs/architecture.md) — components, ownership, state machine, failure taxonomy
 - [Operator guide](./docs/operator-guide.md) — daily loop, CLI cheatsheet, troubleshooting
 - [Merge queue](./docs/merge-queue.md) — the three-service delivery story
-- [GitHub queue contract](./docs/github-queue-contract.md) — bus artifacts, identity algorithms, configurable names
+- [GitHub queue contract](./docs/github-queue-contract.md) — state-derived protocol over PRs, candidate refs, ancestry, and checks
 - [Prompting](./docs/prompting.md) — how workflow files and the built-in scaffold compose
 - [Secrets](./docs/secrets.md) — systemd credentials, resolution order
 - [review-quill reference](./docs/review-quill.md) · [merge-steward reference](./docs/merge-steward.md)

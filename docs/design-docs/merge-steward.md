@@ -1,122 +1,157 @@
 # Merge Steward
 
-`merge-steward` is the dedicated merge queue service in the PatchRelay stack.
+Merge Steward is the deterministic integration reconciler in the PatchRelay
+stack. It owns queue order, cumulative speculative candidates, exact-SHA
+validation, and landing. It does not own feature implementation or substantive
+feature review.
 
-It owns queue ordering, speculative integrated validation, retry policy, landing, and eviction. PatchRelay owns branch repair when an agent is actually needed.
+For the public GitHub protocol, see
+[github-queue-contract.md](../github-queue-contract.md).
 
-For install, GitHub App permissions, commands, API, and troubleshooting, see [../merge-steward.md](../merge-steward.md).
+## Design boundary
 
-## Why It Is Separate
+Delivery has two tracks:
 
-The merge queue is a deterministic control problem. It should keep making progress even when agent execution is unavailable, expensive, or degraded.
+- PatchRelay and Review Quill iterate on the PR branch until its feature is
+  approved and branch CI is green.
+- Merge Steward freezes that approved head and integrates it with prospective
+  `main` in a separate candidate workspace.
 
-PatchRelay should not be both the coding harness and the queue controller. The split keeps:
+Moving `main`, resolving an integration conflict, or repairing candidate CI
+must not rewrite the approved PR branch or cause another full feature review.
 
-- PatchRelay focused on issue worktrees, agent runs, repair, and Linear-facing UX
-- merge-steward focused on GitHub truth, ordered integration, validation, landing, and eviction
-- GitHub as the shared protocol boundary
-
-## Responsibility Split
+## Responsibilities
 
 | System | Owns |
 |-|-|
-| PatchRelay | implementation, review fixes, branch-local CI repair, queue repair |
-| merge-steward | queue state, order, speculative branch construction, CI result classification, merge decisions, retry and eviction |
-| GitHub | PR review truth, status check truth, branch and merge truth |
+| PatchRelay | Feature implementation, feature-review fixes, branch-CI repair, and agent work inside an integration workspace. |
+| Review Quill | Substantive feature review and narrow integration-preservation review. |
+| Merge Steward | Admission, queue order, candidate refs, speculative ancestry, exact-candidate checks, invalidation, and landing. |
+| GitHub | Shared PR, review, ref, ancestry, and check truth. |
 
-Neither service calls the other's API.
+No service calls another service's API. Webhooks wake reconcilers; GitHub state
+determines every transition.
 
-## Queue Lifecycle
+## Candidate chain
 
-Queue entries move through:
-
-```text
-queued -> preparing_head -> validating -> merging -> merged
-                       \-> evicted
-queued -> dequeued
-```
-
-Statuses:
-
-- `queued` — admitted and waiting in line
-- `preparing_head` — fetching and building the speculative branch
-- `validating` — CI running on the speculative SHA
-- `merging` — revalidating and fast-forwarding `main`
-- `merged` — terminal success
-- `evicted` — terminal failure after retry budget, with incident and check run
-- `dequeued` — manual non-destructive removal
-
-## Speculative Validation
-
-The steward builds cumulative speculative branches:
+The queue lands serially and validates several entries in parallel:
 
 ```text
-main + A         -> CI
-main + A + B     -> CI
-main + A + B + C -> CI
+main + A         -> candidate A -> CI
+main + A + B     -> candidate B -> CI
+main + A + B + C -> candidate C -> CI
 ```
 
-These branches are validation artifacts. The landing operation fast-forwards `main` to the tested speculative SHA after revalidation.
+Every synthetic candidate is published at:
 
-Before landing, the steward verifies:
+```text
+merge-steward/<base-branch>/pr-<number>
+```
 
-- the PR has not been merged or closed externally
-- the reviewed PR head is still the expected head
-- the speculative SHA is still a fast-forward from current `main`
-- required checks are still valid
-- policy still allows the push
+The name is a stable GitHub identity understandable without the steward's
+database. The candidate SHA is immutable evidence; the ref may move when its
+prospective base or repair changes.
 
-When an upstream entry lands or fails, downstream speculative branches are reused or invalidated based on whether their assumptions still hold.
+## Candidate states
 
-## Admission
+```text
+queued
+  -> preparing
+  -> blocked_integration
+  -> validating
+  -> repairing_integration
+  -> validating
+  -> landing
+  -> merged
+```
 
-The steward admits from fresh GitHub truth:
+- `blocked_integration` means candidate construction conflicted. The workspace
+  ref points at the prospective base and does not yet contain the approved head.
+- `repairing_integration` means PatchRelay owns the next non-force candidate
+  push after a conflict or settled candidate-CI failure.
+- These states are non-terminal and retain queue position and feature approval.
+- `dequeued` remains an explicit operator action.
+- Terminal failure is limited to policy/product ambiguity, exhausted repair
+  budget, or an integration review proving substantive feature change.
 
-- PR is open
-- review gate is approved
-- required checks are green according to branch policy and repo config
-- the head does not match the latest evicted head for that PR
-- the branch is not excluded
+The named state may be persisted locally for observability, but the operational
+truth is recoverable from candidate ancestry and checks.
 
-The configured queue label is an admission nudge and manual control surface, not the only source of truth. Removing the admission label dequeues an active entry.
+## Conflict repair without messages
 
-## Failure And Repair
+When automatic construction conflicts, Merge Steward publishes the workspace
+at the prospective base and does not trigger candidate CI. PatchRelay derives
+the need for repair because the ref exists but lacks the approved PR head in its
+ancestry. It repeats the merge locally, resolves it, commits, and non-force
+pushes the result.
 
-The steward classifies failures before retrying or evicting:
+Merge Steward alone may reset the ref when the train moves. PatchRelay never
+force-pushes it, so an attempt based on stale ancestry is rejected by Git and
+restarted from fresh GitHub truth.
 
-- `main_broken`
-- `flaky_or_infra`
-- `branch_local`
-- `integration_conflict`
-- `policy_blocked`
+## Candidate test repair
 
-After retry budget is exhausted, the steward:
+A settled required-check failure on a candidate containing the approved head is
+also an integration-repair state. PatchRelay repairs the candidate rather than
+the feature branch. A new candidate SHA reruns required candidate checks and,
+because PatchRelay changed the candidate, receives narrow integration review.
 
-1. records an incident in SQLite
-2. emits the configured eviction check run, default `merge-steward/queue`
-3. transitions the entry to `evicted`
+When the candidate was the approved head itself and therefore had no synthetic
+ref, Merge Steward creates the workspace ref at that head before PatchRelay
+starts. Candidate-only repair can then proceed without changing the PR branch.
 
-PatchRelay observes that check run through GitHub and triggers `queue_repair` when the linked issue is still delegated. After repair, a fresh PR head is required before re-admission.
+Infrastructure retry is allowed on the same SHA. Re-running an already-green
+required suite for the same SHA and policy is not.
+
+## Integration review
+
+Mechanically generated clean candidates need candidate CI but no additional
+feature review. Candidate commits authored by PatchRelay require the
+`review-quill/integration` check on that SHA. This review decides only whether
+the approved feature survived the integration repair.
+
+A successful integration check returns the entry to validation. A failed check
+means the feature itself must change: discard the candidate and return the PR to
+the feature track for a new implementation head and substantive review.
+
+## Speculative blocking and invalidation
+
+For `A -> B -> C`:
+
+- A may land while B is being repaired.
+- B retains its queue position.
+- C cannot land before B.
+- If B had a candidate, C may finish speculative work already in progress.
+- If repair changes B's SHA, C is invalidated and rebuilt on the new B.
+- If B conflicted before a candidate existed, C waits because it has no valid
+  prospective base.
+
+The steward does not silently rebuild the train without B merely because B
+needs ordinary integration work.
+
+## Landing invariant
+
+Immediately before landing, refresh and require:
+
+- current PR head equals the approved frozen head;
+- candidate contains that head;
+- candidate descends from the current prospective base;
+- required checks on the exact candidate SHA are green under current policy;
+- integration review is satisfied when required;
+- current `main` is an ancestor of the exact candidate SHA.
+
+Then non-force push that SHA to `main`. A rejected push invalidates/rebuilds the
+integration candidate only; it does not reopen feature review.
 
 ## Invariants
 
-- `main` advances only to a tested speculative SHA.
-- Reconciliation is idempotent and restart-safe.
-- Retry attempts are bounded per entry.
-- Repeated conflict retries are gated on base SHA changes.
-- A newer PR head invalidates stale queue assumptions.
-- Every active entry is either queued, preparing, validating, merging, merged, evicted, or dequeued.
-
-## Data Model
-
-The steward keeps its own SQLite database for queue truth:
-
-- queue entries
-- incidents
-- transition events
-- speculative branch metadata
-- check-run and CI observations needed for revalidation
-
-PatchRelay stores only enough queue provenance to route repair and explain issue state.
-
-For current operational gaps, see [../merge-steward.md](../merge-steward.md#current-gaps).
+- `main` advances only to an exact tested candidate SHA.
+- Feature branches are immutable while integrating.
+- Base movement invalidates integration evidence, not feature approval.
+- Conflict and candidate-test repair happen on candidate refs.
+- PatchRelay never force-pushes candidate refs.
+- Candidate ancestry and SHA-bound checks are sufficient for cross-service
+  reconciliation after lost webhooks or restart.
+- Downstream speculative candidates are reused only while their predecessor
+  ancestry remains valid.
+- The same required suite is not repeated for the same SHA and policy.

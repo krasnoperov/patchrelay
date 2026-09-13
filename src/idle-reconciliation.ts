@@ -405,7 +405,7 @@ export class IdleIssueReconciler {
   ): void {
     const eventType = reactiveWorkflowEventType(runType);
     let dedupeKey: string;
-    if (runType === "queue_repair" || runType === "ci_repair") {
+    if (runType === "integration_repair" || runType === "queue_repair" || runType === "ci_repair") {
       dedupeKey = buildRepairWorkflowDedupeKey({
         scope: dedupeScope,
         runType,

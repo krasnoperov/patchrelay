@@ -23,7 +23,7 @@ describe("failure classification against main baseline", () => {
     assert.strictEqual(prefixed.length, 3);
   });
 
-  it("classifies as main_broken when same check fails on branch and main", async () => {
+  it("does not evict when the same check fails on branch and main", async () => {
     const h = await createHarness({ maxRetries: 0, flakyRetries: 0, ciRule: () => "fail" });
 
     await h.enqueue({ number: 1, branch: "feat-a", files: [{ path: "a.ts", content: "a" }] });
@@ -41,13 +41,14 @@ describe("failure classification against main baseline", () => {
       { name: "lint", conclusion: "success" },
     ]);
 
-    await h.tick(); // CI fails → evicted
+    await h.tick();
 
-    assert.strictEqual(h.evictionSim.evictions.length, 1);
-    assert.strictEqual(h.evictionSim.evictions[0]!.incident.failureClass, "main_broken");
+    assert.strictEqual(h.evictionSim.evictions.length, 0);
+    assert.equal(h.entries[0]?.status, "validating");
+    assert.equal(h.entries[0]?.candidateRef, "merge-steward/main/pr-1");
   });
 
-  it("classifies as branch_local when main checks pass but branch fails", async () => {
+  it("does not evict when main passes but the candidate fails", async () => {
     const h = await createHarness({ maxRetries: 0, flakyRetries: 0, ciRule: () => "fail" });
 
     await h.enqueue({ number: 1, branch: "feat-b", files: [{ path: "b.ts", content: "b" }] });
@@ -58,9 +59,10 @@ describe("failure classification against main baseline", () => {
     h.githubSim.setChecks(1, [{ name: "build", conclusion: "failure" }]);
     h.githubSim.setRefChecks("main", [{ name: "build", conclusion: "success" }]);
 
-    await h.tick(); // CI fails → evicted
+    await h.tick();
 
-    assert.strictEqual(h.evictionSim.evictions.length, 1);
-    assert.strictEqual(h.evictionSim.evictions[0]!.incident.failureClass, "branch_local");
+    assert.strictEqual(h.evictionSim.evictions.length, 0);
+    assert.equal(h.entries[0]?.status, "validating");
+    assert.equal(h.entries[0]?.candidateRef, "merge-steward/main/pr-1");
   });
 });

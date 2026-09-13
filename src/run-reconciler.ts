@@ -18,6 +18,8 @@ import { resolveEffectiveActiveRun } from "./effective-active-run.ts";
 import { isThreadMaterializingError } from "./codex-thread-errors.ts";
 import { fetchPullRequestSnapshot } from "./reconcile-pr-fetch.ts";
 import { emitTelemetry, noopTelemetry, type PatchRelayTelemetry } from "./telemetry.ts";
+import { buildWorkflowSnapshotForIssue } from "./workflow-task-reconciler.ts";
+import { runUsesIntegrationDeliveryAuthority } from "./integration-delivery-authority.ts";
 
 const THREAD_MATERIALIZATION_GRACE_MS = 10 * 60_000;
 
@@ -96,7 +98,11 @@ export class RunReconciler {
       }
     }
 
-    if (!effectiveIssue.delegatedToPatchRelay) {
+    const candidateOnlyAuthority = runUsesIntegrationDeliveryAuthority(
+      buildWorkflowSnapshotForIssue(this.db, effectiveIssue),
+      run.runType,
+    );
+    if (!effectiveIssue.delegatedToPatchRelay && !candidateOnlyAuthority) {
       const authority = await this.confirmDelegationAuthorityBeforeRelease(run, effectiveIssue);
       effectiveIssue = authority.issue;
       if (authority.released) {

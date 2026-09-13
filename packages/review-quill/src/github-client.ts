@@ -444,6 +444,54 @@ export class GitHubClient {
     }));
   }
 
+  async listIntegrationCandidateRefs(repoFullName: string): Promise<import("./types.ts").GitHubRefRecord[]> {
+    const encodedRepo = repoFullName.split("/").map(encodeURIComponent).join("/");
+    const refs = await this.request<Array<Record<string, unknown>>>(
+      repoFullName,
+      `/repos/${encodedRepo}/git/matching-refs/heads/merge-steward/`,
+    );
+    return refs.map((entry) => ({
+      ref: String(entry.ref ?? ""),
+      sha: String((entry.object as Record<string, unknown> | undefined)?.sha ?? ""),
+    })).filter((entry) => entry.ref && entry.sha);
+  }
+
+  async getCommit(repoFullName: string, sha: string): Promise<import("./types.ts").GitHubCommitRecord> {
+    const encodedRepo = repoFullName.split("/").map(encodeURIComponent).join("/");
+    const commit = await this.request<Record<string, unknown>>(
+      repoFullName,
+      `/repos/${encodedRepo}/commits/${encodeURIComponent(sha)}`,
+    );
+    return {
+      sha: String(commit.sha ?? sha),
+      message: String((commit.commit as Record<string, unknown> | undefined)?.message ?? ""),
+      parentShas: Array.isArray(commit.parents)
+        ? commit.parents.map((parent) => String((parent as Record<string, unknown>).sha ?? "")).filter(Boolean)
+        : [],
+      ...(typeof (commit.author as Record<string, unknown> | undefined)?.login === "string"
+        ? { authorLogin: String((commit.author as Record<string, unknown>).login) }
+        : {}),
+      ...(typeof (commit.committer as Record<string, unknown> | undefined)?.login === "string"
+        ? { committerLogin: String((commit.committer as Record<string, unknown>).login) }
+        : {}),
+    };
+  }
+
+  async isAncestor(repoFullName: string, ancestorSha: string, descendantSha: string): Promise<boolean> {
+    if (ancestorSha === descendantSha) return true;
+    const encodedRepo = repoFullName.split("/").map(encodeURIComponent).join("/");
+    try {
+      const comparison = await this.request<Record<string, unknown>>(
+        repoFullName,
+        `/repos/${encodedRepo}/compare/${encodeURIComponent(ancestorSha)}...${encodeURIComponent(descendantSha)}`,
+      );
+      return comparison.status === "ahead" || comparison.status === "identical";
+    } catch (error) {
+      if (error instanceof GitHubApiError && error.status === 404) return false;
+      throw error;
+    }
+  }
+
   async readRepoFile(repoFullName: string, filePath: string, ref: string): Promise<string | undefined> {
     const encodedRepo = repoFullName.split("/").map(encodeURIComponent).join("/");
     const encodedPath = filePath.split("/").map(encodeURIComponent).join("/");

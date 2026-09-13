@@ -6,6 +6,7 @@ import { withRepoCacheMutation } from "./cache-mutex.ts";
 import {
   gitCheckoutDetached,
   gitFetchReviewRefs,
+  gitFetchIntegrationRefs,
   gitMergeBase,
   gitWorktreeAddDetached,
   gitWorktreeRemove,
@@ -20,6 +21,46 @@ export async function resolveReviewDiffBaseSha(
     throw new Error(`PR #${pr.number} has no GitHub-reported base SHA`);
   }
   return await gitMergeBase(worktreePath, pr.baseSha, pr.headSha);
+}
+
+export async function materializeIntegrationWorkspace(params: {
+  repoFullName: string;
+  candidateRef: string;
+  candidateSha: string;
+  approvedHeadSha: string;
+  prospectiveBaseSha: string;
+  prNumber: number;
+  token: string;
+}): Promise<{ workspace: ReviewWorkspace; dispose: () => Promise<void> }> {
+  const cachePath = await ensureRepoCache(params.repoFullName, params.token);
+  const worktreePath = await mkdtemp(path.join(tmpdir(), "review-quill-integration-"));
+  const headRef = "refs/remotes/integration/candidate";
+  try {
+    await withRepoCacheMutation(cachePath, async () => {
+      await gitFetchIntegrationRefs(cachePath, params.candidateRef, params.prNumber, params.token);
+      await gitWorktreeAddDetached(cachePath, worktreePath, headRef);
+    });
+    await gitCheckoutDetached(worktreePath, params.candidateSha);
+    const workspace: ReviewWorkspace = {
+      repoFullName: params.repoFullName,
+      cachePath,
+      worktreePath,
+      baseRef: params.prospectiveBaseSha,
+      diffBaseRef: params.prospectiveBaseSha,
+      headRef,
+      headSha: params.candidateSha,
+      prBaseSha: params.prospectiveBaseSha,
+    };
+    const dispose = async () => {
+      await withRepoCacheMutation(cachePath, () => gitWorktreeRemove(cachePath, worktreePath)).catch(() => undefined);
+      await rm(worktreePath, { recursive: true, force: true }).catch(() => undefined);
+    };
+    return { workspace, dispose };
+  } catch (error) {
+    await withRepoCacheMutation(cachePath, () => gitWorktreeRemove(cachePath, worktreePath)).catch(() => undefined);
+    await rm(worktreePath, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function materializeReviewWorkspace(params: {

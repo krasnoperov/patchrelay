@@ -243,6 +243,39 @@ export class GitSim implements GitOperations {
 
   // --- SpeculativeBranchBuilder ---
 
+  async createWorkspace(specName: string, baseBranch: string): Promise<string> {
+    try {
+      await this.deleteBranch(specName);
+    } catch { /* may not exist */ }
+    await this.createBranch(specName, baseBranch);
+    return this.headSha(specName);
+  }
+
+  /** Test helper: create a human/agent-authored repair commit on a workspace. */
+  async repairWorkspace(
+    specName: string,
+    prBranch: string,
+    files: Array<{ path: string; content: string }>,
+  ): Promise<string> {
+    await git.checkout({ fs: this.vol, dir: this.dir, ref: specName, force: true });
+    for (const file of files) {
+      const fullPath = `${this.dir}/${file.path}`;
+      const parentDir = fullPath.substring(0, fullPath.lastIndexOf("/"));
+      if (parentDir !== this.dir) await this.vol.promises.mkdir(parentDir, { recursive: true });
+      await this.vol.promises.writeFile(fullPath, file.content);
+      await git.add({ fs: this.vol, dir: this.dir, filepath: file.path });
+    }
+    const baseSha = await this.headSha(specName);
+    const prSha = await this.headSha(prBranch);
+    return git.commit({
+      fs: this.vol,
+      dir: this.dir,
+      message: "Resolve integration workspace",
+      author: AUTHOR,
+      parent: [baseSha, prSha],
+    });
+  }
+
   async buildSpeculative(prBranch: string, baseBranch: string, specName: string, _mergeMessage?: string): Promise<MergeResult> {
     // Create spec branch from base, then merge PR into it.
     try {

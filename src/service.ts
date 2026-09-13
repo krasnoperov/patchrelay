@@ -610,6 +610,11 @@ export class PatchRelayService {
         eventType: params.eventType,
         rawBody: params.rawBody.toString("utf8"),
       });
+      if (params.eventType === "push") {
+        // Candidate pushes do not belong to a PR payload. They wake the
+        // stateless candidate-ref reconciler; no service message is decoded.
+        this.runtime.requestReconcile();
+      }
     }
     return result;
   }

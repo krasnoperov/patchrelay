@@ -59,6 +59,7 @@ export class ServiceRuntime {
   private eventLoopMonitorExpectedAt = 0;
   private eventLoopLagMs = 0;
   private reconcileInProgress = false;
+  private reconcileRequested = false;
   private reconcileHealthy = true;
   private reconcileError: string | undefined;
   private reconcileFailedAt: string | undefined;
@@ -118,6 +119,19 @@ export class ServiceRuntime {
 
   enqueueIssue(projectId: string, issueId: string, options?: { priority?: boolean }): void {
     this.issueQueue.enqueue({ projectId, issueId }, options);
+  }
+
+  /** Wake the GitHub-derived reconciler without blocking a webhook response. */
+  requestReconcile(): void {
+    if (!this.ready || !this.codex.isStarted()) return;
+    this.reconcileRequested = true;
+    if (this.reconcileInProgress) return;
+    this.clearBackgroundReconcile();
+    const timer = setTimeout(() => {
+      void this.runBackgroundReconcile();
+    }, 0);
+    timer.unref?.();
+    this.reconcileTimer = timer;
   }
 
   setLinearConnected(connected: boolean): void {
@@ -188,6 +202,7 @@ export class ServiceRuntime {
     }
 
     this.reconcileInProgress = true;
+    this.reconcileRequested = false;
     try {
       await this.reconcileActiveRunsWithSchemaRetry();
       // Pick up issues that became ready outside the webhook path
@@ -212,7 +227,11 @@ export class ServiceRuntime {
     } finally {
       this.reconcileInProgress = false;
       if (this.ready) {
-        this.scheduleBackgroundReconcile();
+        if (this.reconcileRequested) {
+          this.requestReconcile();
+        } else {
+          this.scheduleBackgroundReconcile();
+        }
       }
     }
   }

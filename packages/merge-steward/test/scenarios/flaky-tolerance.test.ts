@@ -23,7 +23,7 @@ describe("flaky test tolerance", () => {
     h.assertInvariants();
   });
 
-  it("evicts after flaky retries and retry budget exhausted", async () => {
+  it("retains an integration workspace after flaky retries are exhausted", async () => {
     const h = await createHarness({
       ciRule: () => "fail",
       flakyRetries: 1,
@@ -33,8 +33,9 @@ describe("flaky test tolerance", () => {
     await h.advanceMain();
     await h.runUntilStable({ maxTicks: 30 });
 
-    assert.strictEqual(h.entryStatus(prA), "evicted");
-    assert.ok(h.evictions.length > 0, "Should report eviction");
+    assert.strictEqual(h.entryStatus(prA), "validating");
+    assert.ok(h.entries[0]?.candidateRef, "Should publish a repair workspace");
+    assert.strictEqual(h.evictions.length, 0);
     h.assertInvariants();
   });
 });

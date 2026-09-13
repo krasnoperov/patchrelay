@@ -188,7 +188,7 @@ describe("property: queue invariants under random commands", () => {
     );
   });
 
-  it("queue always drains when given enough ticks", async () => {
+  it("queue either drains or waits at a repairable failure", async () => {
     await fc.assert(
       fc.asyncProperty(
         fc.constantFrom<CIMode>("all_pass", "all_fail", "odd_fail"),
@@ -198,10 +198,9 @@ describe("property: queue invariants under random commands", () => {
           await h.init();
           for (let i = 1; i <= prCount; i++) await h.enqueue(arbPR(i));
           await h.runUntilStable({ maxTicks: prCount * 10 });
-          for (const entry of h.entries) {
-            if (entry.status !== "merged" && entry.status !== "evicted") {
-              throw new Error(`PR #${entry.prNumber} stuck in ${entry.status}`);
-            }
+          const firstActive = h.activeEntries[0];
+          if (firstActive && firstActive.status !== "validating") {
+            throw new Error(`PR #${firstActive.prNumber} is not at a repairable gate: ${firstActive.status}`);
           }
           h.assertInvariants();
         },
@@ -210,7 +209,7 @@ describe("property: queue invariants under random commands", () => {
     );
   });
 
-  it("conservation: merged + evicted + dequeued = enqueued after drain", async () => {
+  it("conservation includes entries deliberately retained for integration repair", async () => {
     await fc.assert(
       fc.asyncProperty(
         fc.constantFrom<CIMode>("all_pass", "all_fail", "odd_fail", "first_n_fail"),
@@ -223,9 +222,9 @@ describe("property: queue invariants under random commands", () => {
           await h.runUntilStable({ maxTicks: prCount * 15 });
 
           const merged = h.entries.filter((e) => e.status === "merged").length;
-          const evicted = h.entries.filter((e) => e.status === "evicted").length;
-          if (merged + evicted !== prCount) {
-            throw new Error(`Conservation: ${merged} merged + ${evicted} evicted != ${prCount} enqueued`);
+          const active = h.activeEntries.length;
+          if (merged + active !== prCount) {
+            throw new Error(`Conservation: ${merged} merged + ${active} active != ${prCount} enqueued`);
           }
           h.assertInvariants();
         },
@@ -272,12 +271,12 @@ describe("property: queue invariants under random commands", () => {
           }
           await h.runUntilStable({ maxTicks: prCount * 10 });
 
-          // Exactly one should merge (the first). Rest evicted.
+          // Exactly one should merge (the first). The rest remain ordered for repair.
           if (h.merged.length !== 1) {
             throw new Error(`Expected 1 merge, got ${h.merged.length} (merged: ${h.merged})`);
           }
-          if (h.evicted.length !== prCount - 1) {
-            throw new Error(`Expected ${prCount - 1} evictions, got ${h.evicted.length}`);
+          if (h.activeEntries.length !== prCount - 1 || h.evicted.length !== 0) {
+            throw new Error(`Expected ${prCount - 1} retained entries and no evictions`);
           }
           h.assertInvariants();
         },

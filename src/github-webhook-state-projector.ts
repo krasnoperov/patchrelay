@@ -351,6 +351,12 @@ async function updateGitHubFailureProvenance(
 ): Promise<void> {
   const isQueueEvictionCheck = isQueueEvictionFailure(issue, event, project);
 
+  // Legacy merge-steward/queue failures are presentation-only. Integration
+  // repair is derived from the candidate ref, ancestry, and SHA-bound checks;
+  // treating this check as a command would reintroduce an unrecoverable
+  // service-to-service message protocol.
+  if (isQueueEvictionCheck) return;
+
   if (event.triggerEvent === "check_failed" && issue.prState === "open") {
     const source = isQueueEvictionCheck
       ? "queue_eviction"

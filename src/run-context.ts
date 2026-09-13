@@ -112,7 +112,7 @@ const runContextShape = {
    * free string: the value set spans workflow reasons and event types. */
   workflowReason: z.string().optional(),
   /** Requested run type inside a `delegated` / `completion_check_continue` payload. */
-  runType: z.enum(["implementation", "collaboration", "review_fix", "branch_upkeep", "ci_repair", "queue_repair"]).optional(),
+  runType: z.enum(["implementation", "collaboration", "review_fix", "branch_upkeep", "ci_repair", "integration_repair", "queue_repair"]).optional(),
   /** True for an open-ended conversational run started by mentioning
    * PatchRelay without entering the delivery workflow. */
   collaborationMode: z.boolean().optional(),
@@ -211,6 +211,11 @@ const runContextShape = {
   failureReason: z.string().optional(),
   failureSignature: z.string().optional(),
   failureHeadSha: z.string().optional(),
+  /** GitHub integration workspace. Present only for integration_repair. */
+  candidateBranch: z.string().optional(),
+  candidateSha: z.string().optional(),
+  approvedHeadSha: z.string().optional(),
+  integrationFailureKind: z.enum(["conflict", "candidate_ci"]).optional(),
   /** Produced by buildBranchUpkeepContext / buildReviewFixBranchUpkeepContext
    * (head that was failing/dirty at workflow-intent time). */
   failingHeadSha: z.string().optional(),

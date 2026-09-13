@@ -303,6 +303,8 @@ function planForRunType(
       return ciRepairPlan(params.ciRepairAttempts ?? 1);
     case "queue_repair":
       return queueRepairPlan(params.queueRepairAttempts ?? 1);
+    case "integration_repair":
+      return queueRepairPlan(params.queueRepairAttempts ?? 1);
     case "implementation":
     default:
       return implementationPlan();
@@ -353,14 +355,14 @@ export function buildRunningSessionPlan(runType: string): AgentSessionPlanStep[]
   return buildAgentSessionPlan({
     phase: runType === "ci_repair" ? "repairing_ci"
       : runType === "review_fix" || runType === "branch_upkeep" ? "changes_requested"
-      : runType === "queue_repair" ? "repairing_queue"
+      : runType === "integration_repair" || runType === "queue_repair" ? "repairing_queue"
       : "implementing",
     activeRunType: runType as RunType,
   });
 }
 
 export function buildCompletedSessionPlan(runType: string): AgentSessionPlanStep[] {
-  if (runType === "ci_repair" || runType === "queue_repair") {
+  if (runType === "ci_repair" || runType === "integration_repair" || runType === "queue_repair") {
     return buildAgentSessionPlan({ phase: "awaiting_queue" });
   }
   return buildAgentSessionPlan({ phase: "pr_open" });

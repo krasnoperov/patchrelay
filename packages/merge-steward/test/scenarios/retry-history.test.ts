@@ -2,8 +2,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createHarness } from "../harness.ts";
 
-describe("retryHistory records per-transition baseSha", () => {
-  it("records distinct bases when a cached downstream conflict is invalidated and recomputed", async () => {
+describe("integration workspace base history", () => {
+  it("rebuilds a conflict workspace when its prospective base changes", async () => {
     const h = await createHarness({ ciRule: () => "pass", speculativeDepth: 2 });
     await h.enqueue({ number: 1, branch: "feat-parent", files: [{ path: "shared.ts", content: "parent" }] });
     await h.enqueue({ number: 2, branch: "feat-child", files: [{ path: "shared.ts", content: "child" }] });
@@ -14,12 +14,11 @@ describe("retryHistory records per-transition baseSha", () => {
     await h.runUntilStable({ maxTicks: 30 });
 
     const child = h.entries.find((entry) => entry.prNumber === 2)!;
-    assert.equal(child.status, "evicted");
-    const incident = h.store.listIncidents(child.id)[0]!;
-    const conflictBases = incident.context.retryHistory
-      .filter((event) => event.outcome === "conflict_retry")
+    assert.equal(child.status, "validating");
+    const conflictBases = h.reconcileEvents
+      .filter((event) => event.prNumber === 2 && event.action === "integration_build_conflict")
       .map((event) => event.baseSha)
-      .filter((sha) => sha !== "unknown");
+      .filter((sha): sha is string => Boolean(sha));
     assert.ok(conflictBases.length >= 2, `expected two conflict observations, got ${JSON.stringify(conflictBases)}`);
     assert.ok(new Set(conflictBases).size >= 2, `conflict bases should differ, got ${JSON.stringify(conflictBases)}`);
   });

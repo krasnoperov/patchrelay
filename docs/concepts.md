@@ -1,286 +1,199 @@
 # Concepts
 
-The shared mental model behind PatchRelay, review-quill, and merge-steward. Each service operates independently, but they all read from the same picture of *what a change is*, *what gets reviewed*, and *what lands*. This document is the picture.
+The shared mental model behind PatchRelay, review-quill, and merge-steward.
+The services are independent reconcilers over GitHub state: webhooks wake them
+up, but do not command them, and no service calls another service's API.
 
-If you only read one doc to understand the stack, read this one.
+If you only read one document to understand the stack, read this one.
 
-## One artifact, three roles
+## Two tracks, three roles
 
-A pull request is a Git ref. A *change* is a logical thing. The stack is built around that distinction. Three roles act on the same PR through the GitHub bus — they never call each other:
+Delivery has two deliberately separate tracks:
+
+1. **Feature development** changes the PR branch until branch CI is green and
+   the feature receives a substantive review approval.
+2. **Integration** freezes that approved PR head, composes it with the exact
+   prospective `main`, repairs only the integration result when necessary,
+   validates that exact candidate, and lands it.
 
 ```mermaid
 flowchart LR
-    Author([Author<br/>patchrelay])
-    Reviewer([Reviewer<br/>review-quill])
-    Lander([Lander<br/>merge-steward])
-    GH[(GitHub)]
-
-    Author -->|push branch| GH
-    GH -->|webhook: head updated| Reviewer
-    Reviewer -->|APPROVE / REQUEST_CHANGES| GH
-    GH -->|webhook: approved + green| Lander
-    Lander -->|tested candidate SHA| GH
-    GH -->|webhook: eviction check_run| Author
+    P[PatchRelay<br/>feature implementation] -->|push PR head| GH[(GitHub)]
+    GH --> R[Review Quill<br/>feature review]
+    R -->|APPROVE| GH
+    GH --> M[Merge Steward<br/>speculative train]
+    M -->|candidate ref| GH
+    GH -->|candidate needs repair| P
+    P -->|push candidate only| GH
+    GH --> IR[Review Quill<br/>integration review]
+    IR -->|candidate check| GH
+    GH --> M
+    M -->|tested SHA| Main[main]
 ```
 
-| Role | Default | Replaceable by | Responsibility |
-|-|-|-|-|
-| Author | `patchrelay` | A human, Cursor, Claude Code, Codex CLI | Produces commits on a PR branch. Reacts to "that's not right" and to "that won't integrate." |
-| Reviewer | `review-quill` | Copilot Code Review, CodeRabbit, a human, any other GitHub PR review producer | Decides if a change is correct. Verdict attaches to the change, not to a SHA. |
-| Lander | `merge-steward` | Mergify, Aviator, Bors, GitHub native merge queue | Tests the integrated tree against current `main`. Advances `main` when green. |
+| Role | Default | Responsibility |
+|-|-|-|
+| Author | PatchRelay or a human | Implement the feature and repair review or branch-CI failures on the PR branch. Repair integration failures on the candidate ref without changing the approved PR head. |
+| Reviewer | review-quill or a human | Review the feature once; after an integration repair, review only whether the approved feature survived integration. |
+| Lander | merge-steward | Order the queue, build cumulative candidates, publish candidate refs, validate exact candidate SHAs, and advance `main`. |
 
-All three roles communicate through a small set of GitHub artifacts (the
-*bus*). See [github-queue-contract.md](./github-queue-contract.md).
+## The four Git-native primitives
 
-## Four primitives
+### 1. The approved feature
 
-The model rests on four Git-native ideas. Each is just a thin name on top of something Git already gives you.
+Feature review binds to a PR head. After approval and green branch CI that head
+is frozen for the integration track. Moving `main` does not change the approved
+feature and must not cause PatchRelay to rebase or force-push the PR branch.
 
-### 1. A commit is a tree plus a parent
+`patch_id` remains a small optimization for feature review. A head rewrite with
+the same patch can carry the prior verdict; a changed patch receives a fresh
+feature review. Once the approved head is in the integration track, ancestry to
+that exact head is the simpler proof that the candidate includes the feature.
 
-Git stores snapshots, not diffs. Every commit points to a *tree* — the full state of the repo at that moment — plus the parent commit(s) it descends from. The *diff* you read in a review is computed: `tree(child) − tree(parent)`. It's a derived view, not the artifact.
+### 2. The prospective base
 
-This matters because the question *"does my change still make sense after main moved?"* is really a question about *which two trees you compare*.
+The first queue entry is based on the current `main`. Every later entry is
+based on the preceding candidate:
 
-### 2. The landing candidate
-
-For each dependency-ready PR, the lander resolves the exact commit that would
-become `main`:
-
-```
-if ancestor(prospective_base, pr_head):
-    candidate = pr_head
-else:
-    candidate = merge_commit(prospective_base, pr_head)
-```
-
-The candidate is immutable. Checks authorize only that SHA. The first branch
-reuses exact head checks and creates no duplicate commit; the second creates
-and tests an integration commit. A merge conflict means there is no candidate.
-Review Quill stays on the GitHub PR surface.
-
-### 3. patch-id — the identity of a change
-
-Two commits represent the *same change* when the diff they produce against their merge-base is identical. Git already has a built-in for this:
-
-```
-patch_id = git diff $(git merge-base <base> <head>)..<head> | git patch-id --stable
+```text
+base(A) = main
+base(B) = candidate(A)
+base(C) = candidate(B)
 ```
 
-Same `patch_id` against the same immutable diff base = the same reviewed change.
-Amends, cherry-picks, or commit reorders can preserve that identity; a changed
-effective base deliberately does not.
+This is a speculative train. Candidates may validate in parallel, but they land
+in order. If a predecessor candidate changes, its downstream candidate closure
+is stale and is rebuilt; no feature approval is invalidated.
 
-What it ignores (on purpose): commit messages, author/dates, and commit
-partitioning. Review Quill separately includes the effective diff-base SHA in
-its carry-forward key.
+### 3. The integration workspace
 
-What changes it (on purpose): edits to the diff itself — including conflict resolutions.
+Every queued PR has a self-describing GitHub ref:
 
-`--stable` (not bare `git patch-id`) canonicalises per-file order so commit reorders within a range produce the same id.
-
-### 4. Landing is a pointer move
-
-If `main` is an ancestor of some commit C, and C has been tested in the form it'll land in, then "merging" is just:
-
-```
-git push origin C:main
+```text
+merge-steward/<base-branch>/pr-<number>
 ```
 
-Atomic. Cheap. No merge button. No new commit on top.
+The ref is both the candidate and the integration workspace. Its Git ancestry
+is the cross-service state protocol:
 
-Candidate resolution and validation happen before the pointer moves. By the
-time `main` advances, there is nothing left to infer.
+| Ref state | Meaning |
+|-|-|
+| Ref absent | No active integration candidate for this PR. |
+| Ref equals the prospective base and does not contain the approved PR head | Candidate construction conflicted; PatchRelay must integrate the frozen head here. |
+| Ref contains the approved PR head | A candidate exists; its exact SHA may be reviewed, tested, and landed. |
+| Ref no longer descends from the current prospective base | The train moved; Merge Steward must rebuild it. |
 
-> *Main is a tag. We move it through commits we trust.*
+Merge Steward may reset a stale workspace. PatchRelay may only make ordinary
+non-force pushes to it. A stale PatchRelay push therefore fails naturally when
+Merge Steward has already moved the ref; Git supplies the concurrency fence.
 
-## Five states
+For a tracked PR, any effective GitHub approval on the exact current PR head,
+including a human approval, plus green branch CI grants PatchRelay authority to
+repair only this integration workspace. Linear delegation is not required for
+that candidate-only work. The grant never authorizes changing the PR branch or
+resuming feature implementation.
 
-The three roles map onto five workflow states in Linear, in lifecycle order. The phase is obvious from both Linear (the state) and GitHub (PR labels and checks) at any moment.
+### 4. Exact-SHA validation and landing
+
+Checks authorize a commit SHA, never a mutable branch name. If the prospective
+base is already an ancestor of the approved PR head, the head itself is the
+candidate and its exact-SHA checks are reusable. Otherwise the candidate is an
+integration commit on the workspace ref.
+
+If an exact-head candidate later needs landing-policy test repair, Merge
+Steward publishes the workspace ref at that approved head. PatchRelay can then
+add a candidate-only repair without rewriting the PR branch.
+
+Immediately before landing, Merge Steward refreshes GitHub truth and verifies:
+
+- the PR is still open and its approved head is unchanged;
+- the candidate contains that approved head;
+- the candidate descends from the current prospective base;
+- required candidate checks are green;
+- `review-quill/integration` is green when PatchRelay changed the candidate;
+- current `main` can be fast-forwarded to the same immutable candidate SHA.
+
+Landing is then a non-force pointer move. If `main` moved first, the candidate
+is rebuilt; the feature is not re-reviewed.
+
+## Workflow states
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Implementing: delegated
-    Implementing --> Reviewing: PR opened, ready for review
-    Reviewing --> InMergeQueue: approved
-    InMergeQueue --> Deploying: merged to main
-    Deploying --> Done: deploy succeeded
-    Reviewing --> Implementing: changes requested
-    InMergeQueue --> Implementing: eviction (cannot integrate)
+    [*] --> Implementing
+    Implementing --> Reviewing: PR ready
+    Reviewing --> Implementing: changes requested or branch CI repair
+    Reviewing --> Integrating: feature approved and green
+    Integrating --> RepairingIntegration: candidate conflict or candidate CI failure
+    RepairingIntegration --> Integrating: candidate pushed
+    Integrating --> Implementing: integration review says feature changed
+    Integrating --> Deploying: exact candidate lands
+    Deploying --> Done: deploy succeeds
     Done --> [*]
-
-    state Implementing
-    state Reviewing
-    state InMergeQueue
-    state Deploying
-    state Done
 ```
 
-| State | Owner | What's happening |
-|-|-|-|
-| Implementing | Author | A patchrelay run (or human) is producing or revising the change — including addressing review/CI/queue feedback. |
-| Reviewing | Reviewer + branch CI | review-quill verdict and configured required checks working until both green. |
-| In Merge Queue | Lander | merge-steward holds the issue **pre-merge**: candidate resolved, exact-SHA checks, awaiting its turn, then landing. Visible on GitHub via `queue:testing` / `queue:merging` labels. |
-| Deploying | Deploy | The change is **on main** and the deploy workflow is running. |
-| Done | — | The deploy succeeded. |
+Integration conflict and candidate-CI failure are not feature failures. They
+stay in the integration track. Only a finding that the repair materially
+changes the approved feature returns the issue to implementation and full
+feature review.
 
-Two ways back to Implementing: the reviewer asks for changes, or the lander can't integrate (eviction).
+## Review rules
 
-Every operator-visible phase is derived from durable signals — authority, outcome/input facts, PR facts, workflow tasks, and runs — never from whichever transient webhook happens to fire. The display does not create a second lifecycle.
+### Feature review
 
-If a project's Linear workflow omits a state, the issue collapses to the nearest earlier phase and PatchRelay never invents a state that doesn't exist: without **In Merge Queue** the issue stays in Reviewing with a `queued-for-deploy` sub-label (configurable; see [github-queue-contract.md](./github-queue-contract.md)); without **Deploying** a merged issue advances straight to Done.
+Review Quill reviews the PR diff and wider product context. A changed feature
+patch invalidates the feature verdict. A patch-equivalent rewrite may carry it
+forward. Base movement by itself is handled in integration and does not ask the
+feature reviewer to review the feature again.
 
-Deploying is **opt-in** per project: set `github.deployWorkflowName` to the GitHub Actions workflow that deploys `main`. PatchRelay then holds the merged issue in Deploying and watches that workflow's runs on the base branch — success advances to Done, failure escalates to Human Needed, and a 20-minute timeout completes the issue if no deploy ever runs (the change is already on `main`). With no `deployWorkflowName`, a merge completes immediately.
+### Integration review
 
-PatchRelay's derived phases (`pr_open`, `awaiting_queue`, `repairing_queue`, …) map onto these five — see [architecture.md](./architecture.md#one-workflow-model).
+A mechanically created clean candidate needs exact-candidate CI but no second
+feature review. A candidate changed by PatchRelay receives a narrow review on
+the candidate SHA. The reviewer answers one question:
 
-## The author rule — don't originate redundant pushes
+> Did the integration preserve the already-approved feature while correctly
+> composing it with the prospective base?
 
-When a run finishes, compute the `patch_id` of what it produced. If it equals the last published `patch_id` on this branch, the run had nothing to add — complete cleanly, no push.
+The result is the SHA-bound `review-quill/integration` check:
 
-This is a *behaviour rule* about what runs produce, not a hard gate on `git push`. Republishing the same change isn't harmful; it's just pointless when the run had no new content.
+- `success` — integration preserved the approved feature;
+- `failure` — the repair materially changed the feature and it must return to
+  implementation.
 
-What this kills:
+The check may contain findings for the agent and operator, but its name, SHA,
+and conclusion are sufficient for routing.
 
-- **Rebase to chase main.** The lander handles base advance. The Author shouldn't initiate a republish just because main moved.
-- **"Make the fix unmistakable" cosmetic re-pushes** onto an already-approved head. The run produces no new `patch_id`, so it doesn't push.
+## CI rules
 
-What stays allowed:
+- Branch CI is an admission proof for the approved feature head.
+- Candidate CI is the landing proof for the exact future-`main` SHA.
+- If candidate SHA equals the approved head SHA, reuse its successful checks.
+- Otherwise run required checks on the candidate.
+- Never run the same required suite twice for the same SHA and policy.
+- After that SHA becomes `main`, main CI is informational; only checks with a
+  different purpose, such as deploy or production smoke, add new evidence.
+- A failed candidate may be repaired repeatedly in its integration workspace.
+  Each new SHA needs current candidate checks, but not a new feature review.
 
-- Operator-initiated rebase to unstick a stale PR.
-- Forcing a fresh CI run on a known flake (`gh run rerun`).
-- Branch hygiene (squashing WIP commits).
+## Speculative failure behavior
 
-The Reviewer carries approvals across heads only when both the patch and its
-immutable diff base are unchanged.
+For a train `A -> B -> C`, a red candidate B remains in place while PatchRelay
+repairs it. A may land. C cannot land before B. If B's SHA changes, C is rebuilt
+on the new B; if B conflicted before any candidate existed, C waits until B has
+one. The queue does not silently skip B merely because integration needs work.
 
-## The reviewer rule — carry the verdict across equivalent review inputs
+Eviction is reserved for product ambiguity, policy failure, explicit operator
+removal, an exhausted repair budget, or an integration review proving that the
+feature itself must change. Ordinary conflicts and test failures are repairable
+integration states.
 
-Index approvals by `patch_id`. On a new head:
+## GitHub is the protocol
 
-```
-same identity   →  re-emit the prior verdict. no review.
-different       →  fresh review.
-```
+Labels, comments, and service-to-service requests are not control messages.
+Each service derives work from current PR heads, reviews, candidate refs,
+ancestry, and SHA-bound checks on startup, periodic reconciliation, or webhook
+wakeup. Losing a webhook delays convergence but cannot change the outcome.
 
-Without carry-forward, every commit-only rewrite triggers a fresh model-driven
-review. With it, equivalent patches against the same captured base are free;
-rebasing onto a different base intentionally triggers a fresh review because
-the code context changed.
-
-A PR carrying the configured no-cache label (default `review:no-cache`) is always re-reviewed even when the patch is unchanged — useful for release / changelog PRs that need a fresh body rendering.
-
-### One review surface
-
-The Reviewer reads the PR head against GitHub's structured PR base and keys
-carry-forward on `patch_id` plus the effective immutable diff-base SHA. For a
-stacked child, the parent PR branch is the base, so parent-only changes are not
-reviewed again. Semantic integration
-issues stay in the lander's merge gate.
-
-## The lander rule — test the tree that will land
-
-The lander selects one exact candidate for every dependency-ready PR.
-
-```
-candidate = pr-head                         # when base is an ancestor
-candidate = merge-commit(base, pr-head)    # otherwise
-green     = current policy passes on candidate SHA
-land      = push candidate SHA → main
-fail      = emit eviction signal (merge-steward/queue check_run)
-```
-
-When two PRs are queued, the second candidate is resolved against the first
-candidate, not against stale `main`. Stack dependency edges override priority.
-Independent roots may proceed when another stack is blocked.
-
-Each rung of the train is one exact tested candidate. Immediately before a
-non-force push, the lander refreshes main, PR head, approval, required policy,
-check producer identity, check results, and ancestry. Any uncertainty stops the
-landing.
-
-The ancestry refresh also enumerates every other open PR. Strict descendants
-of the candidate do not block their parent. For every other PR, if the merge
-base contains history not already in `main`, the candidate is evicted. Looking
-only for the other PR's current head is insufficient because a blocked parent
-may have advanced after the child copied an earlier head. This prevents an
-approved child from landing a blocked parent as an unreviewed fast-forward side
-effect.
-
-## The eviction rule — the only signal that returns In Merge Queue to Implementing
-
-Once an issue is **In Merge Queue**, branch CI on the PR head is *metadata*. The lander is testing a different SHA. The Author does not react to red branch CI in this window — it might be a flake the spec doesn't hit, or a real failure the spec also hits.
-
-The only signal that returns the issue to Implementing is the eviction `check_run` (default name `merge-steward/queue`):
-
-| Window | Branch CI red on PR head | Author reaction |
-|-|-|-|
-| Reviewing | Required checks block admission | Re-run if flaky (`gh run rerun`); push a fix if real |
-| In Merge Queue | Metadata only | Wait. Either the spec hits it (eviction) or it was a flake (lands clean) |
-
-This rule is enforced both at the state-machine table (`failureSource === "branch_ci" && state !== "awaiting_queue"`) and in workflow-task derivation. See [architecture.md](./architecture.md#failure-taxonomy).
-
-## Sequencing — dependencies first, independent PRs otherwise
-
-Two PRs that touch the same lock file, migration, or shared helper may conflict
-at integration time. If one task truly depends on the other, record that fact
-as `B blockedBy A` in Linear so B starts only after A is Done. Otherwise the PRs
-remain independent and both target the default branch; a conflict is repaired
-only after one change actually lands.
-
-```mermaid
-flowchart LR
-    Dependency[Real task dependency] -->|Linear blockedBy| Serial[Start after parent is Done]
-    Independent[Independent tasks] -->|PRs target main| Queue[Exact-candidate queue]
-    Queue -->|integration conflict| Repair[Evict and repair on new main]
-    Guard[sequence-check] -->|shared history absent from main| Rebuild[Rebuild issue commits on main]
-```
-
-`patchrelay sequence-check` is a publication guard, not a topology planner. It
-never recommends a parent PR. It fails when the issue branch shares history
-with another open PR outside the default branch and requires the issue's own
-commits to be rebuilt on that branch.
-
-## Stacks, not a "Stack object"
-
-Externally created stacked PRs may still enter the factory. They are *not* a new first-class concept. The chain is expressed through two artifacts that already exist:
-
-- A Linear `blockedBy` edge — declares the dependency at planning time.
-- A PR's `base` ref — declares it at the GitHub layer (`B.base = A.branch`).
-
-PatchRelay does not invent that chain to avoid a conflict. Every actor reads an
-explicit chain from those two places; there is no parallel lifecycle or
-implicit stack inferred from commit overlap.
-
-For a stacked PR, the review diff base is the parent PR's captured head, not
-main. The lander separately treats that base ref as a dependency edge:
-
-```
-review(child) = diff(captured_parent_head, child_head)
-land(child)   = candidate(after_parent_candidate, child_head)
-```
-
-Review carry-forward also includes the effective immutable diff-base SHA, so a
-parent-base change forces a fresh review even if a patch hash happens to match.
-When a parent candidate changes, the lander invalidates its dependent candidate
-closure. GitHub retargeting the child to main collapses the stack by one rung.
-
-## How the four primitives eliminate observed waste
-
-Five waste classes were directly observed in production transcripts (LSR-272 / LSR-278 / LSR-279 / LSR-281 / LSR-284) and all were addressed by mechanisms that fall straight out of the model:
-
-| Observed waste | Mechanism that eliminates it |
-|-|-|
-| Re-review after commit-only rewrites | Carry-forward by `patch_id` plus immutable diff base |
-| Chase-rebase loop on already-approved PRs | The Author rule: no patch-id-equivalent push originated by the agent |
-| `ci_repair` fired during In Merge Queue on flaky branch CI | The eviction rule: branch CI is metadata while In Merge Queue |
-| Cosmetic re-push dismisses a fresh approval mid-run | Mid-run approval cancellation: when an approval lands on the run's source SHA, the run is superseded and `shouldNotPublish` blocks the finalizer |
-| Lock-file conflicts caught only at integration time | Explicit `blockedBy`, otherwise exact-candidate eviction and repair |
-
-## Where to read next
-
-- [github-queue-contract.md](./github-queue-contract.md) — the bus artifacts, configurable names, identity algorithms.
-- [merge-queue.md](./merge-queue.md) — the end-to-end story across all three services.
-- [architecture.md](./architecture.md) — PatchRelay facts, workflow tasks, run types, and ownership.
-- [review-quill.md](./review-quill.md) and [merge-steward.md](./merge-steward.md) — operator references.
-- [operator-guide.md](./operator-guide.md) — the operator alert vocabulary and daily loop.
+See [github-queue-contract.md](./github-queue-contract.md) for the exact state
+table and [merge-queue.md](./merge-queue.md) for the end-to-end lifecycle.

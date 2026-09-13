@@ -51,7 +51,7 @@ export function deriveIssuePhase(input: IssuePhaseInput): IssuePhase {
     ?? input.runnableTaskRunType
     ?? (input.activeRunId !== undefined ? "implementation" : undefined);
   if (runType === "ci_repair") return "repairing_ci";
-  if (runType === "queue_repair") return "repairing_queue";
+  if (runType === "integration_repair" || runType === "queue_repair") return "repairing_queue";
   if (runType === "review_fix" || runType === "branch_upkeep") return "changes_requested";
   if (runType === "implementation") return "implementing";
 

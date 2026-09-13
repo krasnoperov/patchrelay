@@ -9,22 +9,25 @@ For install and first-time setup, see [self-hosting.md](./self-hosting.md). For 
 1. Delegate a Linear issue to the PatchRelay app.
 2. Linear sends delegation and agent-session webhooks to PatchRelay, which creates or reuses the issue worktree and launches an implementation run.
 3. Follow up in the Linear agent session to steer the active run or queue fresh workflow input while it remains delegated.
-4. GitHub webhooks automatically trigger CI repair, review fix, or merge queue repair runs when needed.
+4. GitHub webhooks wake reconciliation. PatchRelay derives feature review/CI
+   repair from the PR and integration repair from candidate ancestry and checks.
 5. Watch progress from the terminal, or open the same worktree and take over manually.
 
 ### Sequencing predictable conflicts at planning time
 
 When two issues will both touch the same lock file, the same schema migration,
 the same shared enum, or the same normalization helper, they will conflict at
-integration time. The merge-steward eviction loop catches it, but every cycle
-costs a fresh review and a queue restart.
+integration time. The speculative train catches it and PatchRelay repairs the
+candidate without rewriting the approved feature branch or restarting feature
+review.
 
 For predictable conflicts, set `B blockedBy A` in Linear **before either
 starts**. PatchRelay already honors `blockedBy` (the `IssueRecord.blockedByCount`
 field gates start). When A reaches Done, B starts on a main that already
 contains A's changes, so there is no conflict to resolve.
 
-See [concepts.md](./concepts.md#sequencing--dependencies-first-independent-prs-otherwise) for the full model.
+See [concepts.md](./concepts.md#speculative-failure-behavior) for the runtime
+behavior when a candidate blocks the train.
 
 Heuristics for when to set `blockedBy` at planning:
 
@@ -37,7 +40,7 @@ Heuristics for when to set `blockedBy` at planning:
 
 The cost is latency — B waits for A. If the tasks are independent, do not add a
 dependency merely because their diffs may conflict. Both PRs target the default
-branch and the later branch is repaired after the first lands. The runtime
+branch and the cumulative integration candidate is repaired in the train. The runtime
 `sequence-check` only prevents a branch from sharing unlanded history with
 another open PR; it never recommends stacking.
 
@@ -89,7 +92,8 @@ Use the log file for persisted history, `journalctl` for the live stream.
 
 ### Operator alert vocabulary
 
-`patchrelay status` and the queue-health monitor surface stuck-state alerts using the Linear-state-prefixed convention from [concepts.md](./concepts.md#four-states). The prefix matches what the team already reads in Linear; the suffix is the diagnostic.
+`patchrelay status` and the queue-health monitor surface stuck-state alerts
+using the Linear-state-prefixed convention from [concepts.md](./concepts.md#workflow-states).
 
 | Display | Where it fires | Trigger |
 |-|-|-|
@@ -97,7 +101,9 @@ Use the log file for persisted history, `journalctl` for the live stream.
 
 Other "PR is in this Linear state — but why isn't progression happening right now?" conditions are surfaced today on the merge-steward dashboard rather than as cluster-health alerts:
 
-- **In Deploy · retry-gated** — integration conflict; the steward is waiting for `main` to advance before retrying. See `merge-steward queue show --pr <num>`.
+- **In Deploy · integration repair** — the candidate ref lacks the approved
+  head or candidate checks are red; PatchRelay owns the next non-force candidate
+  push. See `merge-steward queue show --pr <num>`.
 - **In Deploy · queue paused (operator hold)** — explicit pause on the project, queue, or single PR.
 - **In Deploy · dequeued** — operator pulled the issue from the queue mid-flight.
 
@@ -111,7 +117,7 @@ The cluster-health entry above is the one alert that today is also raised throug
 | Agent ignored a new Linear comment or prompt | Whether the issue comment explicitly started with `PatchRelay` or `@PatchRelay`, `prompt_delivered` session events, queued turn-input delivery lines, and any delivery failure warnings |
 | Codex execution looks broken or stops unexpectedly | `Starting Codex app-server`, `Codex app-server request failed`, `Codex app-server stderr`, `Codex app-server exited` |
 | Requested-changes repair stopped without returning to review | `Requested-changes run finished ... without pushing a new head past blocking review SHA` |
-| Queue repair started after an integration failure | `PR needs queue repair from fresh GitHub truth`, `Started queue_repair run`, and the `merge-steward/queue` check run |
+| Integration repair started | Candidate ref, approved-head ancestry, settled candidate checks, and `Started integration_repair run` |
 | Old closed PRs keep appearing in logs | `Reconciliation: PR was closed on a terminal issue; preserving terminal state` |
 | Startup/recovery cannot read an empty Codex thread yet | `thread ... is not materialized yet; includeTurns is unavailable before first user message` |
 
@@ -139,19 +145,22 @@ If there is a real fix in the worktree, commit and push it or requeue the issue.
 
 PatchRelay allows three requested-changes repair attempts by default. Projects can override this with `repair_budgets.review_fix`. When that limit is reached, PatchRelay identifies a repeated/systemic review loop and escalates with the observed attempt count, configured limit, and next action: consolidate the accumulated review history and audit the violated invariants, or split an oversized PR before requesting another review.
 
-### Queue repair handoff
+### Integration repair
 
-When merge-steward cannot land an approved PR, it emits the configured eviction check run (default `merge-steward/queue`). PatchRelay treats that as `queue_repair`, not ordinary branch CI. The normal successful shape is:
+PatchRelay does not wait for an eviction command. It derives repair from the
+self-describing `merge-steward/<base>/pr-<number>` ref. A ref that lacks the
+frozen approved head means merge conflict; settled red checks on a ref that
+contains the head mean candidate-test repair. The normal shape is:
 
 ```text
-merge-steward/queue fails
-PatchRelay starts queue_repair
-PatchRelay pushes a fresh branch head
-review-quill approves
-merge-steward re-admits and merges
+Merge Steward publishes candidate workspace
+PatchRelay derives conflict or candidate-CI repair from GitHub
+PatchRelay non-force pushes the candidate ref, not the PR branch
+Review Quill publishes review-quill/integration on the candidate SHA
+Merge Steward lands that exact SHA when green
 ```
 
-Start with the incident and the issue view:
+Start with GitHub ancestry and checks, then the service views:
 
 ```bash
 merge-steward queue show --pr <num>
@@ -159,7 +168,10 @@ patchrelay status APP-123
 patchrelay logs APP-123 --lines 100
 ```
 
-Escalate when the incident is product ambiguity, a broken required check on `main`, missing credentials, or repeated semantic failures after fresh heads.
+Escalate when integration review says the feature must change, product intent is
+ambiguous, credentials or repository policy are broken, or the integration
+repair budget is exhausted. Ordinary conflict and candidate-test failure stay
+in the integration track.
 
 ### Benign reconciliation noise
 

@@ -160,6 +160,19 @@ export interface CheckRunRecord {
   outputText?: string;
 }
 
+export interface GitHubRefRecord {
+  ref: string;
+  sha: string;
+}
+
+export interface GitHubCommitRecord {
+  sha: string;
+  message: string;
+  parentShas: string[];
+  authorLogin?: string;
+  committerLogin?: string;
+}
+
 export interface GuidanceDoc {
   path: string;
   text: string;

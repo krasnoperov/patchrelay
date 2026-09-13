@@ -45,6 +45,7 @@ function fakeGithub(prs: Map<number, PRStatus>): GitHubPRApi {
 
 function fakeSpecBuilder(): SpeculativeBranchBuilder {
   return {
+    async createWorkspace() { return "workspace"; },
     async buildSpeculative() { return { success: true, sha: "spec" }; },
     async deleteSpeculative() { /* no-op */ },
   };
@@ -155,7 +156,7 @@ describe("stack-aware admission", () => {
     assert.ok(parent.position < sibling.position, "sibling was admitted after parent");
   });
 
-  it("never lets a priority child sort ahead of its active parent", async () => {
+  it("does not let a presentation label reorder an active stack", async () => {
     const store = new MemoryStore();
     const queue = new MergeStewardQueueCommands(
       config,
@@ -182,8 +183,8 @@ describe("stack-aware admission", () => {
     const ordered = store.listActive("repo");
     assert.deepEqual(
       ordered.map((entry) => entry.prNumber),
-      [100, 200, 150],
-      "the parent becomes ready first; its priority child may then outrank an unrelated root",
+      [100, 150, 200],
+      "labels do not change the admission order",
     );
   });
 });

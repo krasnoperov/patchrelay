@@ -5,7 +5,11 @@ PatchRelay classifies delegated issues into two issue classes:
 - `implementation`
 - `orchestration`
 
-Issue class is separate from run type. A normal implementation issue can still run `implementation`, `review_fix`, `ci_repair`, and `queue_repair` loops. Orchestration issues use the implementation run type today, but their prompt, plan, and workflow context are orchestration-shaped.
+Issue class is separate from run type. A normal implementation issue can still
+run `implementation`, `review_fix`, `ci_repair`, and `integration_repair` loops.
+The last loop uses a Merge Steward candidate workspace, not the feature branch.
+Orchestration issues use the implementation run type today, but their prompt,
+plan, and workflow context are orchestration-shaped.
 
 ## Why This Exists
 
@@ -37,7 +41,8 @@ Implementation sessions should:
 - solve the delegated issue directly
 - use the issue worktree as the action boundary
 - publish a PR when code changes need review
-- route requested changes, CI failures, and queue evictions into the existing repair loops
+- route requested changes, branch-CI failures, and candidate integration
+  failures into their distinct repair loops
 - use the no-PR completion check when the run finishes without a linked PR
 
 Related child or parent context can be advisory, but it should not turn a concrete implementation issue into a broad planning run.

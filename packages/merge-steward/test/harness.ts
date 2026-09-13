@@ -127,7 +127,7 @@ export class Harness {
             entry.candidateRef === branch
             || entry.branch === branch
             || entry.headSha === branch
-            || entry.candidateSha === branch
+            || (entry.status === "merging" && entry.candidateSha === branch)
           ) {
             this.githubSim.markMergedByBranch(entry.branch);
           }

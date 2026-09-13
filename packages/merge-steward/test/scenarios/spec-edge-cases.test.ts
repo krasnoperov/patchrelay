@@ -112,7 +112,7 @@ describe("speculative edge cases", () => {
     h.assertInvariants();
   });
 
-  it("CI failure mid-chain evicts and downstream rebuilds without the failed entry", async () => {
+  it("CI failure mid-chain retains order and invalidates downstream", async () => {
     // B always fails CI. With speculation, A and B test in parallel.
     // When B fails, C's spec (which included B) must be rebuilt without B.
     const h = await createHarness({
@@ -126,8 +126,8 @@ describe("speculative edge cases", () => {
     await h.runUntilStable({ maxTicks: 40 });
 
     assert.ok(h.merged.includes(1), "A should merge");
-    assert.strictEqual(h.entryStatus(prB), "evicted", "B should be evicted");
-    assert.ok(h.merged.includes(3), "C should merge after B evicted");
+    assert.strictEqual(h.entryStatus(prB), "validating", "B should await repair");
+    assert.ok(!h.merged.includes(3), "C must not bypass B");
 
     // Verify the event stream shows the invalidation + rebuild.
     const cInvalidated = h.reconcileEvents.filter(

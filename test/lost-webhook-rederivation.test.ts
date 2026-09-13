@@ -678,7 +678,7 @@ test("lost check_failed (branch_ci): poll records equivalent failure provenance 
 
 // ─── check_failed (queue_eviction) ───────────────────────────────────
 
-test("lost check_failed (queue_eviction): queue health probe routes the same queue_repair", { concurrency: false }, async () => {
+test("legacy queue check is not a command; reconciliation converges from candidate GitHub state", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-lost-eviction-"));
   const restoreGh = installFakeGh(baseDir, {
     prView: {
@@ -715,30 +715,29 @@ test("lost check_failed (queue_eviction): queue health probe routes the same que
       rawBody: buildCheckRunPayload({ branch: "feat-evict", headSha: "sha-evict", prNumber: 15, checkName: "merge-steward/queue", conclusion: "failure" }),
     });
 
+    // The legacy check is metadata-only and must not itself route work. Age
+    // both worlds past the normal candidate reconciliation grace window.
+    backdateIssueUpdatedAt(pair.delivered, 5 * 60_000);
+    backdateIssueUpdatedAt(pair.lost, 5 * 60_000);
+
     await runReconciliationPass(pair.delivered);
     await runReconciliationPass(pair.lost);
 
     const a = captureConvergedFacts(pair.delivered);
     const b = captureConvergedFacts(pair.lost);
-    // The behavior-driving outcome converges: both worlds hold a pending
-    // queue_repair workflowTask that was dispatched to the work queue.
-    assert.equal(a.runnableTaskRunType, "queue_repair");
-    assert.equal(b.runnableTaskRunType, "queue_repair");
+    // The behavior-driving outcome converges from the candidate ref observed
+    // by the queue-health pass, regardless of whether the legacy check webhook
+    // was delivered.
+    assert.equal(a.runnableTaskRunType, "integration_repair");
+    assert.equal(b.runnableTaskRunType, "integration_repair");
     assert.ok(pair.delivered.enqueueCalls.some((call) => call.issueId === ISSUE));
     assert.ok(pair.lost.enqueueCalls.some((call) => call.issueId === ISSUE));
 
-    // Documented asymmetry 1: the webhook records full steward incident detail;
-    // the queue-health probe records the durable queue_eviction source plus a
-    // requiresFreshHead repair context. Both worlds route the same repair run;
-    // the lost world's incident detail is the poll-side minimum.
     assert.equal(a.failureSource, "queue_eviction");
     assert.equal(b.failureSource, "queue_eviction");
-    // The probe's incident identity lives in the workflowTask context while the durable
-    // queue_eviction fact keeps the compatibility state from flipping back to
-    // awaiting_queue in the same pass.
     const lostTask = new RunTaskPlanner(pair.lost.db).resolveRunTask(pair.lost.db.getIssue(PROJECT, ISSUE)!);
-    assert.equal(lostTask?.context.failureSignature, "same_head_queue_eviction:sha-evict");
-    assert.equal(lostTask?.context.requiresFreshHead, true);
+    assert.equal(lostTask?.context.failureReason, "candidate_conflict");
+    assert.equal(lostTask?.context.candidateBranch, "merge-steward/main/pr-15");
 
     // Both worlds now keep the same compatibility state because the poll-side
     // monitor records a durable queue_eviction fact before routing.

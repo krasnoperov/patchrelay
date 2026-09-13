@@ -76,7 +76,7 @@ export function inspectGitWorktreeStatus(worktreePath: string): GitWorktreeStatu
 }
 
 export function isRepairRunType(runType: string): boolean {
-  return runType === "review_fix" || runType === "branch_upkeep" || runType === "ci_repair" || runType === "queue_repair";
+  return runType === "review_fix" || runType === "branch_upkeep" || runType === "ci_repair" || runType === "integration_repair" || runType === "queue_repair";
 }
 
 export interface DirtyWorktreeEventPayload {

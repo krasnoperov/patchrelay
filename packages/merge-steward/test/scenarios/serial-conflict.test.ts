@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHarness, type SimPR } from "../harness.ts";
 
 describe("serial conflict handling", () => {
-  it("evicts conflicting PR with incident record", async () => {
+  it("retains a conflicting PR with a GitHub-visible repair workspace", async () => {
     const prA: SimPR = {
       number: 1,
       branch: "feat-a",
@@ -22,17 +22,12 @@ describe("serial conflict handling", () => {
     await h.runUntilStable({ maxTicks: 30 });
 
     assert.ok(h.merged.includes(1), "PR #1 should merge");
-    assert.strictEqual(h.entryStatus(prB), "evicted");
-
-    // Eviction reported with incident.
-    assert.ok(h.evictions.length > 0, "Should report eviction");
-    assert.strictEqual(h.evictions[0]!.incident.failureClass, "integration_conflict");
-
-    // Durable incident in store.
+    assert.strictEqual(h.entryStatus(prB), "validating");
     const entry = h.entries.find((e) => e.prNumber === 2)!;
-    const incidents = h.store.listIncidents(entry.id);
-    assert.ok(incidents.length > 0);
-    assert.strictEqual(incidents[0]!.outcome, "open");
+    assert.equal(entry.candidateRef, "merge-steward/main/pr-2");
+    assert.equal(await h.gitSim.isAncestor(entry.headSha, entry.candidateSha!), false);
+    assert.equal(h.store.listIncidents(entry.id).length, 0);
+    assert.equal(h.evictions.length, 0);
 
     h.assertInvariants();
   });

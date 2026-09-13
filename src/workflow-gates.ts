@@ -1,7 +1,12 @@
 import type { GateDecision, WorkflowSnapshot, WorkflowTask } from "./workflow-model.ts";
+import { taskUsesIntegrationDeliveryAuthority } from "./integration-delivery-authority.ts";
 
 export function evaluateTaskStart(snapshot: WorkflowSnapshot, task: WorkflowTask): GateDecision {
-  if (!snapshot.authority.delegated && task.runType !== "collaboration") {
+  if (
+    !snapshot.authority.delegated
+    && task.runType !== "collaboration"
+    && !taskUsesIntegrationDeliveryAuthority(snapshot, task)
+  ) {
     return { action: "wait", reason: "authority_not_delegated" };
   }
   if (snapshot.activeRun) {

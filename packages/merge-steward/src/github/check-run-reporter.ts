@@ -85,6 +85,8 @@ function formatTitle(incident: IncidentRecord): string {
       return "Queue eviction: CI failure (branch-specific)";
     case "main_broken":
       return "Queue eviction: main branch CI failing";
+    case "feature_changed":
+      return "Queue eviction: integration repair changed the approved feature";
     case "policy_blocked":
       return incident.context.openPrAncestors?.length
         ? "Queue eviction: candidate shares unlanded history with another open PR"

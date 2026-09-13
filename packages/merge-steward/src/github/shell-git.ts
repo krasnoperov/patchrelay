@@ -1,5 +1,5 @@
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { GitOperations, SpeculativeBranchBuilder } from "../interfaces.ts";
 import type { MergeResult } from "../types.ts";
 import { exec } from "../exec.ts";
@@ -123,6 +123,18 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
 
   // ─── SpeculativeBranchBuilder ───────────────────────────────
 
+  async createWorkspace(specName: string, baseBranch: string): Promise<string> {
+    const wtPath = join(this.worktreeBase, specName);
+    await this.git(["worktree", "remove", "--force", wtPath], { allowNonZero: true });
+    await this.git(["branch", "-D", specName], { allowNonZero: true });
+    await this.git(["worktree", "prune"], { allowNonZero: true });
+    mkdirSync(dirname(wtPath), { recursive: true });
+    await this.git(["worktree", "add", "-B", specName, wtPath, baseBranch]);
+    const sha = (await this.gitIn(wtPath, ["rev-parse", "HEAD"])).stdout.trim();
+    await this.git(["worktree", "remove", "--force", wtPath], { allowNonZero: true });
+    return sha;
+  }
+
   /**
    * Build a speculative merge branch using an isolated git worktree.
    * Each call gets its own working directory — no shared mutable state.
@@ -138,7 +150,7 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
     await this.git(["worktree", "prune"], { allowNonZero: true });
 
     // Create isolated worktree with spec branch starting at baseBranch.
-    mkdirSync(this.worktreeBase, { recursive: true });
+    mkdirSync(dirname(wtPath), { recursive: true });
     await this.git(["worktree", "add", "-B", specName, wtPath, baseBranch]);
 
     // Override git identity so merge commits are attributed to the steward, not the clone owner.
@@ -168,7 +180,9 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
 
       await this.gitIn(wtPath, ["merge", "--abort"], { allowNonZero: true });
       await this.git(["worktree", "remove", "--force", wtPath], { allowNonZero: true });
-      await this.git(["branch", "-D", specName], { allowNonZero: true });
+      // Keep the workspace branch at the prospective base. Publishing this
+      // ref is the cross-service repair signal: it exists, but does not yet
+      // contain the approved PR head.
       return { success: false, conflictFiles };
     }
 

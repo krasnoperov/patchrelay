@@ -141,6 +141,8 @@ export function buildRunStartedActivity(runType: RunType): LinearAgentActivityCo
       return { type: "action", action: "Repairing", parameter: "PR branch upkeep after requested changes" };
     case "ci_repair":
       return { type: "action", action: "Repairing", parameter: "failing CI checks" };
+    case "integration_repair":
+      return { type: "action", action: "Repairing", parameter: "integration candidate" };
     case "queue_repair":
       return { type: "action", action: "Repairing", parameter: "merge queue failure" };
     case "implementation":
@@ -219,6 +221,7 @@ export function buildRunCompletedActivity(params: {
             type: "response",
             body: steeringSummary ? `Updated ${prLabel} after CI repair.\n\n${steeringSummary}` : `Updated ${prLabel} after CI repair.`,
           };
+    case "integration_repair":
     case "queue_repair":
       return summary
         ? {

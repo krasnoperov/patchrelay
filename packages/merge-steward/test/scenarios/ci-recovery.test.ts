@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHarness, type SimPR } from "../harness.ts";
 
 describe("CI recovery scenarios", () => {
-  it("evicts a failed exact head without manufacturing a duplicate candidate", async () => {
+  it("materializes a repair workspace for a failed exact head", async () => {
     const h = await createHarness({
       ciRule: () => "fail",
       maxRetries: 2,
@@ -15,7 +15,8 @@ describe("CI recovery scenarios", () => {
     await h.runUntilStable({ maxTicks: 30 });
 
     assert.deepStrictEqual(h.merged, []);
-    assert.strictEqual(h.entryStatus(prA), "evicted");
+    assert.strictEqual(h.entryStatus(prA), "validating");
+    assert.equal(h.entries[0]?.candidateRef, "merge-steward/main/pr-1");
     assert.strictEqual(h.ciSim.runCount, 0, "failed head checks must not create synthetic CI");
     h.assertInvariants();
   });
@@ -46,7 +47,7 @@ describe("CI recovery scenarios", () => {
     h.assertInvariants();
   });
 
-  it("bounds unavailable reruns and lets an independent root proceed", async () => {
+  it("bounds unavailable reruns and keeps the failed root ordered", async () => {
     const h = await createHarness({
       ciRule: (files) => files.includes("bad.ts") ? "fail" : "pass",
       flakyRetries: 2,
@@ -70,22 +71,22 @@ describe("CI recovery scenarios", () => {
 
     await h.runUntilStable({ maxTicks: 40 });
 
-    assert.ok(rerunAttempts <= 4, "each invalidated candidate must consume only its bounded flaky budget");
+    assert.ok(rerunAttempts <= 3, "the root and its already-started speculative child stay bounded");
     assert.equal(
       h.reconcileEvents.filter((event) =>
         event.prNumber === 21 && event.action === "ci_flaky_retry").length,
       2,
       "the failed root consumes exactly its configured retry budget",
     );
-    assert.ok(h.evicted.includes(21));
-    assert.ok(h.merged.includes(22), "the unrelated root must recover after the failed root is evicted");
+    assert.equal(h.entryStatus({ number: 21 } as SimPR), "validating");
+    assert.ok(!h.merged.includes(22), "the later root must not bypass the failed root");
     assert.ok(h.reconcileEvents.some((event) =>
       event.prNumber === 21
       && event.action === "ci_failed"
       && event.detail?.includes("rerun unavailable")));
   });
 
-  it("evicts a skipped required head check as a policy block when it cannot be rerun", async () => {
+  it("retains a skipped required head check for repair when it cannot be rerun", async () => {
     const h = await createHarness({
       ciRule: () => "pass",
       flakyRetries: 1,
@@ -109,8 +110,9 @@ describe("CI recovery scenarios", () => {
     await h.runUntilStable({ maxTicks: 20 });
 
     const entry = h.entries[0]!;
-    assert.equal(entry.status, "evicted");
-    assert.equal(h.store.listIncidents(entry.id)[0]?.failureClass, "policy_blocked");
+    assert.equal(entry.status, "validating");
+    assert.equal(entry.candidateRef, "merge-steward/main/pr-23");
+    assert.equal(h.store.listIncidents(entry.id).length, 0);
   });
 
   it("multiple PRs: first passes, second fails then recovers via retry", async () => {

@@ -17,6 +17,8 @@ export interface GitOperations {
  * Separate from GitOperations to keep the core interface minimal.
  */
 export interface SpeculativeBranchBuilder {
+  /** Create/reset a candidate workspace at an exact base commit. */
+  createWorkspace(specName: string, baseBranch: string): Promise<string>;
   /** Merge prBranch into baseBranch, store result as specName. */
   buildSpeculative(prBranch: string, baseBranch: string, specName: string, mergeMessage?: string): Promise<MergeResult>;
   /** Delete a speculative branch (cleanup after merge/eviction). */

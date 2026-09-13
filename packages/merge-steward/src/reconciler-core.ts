@@ -23,7 +23,8 @@ export interface ReconcileContext {
   onEvent: (event: ReconcileEvent) => void;
 }
 
-export const CANDIDATE_REF_PREFIX = "mq-spec-";
+export const CANDIDATE_REF_PREFIX = "merge-steward";
+export const INTEGRATION_REVIEW_CHECK = "review-quill/integration";
 export const FAILED_CONCLUSIONS = new Set<string>(["failure"]);
 export const CLEAR_CANDIDATE = {
   candidateKind: null,
@@ -44,8 +45,8 @@ export function ref(ctx: ReconcileContext, name: string): string {
   return ctx.remotePrefix + name;
 }
 
-export function candidateRefName(entryId: string): string {
-  return `${CANDIDATE_REF_PREFIX}${entryId}`;
+export function candidateRefName(baseBranch: string, prNumber: number): string {
+  return `${CANDIDATE_REF_PREFIX}/${baseBranch}/pr-${prNumber}`;
 }
 
 export function isBudgetExhausted(entry: QueueEntry): boolean {
