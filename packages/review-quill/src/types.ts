@@ -33,7 +33,7 @@ export interface CodexAppServerConfig {
   shellBin?: string;
   sourceBashrc?: boolean;
   requestTimeoutMs?: number;
-  /** Fork a validated prior review thread for a newer PR head. Default off. */
+  /** Fork a validated prior review thread for a newer PR head, including rebases and metadata repairs. Default off. */
   forkPriorReviewThread?: boolean;
   /** Review execution strategy. Native two-pass keeps review reasoning separate from verdict serialization. */
   reviewMode?: "structured-turn" | "native-two-pass";

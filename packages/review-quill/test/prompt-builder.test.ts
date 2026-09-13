@@ -202,7 +202,7 @@ test("renderFollowUpReviewPrompt carries policy and inventory without patch bodi
     excerpt: "A newer human concern.",
   }];
 
-  const prompt = renderFollowUpReviewPrompt(context, "previous-sha-123");
+  const prompt = renderFollowUpReviewPrompt(context, "previous-sha-123", "previous-base-456");
 
   assert.match(prompt, /Previous reviewed head SHA: previous-sha-123/);
   assert.match(prompt, /Current head SHA: abc123/);
@@ -216,6 +216,8 @@ test("renderFollowUpReviewPrompt carries policy and inventory without patch bodi
   assert.match(prompt, /A newer human concern/);
   assert.match(prompt, /schema-constrained JSON verdict/);
   assert.match(prompt, /git diff base-sha-123 HEAD --/);
+  assert.match(prompt, /git range-diff previous-base-456\.\.previous-sha-123 base-sha-123\.\.HEAD --/);
+  assert.match(prompt, /Preserve prior dispositions for patch-equivalent code/);
   assert.match(prompt, /do not anchor on its verdict/i);
   assert.doesNotMatch(prompt, /Detailed patches:/);
   assert.doesNotMatch(prompt, /export const updated = true/);

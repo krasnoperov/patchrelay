@@ -6,6 +6,7 @@ export interface PriorReviewThreadCandidate {
   threadId: string;
   lastTurnId: string;
   priorHeadSha: string;
+  priorDiffBaseSha?: string;
   promptFingerprint: string;
   completedAt?: string;
 }
@@ -34,8 +35,6 @@ export function selectPriorReviewThread(input: {
   if (!attempt.threadId?.trim() || !attempt.turnId?.trim() || !transcript || transcript.turns.length === 0) {
     return { kind: "miss", reason: "missing_thread_state" };
   }
-  if (attempt.diffBaseSha !== input.identity.diffBaseSha) return { kind: "miss", reason: "base_mismatch" };
-  if (attempt.promptFingerprint !== input.promptFingerprint) return { kind: "miss", reason: "prompt_mismatch" };
   if (transcript.id !== attempt.threadId) return { kind: "miss", reason: "thread_mismatch" };
   const lastTurn = transcript.turns.at(-1);
   if (!lastTurn || lastTurn.id !== attempt.turnId || lastTurn.status !== "completed") {
@@ -48,6 +47,7 @@ export function selectPriorReviewThread(input: {
       threadId: attempt.threadId,
       lastTurnId: attempt.turnId,
       priorHeadSha: attempt.headSha,
+      ...(attempt.diffBaseSha ? { priorDiffBaseSha: attempt.diffBaseSha } : {}),
       promptFingerprint: input.promptFingerprint,
       ...(attempt.completedAt ? { completedAt: attempt.completedAt } : {}),
     },
