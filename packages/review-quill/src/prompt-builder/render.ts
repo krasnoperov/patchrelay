@@ -9,6 +9,7 @@ export const REVIEW_QUILL_PROMPT_SECTION_IDS = [
   "pull-request",
   "conversation-claims",
   "diff-context",
+  "follow-up-history",
   "repo-guidance",
   "prior-review-claims",
 ] as const;
@@ -97,7 +98,7 @@ function reviewScopeSection(context: Omit<ReviewContext, "prompt">, followUp = f
     content: [
       "## Current-head review scope",
       followUp
-        ? "The checkout is pinned to the newer PR head. Compare it with the immutable review base and revalidate earlier concerns against the current code."
+        ? "The checkout is pinned to the newer PR head. Start with the change since the previous reviewed patch series. Preserve prior dispositions for patch-equivalent code; revisit them only when the newer patch or changed base materially affects that code or its contract."
         : "Inspect the complete PR-head change plus relevant code, tests, and callers.",
       `Run \`git diff ${diffBaseRef} HEAD --\`; the inventory is only an index.`,
       "Ignored files are context only, not finding targets. Inspect summarized files when relevant.",
@@ -255,8 +256,21 @@ export function renderNativeReviewPrompt(context: Omit<ReviewContext, "prompt" |
 export function renderNativeFollowUpReviewPrompt(
   context: Omit<ReviewContext, "prompt" | "followUpPrompt">,
   priorHeadSha: string,
+  priorDiffBaseSha?: string,
 ): string {
-  return nativeReviewSections(context, priorHeadSha).map((section) => section.content.trim()).filter(Boolean).join("\n\n");
+  const sections = nativeReviewSections(context, priorHeadSha);
+  if (priorDiffBaseSha) {
+    sections.splice(1, 0, {
+      id: "follow-up-history",
+      content: [
+        "## Follow-up history",
+        "Compare the previously reviewed and current patch series before inspecting the repair:",
+        `Run \`git range-diff ${priorDiffBaseSha}..${priorHeadSha} ${context.workspace.diffBaseRef ?? context.workspace.baseRef}..HEAD --\` when those objects are available.`,
+        "A rebase, metadata correction, or CI-only repair does not reopen patch-equivalent feature decisions. Review the repair delta and any material interaction with the new base; do not relitigate unchanged code merely because the head SHA changed.",
+      ].join("\n"),
+    });
+  }
+  return sections.map((section) => section.content.trim()).filter(Boolean).join("\n\n");
 }
 
 export function renderReviewNormalizationPrompt(): string {
@@ -331,6 +345,7 @@ export function renderReviewPrompt(context: Omit<ReviewContext, "prompt">): stri
 export function renderFollowUpReviewPrompt(
   context: Omit<ReviewContext, "prompt" | "followUpPrompt">,
   priorHeadSha: string,
+  priorDiffBaseSha?: string,
 ): string {
   const sections: ReviewPromptSection[] = [
     {
@@ -345,6 +360,16 @@ export function renderFollowUpReviewPrompt(
     { id: "review-rubric", content: REVIEW_RULES },
     pullRequestSection(context, [`Previous reviewed head SHA: ${priorHeadSha}`, `Current head SHA: ${context.pr.headSha}`]),
   ];
+  if (priorDiffBaseSha) {
+    sections.push({
+      id: "follow-up-history",
+      content: [
+        "## Follow-up history",
+        `Run \`git range-diff ${priorDiffBaseSha}..${priorHeadSha} ${context.workspace.diffBaseRef ?? context.workspace.baseRef}..HEAD --\` when those objects are available.`,
+        "Use it to distinguish rebased patch-equivalent commits from the actual repair. Preserve prior dispositions for patch-equivalent code and review only the repair plus material interactions introduced by the changed base.",
+      ].join("\n"),
+    });
+  }
   appendConversationClaims(sections, context);
   sections.push(reviewScopeSection(context, true));
   appendGuidanceSections(sections, context);

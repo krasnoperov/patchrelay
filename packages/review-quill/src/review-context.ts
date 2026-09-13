@@ -86,11 +86,9 @@ export async function buildReviewContext(params: {
       repoFullName: params.repo.repoFullName,
       pr: params.pr,
     });
-    // The candidate was selected from an earlier PR metadata snapshot. Only
-    // reuse it when the exact snapshot rendered below has the same prompt
-    // fingerprint; title/body edits during workspace preparation must start a
-    // full fresh review instead of anchoring a bounded follow-up to stale
-    // context.
+    // The candidate carries the current metadata fingerprint captured during
+    // selection. A newer head may legitimately change title/body or rebase;
+    // only a second metadata edit during preparation invalidates the follow-up.
     const diff = await buildDiffContext(params.repo, materialized.workspace);
     const promptContext = await buildPromptContext(
       params.github,
@@ -135,12 +133,12 @@ export async function buildReviewContext(params: {
     }
     const prompt = renderReviewPrompt(baseContext);
     const followUpPrompt = priorThread
-      ? renderFollowUpReviewPrompt(baseContext, priorThread.priorHeadSha)
+      ? renderFollowUpReviewPrompt(baseContext, priorThread.priorHeadSha, priorThread.priorDiffBaseSha)
       : undefined;
     const developerInstructions = renderReviewDeveloperInstructions(baseContext);
     const nativeReviewPrompt = renderNativeReviewPrompt(baseContext);
     const nativeFollowUpReviewPrompt = priorThread
-      ? renderNativeFollowUpReviewPrompt(baseContext, priorThread.priorHeadSha)
+      ? renderNativeFollowUpReviewPrompt(baseContext, priorThread.priorHeadSha, priorThread.priorDiffBaseSha)
       : undefined;
     return {
       context: {

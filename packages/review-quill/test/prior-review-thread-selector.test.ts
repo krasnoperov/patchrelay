@@ -49,6 +49,7 @@ test("selectPriorReviewThread accepts only a completed terminal transcript bound
       threadId: "thread-1",
       lastTurnId: "turn-1",
       priorHeadSha: "old-head",
+      priorDiffBaseSha: "base-1",
       promptFingerprint: "prompt-1",
       completedAt: "2026-01-01T00:01:00.000Z",
     },
@@ -63,8 +64,6 @@ test("selectPriorReviewThread rejects each unsafe identity and transcript mismat
     ["prior_not_decisive", select({ attempt: { ...attempt, status: "failed" } })],
     ["carry_forward_attempt", select({ attempt: { ...attempt, priorAttemptId: 99 } })],
     ["missing_thread_state", select({ attempt: { ...attempt, threadId: undefined } })],
-    ["base_mismatch", select({ identity: { patchId: "p", prBaseSha: "pr-base-2", diffBaseSha: "base-2" } })],
-    ["prompt_mismatch", select({ promptFingerprint: "prompt-2" })],
     ["thread_mismatch", select({ transcript: { ...transcript, id: "other-thread" } })],
     ["terminal_turn_mismatch", select({ transcript: { ...transcript, turns: [...transcript.turns, { id: "turn-2", status: "completed", items: [] }] } })],
     ["terminal_turn_mismatch", select({ transcript: { ...transcript, turns: [{ id: "turn-1", status: "failed", items: [] }] } })],
@@ -75,6 +74,17 @@ test("selectPriorReviewThread rejects each unsafe identity and transcript mismat
     currentHeadSha: "new-head",
     promptFingerprint: "prompt-1",
   }), { kind: "miss", reason: "identity_unavailable" });
+});
+
+test("selectPriorReviewThread keeps review continuity across rebases and metadata repairs", () => {
+  const result = select({
+    identity: { patchId: "new-patch", prBaseSha: "new-pr-base", diffBaseSha: "new-diff-base" },
+    promptFingerprint: "new-prompt",
+  });
+  assert.equal(result.kind, "selected");
+  if (result.kind !== "selected") return;
+  assert.equal(result.candidate.priorDiffBaseSha, "base-1");
+  assert.equal(result.candidate.promptFingerprint, "new-prompt");
 });
 
 test("latest different-head lookup returns the newest row for live transcript lookup", () => {
