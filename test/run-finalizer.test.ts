@@ -280,7 +280,7 @@ test("delegated collaboration completion dispatches a fresh implementation run",
   }
 });
 
-test("repair run finalizer continues automatically with a preserved dirty worktree", async () => {
+test("repair run finalizer inspects the actual thread worktree instead of the issue worktree", async () => {
   const { baseDir, db } = createDb();
   try {
     const worktreePath = path.join(baseDir, "repo");
@@ -298,14 +298,27 @@ test("repair run finalizer continues automatically with a preserved dirty worktr
       issueKey: "USE-REPAIR",
       title: "Repair dirty worktree",
       workflowOutcome: undefined,
-      worktreePath,
+      delegatedToPatchRelay: true,
+      worktreePath: path.join(baseDir, "feature-worktree"),
       prNumber: 123,
+      prState: "open",
+      prHeadSha: "approved-head",
+      prReviewState: "approved",
+      prCheckStatus: "success",
+      lastGitHubFailureSource: "queue_eviction",
+      lastGitHubFailureHeadSha: "candidate-base",
+      lastGitHubFailureSignature: "integration:candidate-base:conflict",
+      lastGitHubFailureContextJson: JSON.stringify({
+        candidateBranch: "merge-steward/main/pr-123",
+        approvedHeadSha: "approved-head",
+        integrationFailureKind: "conflict",
+      }),
     });
     const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
-      runType: "branch_upkeep",
+      runType: "integration_repair",
     });
     db.runs.updateRunThread(run.id, { threadId: "thread-1", turnId: "turn-main" });
 
@@ -341,9 +354,9 @@ test("repair run finalizer continues automatically with a preserved dirty worktr
     const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
     const updatedRun = db.runs.getRunById(run.id)!;
     const workflowTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics(issue.projectId, issue.linearIssueId);
-    assertIssuePhase(updatedIssue, "pr_open");
+    assertIssuePhase(updatedIssue, "repairing_queue");
     assert.equal(updatedRun.status, "completed");
-    assert.equal(workflowTask?.runType, "branch_upkeep");
+    assert.equal(workflowTask?.runType, "integration_repair");
     assert.equal(workflowTask?.resumeThread, true);
     assert.equal(workflowTask?.context.preserveDirtyWorktree, true);
     assert.match(String(workflowTask?.context.dirtyWorktreeSummary ?? ""), /tracked\.txt/);

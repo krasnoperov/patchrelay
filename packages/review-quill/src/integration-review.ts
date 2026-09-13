@@ -40,6 +40,14 @@ export function parseIntegrationCandidateRef(ref: GitHubRefRecord): IntegrationC
   return { ref: ref.ref, baseBranch: match[1], prNumber, candidateSha: ref.sha };
 }
 
+export function integrationCandidateMatchesPullRequest(
+  candidate: IntegrationCandidateRef,
+  pr: PullRequestSummary,
+  repositoryBaseBranch: string,
+): boolean {
+  return candidate.prNumber === pr.number && candidate.baseBranch === repositoryBaseBranch;
+}
+
 export function findFrozenApprovedHead(
   reviews: PullRequestReviewRecord[],
   currentHeadSha: string,

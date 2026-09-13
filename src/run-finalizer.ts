@@ -455,9 +455,9 @@ export class RunFinalizer {
     this.clearProgressAndRelease(params.run);
   }
 
-  private inspectDirtyRepairWorktree(run: RunRecord, issue: IssueRecord): GitWorktreeStatus | undefined {
-    if (!isRepairRunType(run.runType) || !issue.worktreePath) return undefined;
-    const status = inspectGitWorktreeStatus(issue.worktreePath);
+  private inspectDirtyRepairWorktree(run: RunRecord, worktreePath: string | undefined): GitWorktreeStatus | undefined {
+    if (!isRepairRunType(run.runType) || !worktreePath) return undefined;
+    const status = inspectGitWorktreeStatus(worktreePath);
     if (!status.dirty) return undefined;
     return status;
   }
@@ -678,7 +678,13 @@ export class RunFinalizer {
       thread,
     );
 
-    const dirtyRepairWorktree = this.inspectDirtyRepairWorktree(run, freshIssue);
+    // The thread cwd is the run's actual workspace. Integration repairs use a
+    // separate candidate worktree and intentionally leave issue.worktreePath
+    // pointing at the feature branch for later feature work.
+    const repairWorktreePath = run.runType === "integration_repair"
+      ? thread.cwd
+      : freshIssue.worktreePath;
+    const dirtyRepairWorktree = this.inspectDirtyRepairWorktree(run, repairWorktreePath);
     if (dirtyRepairWorktree) {
       this.continueDirtyRepairWorktree({
         run,

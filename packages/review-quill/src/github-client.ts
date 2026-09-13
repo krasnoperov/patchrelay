@@ -446,10 +446,15 @@ export class GitHubClient {
 
   async listIntegrationCandidateRefs(repoFullName: string): Promise<import("./types.ts").GitHubRefRecord[]> {
     const encodedRepo = repoFullName.split("/").map(encodeURIComponent).join("/");
-    const refs = await this.request<Array<Record<string, unknown>>>(
-      repoFullName,
-      `/repos/${encodedRepo}/git/matching-refs/heads/merge-steward/`,
-    );
+    const refs: Array<Record<string, unknown>> = [];
+    for (let page = 1; ; page += 1) {
+      const batch = await this.request<Array<Record<string, unknown>>>(
+        repoFullName,
+        `/repos/${encodedRepo}/git/matching-refs/heads/merge-steward/?per_page=100&page=${page}`,
+      );
+      refs.push(...batch);
+      if (batch.length < 100) break;
+    }
     return refs.map((entry) => ({
       ref: String(entry.ref ?? ""),
       sha: String((entry.object as Record<string, unknown> | undefined)?.sha ?? ""),

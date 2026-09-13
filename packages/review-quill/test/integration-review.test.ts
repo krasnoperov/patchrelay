@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   findFrozenApprovedHead,
   hasIntegrationCheck,
+  integrationCandidateMatchesPullRequest,
   parseIntegrationCandidateRef,
   selectIntegrationReviewCandidate,
 } from "../src/integration-review.ts";
@@ -18,6 +19,27 @@ test("candidate refs are self-describing and support slash-containing base branc
     candidateSha: "candidate",
   });
   assert.equal(parseIntegrationCandidateRef({ ref: "refs/heads/mq-spec-3", sha: "old" }), undefined);
+});
+
+test("repository-base candidate remains eligible for a PR stacked on a parent branch", () => {
+  const candidate = parseIntegrationCandidateRef({
+    ref: "refs/heads/merge-steward/main/pr-104",
+    sha: "candidate",
+  })!;
+  const stackedPr = {
+    number: 104,
+    title: "Stacked feature",
+    url: "url",
+    state: "OPEN",
+    isDraft: false,
+    headSha: "head",
+    headRefName: "feature/child",
+    baseRefName: "feature/parent",
+    baseSha: "parent",
+    labels: [],
+  } as const;
+  assert.equal(integrationCandidateMatchesPullRequest(candidate, stackedPr, "main"), true);
+  assert.equal(integrationCandidateMatchesPullRequest(candidate, stackedPr, "release"), false);
 });
 
 test("any approval on the exact feature head freezes the integration baseline", () => {

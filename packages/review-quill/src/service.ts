@@ -46,6 +46,7 @@ import { ReviewExecutionTiming } from "./review-execution-timing.ts";
 import { selectPriorReviewThread, type PriorReviewThreadCandidate } from "./prior-review-thread-selector.ts";
 import {
   executeIntegrationReview,
+  integrationCandidateMatchesPullRequest,
   parseIntegrationCandidateRef,
   selectIntegrationReviewCandidate,
 } from "./integration-review.ts";
@@ -612,7 +613,7 @@ export class ReviewQuillService {
       const parsed = parseIntegrationCandidateRef(rawRef);
       if (!parsed) continue;
       const pr = prsByNumber.get(parsed.prNumber);
-      if (!pr || parsed.baseBranch !== pr.baseRefName) continue;
+      if (!pr || !integrationCandidateMatchesPullRequest(parsed, pr, repo.baseBranch)) continue;
       const candidate = await selectIntegrationReviewCandidate({
         github: this.github,
         repoFullName: repo.repoFullName,
