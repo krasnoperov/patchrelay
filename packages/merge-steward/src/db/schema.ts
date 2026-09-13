@@ -8,6 +8,7 @@ export function ensureSchema(connection: DatabaseConnection): void {
   `).all();
   if (existingTables.length > 0) {
     assertCurrentSchema(connection);
+    ensureActiveEntryIndex(connection);
     return;
   }
   connection.exec(`
@@ -85,6 +86,11 @@ export function ensureSchema(connection: DatabaseConnection): void {
     CREATE INDEX IF NOT EXISTS idx_queue_events_entry
       ON queue_events(entry_id, id)
   `);
+  ensureActiveEntryIndex(connection);
+  assertCurrentSchema(connection);
+}
+
+function ensureActiveEntryIndex(connection: DatabaseConnection): void {
   // Must match TERMINAL_STATUSES in types.ts. Recreate this partial index so
   // an existing database learns about newly-added terminal states.
   connection.exec(`DROP INDEX IF EXISTS idx_one_active_per_pr`);
@@ -93,7 +99,6 @@ export function ensureSchema(connection: DatabaseConnection): void {
       ON queue_entries(repo_id, pr_number)
       WHERE status NOT IN ('merged', 'evicted', 'dequeued', 'superseded')
   `);
-  assertCurrentSchema(connection);
 }
 
 const QUEUE_ENTRY_COLUMNS = [

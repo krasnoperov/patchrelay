@@ -135,6 +135,29 @@ describe("SQLite crash recovery", () => {
     store2.close();
   });
 
+  it("migrates the active-PR index so a superseded head can be re-admitted", () => {
+    const dbPath = tempDbPath();
+    after(() => { try { unlinkSync(dbPath); } catch {} });
+
+    const initialStore = new SqliteStore(dbPath);
+    initialStore.insert({ ...makeEntry("old-head", 7, 1), status: "superseded" });
+    initialStore.close();
+
+    const oldSchema = new SqliteConnection(dbPath);
+    oldSchema.exec(`DROP INDEX idx_one_active_per_pr`);
+    oldSchema.exec(`
+      CREATE UNIQUE INDEX idx_one_active_per_pr
+        ON queue_entries(repo_id, pr_number)
+        WHERE status NOT IN ('merged', 'evicted', 'dequeued')
+    `);
+    oldSchema.close();
+
+    const migratedStore = new SqliteStore(dbPath);
+    assert.doesNotThrow(() => migratedStore.insert(makeEntry("new-head", 7, 2)));
+    assert.strictEqual(migratedStore.listActive("test-repo")[0]?.id, "new-head");
+    migratedStore.close();
+  });
+
   it("event logging is transactional with state changes", () => {
     const dbPath = tempDbPath();
     after(() => { try { unlinkSync(dbPath); } catch {} });
