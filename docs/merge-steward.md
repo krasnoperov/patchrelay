@@ -312,6 +312,7 @@ queued → preparing_head → validating → merging → merged
 | `merging` | Revalidation + fast-forward landing |
 | `merged` | Done |
 | `dequeued` | Manually removed |
+| `superseded` | The admitted PR head changed; the new head must pass feature review and branch CI before receiving a new queue position |
 
 ## Merge gate
 

@@ -1,7 +1,7 @@
 import type { CheckResult, QueueEntry } from "./types.ts";
 import type { ReconcileContext } from "./reconciler-core.ts";
 import { CLEAN_CANDIDATE_REF, CLEAN_CI, CLEAR_CANDIDATE, emit, isBudgetExhausted, ref } from "./reconciler-core.ts";
-import { cleanupCandidate, evictEntry, invalidateDownstream } from "./reconciler-evict.ts";
+import { cleanupCandidate, evictEntry, invalidateDownstream, supersedeAdmittedHead } from "./reconciler-evict.ts";
 import { verifyPostMergeStatus } from "./reconciler-post-merge.ts";
 import { evaluateCheckPolicy, formatRequiredCheck } from "./check-policy.ts";
 import { describeOpenPrAncestors, findUnlandedOpenPrAncestors } from "./open-pr-ancestry.ts";
@@ -205,11 +205,7 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
   }
 
   if (prStatus.headSha !== entry.headSha) {
-    emit(ctx, entry, "branch_mismatch", { detail: `PR head: expected ${entry.headSha.slice(0, 8)}, got ${prStatus.headSha.slice(0, 8)}` });
-    const allActive = ctx.store.listActive(ctx.repoId);
-    await cleanupCandidate(ctx, entry);
-    ctx.store.updateHead(entry.id, prStatus.headSha);
-    await invalidateDownstream(ctx, allActive, 0);
+    await supersedeAdmittedHead(ctx, entry, prStatus.headSha);
     return;
   }
 
@@ -308,13 +304,7 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
       return;
     }
     if (landingPrStatus.headSha !== entry.headSha) {
-      emit(ctx, entry, "branch_mismatch", {
-        detail: `PR head changed during landing: expected ${entry.headSha.slice(0, 8)}, got ${landingPrStatus.headSha.slice(0, 8)}`,
-      });
-      const allActive = ctx.store.listActive(ctx.repoId);
-      await cleanupCandidate(ctx, entry);
-      ctx.store.updateHead(entry.id, landingPrStatus.headSha);
-      await invalidateDownstream(ctx, allActive, 0);
+      await supersedeAdmittedHead(ctx, entry, landingPrStatus.headSha);
       return;
     }
     const landingBaseRefName = landingPrStatus.baseRefName ?? ctx.baseBranch;

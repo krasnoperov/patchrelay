@@ -79,7 +79,7 @@ describe("stack-aware admission", () => {
       noopLogger,
     );
 
-    const admitted = await queue.tryAdmit(100, "feat-a", "head-a");
+    const admitted = await queue.tryAdmit(100, "feat-a", "head-100");
     assert.equal(admitted, true);
     const entry = store.getEntryByPR("repo", 100);
     assert.ok(entry);
@@ -97,7 +97,7 @@ describe("stack-aware admission", () => {
       noopLogger,
     );
 
-    const admitted = await queue.tryAdmit(200, "feat-b", "head-b");
+    const admitted = await queue.tryAdmit(200, "feat-b", "head-200");
     assert.equal(admitted, false, "stacked PR should defer admission");
     assert.equal(store.getEntryByPR("repo", 200), undefined);
   });
@@ -116,9 +116,9 @@ describe("stack-aware admission", () => {
       noopLogger,
     );
 
-    const parentAdmitted = await queue.tryAdmit(100, "feat-a", "head-a");
+    const parentAdmitted = await queue.tryAdmit(100, "feat-a", "head-100");
     assert.equal(parentAdmitted, true);
-    const childAdmitted = await queue.tryAdmit(200, "feat-b", "head-b");
+    const childAdmitted = await queue.tryAdmit(200, "feat-b", "head-200");
     assert.equal(childAdmitted, true);
 
     const parent = store.getEntryByPR("repo", 100);
@@ -144,9 +144,9 @@ describe("stack-aware admission", () => {
       noopLogger,
     );
 
-    assert.equal(await queue.tryAdmit(100, "feat-a", "head-a"), true);
-    assert.equal(await queue.tryAdmit(150, "feat-sibling", "head-sibling"), true);
-    assert.equal(await queue.tryAdmit(200, "feat-b", "head-b"), true);
+    assert.equal(await queue.tryAdmit(100, "feat-a", "head-100"), true);
+    assert.equal(await queue.tryAdmit(150, "feat-sibling", "head-150"), true);
+    assert.equal(await queue.tryAdmit(200, "feat-b", "head-200"), true);
 
     const parent = store.getEntryByPR("repo", 100)!;
     const sibling = store.getEntryByPR("repo", 150)!;
@@ -176,9 +176,9 @@ describe("stack-aware admission", () => {
       noopLogger,
     );
 
-    assert.equal(await queue.tryAdmit(100, "feat-a", "head-a"), true);
-    assert.equal(await queue.tryAdmit(150, "feat-sibling", "head-sibling"), true);
-    assert.equal(await queue.tryAdmit(200, "feat-b", "head-b"), true);
+    assert.equal(await queue.tryAdmit(100, "feat-a", "head-100"), true);
+    assert.equal(await queue.tryAdmit(150, "feat-sibling", "head-150"), true);
+    assert.equal(await queue.tryAdmit(200, "feat-b", "head-200"), true);
 
     const ordered = store.listActive("repo");
     assert.deepEqual(

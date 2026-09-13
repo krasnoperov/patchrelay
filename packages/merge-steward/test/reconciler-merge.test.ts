@@ -248,8 +248,8 @@ for (const mutation of ["approval", "head", "closure"] as const) {
       assert.match(after.waitDetail ?? "", /approval|review/i);
       assert.equal(after.candidateSha, before.candidateSha, "approval waits retain the exact tested candidate");
     } else if (mutation === "head") {
-      assert.equal(after.status, "queued");
-      assert.equal(after.headSha, "force-pushed-head");
+      assert.equal(after.status, "superseded");
+      assert.equal(after.headSha, before.headSha, "the new feature revision does not inherit the old admission");
       assert.equal(after.candidateSha, null);
     } else {
       assert.equal(after.status, "dequeued");

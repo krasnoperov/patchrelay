@@ -1,7 +1,7 @@
 import type { QueueEntry } from "./types.ts";
 import type { ReconcileContext } from "./reconciler-core.ts";
 import { CLEAN_CANDIDATE_REF, emit } from "./reconciler-core.ts";
-import { cleanupCandidate } from "./reconciler-evict.ts";
+import { cleanupCandidate, supersedeAdmittedHead } from "./reconciler-evict.ts";
 import { verifyPostMergeStatus } from "./reconciler-post-merge.ts";
 
 export async function sanitizeEntry(ctx: ReconcileContext, entry: QueueEntry): Promise<boolean> {
@@ -33,6 +33,10 @@ export async function sanitizeEntry(ctx: ReconcileContext, entry: QueueEntry): P
         postMergeSummary: verification.postMergeSummary,
         postMergeCheckedAt: new Date().toISOString(),
       }, "merged externally (sanitize)");
+      return true;
+    }
+    if (prStatus.headSha !== entry.headSha) {
+      await supersedeAdmittedHead(ctx, entry, prStatus.headSha);
       return true;
     }
     const liveBaseRefName = prStatus.baseRefName ?? ctx.baseBranch;

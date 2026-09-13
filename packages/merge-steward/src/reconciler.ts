@@ -78,7 +78,7 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
     // spec, so our cumulative spec is still valid (speculative consistency).
     if (entry.candidateBasedOn) {
       const dep = ctx.store.getEntry(entry.candidateBasedOn);
-      if (!dep || dep.status === "dequeued" || dep.status === "evicted") {
+      if (!dep || dep.status === "dequeued" || dep.status === "evicted" || dep.status === "superseded") {
         emit(ctx, entry, "invalidated", {
           detail: `dependency ${entry.candidateBasedOn} is ${dep?.status ?? "removed"}`,
         });

@@ -83,6 +83,7 @@ export function statusColor(status: QueueEntryStatus, entry?: { waitDetail?: str
     case "evicted":
       return "red";
     case "dequeued":
+    case "superseded":
       return "gray";
   }
 }
@@ -110,6 +111,8 @@ export function humanStatus(status: QueueEntryStatus, entry?: { lastFailedBaseSh
       return "needs repair";
     case "dequeued":
       return "removed";
+    case "superseded":
+      return "superseded";
   }
 }
 
@@ -125,6 +128,7 @@ export function queueProgress(status: QueueEntryStatus): { current: number; tota
     case "merged":
     case "evicted":
     case "dequeued":
+    case "superseded":
       return { current: 4, total: 4 };
   }
 }
@@ -154,6 +158,8 @@ export function nextStepLabel(status: QueueEntryStatus, entry?: { lastFailedBase
       return "needs branch repair before re-admission";
     case "dequeued":
       return "removed from queue";
+    case "superseded":
+      return "new PR head must pass approval and branch CI before admission";
   }
 }
 
@@ -187,6 +193,7 @@ const STATUS_DISPLAY: Record<string, string> = {
   merged: "merged",
   evicted: "evicted",
   dequeued: "removed",
+  superseded: "superseded",
 };
 
 function displayStatus(status: string): string {
@@ -255,6 +262,9 @@ export function formatEventNarrative(
   }
   if (event.toStatus === "dequeued") {
     return withDetail(`${prPrefix}was removed from the queue.`, event.detail);
+  }
+  if (event.toStatus === "superseded") {
+    return withDetail(`${prPrefix}left the queue because its admitted head changed.`, event.detail);
   }
   if (event.toStatus === "queued" && event.fromStatus) {
     return withDetail(`${prPrefix}was re-queued for another attempt.`, event.detail);

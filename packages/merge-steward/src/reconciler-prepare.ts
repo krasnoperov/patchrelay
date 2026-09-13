@@ -1,7 +1,7 @@
 import type { MergeResult, QueueEntry } from "./types.ts";
 import type { ReconcileContext } from "./reconciler-core.ts";
 import { CLEAN_CI, CLEAR_CANDIDATE, emit, ref, candidateRefName } from "./reconciler-core.ts";
-import { evictEntry } from "./reconciler-evict.ts";
+import { evictEntry, supersedeAdmittedHead } from "./reconciler-evict.ts";
 import { describeOpenPrAncestors, findUnlandedOpenPrAncestors } from "./open-pr-ancestry.ts";
 
 export async function prepareEntry(
@@ -36,8 +36,7 @@ export async function prepareEntry(
 
   const currentRef = await ctx.git.headSha(ref(ctx, entry.branch));
   if (currentRef !== entry.headSha) {
-    emit(ctx, entry, "branch_mismatch", { detail: `expected ${entry.headSha.slice(0, 8)}, got ${currentRef.slice(0, 8)}` });
-    ctx.store.updateHead(entry.id, currentRef);
+    await supersedeAdmittedHead(ctx, entry, currentRef);
     return;
   }
 

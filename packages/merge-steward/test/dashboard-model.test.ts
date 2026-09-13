@@ -203,6 +203,14 @@ test("dequeued entries do not appear in the dashboard", () => {
   assert.deepEqual(prs, [51]);
 });
 
+test("superseded admissions do not appear in the dashboard", () => {
+  const snapshot = makeSnapshot([
+    makeEntry({ prNumber: 51, position: 1, status: "superseded", updatedAt: minutesAgo(1) }),
+  ]);
+  const model = buildDashboard([makeRepo(snapshot)], { now: NOW });
+  assert.deepEqual(model.repos[0]?.tokens, []);
+});
+
 test("queued non-head entry gets a 'behind head' phrase", () => {
   const snapshot = makeSnapshot([
     makeEntry({ prNumber: 60, position: 1, status: "validating" }),

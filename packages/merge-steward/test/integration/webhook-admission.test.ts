@@ -94,7 +94,7 @@ function webhookBody(payload: Record<string, unknown>): string {
 }
 
 describe("webhook admission integration", () => {
-  it("enqueues on label + approved + green, updates on push, dequeues on close", async () => {
+  it("enqueues an approved green head and revokes admission when that head changes", async () => {
     const store = new MemoryStore();
     const githubSim = new GitHubSim();
     const evictionSim = new EvictionReporterSim();
@@ -127,12 +127,13 @@ describe("webhook admission integration", () => {
     });
     assert.strictEqual(labelResp.status, 200);
 
-    const status1 = await (await fetch(`${address}/repos/test-repo/queue/status`)).json() as { entries: Array<{ prNumber: number; status: string }> };
+    const status1 = await (await fetch(`${address}/repos/test-repo/queue/status`)).json() as { entries: Array<{ id: string; prNumber: number; status: string }> };
     assert.strictEqual(status1.entries.length, 1);
     assert.strictEqual(status1.entries[0]!.prNumber, 42);
     assert.strictEqual(status1.entries[0]!.status, "queued");
 
-    // 2. pr_synchronize — update head SHA.
+    // 2. pr_synchronize — the immutable admission is retired. The new head
+    // must earn its own approval and green CI before it can re-enter.
     const syncBody = webhookBody({
       action: "synchronize",
       pull_request: { number: 42, head: { ref: "feat-x", sha: "new-sha-42" } },
@@ -144,24 +145,73 @@ describe("webhook admission integration", () => {
       body: syncBody,
     });
 
-    const status2 = await (await fetch(`${address}/repos/test-repo/queue/status`)).json() as { entries: Array<{ headSha: string; generation: number }> };
-    assert.strictEqual(status2.entries[0]!.headSha, "new-sha-42");
-    assert.strictEqual(status2.entries[0]!.generation, 1);
+    const status2 = await (await fetch(`${address}/repos/test-repo/queue/status`)).json() as {
+      entries: Array<{ headSha: string; status: string }>;
+    };
+    assert.strictEqual(status2.entries[0]!.headSha, "sha-42");
+    assert.strictEqual(status2.entries[0]!.status, "superseded");
+    assert.strictEqual(store.listActive(config.repoId).length, 0);
 
-    // 3. pr_closed — dequeue.
-    const closeBody = webhookBody({
-      action: "closed",
-      pull_request: { number: 42, merged: false, head: { ref: "feat-x", sha: "new-sha-42" } },
+    githubSim.updateSha(42, "new-sha-42");
+    githubSim.setChecks(42, [{ name: "checks", conclusion: "success" }]);
+    const approvalBody = webhookBody({
+      action: "submitted",
+      review: { state: "approved" },
+      pull_request: { number: 42, head: { ref: "feat-x", sha: "new-sha-42" } },
     });
-
     await fetch(`${address}/webhooks/github`, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-github-event": "pull_request", "x-hub-signature-256": sign(closeBody) },
-      body: closeBody,
+      headers: { "content-type": "application/json", "x-github-event": "pull_request_review", "x-hub-signature-256": sign(approvalBody) },
+      body: approvalBody,
     });
 
-    const status3 = await (await fetch(`${address}/repos/test-repo/queue/status`)).json() as { entries: Array<{ status: string }> };
-    assert.strictEqual(status3.entries[0]!.status, "dequeued");
+    const active = store.listActive(config.repoId);
+    assert.strictEqual(active.length, 1);
+    assert.strictEqual(active[0]!.headSha, "new-sha-42");
+    assert.notStrictEqual(active[0]!.id, status1.entries[0]!.id);
+  });
+
+  it("does not admit when one observed branch check is green but another is pending", async () => {
+    const store = new MemoryStore();
+    const githubSim = new GitHubSim();
+    const logger = pino({ level: "silent" });
+    githubSim.addPR({ number: 43, branch: "feat-pending", headSha: "sha-43", reviewApproved: true });
+    githubSim.setChecks(43, [
+      { name: "Static checks", conclusion: "success" },
+      { name: "Tests", conclusion: "pending" },
+    ]);
+
+    const gitSim = new GitSim() as any;
+    const service = new MergeStewardService(
+      config, createPolicy(), store, gitSim, new CISim(() => "pass") as any,
+      githubSim, new EvictionReporterSim(), gitSim, logger,
+    );
+
+    assert.strictEqual(await service.tryAdmit(43, "feat-pending", "sha-43"), false);
+    assert.strictEqual(store.listActive(config.repoId).length, 0);
+
+    githubSim.setChecks(43, [
+      { name: "Static checks", conclusion: "success" },
+      { name: "Tests", conclusion: "success" },
+    ]);
+    assert.strictEqual(await service.tryAdmit(43, "feat-pending", "sha-43"), true);
+    assert.strictEqual(store.listActive(config.repoId)[0]?.headSha, "sha-43");
+  });
+
+  it("does not admit a stale webhook SHA even when the live PR is approved and green", async () => {
+    const store = new MemoryStore();
+    const githubSim = new GitHubSim();
+    const logger = pino({ level: "silent" });
+    githubSim.addPR({ number: 44, branch: "feat-raced", headSha: "new-sha", reviewApproved: true });
+    githubSim.setChecks(44, [{ name: "Tests", conclusion: "success" }]);
+    const gitSim = new GitSim() as any;
+    const service = new MergeStewardService(
+      config, createPolicy(), store, gitSim, new CISim(() => "pass") as any,
+      githubSim, new EvictionReporterSim(), gitSim, logger,
+    );
+
+    assert.strictEqual(await service.tryAdmit(44, "feat-raced", "old-sha"), false);
+    assert.strictEqual(store.listActive(config.repoId).length, 0);
   });
 
   it("rejects webhook with invalid signature", async () => {

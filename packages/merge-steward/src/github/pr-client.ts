@@ -3,6 +3,14 @@ import type { CheckResult, PRStatus } from "../types.ts";
 import { mapGitHubCheckConclusion } from "../check-policy.ts";
 import { exec } from "../exec.ts";
 
+export function hasApprovalForHead(
+  reviews: Array<{ state?: string; commit?: { oid?: string } }> | undefined,
+  headSha: string,
+): boolean {
+  return (reviews ?? []).some((review) =>
+    review.state === "APPROVED" && review.commit?.oid === headSha);
+}
+
 /**
  * GitHub PR operations via gh CLI and REST API.
  *
@@ -28,7 +36,7 @@ export class GitHubPRClient implements GitHubPRApi {
       "pr", "view", String(prNumber),
       "--repo", this.repoFullName,
       // The base ref lets admission detect stacked PRs.
-      "--json", "number,title,headRefName,headRefOid,baseRefName,reviewDecision,state,mergeStateStatus",
+      "--json", "number,title,headRefName,headRefOid,baseRefName,reviewDecision,reviews,state,mergeStateStatus",
     ], { githubRepoFullName: this.repoFullName });
 
     const data = JSON.parse(result.stdout) as {
@@ -38,6 +46,7 @@ export class GitHubPRClient implements GitHubPRApi {
       headRefOid: string;
       baseRefName?: string;
       reviewDecision: string;
+      reviews?: Array<{ state?: string; commit?: { oid?: string } }>;
       state: string;
       mergeStateStatus?: string;
     };
@@ -51,7 +60,8 @@ export class GitHubPRClient implements GitHubPRApi {
       mergeable: data.state === "OPEN",
       mergeStateStatus: data.mergeStateStatus,
       reviewDecision: data.reviewDecision,
-      reviewApproved: data.reviewDecision === "APPROVED",
+      reviewApproved: data.reviewDecision === "APPROVED"
+        && hasApprovalForHead(data.reviews, data.headRefOid),
       merged: data.state === "MERGED",
     };
   }

@@ -91,7 +91,7 @@ export function formatQueueStatusText(source: "service" | "database", snapshot: 
     ...(githubPolicy.fetchedAt ? [`GitHub policy fetched: ${githubPolicy.fetchedAt}`] : []),
     `Active entries: ${snapshot.summary.active}`,
     `Queued: ${snapshot.summary.queued}  preparing: ${snapshot.summary.preparingHead}  validating: ${snapshot.summary.validating}  merging: ${snapshot.summary.merging}`,
-    `Merged: ${snapshot.summary.merged}  evicted: ${snapshot.summary.evicted}  dequeued: ${snapshot.summary.dequeued}`,
+    `Merged: ${snapshot.summary.merged}  evicted: ${snapshot.summary.evicted}  dequeued: ${snapshot.summary.dequeued}  superseded: ${snapshot.summary.superseded}`,
     snapshot.summary.headPrNumber ? `Head PR: #${snapshot.summary.headPrNumber}` : "Head PR: none",
     ...formatRuntimeActivity(snapshot.runtime),
     ...(snapshot.runtime.lastTickOutcome === "failed"

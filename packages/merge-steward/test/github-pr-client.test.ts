@@ -3,7 +3,16 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { GitHubPRClient } from "../src/github/pr-client.ts";
+import { GitHubPRClient, hasApprovalForHead } from "../src/github/pr-client.ts";
+
+test("approval is bound to the exact current PR head", () => {
+  const reviews = [
+    { state: "APPROVED", commit: { oid: "old-head" } },
+    { state: "DISMISSED", commit: { oid: "new-head" } },
+  ];
+  assert.equal(hasApprovalForHead(reviews, "new-head"), false);
+  assert.equal(hasApprovalForHead(reviews, "old-head"), true);
+});
 
 test("GitHubPRClient listChecks uses the REST check-runs API via head sha", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "ms-gh-pr-client-"));
@@ -16,7 +25,7 @@ test("GitHubPRClient listChecks uses the REST check-runs API via head sha", asyn
       `#!/bin/sh
 echo "$*" >> "$GH_LOG"
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  printf '{"number":101,"headRefName":"feature","headRefOid":"sha-101","reviewDecision":"APPROVED","state":"OPEN"}'
+  printf '{"number":101,"headRefName":"feature","headRefOid":"sha-101","reviewDecision":"APPROVED","reviews":[{"state":"APPROVED","commit":{"oid":"sha-101"}}],"state":"OPEN"}'
   exit 0
 fi
 if [ "$1" = "api" ]; then
@@ -57,7 +66,7 @@ exit 1
     }
 
     const log = readFileSync(logPath, "utf8");
-    assert.match(log, /pr view 101 --repo owner\/repo --json number,title,headRefName,headRefOid,baseRefName,reviewDecision,state/);
+    assert.match(log, /pr view 101 --repo owner\/repo --json number,title,headRefName,headRefOid,baseRefName,reviewDecision,reviews,state/);
     assert.match(log, /api repos\/owner\/repo\/commits\/sha-101\/check-runs --jq \.check_runs/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

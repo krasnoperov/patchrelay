@@ -22,6 +22,35 @@ export async function invalidateDownstream(ctx: ReconcileContext, allActive: Que
   }
 }
 
+/** Retire the immutable admission when GitHub exposes a different PR head. */
+export async function supersedeAdmittedHead(
+  ctx: ReconcileContext,
+  entry: QueueEntry,
+  newHeadSha: string,
+): Promise<void> {
+  const allActive = ctx.store.listActive(ctx.repoId);
+  const index = allActive.findIndex((candidate) => candidate.id === entry.id);
+  emit(ctx, entry, "branch_mismatch", {
+    detail: `admitted head ${entry.headSha.slice(0, 12)} superseded by ${newHeadSha.slice(0, 12)}`,
+  });
+  await cleanupCandidate(ctx, entry);
+  ctx.store.transition(
+    entry.id,
+    "superseded",
+    {
+      ...CLEAN_CANDIDATE_REF,
+      candidateKind: null,
+      candidatePolicyFingerprint: null,
+      candidateSha: null,
+      ciRunId: null,
+      ciRetries: 0,
+      waitDetail: null,
+    },
+    `admitted head ${entry.headSha.slice(0, 12)} superseded by ${newHeadSha.slice(0, 12)}; new head must pass admission`,
+  );
+  if (index >= 0) await invalidateDownstream(ctx, allActive, index);
+}
+
 export async function evictEntry(
   ctx: ReconcileContext,
   entry: QueueEntry,

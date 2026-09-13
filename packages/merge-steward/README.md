@@ -15,6 +15,8 @@ The queue keeps delivery fast without pretending branch CI is always enough. For
 ## How it works
 
 1. A PR becomes eligible when GitHub says it is approved and its required checks are green.
+   If GitHub names no required checks, every observed check on the exact head
+   must be settled without failure; one early green job is not enough.
 2. The steward notices through webhook wakeups or startup reconcile scans, and admits the PR to the queue.
 3. It freezes the approved PR head and resolves the exact future-`main`
    candidate. If the prospective base is its ancestor, that head is the
@@ -22,6 +24,8 @@ The queue keeps delivery fast without pretending branch CI is always enough. For
    `merge-steward/<base>/pr-<number>` as a cumulative integration workspace.
 4. It validates checks on that exact SHA. Only newly-created integration candidates trigger synthetic CI.
 5. Immediately before landing, it refreshes policy, approval, head, checks, and ancestry, then non-force pushes the same immutable SHA to `main`. It never substitutes a mutable branch ref.
+   If the PR head changes, the old admission becomes `superseded`; the new
+   head returns to feature review and branch CI before receiving a new place.
 6. On conflict, the workspace remains at the prospective base; PatchRelay
    derives the missing ancestry and non-force pushes a resolved candidate.
 7. On candidate-CI failure, PatchRelay repairs the candidate rather than the PR

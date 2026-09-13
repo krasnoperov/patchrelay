@@ -15,7 +15,6 @@ describe("revalidation before merge", () => {
     await h.tick(); // validating → merging
 
     assert.strictEqual(h.entries[0]!.status, "merging");
-
     // Withdraw approval.
     h.githubSim.setReviewApproved(1, false);
 
@@ -36,7 +35,7 @@ describe("revalidation before merge", () => {
     h.assertInvariants();
   });
 
-  it("resets to queued when PR head SHA changes before merge", async () => {
+  it("revokes admission when PR head SHA changes before merge", async () => {
     const h = await createHarness({ ciRule: () => "pass" });
     await h.enqueue(prA);
 
@@ -46,18 +45,18 @@ describe("revalidation before merge", () => {
     await h.tick(); // validating → merging
 
     assert.strictEqual(h.entries[0]!.status, "merging");
+    const admittedHeadSha = h.entries[0]!.headSha;
 
     // Simulate external force-push (GitHub shows different SHA).
     h.githubSim.updateSha(1, "externally-pushed-sha");
 
     // Tick — revalidation should detect SHA mismatch.
     await h.tick();
-    assert.strictEqual(h.entries[0]!.status, "queued",
-      "Should reset to queued on SHA mismatch");
-    assert.strictEqual(h.entries[0]!.headSha, "externally-pushed-sha",
-      "Should adopt the new SHA");
-    assert.strictEqual(h.entries[0]!.generation, 1,
-      "Generation should increment");
+    assert.strictEqual(h.entries[0]!.status, "superseded",
+      "The old immutable admission should leave the active train");
+    assert.strictEqual(h.entries[0]!.headSha, admittedHeadSha,
+      "The unreviewed new SHA must not inherit the old admission");
+    assert.strictEqual(h.entries[0]!.generation, 0);
 
     h.assertInvariants();
   });

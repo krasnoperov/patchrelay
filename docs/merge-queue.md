@@ -146,6 +146,11 @@ stateDiagram-v2
     landing --> preparing: main or predecessor advanced
     validating --> feature_rework: integration review says feature changed
     feature_rework --> [*]
+    queued --> superseded: PR head changed
+    preparing --> superseded: PR head changed
+    validating --> superseded: PR head changed
+    landing --> superseded: PR head changed
+    superseded --> [*]
     queued --> dequeued: explicit operator action
     merged --> [*]
 ```

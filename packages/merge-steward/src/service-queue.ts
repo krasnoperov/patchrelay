@@ -169,6 +169,13 @@ export class MergeStewardQueueCommands {
 
     try {
       const status = await this.github.getStatus(prNumber);
+      if (status.headSha !== headSha) {
+        this.logger.debug(
+          { prNumber, eventHeadSha: headSha, liveHeadSha: status.headSha },
+          "Admission wakeup refers to a stale PR head",
+        );
+        return false;
+      }
       if (!status.reviewApproved) {
         this.logger.debug({ prNumber, reviewDecision: status.reviewDecision }, "PR review gate is not satisfied, skipping admission");
         return false;
@@ -178,46 +185,24 @@ export class MergeStewardQueueCommands {
       // remain available for presentation but are not control inputs.
       const priority = 0;
 
-      const checks = await this.github.listChecks(prNumber);
+      const checks = await this.github.listChecksForRef(status.headSha);
       const requiredCheckRules = this.policy.getRequiredCheckRules();
-      if (requiredCheckRules.length > 0) {
-        const evaluation = evaluateCheckPolicy(requiredCheckRules, false, checks);
-        if (evaluation.status !== "pass") {
-          this.logger.debug(
-            {
-              prNumber,
-              checkNames: checks.map((check) => check.name),
-              requiredChecks: requiredCheckRules.map(formatRequiredCheck),
-              checkPolicyStatus: evaluation.status,
-            },
-            "Required checks not all green",
-          );
-          return false;
-        }
-      } else if (this.policy.shouldRequireAllChecksOnEmptyRequiredSet()) {
-        if (checks.length === 0) {
-          this.logger.debug({ prNumber }, "GitHub requires checks but none are visible yet, skipping admission");
-          return false;
-        }
-        const hasPending = checks.some((check) => check.conclusion === "pending");
-        const hasFailures = checks.some((check) => check.conclusion === "failure");
-        if (hasPending || hasFailures) {
-          this.logger.debug(
-            {
-              prNumber,
-              checkNames: checks.map((check) => `${check.name}:${check.conclusion}`),
-            },
-            "GitHub requires all observed checks to pass before admission",
-          );
-          return false;
-        }
-      } else {
-        const nonSteward = checks.filter((c) => !c.name.startsWith("merge-steward"));
-        const hasGreen = nonSteward.some((c) => c.conclusion === "success");
-        if (!hasGreen) {
-          this.logger.debug({ prNumber }, "No green CI checks, skipping admission");
-          return false;
-        }
+      const evaluation = evaluateCheckPolicy(
+        requiredCheckRules,
+        this.policy.shouldRequireAllChecksOnEmptyRequiredSet(),
+        checks,
+      );
+      if (evaluation.status !== "pass") {
+        this.logger.debug(
+          {
+            prNumber,
+            checks: checks.map((check) => `${check.name}:${check.conclusion}`),
+            requiredChecks: requiredCheckRules.map(formatRequiredCheck),
+            checkPolicyStatus: evaluation.status,
+          },
+          "Branch checks are not settled green, skipping admission",
+        );
+        return false;
       }
 
       // A stacked PR waits for its parent queue entry. Monotonic positions
@@ -269,8 +254,27 @@ export class MergeStewardQueueCommands {
         this.logger.debug({ prNumber, entryId: entry.id, headSha }, "Ignoring synchronize webhook for unchanged head");
         return;
       }
-      this.store.updateHead(entry.id, headSha);
-      this.logger.info({ prNumber, entryId: entry.id, headSha }, "PR head updated via webhook");
+      if (entry.candidateRef) {
+        this.specBuilder.deleteSpeculative(entry.candidateRef).catch(() => {});
+      }
+      this.store.transition(
+        entry.id,
+        "superseded",
+        {
+          candidateKind: null,
+          candidatePolicyFingerprint: null,
+          candidateRef: null,
+          candidateSha: null,
+          candidateBasedOn: null,
+          ciRunId: null,
+          ciRetries: 0,
+          waitDetail: null,
+        },
+        `admitted head ${entry.headSha.slice(0, 12)} superseded by ${headSha.slice(0, 12)}; new head must pass admission`,
+      );
+      this.invalidateDownstreamOf(entry);
+      this.clearQueueStateLabels(prNumber).catch(() => {});
+      this.logger.info({ prNumber, entryId: entry.id, previousHeadSha: entry.headSha, headSha }, "PR head changed; admission revoked");
     }
   }
 
@@ -319,10 +323,10 @@ export class MergeStewardQueueCommands {
         this.specBuilder.deleteSpeculative(downstream.candidateRef).catch(() => {});
       }
       this.store.transition(downstream.id, "preparing_head", INVALIDATION_PATCH,
-        `invalidated: entry ${removedEntry.id.slice(0, 8)} dequeued`);
+        `invalidated: entry ${removedEntry.id.slice(0, 8)} left the train`);
     }
     if (targets.length > 0) {
-      this.logger.info({ removedEntryId: removedEntry.id, invalidated: targets.length }, "Invalidated downstream entries after dequeue");
+      this.logger.info({ removedEntryId: removedEntry.id, invalidated: targets.length }, "Invalidated downstream entries after train removal");
     }
   }
 

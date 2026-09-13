@@ -85,11 +85,13 @@ export function ensureSchema(connection: DatabaseConnection): void {
     CREATE INDEX IF NOT EXISTS idx_queue_events_entry
       ON queue_events(entry_id, id)
   `);
-  // Must match TERMINAL_STATUSES in types.ts: merged, evicted, dequeued
+  // Must match TERMINAL_STATUSES in types.ts. Recreate this partial index so
+  // an existing database learns about newly-added terminal states.
+  connection.exec(`DROP INDEX IF EXISTS idx_one_active_per_pr`);
   connection.exec(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_per_pr
+    CREATE UNIQUE INDEX idx_one_active_per_pr
       ON queue_entries(repo_id, pr_number)
-      WHERE status NOT IN ('merged', 'evicted', 'dequeued')
+      WHERE status NOT IN ('merged', 'evicted', 'dequeued', 'superseded')
   `);
   assertCurrentSchema(connection);
 }

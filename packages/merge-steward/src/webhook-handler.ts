@@ -163,7 +163,8 @@ export async function processWebhookEvent(
     }
 
     case "pr_synchronize": {
-      // PR was force-pushed. Update head if queued.
+      // A queued admission is immutable. Retire it when the PR head changes;
+      // the new head may re-enter only after its own approval and green CI.
       service.updateHeadByPR(event.prNumber, event.headSha);
       break;
     }

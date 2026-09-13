@@ -79,11 +79,15 @@ Steward's internal queue-entry identity.
 | Integration review fails | Candidate is not landable; return to feature implementation and full feature review. |
 | Candidate is green, integration review is satisfied, predecessors landed | Merge Steward revalidates and lands that exact SHA. |
 | Candidate no longer descends from its prospective base | Merge Steward resets/rebuilds it; preserve feature approval. |
-| PR head changes | Delete stale candidates and evaluate the new feature head through ordinary feature review. |
+| PR head changes | Mark the old admission `superseded`, delete stale candidates, and evaluate the new feature head through ordinary feature review and branch CI. The new head receives a new queue position only after it is approved and green. |
 
 Services may retain local databases for queue order, retry budgets, issue UX,
 and audit history. Those databases are not cross-service messages and must be
 recoverable by reconciling with GitHub truth.
+
+When GitHub exposes no named required-check set, admission fails closed until
+every observed check on the exact head has settled without failure. One early
+green job never admits a head while another observed job is pending.
 
 For an exact-head candidate with a settled landing-policy failure, Merge Steward
 first publishes the workspace ref at that approved head. The same table then

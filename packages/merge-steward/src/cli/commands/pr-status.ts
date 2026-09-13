@@ -27,7 +27,7 @@ export type PrStatusKind =
 
 export type PrStatusSource = "queue" | "github";
 
-const TERMINAL_QUEUE_STATUSES = new Set(["merged", "evicted", "dequeued"]);
+const TERMINAL_QUEUE_STATUSES = new Set(["merged", "evicted", "dequeued", "superseded"]);
 
 /**
  * Live position of an entry among the entries actually still in the queue,
@@ -79,6 +79,7 @@ export function classifyQueueEntry(entry: QueueEntry): PrStatusReport["kind"] {
     case "merging": return "merging";
     case "evicted": return "evicted";
     case "dequeued": return "dequeued";
+    case "superseded": return "not_queued";
   }
 }
 
@@ -135,7 +136,7 @@ export function classifyGitHubOverview(overview: PrGitHubOverview): { kind: PrSt
 }
 
 function findEntryForPr(snapshot: QueueWatchSnapshot, prNumber: number): QueueEntry | undefined {
-  const matches = snapshot.entries.filter((entry) => entry.prNumber === prNumber);
+  const matches = snapshot.entries.filter((entry) => entry.prNumber === prNumber && entry.status !== "superseded");
   if (matches.length === 0) return undefined;
   matches.sort((left, right) => {
     const leftTerminal = ["merged", "evicted", "dequeued"].includes(left.status) ? 1 : 0;
@@ -172,7 +173,7 @@ async function loadQueueEntry(config: StewardConfig, prNumber: number): Promise<
     const store = new SqliteStore(config.database.path);
     try {
       const all = store.listAll(config.repoId);
-      const entries = all.filter((entry) => entry.prNumber === prNumber);
+      const entries = all.filter((entry) => entry.prNumber === prNumber && entry.status !== "superseded");
       if (entries.length === 0) return { kind: "not_found" };
       entries.sort((left, right) => {
         const leftTerminal = ["merged", "evicted", "dequeued"].includes(left.status) ? 1 : 0;

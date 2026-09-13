@@ -71,6 +71,8 @@ queued
   push after a conflict or settled candidate-CI failure.
 - These states are non-terminal and retain queue position and feature approval.
 - `dequeued` remains an explicit operator action.
+- `superseded` records that the immutable admitted PR head changed. It is not
+  an active queue entry; the new head must pass ordinary admission again.
 - Terminal failure is limited to policy/product ambiguity, exhausted repair
   budget, or an integration review proving substantive feature change.
 

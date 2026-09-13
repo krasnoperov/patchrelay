@@ -130,6 +130,8 @@ function entryKind(entry: QueueEntry): DashboardTokenKind {
       return "error";
     case "dequeued":
       return "cancelled";
+    case "superseded":
+      return "cancelled";
   }
 }
 
@@ -155,6 +157,8 @@ function entryPhrase(entry: QueueEntry, isHead: boolean): string {
       return "evicted";
     case "dequeued":
       return "dequeued";
+    case "superseded":
+      return "superseded by a newer PR head";
   }
 }
 
@@ -207,7 +211,7 @@ function repoEntriesFromSnapshot(
   for (const entry of latest) {
     const active = isActive(entry.status);
     if (!active && timestamp(entry.updatedAt) < cutoff) continue;
-    if (entry.status === "dequeued") continue;
+    if (entry.status === "dequeued" || entry.status === "superseded") continue;
     const isHead = head !== null && entry.id === head.id;
     const kind = entryKind(entry);
     const glyph = GLYPH[kind];
@@ -403,6 +407,7 @@ export function buildQueueSummary(entries: QueueEntry[]): QueueWatchSnapshot["su
     merged: 0,
     evicted: 0,
     dequeued: 0,
+    superseded: 0,
     headEntryId: null,
     headPrNumber: null,
   };
@@ -423,6 +428,7 @@ export function buildQueueSummary(entries: QueueEntry[]): QueueWatchSnapshot["su
       case "merged": summary.merged += 1; break;
       case "evicted": summary.evicted += 1; break;
       case "dequeued": summary.dequeued += 1; break;
+      case "superseded": summary.superseded += 1; break;
     }
   }
 

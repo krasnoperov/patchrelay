@@ -9,7 +9,7 @@
  * Failure: any state → evicted (after retry budget exhausted).
  * Conflict retries are gated on base SHA change (non-spinning).
  *
- * Terminal states: merged, evicted, dequeued.
+ * Terminal states: merged, evicted, dequeued, superseded.
  */
 export type QueueEntryStatus =
   | "queued"
@@ -18,9 +18,10 @@ export type QueueEntryStatus =
   | "merging"
   | "evicted"
   | "merged"
-  | "dequeued";
+  | "dequeued"
+  | "superseded";
 
-export const TERMINAL_STATUSES: QueueEntryStatus[] = ["merged", "evicted", "dequeued"];
+export const TERMINAL_STATUSES: QueueEntryStatus[] = ["merged", "evicted", "dequeued", "superseded"];
 
 export type PostMergeStatus = "pending" | "pass" | "fail" | "unknown";
 export type CandidateKind = "head" | "integration" | "integration_repair";
@@ -76,7 +77,7 @@ export interface QueueEntry {
   updatedAt: string;
   /**
    * Set once, when the entry first reaches a terminal status
-   * (merged/evicted/dequeued), and never bumped afterward — unlike
+   * (merged/evicted/dequeued/superseded), and never bumped afterward — unlike
    * updatedAt, which post-merge re-verification keeps moving. Lets the
    * dashboard report an accurate "how long it took" (decidedAt - enqueuedAt)
    * and "how long ago" (now - decidedAt). Null while still in flight.
@@ -199,6 +200,7 @@ export interface QueueStatusSummary {
   merged: number;
   evicted: number;
   dequeued: number;
+  superseded: number;
   headEntryId: string | null;
   headPrNumber: number | null;
 }
