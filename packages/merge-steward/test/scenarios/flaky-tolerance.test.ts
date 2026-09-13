@@ -38,4 +38,29 @@ describe("flaky test tolerance", () => {
     assert.strictEqual(h.evictions.length, 0);
     h.assertInvariants();
   });
+
+  it("resumes a retained integration candidate when the same SHA rerun becomes green", async () => {
+    let ciCallCount = 0;
+    const h = await createHarness({
+      ciRule: () => (++ciCallCount === 2 ? "fail" : "pass"),
+      flakyRetries: 0,
+    });
+    await h.enqueue(prA);
+    await h.advanceMain();
+    await h.runUntilStable({ maxTicks: 20 });
+
+    const retained = h.entries[0]!;
+    assert.equal(retained.status, "validating");
+    assert.equal(retained.candidateKind, "integration");
+    assert.ok(retained.lastFailedBaseSha);
+
+    h.githubSim.setRefChecks(retained.candidateSha!, [
+      { name: "ci", conclusion: "success" },
+    ]);
+    await h.tick();
+    await h.tick();
+
+    assert.equal(h.entries[0]?.status, "merged");
+    assert.deepEqual(h.evicted, []);
+  });
 });

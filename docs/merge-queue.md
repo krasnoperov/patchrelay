@@ -112,7 +112,7 @@ Any candidate changed by PatchRelay receives the narrow
 the approved feature. A success continues integration. A failure discards the
 candidate and returns the task to feature implementation and full review.
 
-For a tracked PR, exact-head approval from any GitHub reviewer (human or app)
+For any PR, exact-head approval from any GitHub reviewer (human or app)
 and green branch CI grant PatchRelay candidate-only integration authority even
 when the Linear issue is not delegated. PatchRelay still has no authority to
 modify the PR branch or implement additional feature behavior.

@@ -261,6 +261,80 @@ exit 1`;
   }
 });
 
+test("reconcileQueueHealth adopts an approved green GitHub PR without a Linear issue", { concurrency: false }, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "qhm-github-native-"));
+  let oldPath: string | undefined;
+  try {
+    const ghScript = `
+if [ "$1" = "api" ] && [[ "$2" == *"/git/matching-refs/heads/merge-steward/main/pr-" ]]; then
+  printf 'refs/heads/merge-steward/main/pr-77\n'
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '{"state":"OPEN","isDraft":false,"title":"External feature","url":"https://github.test/owner/repo/pull/77","headRefName":"feature/external","headRefOid":"approved-head","baseRefName":"main","reviewDecision":"APPROVED","reviews":[{"state":"APPROVED","commit":{"oid":"approved-head"}}]}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [[ "$2" == *"/commits/approved-head/check-runs" ]]; then
+  printf 'Tests\tcompleted\tsuccess\thttps://checks/head\nverify\tcompleted\tsuccess\thttps://checks/verify\n'
+  exit 0
+fi
+if [ "$1" = "api" ] && [[ "$2" == *"/git/ref/heads/merge-steward/main/pr-77" ]]; then
+  printf 'candidate-base\n'
+  exit 0
+fi
+if [ "$1" = "api" ] && [[ "$2" == *"/compare/approved-head...candidate-base" ]]; then
+  printf 'diverged\n'
+  exit 0
+fi
+exit 1`;
+    const harness = createTestHarness(baseDir, ghScript);
+    oldPath = harness.oldPath;
+
+    await harness.reconcileQueueHealth();
+
+    const subjectId = "github-pr:owner/repo#77";
+    const issue = harness.db.getIssue("proj", subjectId);
+    assert.equal(issue?.prNumber, 77);
+    assert.equal(issue?.prHeadSha, "approved-head");
+    assert.equal(issue?.delegatedToPatchRelay, false);
+    assert.equal(
+      harness.db.issueSessions.peekPendingSessionInputPlanForDiagnostics("proj", subjectId)?.runType,
+      "integration_repair",
+    );
+    assert.deepEqual(harness.enqueueCalls, [{ projectId: "proj", issueId: subjectId }]);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("reconcileQueueHealth does not adopt a candidate without exact-head approval", { concurrency: false }, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "qhm-github-native-stale-review-"));
+  let oldPath: string | undefined;
+  try {
+    const ghScript = `
+if [ "$1" = "api" ] && [[ "$2" == *"/git/matching-refs/heads/merge-steward/main/pr-" ]]; then
+  printf 'refs/heads/merge-steward/main/pr-78\n'
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '{"state":"OPEN","isDraft":false,"headRefName":"feature/external","headRefOid":"new-head","baseRefName":"main","reviewDecision":"APPROVED","reviews":[{"state":"APPROVED","commit":{"oid":"old-head"}}]}'
+  exit 0
+fi
+exit 1`;
+    const harness = createTestHarness(baseDir, ghScript);
+    oldPath = harness.oldPath;
+
+    await harness.reconcileQueueHealth();
+
+    assert.equal(harness.db.getIssue("proj", "github-pr:owner/repo#78"), undefined);
+    assert.deepEqual(harness.enqueueCalls, []);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 // ─── DIRTY without label → queue_repair for downstream upkeep ─────
 
 test("reconcileQueueHealth ignores PR DIRTY state when candidate ref is absent", { concurrency: false }, async () => {
@@ -423,7 +497,7 @@ exit 1`;
   }
 });
 
-// ─── IN_REVIEW_STUCK — approved + red CI > 30 min ────────────────
+// ─── IN_REVIEW_STUCK — approved + red CI > 3 min ─────────────────
 
 test("listApprovedRedCiIssues returns approved+red issues with no run", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "qhm-stuck-list-"));

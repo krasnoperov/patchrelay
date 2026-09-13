@@ -87,7 +87,7 @@ Merge Steward may reset a stale workspace. PatchRelay may only make ordinary
 non-force pushes to it. A stale PatchRelay push therefore fails naturally when
 Merge Steward has already moved the ref; Git supplies the concurrency fence.
 
-For a tracked PR, any effective GitHub approval on the exact current PR head,
+For any PR, any effective GitHub approval on the exact current PR head,
 including a human approval, plus green branch CI grants PatchRelay authority to
 repair only this integration workspace. Linear delegation is not required for
 that candidate-only work. The grant never authorizes changing the PR branch or

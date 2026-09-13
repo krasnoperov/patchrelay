@@ -77,4 +77,38 @@ describe("GitHub-derived integration workspaces", () => {
     assert.equal(h.entries.find((entry) => entry.prNumber === 302)?.status, "merged");
     assert.equal(h.ciSim.runCount, runsBefore, "green checks on the exact repaired SHA must not rerun");
   });
+
+  it("preserves repair provenance and resumes after a same-SHA rerun", async () => {
+    const h = await createHarness({ speculativeDepth: 2 });
+    await h.enqueue({ number: 401, branch: "feature/a", files: [{ path: "shared.ts", content: "a" }] });
+    await h.enqueue({ number: 402, branch: "feature/b", files: [{ path: "shared.ts", content: "b" }] });
+    for (let i = 0; i < 10; i++) await h.tick();
+
+    const blocked = h.entries.find((entry) => entry.prNumber === 402)!;
+    const repairedSha = await h.gitSim.repairWorkspace(blocked.candidateRef!, blocked.branch, [
+      { path: "shared.ts", content: "a + b" },
+    ]);
+    await h.gitSim.push(blocked.candidateRef!, false);
+    h.githubSim.setRefChecks(repairedSha, [
+      { name: "ci", conclusion: "failure" },
+      { name: "review-quill/integration", conclusion: "success" },
+    ]);
+
+    await h.tick(); // detect repaired ref
+    await h.tick(); // retain its failed exact SHA
+    let repaired = h.entries.find((entry) => entry.prNumber === 402)!;
+    assert.equal(repaired.candidateKind, "integration_repair");
+    assert.ok(repaired.lastFailedBaseSha);
+
+    h.githubSim.setRefChecks(repairedSha, [
+      { name: "ci", conclusion: "success" },
+      { name: "review-quill/integration", conclusion: "success" },
+    ]);
+    await h.tick();
+    await h.tick();
+
+    repaired = h.entries.find((entry) => entry.prNumber === 402)!;
+    assert.equal(repaired.status, "merged");
+    assert.deepEqual(h.evicted, []);
+  });
 });

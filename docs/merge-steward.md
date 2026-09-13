@@ -51,7 +51,7 @@ The file `attach` writes looks like:
   "clonePath": "~/.local/state/merge-steward/repos/app",
   "maxRetries": 2,
   "flakyRetries": 1,
-  "speculativeDepth": 10,
+  "speculativeDepth": 3,
   "integrationRepairBudget": 10,
   "pollIntervalMs": 30000,
   "server": { "bind": "127.0.0.1", "port": 8790 },

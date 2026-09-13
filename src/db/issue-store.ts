@@ -168,6 +168,13 @@ export class IssueStore {
     return row ? mapIssueRow(row) : undefined;
   }
 
+  getIssueByProjectPrNumber(projectId: string, prNumber: number): IssueRecord | undefined {
+    const row = this.connection
+      .prepare("SELECT * FROM issues WHERE project_id = ? AND pr_number = ? ORDER BY updated_at DESC LIMIT 1")
+      .get(projectId, prNumber) as Record<string, unknown> | undefined;
+    return row ? mapIssueRow(row) : undefined;
+  }
+
   listIssues(): IssueRecord[] {
     const rows = this.connection
       .prepare("SELECT * FROM issues ORDER BY updated_at DESC")

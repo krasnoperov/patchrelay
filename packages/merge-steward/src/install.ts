@@ -230,7 +230,7 @@ export async function upsertRepoConfig(options: {
     gitBin: existing?.gitBin ?? "git",
     maxRetries: existing?.maxRetries ?? 2,
     flakyRetries: existing?.flakyRetries ?? 1,
-    speculativeDepth: existing?.speculativeDepth ?? 10,
+    speculativeDepth: existing?.speculativeDepth ?? 3,
     pollIntervalMs: existing?.pollIntervalMs ?? 30_000,
     server: {
       bind: existing?.server.bind ?? (homeConfig.server?.bind ?? "127.0.0.1"),

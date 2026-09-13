@@ -4,12 +4,17 @@ import type { IssueRecord } from "./db-types.ts";
 import type { AppConfig } from "./types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
-import { readIntegrationCandidateState } from "./integration-candidate-state.ts";
+import {
+  readIntegrationCandidateState,
+  type IntegrationCandidateState,
+} from "./integration-candidate-state.ts";
 import { getGateCheckNames } from "./github-webhook-policy.ts";
 import { serializeRunContext, type RunContext } from "./run-context.ts";
 import { execCommand } from "./utils.ts";
 import type { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
 import { workflowRunIntent, type WorkflowRunIntent } from "./workflow-intent.ts";
+import { githubNativeSubjectId } from "./github-native-subject.ts";
+import { discoverGitHubNativeCandidateRepairs } from "./github-native-candidate-discovery.ts";
 
 const WRITER = "queue-health-monitor";
 
@@ -18,8 +23,8 @@ const QUEUE_HEALTH_PROBE_FAILURE_COOLDOWN_MS = 300_000;
 // An approved PR with red branch CI for at least this long is
 // stuck at admission — operator notice is needed before the issue
 // goes silent for hours.
-const IN_REVIEW_STUCK_THRESHOLD_MS = 30 * 60 * 1000;
-const IN_REVIEW_STUCK_FEED_COOLDOWN_MS = 30 * 60 * 1000;
+const IN_REVIEW_STUCK_THRESHOLD_MS = 3 * 60 * 1000;
+const IN_REVIEW_STUCK_FEED_COOLDOWN_MS = 15 * 60 * 1000;
 
 export interface QueueHealthAdvancer {
   advanceIdleIssue(
@@ -59,11 +64,54 @@ export class QueueHealthMonitor {
   ) {}
 
   async reconcile(): Promise<void> {
+    await this.adoptGitHubNativeRepairSubjects();
     for (const issue of this.db.issues.listAwaitingQueueIssues()) {
       await this.probeQueuedIssue(issue);
     }
     for (const issue of this.db.issues.listApprovedRedCiIssues()) {
       this.probeInReviewStuckIssue(issue);
+    }
+  }
+
+  /**
+   * Candidate refs are self-describing queue work. Adopt a repair subject even
+   * when no Linear issue or prior PatchRelay delegation exists, but only after
+   * re-validating exact-head approval and branch CI authority from GitHub.
+   */
+  private async adoptGitHubNativeRepairSubjects(): Promise<void> {
+    const repairs = await discoverGitHubNativeCandidateRepairs({
+      config: this.config,
+      isTracked: (projectId, prNumber) => Boolean(this.db.issues.getIssueByProjectPrNumber(projectId, prNumber)),
+    });
+    for (const repair of repairs) {
+      const subjectId = githubNativeSubjectId(repair.repoFullName, repair.prNumber);
+      const adoption = this.db.issueSessions.commitIssueState({
+        writer: WRITER,
+        update: {
+          projectId: repair.projectId,
+          linearIssueId: subjectId,
+          // This grants only candidate-repair authority. Feature work stays
+          // undelegated even though the integration task is runnable.
+          delegatedToPatchRelay: false,
+          title: repair.title,
+          branchName: repair.headBranch,
+          prNumber: repair.prNumber,
+          ...(repair.url ? { prUrl: repair.url } : {}),
+          prState: "open",
+          prIsDraft: false,
+          prHeadSha: repair.headSha,
+          prReviewState: "approved",
+          prCheckStatus: "success",
+          workflowOutcome: null,
+        },
+      });
+      if (adoption.outcome !== "applied") continue;
+      const issue = adoption.issue;
+      this.dispatchCandidateRepair(issue, repair.candidate);
+      this.logger.info(
+        { projectId: repair.projectId, prNumber: repair.prNumber, subjectId, candidateSha: repair.candidate.candidateSha },
+        "Queue health: adopted GitHub-native integration repair subject",
+      );
     }
   }
 
@@ -175,6 +223,14 @@ export class QueueHealthMonitor {
     }
 
     if (candidate.kind === "conflicted" || candidate.kind === "failed") {
+      this.dispatchCandidateRepair(issue, candidate);
+    }
+  }
+
+  private dispatchCandidateRepair(
+    issue: IssueRecord,
+    candidate: Extract<IntegrationCandidateState, { kind: "conflicted" | "failed" }>,
+  ): void {
       const reason = candidate.kind === "conflicted" ? "candidate_conflict" : "candidate_ci_failed";
       const signature = `integration:${candidate.candidateSha}:${reason}`;
       const workflowRunContext: RunContext = {
@@ -251,6 +307,5 @@ export class QueueHealthMonitor {
           ? `Integration candidate CI failed for PR #${issue.prNumber}; dispatching candidate-only repair`
           : `Integration candidate conflicts for PR #${issue.prNumber}; dispatching candidate-only repair`,
       });
-    }
   }
 }

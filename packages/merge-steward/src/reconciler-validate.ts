@@ -22,7 +22,9 @@ async function holdForIntegrationRepair(
     .map((check) => check.name)
     .join(", ");
   ctx.store.transition(entry.id, "validating", {
-    candidateKind: "integration",
+    // A failed repaired candidate is still a repaired candidate. Preserve the
+    // provenance so a same-SHA rerun remains gated by integration review.
+    candidateKind: entry.candidateKind === "integration_repair" ? "integration_repair" : "integration",
     ciRunId: entry.ciRunId ?? `head:${entry.candidateSha ?? entry.headSha}`,
     candidateRef,
     candidateSha: entry.candidateSha ?? entry.headSha,
@@ -186,9 +188,24 @@ export async function checkValidation(
   if (entry.candidateRef && !await ctx.git.isAncestor(entry.headSha, entry.candidateSha!)) {
     return;
   }
-  if (entry.candidateRef && entry.candidateKind === "integration" && entry.lastFailedBaseSha && entry.ciRunId) {
-    // The same failed SHA is intentionally quiescent until PatchRelay moves
-    // the workspace ref. Do not manufacture another CI run on every wakeup.
+  if (entry.candidateRef && entry.lastFailedBaseSha && entry.ciRunId) {
+    // Do not manufacture another CI run on every wakeup, but do re-read the
+    // exact SHA: an operator or GitHub may have rerun the failed workflow in
+    // place. A green rerun must resume the queue without a no-op commit.
+    const checks = (await ctx.github.listChecksForRef(entry.candidateSha!))
+      .filter((check) => check.name.toLowerCase() !== INTEGRATION_REVIEW_CHECK);
+    const evaluation = evaluateCheckPolicy(
+      ctx.policy.getRequiredCheckRules(),
+      ctx.policy.shouldRequireAllChecksOnEmptyRequiredSet(),
+      checks,
+    );
+    if (evaluation.status === "pass") {
+      await acceptPassingIntegrationCandidate(ctx, entry, allActive, index, isLandingHead, entry.ciRunId);
+    } else if (evaluation.status === "pending") {
+      ctx.store.transition(entry.id, "validating", {
+        waitDetail: "waiting for exact-candidate rerun",
+      }, "exact-candidate rerun pending");
+    }
     return;
   }
 

@@ -17,6 +17,13 @@ const FAILED_CONCLUSIONS = new Set([
   "timed_out",
 ]);
 
+const SUCCESSFUL_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
+
+export type RequiredChecksState =
+  | { kind: "pending"; checks: GitHubStatusRollupEntry[] }
+  | { kind: "green"; checks: GitHubStatusRollupEntry[] }
+  | { kind: "failed"; checks: GitHubStatusRollupEntry[]; failedChecks: GitHubStatusRollupEntry[] };
+
 export function integrationCandidateBranch(baseBranch: string, prNumber: number): string {
   return `merge-steward/${baseBranch}/pr-${prNumber}`;
 }
@@ -66,9 +73,39 @@ export async function readIntegrationCandidateState(params: {
     return { kind: "conflicted", branch, candidateSha, approvedHeadSha: params.approvedHeadSha };
   }
 
+  const checksState = await readRequiredChecksState({
+    repoFullName: params.repoFullName,
+    ref: candidateSha,
+    requiredChecks: params.requiredChecks,
+    runCommand,
+  });
+  if (!checksState) return undefined;
+  if (checksState.kind === "failed") {
+    return {
+      kind: "failed",
+      branch,
+      candidateSha,
+      approvedHeadSha: params.approvedHeadSha,
+      checks: checksState.checks,
+      failedChecks: checksState.failedChecks,
+    };
+  }
+  return checksState.kind === "green"
+    ? { kind: "green", branch, candidateSha, approvedHeadSha: params.approvedHeadSha, checks: checksState.checks }
+    : { kind: "pending", branch, candidateSha, approvedHeadSha: params.approvedHeadSha, checks: checksState.checks };
+}
+
+/** Read the configured check contract on one immutable GitHub ref. */
+export async function readRequiredChecksState(params: {
+  repoFullName: string;
+  ref: string;
+  requiredChecks: string[];
+  runCommand?: typeof execCommand;
+}): Promise<RequiredChecksState | undefined> {
+  const runCommand = params.runCommand ?? execCommand;
   const checksResult = await runCommand("gh", [
     "api",
-    `repos/${params.repoFullName}/commits/${candidateSha}/check-runs`,
+    `repos/${params.repoFullName}/commits/${params.ref}/check-runs`,
     "--paginate",
     "--jq",
     ".check_runs[] | [.name, .status, (.conclusion // \"\"), (.details_url // \"\")] | @tsv",
@@ -79,16 +116,16 @@ export async function readIntegrationCandidateState(params: {
   const matching = checks.filter((check) => required.includes(check.name?.trim().toLowerCase() ?? ""));
   const failedChecks = matching.filter((check) => FAILED_CONCLUSIONS.has(check.conclusion?.toLowerCase() ?? ""));
   if (failedChecks.length > 0) {
-    return { kind: "failed", branch, candidateSha, approvedHeadSha: params.approvedHeadSha, checks, failedChecks };
+    return { kind: "failed", checks, failedChecks };
   }
   const allRequiredSucceeded = required.length > 0 && required.every((name) => matching.some((check) =>
     check.name?.trim().toLowerCase() === name
     && check.status?.toLowerCase() === "completed"
-    && ["success", "neutral", "skipped"].includes(check.conclusion?.toLowerCase() ?? "")
+    && SUCCESSFUL_CONCLUSIONS.has(check.conclusion?.toLowerCase() ?? "")
   ));
   return allRequiredSucceeded
-    ? { kind: "green", branch, candidateSha, approvedHeadSha: params.approvedHeadSha, checks }
-    : { kind: "pending", branch, candidateSha, approvedHeadSha: params.approvedHeadSha, checks };
+    ? { kind: "green", checks }
+    : { kind: "pending", checks };
 }
 
 export function parseCheckRuns(stdout: string): GitHubStatusRollupEntry[] {

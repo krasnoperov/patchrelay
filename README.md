@@ -91,7 +91,7 @@ Full install, ingress, and GitHub/Linear app setup: [self-hosting.md](./docs/sel
 5. Any effective GitHub approval on the exact green feature head lets
    `merge-steward` freeze it and build a speculative train. PatchRelay may then
    repair only its integration candidate without pushing the feature branch,
-   even when the tracked Linear issue is not delegated.
+   even when the PR has no Linear issue or prior PatchRelay delegation.
 6. An operator can take over inside the same worktree at any time.
 
 ### PR ownership in Linear

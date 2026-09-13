@@ -97,7 +97,7 @@ using the Linear-state-prefixed convention from [concepts.md](./concepts.md#work
 
 | Display | Where it fires | Trigger |
 |-|-|-|
-| In Review · stuck at admission | `patchrelay status` and the queue-health monitor (`IN_REVIEW_STUCK` event) | PR is approved but a required check is red, no `ci_repair` is running, and the issue has been in this state ≥ 30 min |
+| In Review · stuck at admission | `patchrelay status` and the queue-health monitor (`IN_REVIEW_STUCK` event) | PR is approved but a required check is red, no `ci_repair` is running, and the issue has been in this state ≥ 3 min |
 
 Other "PR is in this Linear state — but why isn't progression happening right now?" conditions are surfaced today on the merge-steward dashboard rather than as cluster-health alerts:
 

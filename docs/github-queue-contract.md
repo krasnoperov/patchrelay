@@ -62,9 +62,10 @@ Steward's internal queue-entry identity.
 - A non-fast-forward rejection means the prospective base changed. PatchRelay
   discards the stale attempt and reconciles from the new GitHub state.
 - PatchRelay must never push an integration repair to the PR branch.
-- For a tracked PR, any effective approval on its exact current head and green
-  branch CI authorize PatchRelay to repair this candidate ref even without
-  Linear delegation. This authority does not extend to feature work.
+- For any PR, an effective approval on its exact current head and green branch
+  CI authorize PatchRelay to repair this candidate ref. A Linear issue or prior
+  delegation is not required; the self-describing candidate ref is the durable
+  repair signal. This authority does not extend to feature work.
 
 ## Derived action table
 
