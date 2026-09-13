@@ -115,7 +115,7 @@ export function buildPullRequestConversationClaims(
     }));
 }
 
-export function buildFollowUpHumanClaims(
+export function buildFollowUpReviewClaims(
   priorReviews: PullRequestReviewRecord[],
   selfLogin: string | undefined,
   priorAttemptCompletedAt: string | undefined,
@@ -130,7 +130,8 @@ export function buildFollowUpHumanClaims(
       const isBotAuthor = /\[bot\]$/i.test(review.authorLogin?.trim() ?? "");
       const submittedAtMs = review.submittedAt ? Date.parse(review.submittedAt) : Number.NaN;
       const excerpt = summarizePriorClaim(review);
-      if (isBotAuthor || !author || author === normalizedSelf || !Number.isFinite(submittedAtMs) || submittedAtMs <= completedAtMs || !excerpt) {
+      const isSelf = author === normalizedSelf;
+      if ((isBotAuthor && !isSelf) || !author || !Number.isFinite(submittedAtMs) || submittedAtMs <= completedAtMs || !excerpt) {
         return [];
       }
       return [{ review, submittedAtMs, excerpt }];
@@ -243,6 +244,6 @@ export async function buildGitHubPromptContext(
   return {
     conversationClaims: buildPullRequestConversationClaims(conversationComments, pr.authorLogin),
     priorReviewClaims: buildPriorReviewClaims(priorReviews, selfLogin),
-    followUpReviewClaims: buildFollowUpHumanClaims(priorReviews, selfLogin, priorAttemptCompletedAt),
+    followUpReviewClaims: buildFollowUpReviewClaims(priorReviews, selfLogin, priorAttemptCompletedAt),
   };
 }

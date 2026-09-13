@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  buildFollowUpHumanClaims,
+  buildFollowUpReviewClaims,
   buildGitHubPromptContext,
   buildPullRequestConversationClaims,
   buildPriorReviewClaims,
@@ -102,8 +102,8 @@ test("buildPriorReviewClaims only counts decisive reviews toward the fresh-start
   assert.equal(claims[0]?.excerpt, "**Verdict: 🛑 Request changes** — Real concern.");
 });
 
-test("buildFollowUpHumanClaims keeps only newer humans, decisive first then newest, capped at three", () => {
-  const claims = buildFollowUpHumanClaims([
+test("buildFollowUpReviewClaims keeps newer self and human reviews, decisive first then newest, capped at three", () => {
+  const claims = buildFollowUpReviewClaims([
     review({ id: 1, authorLogin: "alice", submittedAt: "2026-07-18T09:59:59Z", body: "Before completion" }),
     review({ id: 2, authorLogin: "REVIEW-QUILL[bot]", submittedAt: "2026-07-18T10:01:00Z", body: "Self bot" }),
     review({ id: 3, authorLogin: "review-quill", submittedAt: "2026-07-18T10:02:00Z", body: "Self case" }),
@@ -114,14 +114,14 @@ test("buildFollowUpHumanClaims keeps only newer humans, decisive first then newe
     review({ id: 7, authorLogin: "dave", state: "COMMENTED", submittedAt: "2026-07-18T10:06:00Z", body: "Newest extra comment" }),
   ], "Review-Quill", "2026-07-18T10:00:00Z");
 
-  assert.deepEqual(claims.map((claim) => claim.authorLogin), ["carol", "bob", "dave"]);
+  assert.deepEqual(claims.map((claim) => claim.authorLogin), ["carol", "bob", "review-quill"]);
 });
 
-test("buildFollowUpHumanClaims requires reviewer identity and a valid completion timestamp", () => {
+test("buildFollowUpReviewClaims requires reviewer identity and a valid completion timestamp", () => {
   const reviews = [review({ authorLogin: "alice", submittedAt: "2026-07-18T10:01:00Z", body: "Human" })];
-  assert.deepEqual(buildFollowUpHumanClaims(reviews, undefined, "2026-07-18T10:00:00Z"), []);
-  assert.deepEqual(buildFollowUpHumanClaims(reviews, "review-quill", undefined), []);
-  assert.deepEqual(buildFollowUpHumanClaims(reviews, "review-quill", "invalid"), []);
+  assert.deepEqual(buildFollowUpReviewClaims(reviews, undefined, "2026-07-18T10:00:00Z"), []);
+  assert.deepEqual(buildFollowUpReviewClaims(reviews, "review-quill", undefined), []);
+  assert.deepEqual(buildFollowUpReviewClaims(reviews, "review-quill", "invalid"), []);
 });
 
 test("buildPullRequestConversationClaims keeps recent author and collaborator context in chronological order", () => {

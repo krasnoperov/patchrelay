@@ -138,20 +138,20 @@ export class SqliteStore {
     return row ? mapAttempt(row) : undefined;
   }
 
-  getLatestApprovedDifferentHeadAttempt(
+  getPriorThreadCandidateAttempts(
     repoFullName: string,
     prNumber: number,
     headSha: string,
-  ): ReviewAttemptRecord | undefined {
-    const row = this.db.prepare(`
+  ): ReviewAttemptRecord[] {
+    const rows = this.db.prepare(`
       SELECT ${ATTEMPT_COLUMNS}
       FROM review_attempts
       WHERE repo_full_name = ? AND pr_number = ? AND head_sha <> ?
-        AND status = 'completed' AND conclusion = 'approved'
-      ORDER BY id DESC
-      LIMIT 1
-    `).get(repoFullName, prNumber, headSha) as Record<string, unknown> | undefined;
-    return row ? mapAttempt(row) : undefined;
+        AND status = 'completed' AND conclusion IN ('approved', 'declined')
+        AND prior_attempt_id IS NULL AND thread_id IS NOT NULL AND turn_id IS NOT NULL
+      ORDER BY CASE conclusion WHEN 'approved' THEN 0 ELSE 1 END, id DESC
+    `).all(repoFullName, prNumber, headSha) as Record<string, unknown>[];
+    return rows.map(mapAttempt);
   }
 
   // Finds an approved attempt with the same patch-id (any prior head) that

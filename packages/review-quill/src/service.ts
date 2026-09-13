@@ -651,33 +651,30 @@ export class ReviewQuillService {
       // An approval is the durable review baseline. Later review claims are
       // included in the current prompt, but a fresh declined attempt must not
       // erase the approved context for patch-equivalent repair follow-ups.
-      const latestAttempt = this.store.getLatestApprovedDifferentHeadAttempt(repo.repoFullName, pr.number, pr.headSha)
-        ?? this.store.getLatestDifferentHeadAttempt(repo.repoFullName, pr.number, pr.headSha);
-      let latestTranscript;
-      if (latestAttempt?.threadId) {
+      const candidateAttempts = this.store.getPriorThreadCandidateAttempts(repo.repoFullName, pr.number, pr.headSha);
+      let selection: ReturnType<typeof selectPriorReviewThread> = { kind: "miss", reason: "no_prior_attempt" };
+      for (const candidateAttempt of candidateAttempts) {
+        let candidateTranscript;
         try {
-          latestTranscript = await this.runner.readThread(latestAttempt.threadId);
+          candidateTranscript = await this.runner.readThread(candidateAttempt.threadId!);
         } catch (error) {
           this.logger.debug({
             repo: repo.repoFullName,
             prNumber: pr.number,
-            sourceAttemptId: latestAttempt.id,
+            sourceAttemptId: candidateAttempt.id,
             error: error instanceof Error ? error.message : String(error),
           }, "Prior review thread is unavailable from Codex");
+          continue;
         }
+        selection = selectPriorReviewThread({
+          enabled: true,
+          ...(identity ? { identity } : {}),
+          currentHeadSha: pr.headSha,
+          promptFingerprint,
+          latest: { attempt: candidateAttempt, transcript: candidateTranscript },
+        });
+        if (selection.kind === "selected") break;
       }
-      const selection = selectPriorReviewThread({
-        enabled: true,
-        ...(identity ? { identity } : {}),
-        currentHeadSha: pr.headSha,
-        promptFingerprint,
-        ...(latestAttempt ? {
-          latest: {
-            attempt: latestAttempt,
-            ...(latestTranscript ? { transcript: latestTranscript } : {}),
-          },
-        } : {}),
-      });
       if (selection.kind === "selected") {
         priorThreadCandidate = selection.candidate;
         this.logger.debug({

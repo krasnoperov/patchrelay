@@ -102,16 +102,22 @@ test("latest different-head lookup returns the newest row for live transcript lo
   store.close();
 });
 
-test("approved baseline lookup ignores a newer declined attempt", () => {
+test("candidate lookup prefers an eligible approval and skips carry-forward rows", () => {
   const store = new SqliteStore(":memory:");
   const approved = store.createAttempt({
     repoFullName: "owner/repo", prNumber: 7, headSha: "head-1", status: "completed", conclusion: "approved",
   });
-  store.createAttempt({
+  store.updateAttempt(approved.id, { threadId: "thread-approved", turnId: "turn-approved" });
+  const declined = store.createAttempt({
     repoFullName: "owner/repo", prNumber: 7, headSha: "head-2", status: "completed", conclusion: "declined",
   });
+  store.updateAttempt(declined.id, { threadId: "thread-declined", turnId: "turn-declined" });
+  store.createAttempt({
+    repoFullName: "owner/repo", prNumber: 7, headSha: "head-copy", status: "completed", conclusion: "approved",
+    priorAttemptId: approved.id,
+  });
 
-  const result = store.getLatestApprovedDifferentHeadAttempt("owner/repo", 7, "head-3");
-  assert.equal(result?.id, approved.id);
+  const result = store.getPriorThreadCandidateAttempts("owner/repo", 7, "head-3");
+  assert.deepEqual(result.map(({ id }) => id), [approved.id, declined.id]);
   store.close();
 });
