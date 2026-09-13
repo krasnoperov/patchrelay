@@ -28,6 +28,15 @@ test("parses PM retry times", () => {
   assert.equal(result.retryAtIso, new Date(2026, 5, 10, 13, 5, 0).toISOString());
 });
 
+test("parses the dated retry time emitted for a multi-day account limit", () => {
+  const now = new Date(2026, 8, 13, 20, 0, 0);
+  const message = "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage "
+    + "to purchase more credits or try again at Sep 19th, 2026 10:09 AM.";
+  const result = classifyCodexFailure(message, now);
+  assert.ok(result.kind === "capacity");
+  assert.equal(result.retryAtIso, new Date(2026, 8, 19, 10, 9, 0).toISOString());
+});
+
 test("parses 12 AM as midnight with next-day rollover", () => {
   const now = new Date(2026, 5, 10, 23, 0, 0);
   const result = classifyCodexFailure("You've hit your usage limit. Try again at 12:30 AM.", now);

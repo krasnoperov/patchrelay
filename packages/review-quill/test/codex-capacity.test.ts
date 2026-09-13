@@ -29,6 +29,15 @@ test("classifyCodexFailure picks the same-day occurrence when the reset time is 
   assert.equal(result.retryAtIso, new Date(2026, 5, 10, 15, 0, 0).toISOString());
 });
 
+test("classifyCodexFailure parses the dated reset emitted for a multi-day account limit", () => {
+  const now = new Date(2026, 8, 13, 20, 0, 0);
+  const message = "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage "
+    + "to purchase more credits or try again at Sep 19th, 2026 10:09 AM.";
+  const result = classifyCodexFailure(message, now);
+  assert.ok(result.kind === "capacity");
+  assert.equal(result.retryAtIso, new Date(2026, 8, 19, 10, 9, 0).toISOString());
+});
+
 test("classifyCodexFailure handles 12 AM and 12 PM correctly", () => {
   const midnight = classifyCodexFailure("usage limit; try again at 12 AM", NOON);
   assert.ok(midnight.kind === "capacity");

@@ -41,9 +41,48 @@ export function classifyCodexFailure(
   return { kind: "capacity", detail, ...(retryAtIso ? { retryAtIso } : {}) };
 }
 
+const MONTHS = new Map<string, number>([
+  ["jan", 0], ["january", 0],
+  ["feb", 1], ["february", 1],
+  ["mar", 2], ["march", 2],
+  ["apr", 3], ["april", 3],
+  ["may", 4],
+  ["jun", 5], ["june", 5],
+  ["jul", 6], ["july", 6],
+  ["aug", 7], ["august", 7],
+  ["sep", 8], ["sept", 8], ["september", 8],
+  ["oct", 9], ["october", 9],
+  ["nov", 10], ["november", 10],
+  ["dec", 11], ["december", 11],
+]);
+
 // Parses "try again at 3:23 AM" into the NEXT such wall-clock time in the
-// host's local timezone (today if still ahead, otherwise tomorrow).
+// host's local timezone (today if still ahead, otherwise tomorrow), plus the
+// dated form emitted for longer account limits: "try again at Sep 19th, 2026
+// 10:09 AM". An explicit past date is not rolled forward.
 function parseRetryAt(message: string, now: Date): string | undefined {
+  const dated = /try again at ([a-z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?,\s*(\d{4})\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?/i.exec(message);
+  if (dated) {
+    const month = MONTHS.get(dated[1]!.toLowerCase());
+    const day = Number(dated[2]);
+    const year = Number(dated[3]);
+    const rawHour = Number(dated[4]);
+    const minute = dated[5] === undefined ? 0 : Number(dated[5]);
+    if (month === undefined || day < 1 || day > 31 || rawHour < 1 || rawHour > 12 || minute > 59) {
+      return undefined;
+    }
+    const isPm = dated[6]!.toLowerCase() === "p";
+    const candidate = new Date(year, month, day, (rawHour % 12) + (isPm ? 12 : 0), minute, 0, 0);
+    if (
+      candidate.getFullYear() !== year
+      || candidate.getMonth() !== month
+      || candidate.getDate() !== day
+      || candidate.getTime() <= now.getTime()
+    ) {
+      return undefined;
+    }
+    return candidate.toISOString();
+  }
   const match = /try again at (\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?/i.exec(message);
   if (!match) return undefined;
   const rawHour = Number(match[1]);

@@ -84,6 +84,9 @@ export function classifyAttempt(attempt: ReviewAttemptRecord | undefined): { kin
     case "running":
       return { kind: "running", reason: "Review is in progress." };
     case "cancelled":
+      if (isCapacityDeferredAttempt(attempt)) {
+        return { kind: "queued", reason: "Review is deferred until Codex capacity is available." };
+      }
       return { kind: "cancelled", reason: "Review attempt was cancelled." };
     case "superseded":
       return { kind: "no_attempt", reason: "Latest attempt was superseded without a completed review." };
@@ -122,7 +125,13 @@ function isTerminalKind(kind: PrReviewKind): boolean {
 }
 
 export function isRetryableAttempt(attempt: ReviewAttemptRecord | undefined): boolean {
-  return attempt?.status === "failed";
+  return attempt?.status === "failed" || isCapacityDeferredAttempt(attempt);
+}
+
+function isCapacityDeferredAttempt(attempt: ReviewAttemptRecord | undefined): boolean {
+  return attempt?.status === "cancelled"
+    && attempt.conclusion === "skipped"
+    && attempt.summary?.startsWith("Codex usage limit; review deferred until ") === true;
 }
 
 function firstLine(summary: string | undefined): string | undefined {

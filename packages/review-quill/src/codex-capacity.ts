@@ -29,6 +29,21 @@ const CAPACITY_PATTERNS = [/usage limit/i, /rate limit/i, /quota/i];
 
 // "try again at 3:23 AM" / "try again at 11 PM". Minutes are optional.
 const TRY_AGAIN_AT_PATTERN = /try again at (\d{1,2})(?::(\d{2}))?\s*(AM|PM)/i;
+const DATED_TRY_AGAIN_AT_PATTERN = /try again at ([a-z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?,\s*(\d{4})\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(AM|PM)/i;
+const MONTHS = new Map<string, number>([
+  ["jan", 0], ["january", 0],
+  ["feb", 1], ["february", 1],
+  ["mar", 2], ["march", 2],
+  ["apr", 3], ["april", 3],
+  ["may", 4],
+  ["jun", 5], ["june", 5],
+  ["jul", 6], ["july", 6],
+  ["aug", 7], ["august", 7],
+  ["sep", 8], ["sept", 8], ["september", 8],
+  ["oct", 9], ["october", 9],
+  ["nov", 10], ["november", 10],
+  ["dec", 11], ["december", 11],
+]);
 
 /**
  * Classify a Codex turn error. Returns `kind: "capacity"` when the message
@@ -53,6 +68,29 @@ export function classifyCodexFailure(
 }
 
 function parseTryAgainAt(message: string, now: Date): Date | undefined {
+  const dated = message.match(DATED_TRY_AGAIN_AT_PATTERN);
+  if (dated) {
+    const month = MONTHS.get(dated[1]!.toLowerCase());
+    const day = Number.parseInt(dated[2]!, 10);
+    const year = Number.parseInt(dated[3]!, 10);
+    const rawHour = Number.parseInt(dated[4]!, 10);
+    const minute = dated[5] ? Number.parseInt(dated[5], 10) : 0;
+    if (month === undefined || day < 1 || day > 31 || rawHour < 1 || rawHour > 12 || minute > 59) {
+      return undefined;
+    }
+    let hour = rawHour === 12 ? 0 : rawHour;
+    if (dated[6]!.toUpperCase() === "PM") hour += 12;
+    const candidate = new Date(year, month, day, hour, minute, 0, 0);
+    if (
+      candidate.getFullYear() !== year
+      || candidate.getMonth() !== month
+      || candidate.getDate() !== day
+      || candidate.getTime() <= now.getTime()
+    ) {
+      return undefined;
+    }
+    return candidate;
+  }
   const match = message.match(TRY_AGAIN_AT_PATTERN);
   if (!match) return undefined;
   const rawHour = Number.parseInt(match[1]!, 10);
