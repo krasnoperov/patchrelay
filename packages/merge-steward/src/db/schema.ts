@@ -93,12 +93,20 @@ export function ensureSchema(connection: DatabaseConnection): void {
 function ensureActiveEntryIndex(connection: DatabaseConnection): void {
   // Must match TERMINAL_STATUSES in types.ts. Recreate this partial index so
   // an existing database learns about newly-added terminal states.
-  connection.exec(`DROP INDEX IF EXISTS idx_one_active_per_pr`);
-  connection.exec(`
-    CREATE UNIQUE INDEX idx_one_active_per_pr
-      ON queue_entries(repo_id, pr_number)
-      WHERE status NOT IN ('merged', 'evicted', 'dequeued', 'superseded')
-  `);
+  const current = connection.prepare(`
+    SELECT sql FROM sqlite_master
+    WHERE type = 'index' AND name = 'idx_one_active_per_pr'
+  `).get();
+  if (String(current?.sql ?? "").toLowerCase().includes("'superseded'")) return;
+
+  connection.transaction(() => {
+    connection.exec(`DROP INDEX IF EXISTS idx_one_active_per_pr`);
+    connection.exec(`
+      CREATE UNIQUE INDEX idx_one_active_per_pr
+        ON queue_entries(repo_id, pr_number)
+        WHERE status NOT IN ('merged', 'evicted', 'dequeued', 'superseded')
+    `);
+  })();
 }
 
 const QUEUE_ENTRY_COLUMNS = [

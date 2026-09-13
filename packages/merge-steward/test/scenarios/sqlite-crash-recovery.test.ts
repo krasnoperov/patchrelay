@@ -156,6 +156,20 @@ describe("SQLite crash recovery", () => {
     assert.doesNotThrow(() => migratedStore.insert(makeEntry("new-head", 7, 2)));
     assert.strictEqual(migratedStore.listActive("test-repo")[0]?.id, "new-head");
     migratedStore.close();
+
+    const migratedSchema = new SqliteConnection(dbPath);
+    const schemaVersion = Number(migratedSchema.prepare("PRAGMA schema_version").get()?.schema_version);
+    migratedSchema.close();
+
+    const reopenedStore = new SqliteStore(dbPath);
+    reopenedStore.close();
+    const unchangedSchema = new SqliteConnection(dbPath);
+    assert.strictEqual(
+      Number(unchangedSchema.prepare("PRAGMA schema_version").get()?.schema_version),
+      schemaVersion,
+      "opening a current database must not rebuild the index",
+    );
+    unchangedSchema.close();
   });
 
   it("event logging is transactional with state changes", () => {
