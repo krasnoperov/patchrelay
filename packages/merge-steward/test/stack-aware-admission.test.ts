@@ -36,7 +36,16 @@ function fakeGithub(prs: Map<number, PRStatus>): GitHubPRApi {
         : [];
     },
     async setLabels() {},
-    async listOpenPRs() { return []; },
+    async listOpenPRs() {
+      return [...prs.values()]
+        .filter((pr) => !pr.merged)
+        .map((pr) => ({
+          number: pr.number,
+          branch: pr.branch,
+          headSha: pr.headSha,
+          baseBranch: pr.baseRefName ?? "main",
+        }));
+    },
     async findPRByBranch() { return null; },
     async deleteBranch() { /* no-op */ },
     async listOpenPRsWithLabel() { return []; },
@@ -186,6 +195,71 @@ describe("stack-aware admission", () => {
       [100, 150, 200],
       "labels do not change the admission order",
     );
+  });
+});
+
+describe("re-admission after an environmental eviction", () => {
+  function evictedQueue() {
+    const store = new MemoryStore();
+    const queue = new MergeStewardQueueCommands(
+      config,
+      policy,
+      store,
+      fakeGithub(new Map([[100, basePr({ number: 100, branch: "feat-a", baseRefName: "main" })]])),
+      fakeSpecBuilder(),
+      noopLogger,
+    );
+    return { store, queue };
+  }
+
+  async function evictAdmitted(
+    store: MemoryStore,
+    queue: MergeStewardQueueCommands,
+    failureClass: "policy_blocked" | "integration_conflict",
+  ) {
+    await queue.tryAdmit(100, "feat-a", "head-100");
+    const entry = store.getEntryByPR("repo", 100)!;
+    store.insertIncident({
+      id: `incident-${failureClass}`,
+      entryId: entry.id,
+      at: new Date().toISOString(),
+      failureClass,
+      context: {
+        version: 1,
+        failureClass,
+        baseSha: "main",
+        prHeadSha: entry.headSha,
+        queuePosition: entry.position,
+        baseBranch: "main",
+        branch: entry.branch,
+        issueKey: null,
+        retryHistory: [],
+      },
+      outcome: "open",
+    });
+    store.transition(entry.id, "evicted", {}, `evicted: ${failureClass}`);
+  }
+
+  it("offers a policy-blocked head again on the startup scan", async () => {
+    const { store, queue } = evictedQueue();
+    await evictAdmitted(store, queue, "policy_blocked");
+
+    // A webhook is no reason to re-litigate a policy decision.
+    assert.equal(await queue.tryAdmit(100, "feat-a", "head-100"), false);
+
+    // A restart is: the policy that evicted it may not be the policy now.
+    const { admitted } = await queue.scanEligibleOpenPrs();
+    assert.equal(admitted, 1, "the same head is admitted again without a new push");
+    assert.equal(store.getEntryByPR("repo", 100)?.status, "queued");
+  });
+
+  it("still holds a head evicted for something only a new push can fix", async () => {
+    const { store, queue } = evictedQueue();
+    await evictAdmitted(store, queue, "integration_conflict");
+
+    const { admitted } = await queue.scanEligibleOpenPrs();
+    assert.equal(admitted, 0, "a conflicting head unchanged would only conflict again");
+    assert.equal(store.getEntryByPR("repo", 100), undefined);
   });
 });
 

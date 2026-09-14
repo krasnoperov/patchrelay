@@ -356,6 +356,7 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
       github: ctx.github,
       git: ctx.git,
       currentPrNumber: entry.prNumber,
+      currentBranch: entry.branch,
       prHeadSha: entry.headSha,
       candidateSha: landingSha,
       baseSha: currentBase,

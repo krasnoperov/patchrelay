@@ -20,9 +20,13 @@ function graph(relationships: string[], mergeBases: Record<string, string>): Git
   };
 }
 
-function openPrApi(prs: Array<{ number: number; branch: string; headSha: string }>): GitHubPRApi {
+function openPrApi(
+  prs: Array<{ number: number; branch: string; headSha: string; baseBranch?: string }>,
+): GitHubPRApi {
   return {
-    async listOpenPRs() { return prs; },
+    async listOpenPRs() {
+      return prs.map((pr) => ({ ...pr, baseBranch: pr.baseBranch ?? "main" }));
+    },
   } as GitHubPRApi;
 }
 
@@ -45,6 +49,7 @@ test("finds shared open-PR history absent from current main after the parent adv
       "descendant|candidate": "candidate",
     }),
     currentPrNumber: 30,
+    currentBranch: "candidate",
     prHeadSha: "candidate",
     candidateSha: "candidate",
     baseSha: "main",
@@ -55,6 +60,76 @@ test("finds shared open-PR history absent from current main after the parent adv
     branch: "blocked-parent",
     headSha: "blocked",
     sharedAncestorSha: "blocked-v1",
+  }]);
+});
+
+test("a stack child never blocks its parent, even after the parent advances past it", async () => {
+  // The child sits on "parent-v1"; the parent has since pushed "parent". The
+  // shared history is the parent's own commit, which is in the parent's diff
+  // and was reviewed there, so landing the parent bypasses nothing.
+  const blockers = await findUnlandedOpenPrAncestors({
+    github: openPrApi([
+      { number: 30, branch: "parent", headSha: "parent", baseBranch: "main" },
+      { number: 40, branch: "child", headSha: "child", baseBranch: "parent" },
+    ]),
+    git: graph([], { "child|parent": "parent-v1" }),
+    currentPrNumber: 30,
+    currentBranch: "parent",
+    prHeadSha: "parent",
+    candidateSha: "parent",
+    baseSha: "main",
+  });
+
+  assert.deepEqual(blockers, []);
+});
+
+test("the parent still blocks its stack child", async () => {
+  // The reverse direction is the one that matters: the child's candidate
+  // carries the parent's commits, which GitHub reviewed against the parent's
+  // branch rather than against main.
+  const blockers = await findUnlandedOpenPrAncestors({
+    github: openPrApi([
+      { number: 30, branch: "parent", headSha: "parent", baseBranch: "main" },
+      { number: 40, branch: "child", headSha: "child", baseBranch: "parent" },
+    ]),
+    git: graph([], { "parent|child": "parent-v1" }),
+    currentPrNumber: 40,
+    currentBranch: "child",
+    prHeadSha: "child",
+    candidateSha: "child",
+    baseSha: "main",
+  });
+
+  assert.deepEqual(blockers, [{
+    prNumber: 30,
+    branch: "parent",
+    headSha: "parent",
+    sharedAncestorSha: "parent-v1",
+  }]);
+});
+
+test("a PR that only declares this branch as its base is not enough to be believed about others", async () => {
+  // The skip is scoped to the declaring PR. An unrelated PR holding unlanded
+  // history still blocks, whatever some other PR declares.
+  const blockers = await findUnlandedOpenPrAncestors({
+    github: openPrApi([
+      { number: 30, branch: "parent", headSha: "parent", baseBranch: "main" },
+      { number: 40, branch: "child", headSha: "child", baseBranch: "parent" },
+      { number: 50, branch: "unrelated", headSha: "unrelated", baseBranch: "main" },
+    ]),
+    git: graph([], { "child|parent": "parent-v1", "unrelated|parent": "shared" }),
+    currentPrNumber: 30,
+    currentBranch: "parent",
+    prHeadSha: "parent",
+    candidateSha: "parent",
+    baseSha: "main",
+  });
+
+  assert.deepEqual(blockers, [{
+    prNumber: 50,
+    branch: "unrelated",
+    headSha: "unrelated",
+    sharedAncestorSha: "shared",
   }]);
 });
 

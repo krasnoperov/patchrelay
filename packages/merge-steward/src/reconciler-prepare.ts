@@ -45,6 +45,7 @@ export async function prepareEntry(
       github: ctx.github,
       git: ctx.git,
       currentPrNumber: entry.prNumber,
+      currentBranch: entry.branch,
       prHeadSha: entry.headSha,
       candidateSha: entry.headSha,
       baseSha,

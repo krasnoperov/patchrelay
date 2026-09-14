@@ -5,13 +5,26 @@ import type { GitHubPolicyCache } from "./github-policy.ts";
 import { INVALIDATION_PATCH, selectDownstream } from "./invalidation.ts";
 import type { GitHubPRApi, SpeculativeBranchBuilder } from "./interfaces.ts";
 import type { QueueStore } from "./store.ts";
-import type { QueueEntry, QueueEntryStatus } from "./types.ts";
+import type { FailureClass, QueueEntry, QueueEntryStatus } from "./types.ts";
 import { evaluateCheckPolicy, formatRequiredCheck } from "./check-policy.ts";
 
 function matchGlob(pattern: string, value: string): boolean {
   const regex = new RegExp("^" + pattern.replace(/\*/g, ".*") + "$");
   return regex.test(value);
 }
+
+/**
+ * Evictions the same head can recover from, because what blocked it was the
+ * state around the PR rather than anything about the PR.
+ *
+ * Every other class is a fact about this head — it conflicts, its checks fail,
+ * its branch is broken — and re-admitting it unchanged would only reproduce
+ * the eviction. `policy_blocked` is the exception: it says another open PR's
+ * unlanded history is in the way, which the head cannot fix and which stops
+ * being true when that PR lands, closes, retargets, or when the admission
+ * policy itself changes. Those are re-read on the next startup scan.
+ */
+const ENVIRONMENTAL_FAILURES: ReadonlySet<FailureClass> = new Set<FailureClass>(["policy_blocked"]);
 
 function getLatestEvictedEntry(entries: QueueEntry[], prNumber: number): QueueEntry | undefined {
   const evicted = entries.filter((entry) => entry.prNumber === prNumber && entry.status === "evicted");
@@ -119,11 +132,22 @@ export class MergeStewardQueueCommands {
     }
   }
 
+  /**
+   * A full re-read of what is admissible.
+   *
+   * This runs on startup, which is when the admission policy can have changed
+   * under an entry that a previous version evicted for it. Heads evicted on
+   * environment are offered again here and nowhere else: a webhook says one PR
+   * moved, which is no reason to re-litigate a policy decision, while a restart
+   * is exactly the moment to.
+   */
   async scanEligibleOpenPrs(): Promise<{ scanned: number; admitted: number }> {
     const open = await this.github.listOpenPRs();
     let admitted = 0;
     for (const pr of open) {
-      if (await this.tryAdmit(pr.number, pr.branch, pr.headSha)) admitted += 1;
+      if (await this.tryAdmit(pr.number, pr.branch, pr.headSha, { rereadEnvironmentalEvictions: true })) {
+        admitted += 1;
+      }
     }
     return { scanned: open.length, admitted };
   }
@@ -146,7 +170,19 @@ export class MergeStewardQueueCommands {
     return true;
   }
 
-  async tryAdmit(prNumber: number, branch: string, headSha: string): Promise<boolean> {
+  /** Whether this entry's eviction was about the world rather than the head. */
+  private evictedOnEnvironment(entry: QueueEntry): boolean {
+    const incidents = this.store.listIncidents(entry.id);
+    const latest = incidents[incidents.length - 1];
+    return latest !== undefined && ENVIRONMENTAL_FAILURES.has(latest.failureClass);
+  }
+
+  async tryAdmit(
+    prNumber: number,
+    branch: string,
+    headSha: string,
+    options?: { rereadEnvironmentalEvictions?: boolean },
+  ): Promise<boolean> {
     if (this.config.excludeBranches.some((pattern) => matchGlob(pattern, branch))) {
       this.logger.debug({ prNumber, branch }, "Branch excluded from admission");
       return false;
@@ -160,11 +196,19 @@ export class MergeStewardQueueCommands {
 
     const latestEvicted = getLatestEvictedEntry(this.store.listAll(this.config.repoId), prNumber);
     if (latestEvicted?.headSha === headSha) {
-      this.logger.debug(
+      const rereadable = options?.rereadEnvironmentalEvictions === true
+        && this.evictedOnEnvironment(latestEvicted);
+      if (!rereadable) {
+        this.logger.debug(
+          { prNumber, headSha, evictedEntryId: latestEvicted.id },
+          "PR head matches latest evicted entry, skipping admission until a new push",
+        );
+        return false;
+      }
+      this.logger.info(
         { prNumber, headSha, evictedEntryId: latestEvicted.id },
-        "PR head matches latest evicted entry, skipping admission until a new push",
+        "Re-admitting a head evicted on environment; the blocking condition is re-read from scratch",
       );
-      return false;
     }
 
     try {

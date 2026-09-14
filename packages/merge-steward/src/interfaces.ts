@@ -52,7 +52,7 @@ export interface GitHubPRApi {
   /** Add and/or remove labels on a PR in a single edit. */
   setLabels(prNumber: number, opts: { add?: string[]; remove?: string[] }): Promise<void>;
   /** List open PRs for restart-time eligibility scans. */
-  listOpenPRs(): Promise<Array<{ number: number; branch: string; headSha: string }>>;
+  listOpenPRs(): Promise<Array<{ number: number; branch: string; headSha: string; baseBranch: string }>>;
   /** Find the open PR number for a branch, or null if none exists. */
   findPRByBranch(branch: string): Promise<number | null>;
   /** Delete the PR's head branch from the remote (best-effort cleanup). */

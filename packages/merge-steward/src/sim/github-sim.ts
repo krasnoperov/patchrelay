@@ -139,10 +139,15 @@ export class GitHubSim implements GitHubPRApi {
     return [];
   }
 
-  async listOpenPRs(): Promise<Array<{ number: number; branch: string; headSha: string }>> {
+  async listOpenPRs(): Promise<Array<{ number: number; branch: string; headSha: string; baseBranch: string }>> {
     return [...this.prs.values()]
       .filter((pr) => !pr.merged && !pr.closed)
-      .map((pr) => ({ number: pr.number, branch: pr.branch, headSha: pr.headSha }));
+      .map((pr) => ({
+        number: pr.number,
+        branch: pr.branch,
+        headSha: pr.headSha,
+        baseBranch: pr.baseRefName,
+      }));
   }
 
   async deleteBranch(_prNumber: number): Promise<void> {

@@ -127,12 +127,12 @@ export class GitHubPRClient implements GitHubPRApi {
     }
   }
 
-  async listOpenPRs(): Promise<Array<{ number: number; branch: string; headSha: string }>> {
+  async listOpenPRs(): Promise<Array<{ number: number; branch: string; headSha: string; baseBranch: string }>> {
     const result = await exec("gh", [
       "pr", "list",
       "--repo", this.repoFullName,
       "--state", "open",
-      "--json", "number,headRefName,headRefOid",
+      "--json", "number,headRefName,headRefOid,baseRefName",
       "--limit", "1000",
     ], { allowNonZero: true, githubRepoFullName: this.repoFullName });
 
@@ -145,8 +145,14 @@ export class GitHubPRClient implements GitHubPRApi {
         number: number;
         headRefName: string;
         headRefOid: string;
+        baseRefName: string;
       }>;
-      return data.map((pr) => ({ number: pr.number, branch: pr.headRefName, headSha: pr.headRefOid }));
+      return data.map((pr) => ({
+        number: pr.number,
+        branch: pr.headRefName,
+        headSha: pr.headRefOid,
+        baseBranch: pr.baseRefName,
+      }));
     } catch (error) {
       throw new Error("GitHub returned malformed open PR data", { cause: error });
     }
