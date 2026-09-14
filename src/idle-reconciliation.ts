@@ -43,7 +43,7 @@ import type { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
 import { LinearIssueProjectionService } from "./linear-issue-projection.ts";
 import type { LinearClientProvider } from "./types.ts";
 import { TerminalInboxReconciler } from "./terminal-inbox-reconciler.ts";
-import { readIntegrationCandidateState } from "./integration-candidate-state.ts";
+import { resolveConflictRepairOwnership } from "./conflict-repair-ownership.ts";
 
 const BLOCKED_DEPENDENCY_REFRESH_SUCCESS_BACKOFF_MS = 60_000;
 const BLOCKED_DEPENDENCY_REFRESH_FAILURE_BACKOFF_MS = 5 * 60_000;
@@ -954,28 +954,18 @@ export class IdleIssueReconciler {
         return;
       }
       if (issue.delegatedToPatchRelay && reactiveIntent?.runType === "queue_repair" && mergeConflictDetected) {
-        const candidate = pr.headRefOid && project.github?.repoFullName
-          ? await readIntegrationCandidateState({
-              repoFullName: project.github.repoFullName,
-              baseBranch: project.github.baseBranch ?? "main",
-              prNumber,
-              approvedHeadSha: pr.headRefOid,
-              requiredChecks: getGateCheckNames(project),
-            })
-          : undefined;
-        // A published candidate ref is Merge Steward's ownership signal. A
-        // DIRTY feature PR is expected while that separate workspace is being
-        // repaired or validated; rewriting the approved PR head here would
-        // invalidate both its review and the exact candidate. Only the proven
-        // absence of a candidate permits the legacy branch-repair path. API
-        // uncertainty fails closed to preserve the frozen feature artifact.
-        if (candidate?.kind !== "absent") {
+        const ownership = await resolveConflictRepairOwnership({
+          project,
+          prNumber,
+          ...(pr.headRefOid ? { approvedHeadSha: pr.headRefOid } : {}),
+        });
+        if (ownership.owner === "integration_candidate") {
           this.logger.info(
             {
               issueKey: issue.issueKey,
               prNumber: issue.prNumber,
-              candidateKind: candidate?.kind ?? "unknown",
-              candidateSha: candidate?.candidateSha,
+              candidateKind: ownership.candidateKind,
+              candidateSha: ownership.candidateSha,
             },
             "Reconciliation: integration candidate owns the dirty PR; feature head remains frozen",
           );
