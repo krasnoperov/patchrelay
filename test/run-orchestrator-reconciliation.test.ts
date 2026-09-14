@@ -869,6 +869,108 @@ exit 1
   }
 });
 
+test("reconcileIdleIssues keeps an approved DIRTY head frozen while its integration candidate exists", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-dirty-candidate-owned-"));
+  const fakeBin = path.join(baseDir, "bin");
+  const ghPath = path.join(fakeBin, "gh");
+  const oldPath = process.env.PATH;
+  try {
+    mkdirSync(fakeBin, { recursive: true });
+    writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "api" ] && [[ "$2" == repos/owner/repo/git/ref/heads/merge-steward/main/pr-113 ]]; then
+  printf 'candidate-sha'
+  exit 0
+fi
+if [ "$1" = "api" ] && [[ "$2" == repos/owner/repo/compare/sha-frozen...candidate-sha ]]; then
+  printf 'ahead'
+  exit 0
+fi
+if [ "$1" = "api" ] && [[ "$2" == repos/owner/repo/commits/candidate-sha/check-runs ]]; then
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '{"state":"OPEN","reviewDecision":"APPROVED","mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"sha-frozen","labels":[],"statusCheckRollup":[]}'
+  exit 0
+fi
+exit 1`, "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, enqueueCalls, orchestrator } = createOrchestrator(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-candidate-owned",
+      issueKey: "USE-CO",
+      branchName: "feat-candidate-owned",
+      prNumber: 113,
+      prState: "open",
+      prHeadSha: "sha-frozen",
+      prReviewState: "approved",
+      prCheckStatus: "success",
+      workflowOutcome: undefined,
+      delegatedToPatchRelay: true,
+    });
+
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    const issue = db.getIssue("usertold", "issue-candidate-owned");
+    assertIssuePhase(issue, "awaiting_queue");
+    assert.equal(issue?.prHeadSha, "sha-frozen");
+    assert.equal(issue?.lastGitHubFailureSource, undefined);
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("reconcileIdleIssues keeps an approved DIRTY head frozen when candidate ownership cannot be read", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-dirty-candidate-unknown-"));
+  const fakeBin = path.join(baseDir, "bin");
+  const ghPath = path.join(fakeBin, "gh");
+  const oldPath = process.env.PATH;
+  try {
+    mkdirSync(fakeBin, { recursive: true });
+    writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "api" ]; then
+  printf 'temporary GitHub API failure' >&2
+  exit 1
+fi
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '{"state":"OPEN","reviewDecision":"APPROVED","mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"sha-frozen","labels":[],"statusCheckRollup":[]}'
+  exit 0
+fi
+exit 1`, "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, enqueueCalls, orchestrator } = createOrchestrator(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-candidate-unknown",
+      issueKey: "USE-CU",
+      branchName: "feat-candidate-unknown",
+      prNumber: 113,
+      prState: "open",
+      prHeadSha: "sha-frozen",
+      prReviewState: "approved",
+      prCheckStatus: "success",
+      workflowOutcome: undefined,
+      delegatedToPatchRelay: true,
+    });
+
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    const issue = db.getIssue("usertold", "issue-candidate-unknown");
+    assertIssuePhase(issue, "awaiting_queue");
+    assert.equal(issue?.prHeadSha, "sha-frozen");
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("idle reconciliation recovers escalated PR issues when a newer head is now pending CI", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-terminal-pending-"));
   const oldPath = process.env.PATH;
@@ -1747,6 +1849,10 @@ test("reconcileIdleIssues dispatches queue repair for approved DIRTY PRs without
   try {
     mkdirSync(fakeBin, { recursive: true });
     writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "api" ] && [[ "$2" == repos/owner/repo/git/ref/heads/merge-steward/main/pr-113 ]]; then
+  printf '404 Not Found' >&2
+  exit 1
+fi
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   printf '{"state":"OPEN","reviewDecision":"APPROVED","mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"sha-13b2","labels":[]}'
   exit 0
