@@ -18,7 +18,6 @@ import { discoverGitHubNativeCandidateRepairs } from "./github-native-candidate-
 
 const WRITER = "queue-health-monitor";
 
-const QUEUE_HEALTH_GRACE_MS = 120_000;
 const QUEUE_HEALTH_PROBE_FAILURE_COOLDOWN_MS = 300_000;
 // An approved PR with red branch CI for at least this long is
 // stuck at admission — operator notice is needed before the issue
@@ -160,9 +159,6 @@ export class QueueHealthMonitor {
     if (!issue.prNumber) return;
     const project = this.config.projects.find((p) => p.id === issue.projectId);
     if (!project?.github?.repoFullName) return;
-
-    const age = Date.now() - Date.parse(issue.updatedAt);
-    if (age < QUEUE_HEALTH_GRACE_MS) return;
 
     const protocol = resolveMergeQueueProtocol(project);
 

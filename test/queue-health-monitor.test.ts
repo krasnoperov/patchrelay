@@ -132,15 +132,30 @@ function insertQueuedIssue(db: PatchRelayDatabase, overrides?: Record<string, un
     .run(oldDate, (overrides as { linearIssueId?: string })?.linearIssueId ?? "issue-1");
 }
 
-// ─── Grace period ─────────────────────────────────────────────────
+// ─── Candidate probing is independent of projection timestamps ───
 
-test("reconcileQueueHealth skips issues within the grace period", { concurrency: false }, async () => {
+test("reconcileQueueHealth probes a recently refreshed tracked issue", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "qhm-grace-"));
   let oldPath: string | undefined;
   try {
-    const harness = createTestHarness(baseDir, 'echo "should not be called"; exit 1');
+    const ghScript = `
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '{"state":"OPEN","headRefOid":"approved-head"}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [[ "$2" == *"/git/ref/heads/merge-steward/main/pr-42" ]]; then
+  printf 'candidate-sha\n'
+  exit 0
+fi
+if [ "$1" = "api" ] && [[ "$2" == *"/compare/approved-head...candidate-sha" ]]; then
+  printf 'diverged\n'
+  exit 0
+fi
+exit 1`;
+    const harness = createTestHarness(baseDir, ghScript);
     oldPath = harness.oldPath;
-    // Insert with current updatedAt (within grace period)
+    // A projection refresh may update this generic timestamp every cycle.
+    // Candidate discovery must not wait for it to become old.
     harness.db.upsertIssue({
       projectId: "proj",
       linearIssueId: "issue-1",
@@ -155,7 +170,12 @@ test("reconcileQueueHealth skips issues within the grace period", { concurrency:
     await harness.reconcileQueueHealth();
 
     const issue = harness.db.getIssue("proj", "issue-1");
-    assertIssuePhase(issue, "awaiting_queue");
+    assert.equal(issue?.lastGitHubFailureHeadSha, "candidate-sha");
+    assert.equal(
+      harness.db.issueSessions.peekPendingSessionInputPlanForDiagnostics("proj", "issue-1")?.runType,
+      "integration_repair",
+    );
+    assert.deepEqual(harness.enqueueCalls, [{ projectId: "proj", issueId: "issue-1" }]);
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });
