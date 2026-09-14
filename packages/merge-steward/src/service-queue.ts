@@ -123,7 +123,7 @@ export class MergeStewardQueueCommands {
   async scanStartupAdmissions(): Promise<void> {
     this.logger.info({ repoId: this.config.repoId }, "Scanning startup admissions");
     try {
-      const { scanned, admitted } = await this.scanEligibleOpenPrs();
+      const { scanned, admitted } = await this.scanEligibleOpenPrs({ rereadEnvironmentalEvictions: true });
       if (scanned > 0) {
         this.logger.info({ scanned, admitted }, "Startup scan for eligible open PRs complete");
       }
@@ -135,17 +135,17 @@ export class MergeStewardQueueCommands {
   /**
    * A full re-read of what is admissible.
    *
-   * This runs on startup, which is when the admission policy can have changed
-   * under an entry that a previous version evicted for it. Heads evicted on
-   * environment are offered again here and nowhere else: a webhook says one PR
-   * moved, which is no reason to re-litigate a policy decision, while a restart
-   * is exactly the moment to.
+   * This runs both periodically and on startup. Only the startup caller asks
+   * to re-read environmental evictions, because that is when the admission
+   * policy can have changed under an entry that a previous version evicted.
    */
-  async scanEligibleOpenPrs(): Promise<{ scanned: number; admitted: number }> {
+  async scanEligibleOpenPrs(
+    options?: { rereadEnvironmentalEvictions?: boolean },
+  ): Promise<{ scanned: number; admitted: number }> {
     const open = await this.github.listOpenPRs();
     let admitted = 0;
     for (const pr of open) {
-      if (await this.tryAdmit(pr.number, pr.branch, pr.headSha, { rereadEnvironmentalEvictions: true })) {
+      if (await this.tryAdmit(pr.number, pr.branch, pr.headSha, options)) {
         admitted += 1;
       }
     }

@@ -247,9 +247,11 @@ describe("re-admission after an environmental eviction", () => {
     // A webhook is no reason to re-litigate a policy decision.
     assert.equal(await queue.tryAdmit(100, "feat-a", "head-100"), false);
 
+    // Nor is the same full scan that runs before every periodic queue tick.
+    assert.deepEqual(await queue.scanEligibleOpenPrs(), { scanned: 1, admitted: 0 });
+
     // A restart is: the policy that evicted it may not be the policy now.
-    const { admitted } = await queue.scanEligibleOpenPrs();
-    assert.equal(admitted, 1, "the same head is admitted again without a new push");
+    await queue.scanStartupAdmissions();
     assert.equal(store.getEntryByPR("repo", 100)?.status, "queued");
   });
 
