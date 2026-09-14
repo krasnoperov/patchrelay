@@ -22,44 +22,9 @@ import { appendBranchUpkeepObservation } from "./branch-upkeep-signal.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 import { settleRun } from "./run-settlement.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
+import { buildAttemptRefundFields } from "./run-attempt-accounting.ts";
 
 const WRITER = "run-failure-policy";
-
-type AttemptRefundFields = Partial<Pick<
-  UpsertIssueParams,
-  | "ciRepairAttempts"
-  | "queueRepairAttempts"
-  | "reviewFixAttempts"
-  | "lastAttemptedFailureHeadSha"
-  | "lastAttemptedFailureSignature"
-  | "lastAttemptedFailureAt"
->>;
-
-// Roll back the attempt counter consumed at launch and clear the
-// attempted-failure provenance for repair runs, so a run that died without
-// evidence about the work (interrupted turn, capacity outage) neither burns
-// a budget unit nor blocks the same failure from re-deriving a workflow task.
-function buildAttemptRefundFields(
-  runType: RunType,
-  issue: Pick<IssueRecord, "ciRepairAttempts" | "queueRepairAttempts" | "reviewFixAttempts">,
-): AttemptRefundFields | undefined {
-  const counter = runType === "ci_repair" && issue.ciRepairAttempts > 0
-    ? { ciRepairAttempts: issue.ciRepairAttempts - 1 }
-    : (runType === "integration_repair" || runType === "queue_repair") && issue.queueRepairAttempts > 0
-      ? { queueRepairAttempts: issue.queueRepairAttempts - 1 }
-      : isRequestedChangesRunType(runType) && issue.reviewFixAttempts > 0
-        ? { reviewFixAttempts: issue.reviewFixAttempts - 1 }
-        : undefined;
-  const provenance = runType === "ci_repair" || runType === "integration_repair" || runType === "queue_repair"
-    ? {
-        lastAttemptedFailureHeadSha: null,
-        lastAttemptedFailureSignature: null,
-        lastAttemptedFailureAt: null,
-      }
-    : undefined;
-  if (!counter && !provenance) return undefined;
-  return { ...counter, ...provenance };
-}
 
 // The interrupted-run variant: same refund, committed as a single issue
 // update so the whole repair commits (and conflict-recomputes) atomically.
@@ -68,7 +33,7 @@ function buildInterruptedAttemptRepairUpdate(
   issue: Pick<IssueRecord, "projectId" | "linearIssueId" | "ciRepairAttempts" | "queueRepairAttempts" | "reviewFixAttempts">,
 ): UpsertIssueParams | undefined {
   const fields = buildAttemptRefundFields(runType, issue);
-  if (!fields) return undefined;
+  if (Object.keys(fields).length === 0) return undefined;
   return {
     projectId: issue.projectId,
     linearIssueId: issue.linearIssueId,
@@ -129,12 +94,16 @@ export class RunFailurePolicy {
     failureReason: string;
   }): void {
     const { run, issue } = params;
+    const turnNeverStarted = run.launchPhase !== "turn_started" && run.launchPhase !== "running";
     this.withHeldLease(run.projectId, run.linearIssueId, (lease) =>
       settleRun({
         db: this.db,
         run,
         finish: { status: "failed", failureReason: params.failureReason },
         lease,
+        ...(turnNeverStarted
+          ? { buildIssueUpdate: (current) => buildAttemptRefundFields(run.runType, current) }
+          : {}),
       }));
     this.recoverOrEscalate({ issue, runType: run.runType, reason: params.reason });
   }

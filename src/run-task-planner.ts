@@ -17,8 +17,6 @@ import type { WorkflowRunIntent } from "./workflow-intent.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
 import { reconcileWorkflowTasksForIssue } from "./workflow-task-reconciler.ts";
 
-const WRITER = "run-task-planner";
-
 export function buildRequestedChangesLoopEscalationReason(attempts: number, configuredLimit: number): string {
   return `Repeated/systemic requested-changes review loop after ${attempts} repair attempts (configured limit: ${configuredLimit}). Next action: consolidate the accumulated review history and audit the violated invariants, or split an oversized PR before requesting another review.`;
 }
@@ -199,37 +197,4 @@ export class RunTaskPlanner {
     return undefined;
   }
 
-  incrementAttemptCounters(
-    issue: IssueRecord,
-    lease: IssueSessionLease,
-    runType: RunType,
-    isRequestedChangesRunType: (runType: RunType) => boolean,
-  ): boolean {
-    // The increments are read-modify-write against the issue row (which may
-    // be stale by the time the launch path gets here); on conflict, recompute
-    // from the fresh row instead of writing a counter derived from the stale
-    // read.
-    const buildIncrement = (record: Pick<IssueRecord, "ciRepairAttempts" | "queueRepairAttempts" | "reviewFixAttempts">) => {
-      if (runType === "ci_repair") {
-        return { projectId: issue.projectId, linearIssueId: issue.linearIssueId, ciRepairAttempts: record.ciRepairAttempts + 1 };
-      }
-      if (runType === "integration_repair" || runType === "queue_repair") {
-        return { projectId: issue.projectId, linearIssueId: issue.linearIssueId, queueRepairAttempts: record.queueRepairAttempts + 1 };
-      }
-      if (isRequestedChangesRunType(runType)) {
-        return { projectId: issue.projectId, linearIssueId: issue.linearIssueId, reviewFixAttempts: record.reviewFixAttempts + 1 };
-      }
-      return undefined;
-    };
-    const update = buildIncrement(issue);
-    if (!update) return true;
-    const commit = this.db.issueSessions.commitIssueState({
-      writer: WRITER,
-      lease,
-      expectedVersion: issue.version,
-      update,
-      onConflict: (current) => buildIncrement(current),
-    });
-    return commit.outcome === "applied";
-  }
 }

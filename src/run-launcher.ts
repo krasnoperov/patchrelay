@@ -5,6 +5,7 @@ import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { RunType } from "./run-type.ts";
+import { buildAttemptRefundFields, buildAttemptStartFields } from "./run-attempt-accounting.ts";
 import { resolveFailureOutcome } from "./reactive-pr-state.ts";
 import { buildHookEnv, type HookEnv, type HookResult, runProjectHook } from "./hook-runner.ts";
 import { buildRunFailureActivity } from "./linear-session-reporting.ts";
@@ -320,8 +321,6 @@ export class RunLauncher {
           ...(params.authorityEpoch !== undefined ? { authorityEpoch: params.authorityEpoch } : {}),
           promptText: params.prompt,
         });
-        const failureHeadSha = params.effectiveContext?.failureHeadSha;
-        const failureSignature = params.effectiveContext?.failureSignature;
         const claimUpdate = {
           projectId: params.item.projectId,
           linearIssueId: params.item.issueId,
@@ -334,13 +333,7 @@ export class RunLauncher {
                 workflowOutcomeReason: null,
                 inputRequestKind: null,
               }),
-          ...((params.runType === "ci_repair" || params.runType === "integration_repair" || params.runType === "queue_repair") && failureSignature
-            ? {
-                lastAttemptedFailureSignature: failureSignature,
-                lastAttemptedFailureHeadSha: failureHeadSha ?? null,
-                lastAttemptedFailureAt: new Date().toISOString(),
-              }
-            : {}),
+          ...buildAttemptStartFields(params.runType, fresh, params.effectiveContext),
         };
         const claimCommit = this.db.issueSessions.commitIssueState({
           writer: WRITER,
@@ -554,13 +547,20 @@ export class RunLauncher {
         // Issue clear + run-terminal write ride in one transaction; the run
         // finish is gated on the issue commit so a lost lease skips both.
         this.db.transaction(() => {
+          const current = this.db.issues.getIssue(params.project.id, params.issue.linearIssueId);
+          // A completion notification may have settled this run while the
+          // start request was rejecting. Never clear or refund a slot that no
+          // longer belongs to this launch.
+          if (!current || current.activeRunId !== params.run.id) return;
           const commit = this.db.issueSessions.commitIssueState({
             writer: WRITER,
             lease: { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, leaseId: params.leaseId },
+            expectedVersion: current.version,
             update: {
               projectId: params.project.id,
               linearIssueId: params.issue.linearIssueId,
               activeRunId: null,
+              ...buildAttemptRefundFields(params.runType, current),
               ...(workflowOutcome
                 ? {
                     workflowOutcome,
@@ -568,6 +568,20 @@ export class RunLauncher {
                   }
                 : {}),
             },
+            onConflict: (fresh) => fresh.activeRunId === params.run.id
+              ? {
+                  projectId: params.project.id,
+                  linearIssueId: params.issue.linearIssueId,
+                  activeRunId: null,
+                  ...buildAttemptRefundFields(params.runType, fresh),
+                  ...(workflowOutcome
+                    ? {
+                        workflowOutcome,
+                        workflowOutcomeReason: `run_launch_failed:${params.runType}`,
+                      }
+                    : {}),
+                }
+              : undefined,
           });
           if (commit.outcome !== "applied") return;
           this.db.runs.finishRun(params.run.id, {
