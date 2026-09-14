@@ -37,6 +37,28 @@ test("buildOperatorRetryEvent preserves queue incident and failure context for q
   assert.match(String(payload.promptContext), /publish a new head SHA/);
 });
 
+test("buildOperatorRetryEvent retries approved integration work without feature-head mutation instructions", () => {
+  const event = buildOperatorRetryEvent(createIssue({
+    linearIssueId: "issue-integration",
+    lastGitHubFailureSignature: "integration:candidate-123:conflict",
+    lastGitHubFailureContextJson: JSON.stringify({
+      candidateBranch: "merge-steward/main/pr-42",
+      candidateSha: "candidate-123",
+      approvedHeadSha: "approved-456",
+      integrationFailureKind: "conflict",
+    }),
+  }), "integration_repair");
+
+  assert.equal(event.eventType, "merge_steward_incident");
+  assert.equal(event.dedupeKey, "operator_retry:integration_repair:issue-integration:candidate-123");
+  const payload = JSON.parse(event.eventJson) as Record<string, unknown>;
+  assert.equal(payload.candidateBranch, "merge-steward/main/pr-42");
+  assert.equal(payload.approvedHeadSha, "approved-456");
+  assert.equal(payload.source, "operator_retry");
+  assert.equal("requiresFreshHead" in payload, false);
+  assert.equal("promptContext" in payload, false);
+});
+
 test("buildOperatorRetryEvent emits settled_red_ci for ci repair", () => {
   const event = buildOperatorRetryEvent(createIssue({
     linearIssueId: "issue-ci",

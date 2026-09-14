@@ -20,14 +20,7 @@ export function resolveRetryTarget(params: {
   }
 
   if (hasOpenPr(params.prNumber, params.prState) && params.lastGitHubFailureSource === "queue_eviction") {
-    return { runType: "queue_repair" };
-  }
-  if (
-    hasOpenPr(params.prNumber, params.prState)
-    && params.prReviewState === "approved"
-    && params.lastRunType === "queue_repair"
-  ) {
-    return { runType: "queue_repair" };
+    return { runType: params.prReviewState === "approved" ? "integration_repair" : "queue_repair" };
   }
   if (
     hasOpenPr(params.prNumber, params.prState)
@@ -42,6 +35,9 @@ export function resolveRetryTarget(params: {
         : "review_fix",
     };
   }
+  if (hasOpenPr(params.prNumber, params.prState) && params.prReviewState === "approved") {
+    return { runType: "integration_repair" };
+  }
   if (hasOpenPr(params.prNumber, params.prState)) {
     return { runType: "implementation" };
   }
@@ -52,7 +48,7 @@ export function buildManualRetryAttemptReset(runType: RunType): Partial<Pick<Ups
   if (runType === "ci_repair") {
     return { ciRepairAttempts: 0 };
   }
-  if (runType === "queue_repair") {
+  if (runType === "queue_repair" || runType === "integration_repair") {
     return { queueRepairAttempts: 0 };
   }
   if (runType === "review_fix" || runType === "branch_upkeep") {

@@ -575,12 +575,12 @@ test("cli retry covers operator control flows", async () => {
       }),
       0,
     );
-    assert.match(queueRetryOut.read(), /Queued stage: queue_repair/);
+    assert.match(queueRetryOut.read(), /Queued stage: integration_repair/);
 
     const queueRepairIssue = db.getIssue("usertold", "issue-queue-repair");
     assertIssuePhase(queueRepairIssue, "repairing_queue");
     const queueRepairTask = db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-queue-repair");
-    assert.equal(queueRepairTask?.runType, "queue_repair");
+    assert.equal(queueRepairTask?.runType, "integration_repair");
 
     db.upsertIssue({
       projectId: "usertold",

@@ -212,6 +212,14 @@ export function deriveWorkflowTasks(snapshot: Omit<WorkflowSnapshot, "openTasks"
       tasks.push(authorizedIntegrationTask);
       return tasks;
     }
+    if (prReviewState === "approved") {
+      tasks.push({
+        id: "wait:integration_candidate",
+        type: "wait",
+        reason: "Approved feature head is frozen while Merge Steward publishes or refreshes its integration candidate",
+      });
+      return tasks;
+    }
     tasks.push({
       id: integrationRepair ? "run:integration_repair" : "run:queue_repair",
       type: "run",

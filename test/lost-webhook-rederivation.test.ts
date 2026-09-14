@@ -814,7 +814,8 @@ test("lost check_passed: green BRANCH gate does NOT clear queue_eviction provena
   // The swallowed-repair doctrine: a queue eviction means integration with
   // main broke; a green branch gate proves nothing about that. Neither the
   // delivered check_passed nor the poll may clear the queue provenance —
-  // both worlds must keep it and route the queue repair from it.
+  // both worlds must keep it, but an approved feature head stays frozen until
+  // Merge Steward publishes candidate context.
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-lost-green-queue-"));
   const restoreGh = installFakeGh(baseDir, {
     prView: {
@@ -868,7 +869,8 @@ test("lost check_passed: green BRANCH gate does NOT clear queue_eviction provena
       assert.equal(issue?.lastGitHubFailureSource, "queue_eviction", `${world.name}: queue provenance must survive the green poll`);
     }
 
-    // Pass 2: the surviving provenance routes the queue repair.
+    // Pass 2: the surviving provenance remains visible without creating a
+    // feature-branch repair task.
     await runReconciliationPass(pair.delivered);
     await runReconciliationPass(pair.lost);
 
@@ -876,7 +878,7 @@ test("lost check_passed: green BRANCH gate does NOT clear queue_eviction provena
     const b = captureConvergedFacts(pair.lost);
     assertIssuePhase(b, "repairing_queue");
     assert.equal(b.failureSource, "queue_eviction");
-    assert.equal(b.runnableTaskRunType, "queue_repair");
+    assert.equal(b.runnableTaskRunType, null);
     assert.deepEqual(b, a, "the preserved queue provenance must drive the same repair in both worlds");
   } finally {
     pair.close();

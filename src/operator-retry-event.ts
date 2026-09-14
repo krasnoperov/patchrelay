@@ -16,6 +16,20 @@ function parseRunContextColumn(value: string | undefined): RunContext | undefine
 }
 
 export function buildOperatorRetryEvent(issue: IssueRecord, runType: string, source: string = "operator_retry") {
+  if (runType === "integration_repair") {
+    const queueIncident = parseRunContextColumn(issue.lastQueueIncidentJson);
+    const failureContext = parseRunContextColumn(issue.lastGitHubFailureContextJson);
+    return {
+      eventType: "merge_steward_incident" as const,
+      eventJson: JSON.stringify({
+        ...queueIncident,
+        ...failureContext,
+        source,
+      } satisfies RunContext),
+      dedupeKey: `${source}:integration_repair:${issue.linearIssueId}:${failureContext?.candidateSha ?? issue.lastGitHubFailureSignature ?? issue.lastGitHubFailureHeadSha ?? "unknown-sha"}`,
+    };
+  }
+
   if (runType === "queue_repair") {
     const queueIncident = parseRunContextColumn(issue.lastQueueIncidentJson);
     const failureContext = parseRunContextColumn(issue.lastGitHubFailureContextJson);

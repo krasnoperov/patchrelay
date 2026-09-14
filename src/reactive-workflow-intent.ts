@@ -31,7 +31,7 @@ export function deriveReactiveWorkflowIntent(
 
   if (params.latestFailureSource === "queue_eviction" || (params.mergeConflictDetected && params.downstreamOwned)) {
     return {
-      runType: "queue_repair",
+      runType: params.prReviewState === "approved" ? "integration_repair" : "queue_repair",
       workflowReason: "merge_steward_incident",
     };
   }

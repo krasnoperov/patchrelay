@@ -339,7 +339,12 @@ export function deriveSessionInputPlan(
     if (!typed) continue;
     switch (typed.eventType) {
       case "merge_steward_incident":
-        runType = typed.payload?.candidateBranch ? "integration_repair" : "queue_repair";
+        // Once a PR is approved, every merge-steward incident belongs to the
+        // integration candidate even while its ref is still materializing.
+        // Legacy feature-branch queue repair is only valid before approval.
+        runType = typed.payload?.candidateBranch || issue.prReviewState === "approved"
+          ? "integration_repair"
+          : "queue_repair";
         workflowReason = "merge_steward_incident";
         eventIds = [event.id];
         Object.assign(context, typed.payload ?? {});

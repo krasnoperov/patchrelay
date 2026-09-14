@@ -683,17 +683,6 @@ export class RunOrchestrator {
       return;
     }
 
-    if (!this.runTaskPlanner.incrementAttemptCounters(
-      issue,
-      { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId },
-      runType,
-      isRequestedChangesRunType,
-    )) {
-      this.emitRunSkipped(item, "lease_lost_incrementing_attempts", issue, { runType });
-      this.releaseIssueSessionLease(item.projectId, item.issueId);
-      return;
-    }
-
     const { prompt, branchName, worktreePath } = this.runLauncher.prepareLaunchPlan({
       project,
       issue,
@@ -756,6 +745,20 @@ export class RunOrchestrator {
       releaseLease: (projectId, issueId) => this.releaseIssueSessionLease(projectId, issueId),
       lowerCaseFirst,
     });
+
+    // A repair budget represents an agent attempt, not an enqueue, worktree
+    // preparation, failed claim, or other pre-turn infrastructure work.
+    // Consume it only after Codex confirms that the turn actually started.
+    if (!this.runTaskPlanner.incrementAttemptCounters(
+      this.db.issues.getIssue(item.projectId, item.issueId) ?? issue,
+      { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId },
+      runType,
+      isRequestedChangesRunType,
+    )) {
+      this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Started Codex turn but lost lease before recording its attempt");
+      this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+      return;
+    }
 
     this.assertLaunchLease(run, "before recording the active thread");
     if (!this.db.issueSessions.updateRunThreadWithLease(

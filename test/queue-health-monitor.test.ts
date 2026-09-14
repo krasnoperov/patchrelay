@@ -164,6 +164,7 @@ exit 1`;
       prNumber: 42,
       prState: "open",
       prReviewState: "approved",
+      prCheckStatus: "success",
       workflowOutcome: undefined,
     });
 

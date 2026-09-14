@@ -511,6 +511,50 @@ test("blocked implementation starts after idle dependency refresh recovers", asy
   }
 });
 
+test("a failed run claim does not consume a repair attempt before a Codex turn starts", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-pre-turn-attempt-budget-"));
+  try {
+    const { db, orchestrator } = createOrchestrator(baseDir);
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-pre-turn-budget",
+      issueKey: "USE-PRE-TURN",
+      title: "Preserve repair budget before launch",
+      delegatedToPatchRelay: true,
+      prNumber: 77,
+      prState: "open",
+      prHeadSha: "failed-head",
+      prReviewState: "review_required",
+      prCheckStatus: "failed",
+      lastGitHubFailureSource: "branch_ci",
+      lastGitHubFailureHeadSha: "failed-head",
+      lastGitHubFailureSignature: "branch_ci:failed-head:verify",
+      workflowOutcome: undefined,
+    });
+    reconcileWorkflowTasksForIssue(db, issue);
+
+    const runLauncher = (orchestrator as unknown as {
+      runLauncher: {
+        prepareLaunchPlan: () => { prompt: string; branchName: string; worktreePath: string };
+        claimRun: () => undefined;
+      };
+    }).runLauncher;
+    runLauncher.prepareLaunchPlan = () => ({
+      prompt: "repair CI",
+      branchName: "use/pre-turn-budget",
+      worktreePath: path.join(baseDir, "worktrees", "USE-PRE-TURN"),
+    });
+    runLauncher.claimRun = () => undefined;
+
+    await orchestrator.run({ projectId: issue.projectId, issueId: issue.linearIssueId });
+
+    assert.equal(db.getIssue(issue.projectId, issue.linearIssueId)?.ciRepairAttempts, 0);
+    assert.equal(db.runs.listRunsForIssue(issue.projectId, issue.linearIssueId).length, 0);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("idle reconciliation does not re-enqueue issues that already have an active run", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-active-run-orphan-"));
   try {
@@ -869,7 +913,7 @@ exit 1
   }
 });
 
-test("reconcileIdleIssues keeps an approved DIRTY head frozen while its integration candidate exists", async () => {
+test("reconcileIdleIssues keeps an approved DIRTY head frozen for candidate reconciliation", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-dirty-candidate-owned-"));
   const fakeBin = path.join(baseDir, "bin");
   const ghPath = path.join(fakeBin, "gh");
@@ -877,17 +921,6 @@ test("reconcileIdleIssues keeps an approved DIRTY head frozen while its integrat
   try {
     mkdirSync(fakeBin, { recursive: true });
     writeFileSync(ghPath, `#!/usr/bin/env bash
-if [ "$1" = "api" ] && [[ "$2" == repos/owner/repo/git/ref/heads/merge-steward/main/pr-113 ]]; then
-  printf 'candidate-sha'
-  exit 0
-fi
-if [ "$1" = "api" ] && [[ "$2" == repos/owner/repo/compare/sha-frozen...candidate-sha ]]; then
-  printf 'ahead'
-  exit 0
-fi
-if [ "$1" = "api" ] && [[ "$2" == repos/owner/repo/commits/candidate-sha/check-runs ]]; then
-  exit 0
-fi
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   printf '{"state":"OPEN","reviewDecision":"APPROVED","mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"sha-frozen","labels":[],"statusCheckRollup":[]}'
   exit 0
@@ -917,53 +950,6 @@ exit 1`, "utf8");
     assertIssuePhase(issue, "awaiting_queue");
     assert.equal(issue?.prHeadSha, "sha-frozen");
     assert.equal(issue?.lastGitHubFailureSource, undefined);
-    assert.deepEqual(enqueueCalls, []);
-  } finally {
-    process.env.PATH = oldPath;
-    rmSync(baseDir, { recursive: true, force: true });
-  }
-});
-
-test("reconcileIdleIssues keeps an approved DIRTY head frozen when candidate ownership cannot be read", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-dirty-candidate-unknown-"));
-  const fakeBin = path.join(baseDir, "bin");
-  const ghPath = path.join(fakeBin, "gh");
-  const oldPath = process.env.PATH;
-  try {
-    mkdirSync(fakeBin, { recursive: true });
-    writeFileSync(ghPath, `#!/usr/bin/env bash
-if [ "$1" = "api" ]; then
-  printf 'temporary GitHub API failure' >&2
-  exit 1
-fi
-if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  printf '{"state":"OPEN","reviewDecision":"APPROVED","mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"sha-frozen","labels":[],"statusCheckRollup":[]}'
-  exit 0
-fi
-exit 1`, "utf8");
-    chmodSync(ghPath, 0o755);
-    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
-
-    const { db, enqueueCalls, orchestrator } = createOrchestrator(baseDir);
-    db.upsertIssue({
-      projectId: "usertold",
-      linearIssueId: "issue-candidate-unknown",
-      issueKey: "USE-CU",
-      branchName: "feat-candidate-unknown",
-      prNumber: 113,
-      prState: "open",
-      prHeadSha: "sha-frozen",
-      prReviewState: "approved",
-      prCheckStatus: "success",
-      workflowOutcome: undefined,
-      delegatedToPatchRelay: true,
-    });
-
-    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
-
-    const issue = db.getIssue("usertold", "issue-candidate-unknown");
-    assertIssuePhase(issue, "awaiting_queue");
-    assert.equal(issue?.prHeadSha, "sha-frozen");
     assert.deepEqual(enqueueCalls, []);
   } finally {
     process.env.PATH = oldPath;
@@ -1841,7 +1827,7 @@ exit 1`, "utf8");
   }
 });
 
-test("reconcileIdleIssues dispatches queue repair for approved DIRTY PRs without queue admission", async () => {
+test("reconcileIdleIssues freezes approved DIRTY PRs until Merge Steward publishes a candidate", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-approved-dirty-no-queue-"));
   const fakeBin = path.join(baseDir, "bin");
   const ghPath = path.join(fakeBin, "gh");
@@ -1878,9 +1864,9 @@ exit 1`, "utf8");
     await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
 
     const issue = db.getIssue("usertold", "issue-13b2");
-    assertIssuePhase(issue, "repairing_queue");
-    assert.equal(new RunTaskPlanner(db).resolveRunTask(issue!)?.runType, "queue_repair");
-    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-13b2" }]);
+    assertIssuePhase(issue, "awaiting_queue");
+    assert.equal(new RunTaskPlanner(db).resolveRunTask(issue!), undefined);
+    assert.deepEqual(enqueueCalls, []);
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });
@@ -1932,7 +1918,7 @@ exit 1`, "utf8");
   }
 });
 
-test("reconcileIdleIssues reclassifies stale branch_ci provenance to queue repair when GitHub shows a downstream conflict", async () => {
+test("reconcileIdleIssues reclassifies an approved downstream conflict without dispatching feature-branch repair", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-stale-branch-ci-"));
   const fakeBin = path.join(baseDir, "bin");
   const ghPath = path.join(fakeBin, "gh");
@@ -1969,12 +1955,9 @@ exit 1`, "utf8");
     await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
 
     const issue = db.getIssue("usertold", "issue-13e");
-    assertIssuePhase(issue, "repairing_queue");
-    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-13e")?.runType, "queue_repair");
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-13e")?.runType, "integration_repair");
     assert.equal(issue?.lastGitHubFailureSource, "queue_eviction");
-    assert.equal(issue?.lastGitHubFailureCheckName, "merge-steward/queue");
-    assert.equal(issue?.lastGitHubFailureSignature, "queue_eviction::sha-13e::merge-steward/queue");
-    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-13e" }]);
+    assert.deepEqual(enqueueCalls, []);
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });
@@ -2335,8 +2318,8 @@ test("reconcileRun reclaims a foreign active-run lease after restart once the ho
     assert.equal(updatedIssue?.activeRunId, undefined);
     assert.equal(updatedRun?.status, "failed");
     assert.equal(updatedRun?.failureReason, "Codex turn was interrupted");
-    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-15f")?.runType, "queue_repair");
-    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-15f" }]);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-15f")?.runType, "integration_repair");
+    assert.deepEqual(enqueueCalls, []);
     assert.equal(session?.leaseId, undefined);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -2405,11 +2388,11 @@ test("reconcileRun leaves interrupted queue_repair eligible for retry on idle re
     const updatedRun = db.runs.getRunById(run.id);
     assertIssuePhase(updatedIssue, "repairing_queue");
     assert.equal(updatedIssue?.queueRepairAttempts, 0);
-    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-15q")?.runType, "queue_repair");
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-15q")?.runType, "integration_repair");
     assert.equal(updatedIssue?.activeRunId, undefined);
     assert.equal(updatedRun?.status, "failed");
     assert.equal(updatedRun?.failureReason, "Codex turn was interrupted");
-    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-15q" }]);
+    assert.deepEqual(enqueueCalls, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -3456,7 +3439,7 @@ test("reconciliation repairs stale undelegated local state from live Linear befo
   }
 });
 
-test("reconcileIdleIssues prioritizes queue eviction recovery over approved waiting state", async () => {
+test("reconcileIdleIssues waits for a candidate instead of replaying an approved queue eviction on the feature branch", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-queue-eviction-priority-"));
   try {
     const { db, enqueueCalls, orchestrator } = createOrchestrator(baseDir);
@@ -3482,8 +3465,8 @@ test("reconcileIdleIssues prioritizes queue eviction recovery over approved wait
 
     const issue = db.getIssue("usertold", "issue-queue-priority");
     assertIssuePhase(issue, "repairing_queue");
-    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-queue-priority")?.runType, "queue_repair");
-    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-queue-priority" }]);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-queue-priority")?.runType, "integration_repair");
+    assert.deepEqual(enqueueCalls, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -3760,7 +3743,7 @@ test("reconcileIdleIssues leaves awaiting_queue issues idle when they are alread
   }
 });
 
-test("reconcileIdleIssues re-enqueues queue_repair when a fresh steward incident fires after a prior failed attempt", async () => {
+test("reconcileIdleIssues leaves a fresh approved steward incident pending until candidate context arrives", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-fresh-incident-"));
   try {
     const { db, enqueueCalls, orchestrator } = createOrchestrator(baseDir);
@@ -3791,8 +3774,8 @@ test("reconcileIdleIssues re-enqueues queue_repair when a fresh steward incident
 
     const issue = db.getIssue("usertold", "issue-fresh-incident");
     assertIssuePhase(issue, "repairing_queue");
-    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-fresh-incident")?.runType, "queue_repair");
-    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-fresh-incident" }]);
+    assert.equal(db.issueSessions.peekPendingSessionInputPlanForDiagnostics("usertold", "issue-fresh-incident")?.runType, "integration_repair");
+    assert.deepEqual(enqueueCalls, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

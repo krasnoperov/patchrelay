@@ -43,7 +43,6 @@ import type { WorkflowTaskDispatcher } from "./workflow-task-dispatcher.ts";
 import { LinearIssueProjectionService } from "./linear-issue-projection.ts";
 import type { LinearClientProvider } from "./types.ts";
 import { TerminalInboxReconciler } from "./terminal-inbox-reconciler.ts";
-import { resolveConflictRepairOwnership } from "./conflict-repair-ownership.ts";
 
 const BLOCKED_DEPENDENCY_REFRESH_SUCCESS_BACKOFF_MS = 60_000;
 const BLOCKED_DEPENDENCY_REFRESH_FAILURE_BACKOFF_MS = 5 * 60_000;
@@ -953,24 +952,17 @@ export class IdleIssueReconciler {
         });
         return;
       }
+      if (issue.delegatedToPatchRelay && reactiveIntent?.runType === "integration_repair" && mergeConflictDetected) {
+        this.logger.info(
+          {
+            issueKey: issue.issueKey,
+            prNumber: issue.prNumber,
+          },
+          "Reconciliation: dirty approved PR remains frozen; candidate reconciliation owns integration repair",
+        );
+        return;
+      }
       if (issue.delegatedToPatchRelay && reactiveIntent?.runType === "queue_repair" && mergeConflictDetected) {
-        const ownership = await resolveConflictRepairOwnership({
-          project,
-          prNumber,
-          ...(pr.headRefOid ? { approvedHeadSha: pr.headRefOid } : {}),
-        });
-        if (ownership.owner === "integration_candidate") {
-          this.logger.info(
-            {
-              issueKey: issue.issueKey,
-              prNumber: issue.prNumber,
-              candidateKind: ownership.candidateKind,
-              candidateSha: ownership.candidateSha,
-            },
-            "Reconciliation: integration candidate owns the dirty PR; feature head remains frozen",
-          );
-          return;
-        }
         this.logger.info(
           { issueKey: issue.issueKey, prNumber: issue.prNumber, mergeable: pr.mergeable },
           "Reconciliation: PR needs queue repair from fresh GitHub truth",
