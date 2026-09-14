@@ -85,6 +85,7 @@ function stubIntegrationGh(baseDir: string, params: {
   prHeadSha: string;
   candidateSha?: string;
   comparisonStatus?: string;
+  checkRunsTsv?: string;
   failRefRead?: boolean;
 }): string {
   const fakeBin = path.join(baseDir, "bin");
@@ -107,6 +108,10 @@ if (args[0] === "api" && args[1].includes("/git/ref/heads/")) {
 }
 if (args[0] === "api" && args[1].includes("/compare/")) {
   process.stdout.write(${JSON.stringify(params.comparisonStatus ?? "behind")});
+  process.exit(0);
+}
+if (args[0] === "api" && args[1].includes("/commits/") && args[1].includes("/check-runs")) {
+  process.stdout.write(${JSON.stringify(params.checkRunsTsv ?? "")});
   process.exit(0);
 }
 process.exit(1);
@@ -235,6 +240,64 @@ test("verifyReactiveRunAdvancedBranch fails closed when the candidate ref cannot
     });
 
     assert.match(await policy.verifyReactiveRunAdvancedBranch(run, issue) ?? "", /could not be verified on GitHub/);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyReactiveRunAdvancedBranch accepts the same candidate while a steward retry is running", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-integration-repair-retry-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = stubIntegrationGh(baseDir, {
+      prHeadSha: "approved-head",
+      candidateSha: "candidate-before",
+      comparisonStatus: "ahead",
+      checkRunsTsv: [
+        "Tests\tcompleted\tfailure\thttps://checks/1\t2026-09-14T12:00:00.000Z\t2026-09-14T12:01:00.000Z",
+        "Runtime tests (runtime-canvas)\tin_progress\t\thttps://checks/2\t2026-09-14T12:01:30.000Z\t",
+        "",
+      ].join("\n"),
+    });
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+    const { db, policy } = setupPolicy(baseDir);
+    const issue = db.upsertIssue(integrationIssue());
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "integration_repair",
+    });
+
+    assert.equal(await policy.verifyReactiveRunAdvancedBranch(run, issue), undefined);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyReactiveRunAdvancedBranch still rejects the same settled failing candidate", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-integration-repair-still-red-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = stubIntegrationGh(baseDir, {
+      prHeadSha: "approved-head",
+      candidateSha: "candidate-before",
+      comparisonStatus: "ahead",
+      checkRunsTsv: "Tests\tcompleted\tfailure\thttps://checks/3\t2020-01-01T00:00:00.000Z\t2020-01-01T00:01:00.000Z\n",
+    });
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+    const { db, policy } = setupPolicy(baseDir);
+    const issue = db.upsertIssue(integrationIssue());
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "integration_repair",
+    });
+
+    assert.match(await policy.verifyReactiveRunAdvancedBranch(run, issue) ?? "", /still on failing SHA/);
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });

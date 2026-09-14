@@ -22,6 +22,11 @@ import { workflowRunIntent } from "./workflow-intent.ts";
 import { execCommand } from "./utils.ts";
 import { parseRunContext } from "./run-context.ts";
 import { readRemotePrState } from "./remote-pr-state.ts";
+import {
+  INTEGRATION_FAILURE_HANDOFF_GRACE_MS,
+  readRequiredChecksState,
+} from "./integration-candidate-state.ts";
+import { getGateCheckNames } from "./github-webhook-policy.ts";
 
 const WRITER = "reactive-run-policy";
 
@@ -81,9 +86,6 @@ export class ReactiveRunPolicy {
         if (!currentCandidateSha) {
           return `Integration repair finished but candidate ${context.candidateBranch} has no verifiable GitHub SHA`;
         }
-        if (currentCandidateSha === issue.lastGitHubFailureHeadSha) {
-          return `Integration repair finished but candidate ${context.candidateBranch} is still on failing SHA ${issue.lastGitHubFailureHeadSha.slice(0, 8)}`;
-        }
         if (context.approvedHeadSha) {
           const comparison = await execCommand("gh", [
             "api",
@@ -98,6 +100,19 @@ export class ReactiveRunPolicy {
           if (status !== "ahead" && status !== "identical") {
             return `Integration repair advanced ${context.candidateBranch}, but candidate ${currentCandidateSha.slice(0, 8)} does not contain approved head ${context.approvedHeadSha.slice(0, 8)}`;
           }
+        }
+        if (currentCandidateSha === issue.lastGitHubFailureHeadSha) {
+          const checksState = await readRequiredChecksState({
+            repoFullName: project.github.repoFullName,
+            ref: currentCandidateSha,
+            requiredChecks: getGateCheckNames(project),
+            waitForAllChecks: true,
+            failureGraceMs: INTEGRATION_FAILURE_HANDOFF_GRACE_MS,
+          });
+          if (checksState?.kind === "pending" || checksState?.kind === "green") {
+            return undefined;
+          }
+          return `Integration repair finished but candidate ${context.candidateBranch} is still on failing SHA ${issue.lastGitHubFailureHeadSha.slice(0, 8)}`;
         }
         return undefined;
       }

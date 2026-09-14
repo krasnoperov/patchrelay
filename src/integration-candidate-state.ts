@@ -19,6 +19,13 @@ const FAILED_CONCLUSIONS = new Set([
 
 const SUCCESSFUL_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
 
+// Merge Steward reconciles a settled candidate failure and starts its own
+// exact-SHA retry asynchronously. Give that owner a brief handoff window before
+// deriving agent work. Once a new check starts inside that window, its status
+// takes precedence over the timer and the candidate remains pending until the
+// check settles, however long that takes.
+export const INTEGRATION_FAILURE_HANDOFF_GRACE_MS = 90_000;
+
 export type RequiredChecksState =
   | { kind: "pending"; checks: GitHubStatusRollupEntry[] }
   | { kind: "green"; checks: GitHubStatusRollupEntry[] }
@@ -77,6 +84,8 @@ export async function readIntegrationCandidateState(params: {
     repoFullName: params.repoFullName,
     ref: candidateSha,
     requiredChecks: params.requiredChecks,
+    waitForAllChecks: true,
+    failureGraceMs: INTEGRATION_FAILURE_HANDOFF_GRACE_MS,
     runCommand,
   });
   if (!checksState) return undefined;
@@ -100,6 +109,9 @@ export async function readRequiredChecksState(params: {
   repoFullName: string;
   ref: string;
   requiredChecks: string[];
+  waitForAllChecks?: boolean;
+  failureGraceMs?: number;
+  nowMs?: number;
   runCommand?: typeof execCommand;
 }): Promise<RequiredChecksState | undefined> {
   const runCommand = params.runCommand ?? execCommand;
@@ -108,7 +120,7 @@ export async function readRequiredChecksState(params: {
     `repos/${params.repoFullName}/commits/${params.ref}/check-runs`,
     "--paginate",
     "--jq",
-    ".check_runs[] | [.name, .status, (.conclusion // \"\"), (.details_url // \"\")] | @tsv",
+    ".check_runs[] | [.name, .status, (.conclusion // \"\"), (.details_url // \"\"), (.started_at // \"\"), (.completed_at // \"\")] | @tsv",
   ], { timeoutMs: 10_000 });
   if (checksResult.exitCode !== 0) return undefined;
   const checks = parseCheckRuns(checksResult.stdout);
@@ -116,7 +128,29 @@ export async function readRequiredChecksState(params: {
   const matching = checks.filter((check) => required.includes(check.name?.trim().toLowerCase() ?? ""));
   const failedChecks = matching.filter((check) => FAILED_CONCLUSIONS.has(check.conclusion?.toLowerCase() ?? ""));
   if (failedChecks.length > 0) {
+    const graceMs = params.failureGraceMs ?? 0;
+    const nowMs = params.nowMs ?? Date.now();
+    const latestFailureMs = Math.max(...failedChecks.map((check) => Date.parse(check.completedAt ?? "")).filter(Number.isFinite));
+    const retryStartedWithinGrace = params.waitForAllChecks
+      && graceMs > 0
+      && Number.isFinite(latestFailureMs)
+      && checks.some((check) => {
+        if (check.status?.toLowerCase() === "completed") return false;
+        const startedAtMs = Date.parse(check.startedAt ?? "");
+        return Number.isFinite(startedAtMs)
+          && startedAtMs >= latestFailureMs
+          && startedAtMs - latestFailureMs <= graceMs;
+      });
+    if (retryStartedWithinGrace) {
+      return { kind: "pending", checks };
+    }
+    if (graceMs > 0 && Number.isFinite(latestFailureMs) && nowMs - latestFailureMs < graceMs) {
+      return { kind: "pending", checks };
+    }
     return { kind: "failed", checks, failedChecks };
+  }
+  if (params.waitForAllChecks && checks.some((check) => check.status?.toLowerCase() !== "completed")) {
+    return { kind: "pending", checks };
   }
   const allRequiredSucceeded = required.length > 0 && required.every((name) => matching.some((check) =>
     check.name?.trim().toLowerCase() === name
@@ -130,12 +164,14 @@ export async function readRequiredChecksState(params: {
 
 export function parseCheckRuns(stdout: string): GitHubStatusRollupEntry[] {
   return stdout.split(/\r?\n/).filter(Boolean).map((line) => {
-    const [name, status, conclusion, detailsUrl] = line.split("\t");
+    const [name, status, conclusion, detailsUrl, startedAt, completedAt] = line.split("\t");
     return {
       ...(name ? { name } : {}),
       ...(status ? { status } : {}),
       ...(conclusion ? { conclusion } : {}),
       ...(detailsUrl ? { detailsUrl } : {}),
+      ...(startedAt ? { startedAt } : {}),
+      ...(completedAt ? { completedAt } : {}),
     };
   });
 }

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   integrationCandidateBranch,
   readIntegrationCandidateState,
+  readRequiredChecksState,
 } from "../src/integration-candidate-state.ts";
 import { resolveRunWorkspace } from "../src/run-launcher.ts";
 
@@ -77,6 +78,82 @@ test("pending candidate does not become repair work", async () => {
     runCommand: fake.runCommand,
   });
   assert.equal(state?.kind, "pending");
+});
+
+test("recent completed failure stays pending during the steward handoff window", async () => {
+  const fake = runner([
+    ok("Tests\tcompleted\tfailure\thttps://checks/4\t2026-09-14T12:00:00.000Z\t2026-09-14T12:01:00.000Z\n"),
+  ]);
+  const state = await readRequiredChecksState({
+    repoFullName: "owner/repo",
+    ref: "candidate-4",
+    requiredChecks: ["Tests"],
+    waitForAllChecks: true,
+    failureGraceMs: 90_000,
+    nowMs: Date.parse("2026-09-14T12:02:00.000Z"),
+    runCommand: fake.runCommand,
+  });
+
+  assert.equal(state?.kind, "pending");
+});
+
+test("a started retry remains pending even after the failure handoff window expires", async () => {
+  const fake = runner([
+    ok([
+      "Tests\tcompleted\tfailure\thttps://checks/5\t2026-09-14T12:00:00.000Z\t2026-09-14T12:01:00.000Z",
+      "Runtime tests (runtime-canvas)\tin_progress\t\thttps://checks/6\t2026-09-14T12:01:30.000Z\t",
+      "",
+    ].join("\n")),
+  ]);
+  const state = await readRequiredChecksState({
+    repoFullName: "owner/repo",
+    ref: "candidate-5",
+    requiredChecks: ["Tests"],
+    waitForAllChecks: true,
+    failureGraceMs: 90_000,
+    nowMs: Date.parse("2026-09-14T15:00:00.000Z"),
+    runCommand: fake.runCommand,
+  });
+
+  assert.equal(state?.kind, "pending");
+});
+
+test("an unrelated check started before the failure cannot extend the handoff window", async () => {
+  const fake = runner([
+    ok([
+      "Runtime tests (runtime-canvas)\tin_progress\t\thttps://checks/7\t2026-09-14T11:00:00.000Z\t",
+      "Tests\tcompleted\tfailure\thttps://checks/8\t2026-09-14T12:00:00.000Z\t2026-09-14T12:01:00.000Z",
+      "",
+    ].join("\n")),
+  ]);
+  const state = await readRequiredChecksState({
+    repoFullName: "owner/repo",
+    ref: "candidate-6",
+    requiredChecks: ["Tests"],
+    waitForAllChecks: true,
+    failureGraceMs: 90_000,
+    nowMs: Date.parse("2026-09-14T15:00:00.000Z"),
+    runCommand: fake.runCommand,
+  });
+
+  assert.equal(state?.kind, "failed");
+});
+
+test("settled candidate failure becomes repair work after the handoff window", async () => {
+  const fake = runner([
+    ok("Tests\tcompleted\tfailure\thttps://checks/7\t2026-09-14T12:00:00.000Z\t2026-09-14T12:01:00.000Z\n"),
+  ]);
+  const state = await readRequiredChecksState({
+    repoFullName: "owner/repo",
+    ref: "candidate-7",
+    requiredChecks: ["Tests"],
+    waitForAllChecks: true,
+    failureGraceMs: 90_000,
+    nowMs: Date.parse("2026-09-14T12:03:00.000Z"),
+    runCommand: fake.runCommand,
+  });
+
+  assert.equal(state?.kind, "failed");
 });
 
 test("integration repair gets a separate candidate worktree and branch", () => {
