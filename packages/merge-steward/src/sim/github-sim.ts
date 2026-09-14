@@ -129,6 +129,12 @@ export class GitHubSim implements GitHubPRApi {
     return null;
   }
 
+  async setBaseBranch(prNumber: number, baseBranch: string): Promise<void> {
+    const pr = this.prs.get(prNumber);
+    if (!pr) throw new Error(`PR #${prNumber} not found`);
+    pr.baseRefName = baseBranch;
+  }
+
   async listLabels(prNumber: number): Promise<string[]> {
     const pr = this.prs.get(prNumber);
     if (!pr) return [];

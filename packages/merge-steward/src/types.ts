@@ -301,6 +301,7 @@ export type ReconcileAction =
   | "main_pending_bypassed"  // main rerun pending for an already-validated merge commit
   | "pr_branch_cleanup_deferred" // GitHub has not yet classified the PR as merged
   | "pr_branch_cleanup_failed"   // branch cleanup failed after merge; non-blocking
+  | "stack_children_retargeted"  // direct children moved to the merged parent's base before cleanup
   | "sanitized_closed"    // entry terminalized: PR closed on GitHub
   | "sanitized_duplicate" // older duplicate entry superseded
   | "post_merge_verification_started"

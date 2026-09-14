@@ -52,6 +52,7 @@ exit 1
         { name: "Tests", conclusion: "success", appId: 42, runId: 101, url: "https://github.com/owner/repo/checks/1" },
         { name: "AI Review", conclusion: "skipped", appId: 7, runId: 102, url: "https://github.com/owner/repo/checks/2" },
       ]);
+      await client.setBaseBranch(101, "main");
     } finally {
       if (previousPath === undefined) {
         delete process.env.PATH;
@@ -68,6 +69,7 @@ exit 1
     const log = readFileSync(logPath, "utf8");
     assert.match(log, /pr view 101 --repo owner\/repo --json number,title,headRefName,headRefOid,baseRefName,reviewDecision,reviews,state/);
     assert.match(log, /api repos\/owner\/repo\/commits\/sha-101\/check-runs --jq \.check_runs/);
+    assert.match(log, /api --method PATCH repos\/owner\/repo\/pulls\/101 -f base=main/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

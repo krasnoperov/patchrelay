@@ -515,6 +515,23 @@ export async function deletePrBranchAfterGitHubMarksMerged(
     }
 
     if (merged) {
+      let children: Array<{ number: number; branch: string; headSha: string; baseBranch: string }>;
+      try {
+        children = (await ctx.github.listOpenPRs()).filter((pr) => pr.baseBranch === entry.branch);
+        for (const child of children) {
+          await ctx.github.setBaseBranch(child.number, ctx.baseBranch);
+        }
+      } catch {
+        emit(ctx, entry, "pr_branch_cleanup_deferred", {
+          detail: "preserving the merged PR branch because stacked children could not be safely retargeted",
+        });
+        return;
+      }
+      if (children.length > 0) {
+        emit(ctx, entry, "stack_children_retargeted", {
+          detail: `retargeted child PR ${children.map((child) => `#${child.number}`).join(", ")} to ${ctx.baseBranch} before deleting ${entry.branch}`,
+        });
+      }
       try {
         await ctx.github.deleteBranch(entry.prNumber);
       } catch {

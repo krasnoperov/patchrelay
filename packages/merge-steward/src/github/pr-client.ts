@@ -158,6 +158,14 @@ export class GitHubPRClient implements GitHubPRApi {
     }
   }
 
+  async setBaseBranch(prNumber: number, baseBranch: string): Promise<void> {
+    await exec("gh", [
+      "api", "--method", "PATCH",
+      `repos/${this.repoFullName}/pulls/${prNumber}`,
+      "-f", `base=${baseBranch}`,
+    ], { githubRepoFullName: this.repoFullName });
+  }
+
   async deleteBranch(prNumber: number): Promise<void> {
     const status = await this.getStatus(prNumber);
     await exec("gh", [

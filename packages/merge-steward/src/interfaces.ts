@@ -55,6 +55,8 @@ export interface GitHubPRApi {
   listOpenPRs(): Promise<Array<{ number: number; branch: string; headSha: string; baseBranch: string }>>;
   /** Find the open PR number for a branch, or null if none exists. */
   findPRByBranch(branch: string): Promise<number | null>;
+  /** Retarget a PR before deleting a branch used as its current base. */
+  setBaseBranch(prNumber: number, baseBranch: string): Promise<void>;
   /** Delete the PR's head branch from the remote (best-effort cleanup). */
   deleteBranch(prNumber: number): Promise<void>;
   /** List open PRs with a specific label (for startup scan). */

@@ -101,6 +101,9 @@ test("branch cleanup runs after GitHub reports the PR as merged", async () => {
         merged: true,
       };
     },
+    async listOpenPRs() {
+      return [];
+    },
     async deleteBranch() {
       deleteCalls += 1;
     },
@@ -114,6 +117,75 @@ test("branch cleanup runs after GitHub reports the PR as merged", async () => {
 
   assert.equal(deleteCalls, 1);
   assert.equal(events.length, 0);
+});
+
+test("branch cleanup retargets direct stack children before deleting their parent branch", async () => {
+  const calls: string[] = [];
+  const events: ReconcileEvent[] = [];
+  const github = {
+    async getStatus() {
+      return {
+        number: 764,
+        branch: "feature",
+        headSha: "head",
+        mergeable: false,
+        reviewApproved: true,
+        merged: true,
+      };
+    },
+    async listOpenPRs() {
+      return [
+        { number: 765, branch: "child", headSha: "child-head", baseBranch: "feature" },
+        { number: 766, branch: "other", headSha: "other-head", baseBranch: "main" },
+      ];
+    },
+    async setBaseBranch(prNumber: number, baseBranch: string) {
+      calls.push(`retarget:${prNumber}:${baseBranch}`);
+    },
+    async deleteBranch(prNumber: number) {
+      calls.push(`delete:${prNumber}`);
+    },
+  } as GitHubPRApi;
+
+  await deletePrBranchAfterGitHubMarksMerged(buildContext(github, events), makeEntry(), {
+    attempts: 1,
+    delayMs: 0,
+  });
+
+  assert.deepEqual(calls, ["retarget:765:main", "delete:764"]);
+  assert.equal(events.at(-1)?.action, "stack_children_retargeted");
+});
+
+test("branch cleanup preserves the parent branch when stack children cannot be inspected", async () => {
+  let deleteCalls = 0;
+  const events: ReconcileEvent[] = [];
+  const github = {
+    async getStatus() {
+      return {
+        number: 764,
+        branch: "feature",
+        headSha: "head",
+        mergeable: false,
+        reviewApproved: true,
+        merged: true,
+      };
+    },
+    async listOpenPRs() {
+      throw new Error("GitHub unavailable");
+    },
+    async deleteBranch() {
+      deleteCalls += 1;
+    },
+  } as GitHubPRApi;
+
+  await deletePrBranchAfterGitHubMarksMerged(buildContext(github, events), makeEntry(), {
+    attempts: 1,
+    delayMs: 0,
+  });
+
+  assert.equal(deleteCalls, 0);
+  assert.equal(events.at(-1)?.action, "pr_branch_cleanup_deferred");
+  assert.match(events.at(-1)?.detail ?? "", /stacked children/);
 });
 
 function protectedBranchError(): Error & { stderr: string; exitCode: number } {
