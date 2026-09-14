@@ -156,6 +156,10 @@ export class GitHubSim implements GitHubPRApi {
       }));
   }
 
+  async listOpenPRsByBase(baseBranch: string): Promise<Array<{ number: number; branch: string; headSha: string; baseBranch: string }>> {
+    return (await this.listOpenPRs()).filter((pr) => pr.baseBranch === baseBranch);
+  }
+
   async deleteBranch(_prNumber: number): Promise<void> {
     // No-op in sim — branch deletion is cosmetic cleanup.
   }

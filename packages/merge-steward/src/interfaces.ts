@@ -53,6 +53,8 @@ export interface GitHubPRApi {
   setLabels(prNumber: number, opts: { add?: string[]; remove?: string[] }): Promise<void>;
   /** List open PRs for restart-time eligibility scans. */
   listOpenPRs(): Promise<Array<{ number: number; branch: string; headSha: string; baseBranch: string }>>;
+  /** List every open PR whose current base is the given branch. */
+  listOpenPRsByBase(baseBranch: string): Promise<Array<{ number: number; branch: string; headSha: string; baseBranch: string }>>;
   /** Find the open PR number for a branch, or null if none exists. */
   findPRByBranch(branch: string): Promise<number | null>;
   /** Retarget a PR before deleting a branch used as its current base. */

@@ -506,18 +506,19 @@ export async function deletePrBranchAfterGitHubMarksMerged(
   const delayMs = options.delayMs ?? DEFAULT_PR_MERGED_POLL_DELAY_MS;
 
   for (let attempt = 0; attempt < attempts; attempt++) {
-    let merged = false;
+    let mergedStatus: Awaited<ReturnType<ReconcileContext["github"]["getStatus"]>> | null = null;
     try {
-      merged = (await ctx.github.getStatus(entry.prNumber)).merged;
+      const status = await ctx.github.getStatus(entry.prNumber);
+      if (status.merged) mergedStatus = status;
     } catch {
       // Keep polling briefly. If GitHub is unavailable, branch cleanup is
       // cosmetic; preserving correct PR merge classification matters more.
     }
 
-    if (merged) {
+    if (mergedStatus) {
       let children: Array<{ number: number; branch: string; headSha: string; baseBranch: string }>;
       try {
-        children = (await ctx.github.listOpenPRs()).filter((pr) => pr.baseBranch === entry.branch);
+        children = await ctx.github.listOpenPRsByBase(mergedStatus.branch);
         for (const child of children) {
           await ctx.github.setBaseBranch(child.number, ctx.baseBranch);
         }
@@ -529,7 +530,7 @@ export async function deletePrBranchAfterGitHubMarksMerged(
       }
       if (children.length > 0) {
         emit(ctx, entry, "stack_children_retargeted", {
-          detail: `retargeted child PR ${children.map((child) => `#${child.number}`).join(", ")} to ${ctx.baseBranch} before deleting ${entry.branch}`,
+          detail: `retargeted child PR ${children.map((child) => `#${child.number}`).join(", ")} to ${ctx.baseBranch} before deleting ${mergedStatus.branch}`,
         });
       }
       try {

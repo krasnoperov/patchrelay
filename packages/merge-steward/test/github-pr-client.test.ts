@@ -74,3 +74,45 @@ exit 1
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("GitHubPRClient lists every open child for one base with paginated REST", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "ms-gh-pr-children-"));
+  const ghPath = path.join(baseDir, "gh");
+  const logPath = path.join(baseDir, "gh.log");
+
+  try {
+    writeFileSync(
+      ghPath,
+      `#!/bin/sh
+echo "$*" >> "$GH_LOG"
+printf '[[{"number":102,"head":{"ref":"child-one","sha":"sha-102"},"base":{"ref":"renamed-parent"}}],[{"number":103,"head":{"ref":"child-two","sha":"sha-103"},"base":{"ref":"renamed-parent"}}]]'
+`,
+      "utf8",
+    );
+    chmodSync(ghPath, 0o755);
+
+    const previousPath = process.env.PATH;
+    const previousLog = process.env.GH_LOG;
+    process.env.PATH = `${baseDir}${path.delimiter}${previousPath ?? ""}`;
+    process.env.GH_LOG = logPath;
+    try {
+      const children = await new GitHubPRClient("owner/repo").listOpenPRsByBase("renamed-parent");
+      assert.deepEqual(children, [
+        { number: 102, branch: "child-one", headSha: "sha-102", baseBranch: "renamed-parent" },
+        { number: 103, branch: "child-two", headSha: "sha-103", baseBranch: "renamed-parent" },
+      ]);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (previousLog === undefined) delete process.env.GH_LOG;
+      else process.env.GH_LOG = previousLog;
+    }
+
+    assert.match(
+      readFileSync(logPath, "utf8"),
+      /api --method GET repos\/owner\/repo\/pulls -f state=open -f base=renamed-parent -f per_page=100 --paginate --slurp/,
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

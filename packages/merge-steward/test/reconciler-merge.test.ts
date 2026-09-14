@@ -101,7 +101,7 @@ test("branch cleanup runs after GitHub reports the PR as merged", async () => {
         merged: true,
       };
     },
-    async listOpenPRs() {
+    async listOpenPRsByBase() {
       return [];
     },
     async deleteBranch() {
@@ -126,17 +126,17 @@ test("branch cleanup retargets direct stack children before deleting their paren
     async getStatus() {
       return {
         number: 764,
-        branch: "feature",
+        branch: "renamed-feature",
         headSha: "head",
         mergeable: false,
         reviewApproved: true,
         merged: true,
       };
     },
-    async listOpenPRs() {
+    async listOpenPRsByBase(baseBranch: string) {
+      calls.push(`discover:${baseBranch}`);
       return [
-        { number: 765, branch: "child", headSha: "child-head", baseBranch: "feature" },
-        { number: 766, branch: "other", headSha: "other-head", baseBranch: "main" },
+        { number: 765, branch: "child", headSha: "child-head", baseBranch: baseBranch },
       ];
     },
     async setBaseBranch(prNumber: number, baseBranch: string) {
@@ -152,7 +152,7 @@ test("branch cleanup retargets direct stack children before deleting their paren
     delayMs: 0,
   });
 
-  assert.deepEqual(calls, ["retarget:765:main", "delete:764"]);
+  assert.deepEqual(calls, ["discover:renamed-feature", "retarget:765:main", "delete:764"]);
   assert.equal(events.at(-1)?.action, "stack_children_retargeted");
 });
 
@@ -170,7 +170,7 @@ test("branch cleanup preserves the parent branch when stack children cannot be i
         merged: true,
       };
     },
-    async listOpenPRs() {
+    async listOpenPRsByBase() {
       throw new Error("GitHub unavailable");
     },
     async deleteBranch() {

@@ -158,6 +158,33 @@ export class GitHubPRClient implements GitHubPRApi {
     }
   }
 
+  async listOpenPRsByBase(baseBranch: string): Promise<Array<{ number: number; branch: string; headSha: string; baseBranch: string }>> {
+    const result = await exec("gh", [
+      "api", "--method", "GET",
+      `repos/${this.repoFullName}/pulls`,
+      "-f", "state=open",
+      "-f", `base=${baseBranch}`,
+      "-f", "per_page=100",
+      "--paginate", "--slurp",
+    ], { githubRepoFullName: this.repoFullName });
+
+    try {
+      const pages = JSON.parse(result.stdout) as Array<Array<{
+        number: number;
+        head: { ref: string; sha: string };
+        base: { ref: string };
+      }>>;
+      return pages.flat().map((pr) => ({
+        number: pr.number,
+        branch: pr.head.ref,
+        headSha: pr.head.sha,
+        baseBranch: pr.base.ref,
+      }));
+    } catch (error) {
+      throw new Error("GitHub returned malformed stack child PR data", { cause: error });
+    }
+  }
+
   async setBaseBranch(prNumber: number, baseBranch: string): Promise<void> {
     await exec("gh", [
       "api", "--method", "PATCH",
