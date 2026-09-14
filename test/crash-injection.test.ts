@@ -362,6 +362,77 @@ test("launch race: slot claimed but no thread persisted - restart settles the zo
   }
 });
 
+test("pre-turn crash: persisted thread with no turn refunds the repair attempt and recovers", { concurrency: false }, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-crash-pre-turn-thread-"));
+  const restoreGh = installFakeGh(baseDir, {
+    prView: {
+      headRefOid: "sha-pre-turn",
+      state: "OPEN",
+      reviewDecision: "REVIEW_REQUIRED",
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "BLOCKED",
+      statusCheckRollup: [{ __typename: "CheckRun", name: "verify", status: "COMPLETED", conclusion: "FAILURE" }],
+    },
+  });
+  const config = createConfig(baseDir);
+  try {
+    seedCrashedProcessState(config, (db) => {
+      const issue = db.upsertIssue({
+        projectId: PROJECT,
+        linearIssueId: "issue-pre-turn-thread",
+        issueKey: "USE-CR2B",
+        branchName: "feat-pre-turn-thread",
+        prNumber: 42,
+        prState: "open",
+        prHeadSha: "sha-pre-turn",
+        prCheckStatus: "failure",
+        workflowOutcome: undefined,
+        delegatedToPatchRelay: true,
+        ciRepairAttempts: 1,
+        lastGitHubFailureSource: "branch_ci",
+        lastGitHubFailureHeadSha: "sha-pre-turn",
+        lastGitHubFailureSignature: "branch_ci::sha-pre-turn::verify",
+        lastAttemptedFailureHeadSha: "sha-pre-turn",
+        lastAttemptedFailureSignature: "branch_ci::sha-pre-turn::verify",
+      });
+      const run = db.runs.createRun({
+        issueId: issue.id,
+        projectId: PROJECT,
+        linearIssueId: issue.linearIssueId,
+        runType: "ci_repair",
+        sourceHeadSha: "sha-pre-turn",
+      });
+      db.runs.updateRunThread(run.id, { threadId: "thread-pre-turn" });
+      db.runs.updateLaunchPhase(run.id, "thread_started");
+      db.upsertIssue({ projectId: PROJECT, linearIssueId: issue.linearIssueId, activeRunId: run.id });
+      seedExpiredForeignLease(db, issue.linearIssueId);
+    });
+
+    const { db, orchestrator, enqueueCalls } = startRestartedService(config, {
+      readThread: async () => ({ id: "thread-pre-turn", turns: [] }) as never,
+    });
+    try {
+      await orchestrator.reconcileActiveRuns();
+
+      const issue = db.getIssue(PROJECT, "issue-pre-turn-thread");
+      const run = db.runs.getLatestRunForIssue(PROJECT, "issue-pre-turn-thread");
+      assert.equal(run?.status, "failed");
+      assert.match(run?.failureReason ?? "", /turn never started/);
+      assert.equal(issue?.activeRunId, undefined);
+      assert.equal(issue?.ciRepairAttempts, 0);
+      assert.equal(issue?.lastAttemptedFailureSignature, undefined);
+      assert.equal(new RunTaskPlanner(db).resolveRunTask(issue!)?.runType, "ci_repair");
+      assert.ok(enqueueCalls.some((call) => call.issueId === "issue-pre-turn-thread"));
+      assertConvergedIssue(db, "issue-pre-turn-thread");
+    } finally {
+      db.close();
+    }
+  } finally {
+    restoreGh();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("thread persisted but gone after restart: stale foreign lease is reclaimed and the run settles in one pass", async () => {
   // Multi-step path: the thread id was persisted, but the Codex side lost
   // the thread across the crash (readThread fails). The dead worker's lease

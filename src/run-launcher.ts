@@ -321,7 +321,7 @@ export class RunLauncher {
           ...(params.authorityEpoch !== undefined ? { authorityEpoch: params.authorityEpoch } : {}),
           promptText: params.prompt,
         });
-        const claimUpdate = {
+        const buildClaimUpdate = (record: IssueRecord) => ({
           projectId: params.item.projectId,
           linearIssueId: params.item.issueId,
           activeRunId: created.id,
@@ -333,14 +333,15 @@ export class RunLauncher {
                 workflowOutcomeReason: null,
                 inputRequestKind: null,
               }),
-          ...buildAttemptStartFields(params.runType, fresh, params.effectiveContext),
-        };
+          ...buildAttemptStartFields(params.runType, record, params.effectiveContext),
+        });
+        const claimUpdate = buildClaimUpdate(fresh);
         const claimCommit = this.db.issueSessions.commitIssueState({
           writer: WRITER,
           expectedVersion: fresh.version,
           update: claimUpdate,
           // Never steal a slot another writer claimed concurrently.
-          onConflict: (current) => (current.activeRunId == null ? claimUpdate : undefined),
+          onConflict: (current) => (current.activeRunId == null ? buildClaimUpdate(current) : undefined),
         });
         if (claimCommit.outcome !== "applied") return undefined;
         // Session events are consumed for session-history coherence; the

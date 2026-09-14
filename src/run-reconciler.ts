@@ -181,6 +181,33 @@ export class RunReconciler {
       return;
     }
 
+    const latestTurn = getThreadTurns(thread).at(-1);
+    const turnNeverStarted = run.launchPhase !== "turn_started" && run.launchPhase !== "running";
+    if (!latestTurn && turnNeverStarted) {
+      if (recoveryLease === "owned") {
+        this.logger.debug(
+          { issueKey: effectiveIssue.issueKey, runId: run.id, runType: run.runType, threadId: run.threadId },
+          "Skipping pre-turn recovery for a locally-owned launch",
+        );
+        return;
+      }
+      this.logger.warn(
+        { issueKey: effectiveIssue.issueKey, runId: run.id, runType: run.runType, threadId: run.threadId },
+        "Pre-turn zombie detected (thread exists but no turn started)",
+      );
+      this.failurePolicy.settleStrandedRunAndRecover({
+        run,
+        issue: effectiveIssue,
+        reason: "pre_turn_zombie",
+        failureReason: "Zombie: thread created but Codex turn never started after restart",
+      });
+      const recoveredIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? effectiveIssue;
+      void this.linearSync.emitActivity(recoveredIssue, buildRunFailureActivity(run.runType, "The Codex thread was created, but its turn never started before PatchRelay restarted."));
+      void this.linearSync.syncSession(recoveredIssue, { activeRunType: run.runType });
+      this.releaseLease(run.projectId, run.linearIssueId);
+      return;
+    }
+
     const linear = await this.linearProvider.forProject(run.projectId).catch(() => undefined);
     if (linear) {
       const linearIssue = await linear.getIssue(run.linearIssueId).catch(() => undefined);
@@ -217,7 +244,6 @@ export class RunReconciler {
       }
     }
 
-    const latestTurn = getThreadTurns(thread).at(-1);
     if (latestTurn?.status === "interrupted") {
       try {
         await this.failurePolicy.handleInterruptedRun(run, effectiveIssue);
