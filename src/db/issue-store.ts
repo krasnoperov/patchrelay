@@ -158,8 +158,22 @@ export class IssueStore {
     return row ? mapIssueRow(row) : undefined;
   }
 
+  getIssueByProjectKey(projectId: string, issueKey: string): IssueRecord | undefined {
+    const row = this.connection
+      .prepare("SELECT * FROM issues WHERE project_id = ? AND issue_key = ? ORDER BY updated_at DESC LIMIT 1")
+      .get(projectId, issueKey) as Record<string, unknown> | undefined;
+    return row ? mapIssueRow(row) : undefined;
+  }
+
   getIssueByBranch(branchName: string): IssueRecord | undefined {
     const row = this.connection.prepare("SELECT * FROM issues WHERE branch_name = ?").get(branchName) as Record<string, unknown> | undefined;
+    return row ? mapIssueRow(row) : undefined;
+  }
+
+  getIssueByProjectBranch(projectId: string, branchName: string): IssueRecord | undefined {
+    const row = this.connection
+      .prepare("SELECT * FROM issues WHERE project_id = ? AND branch_name = ? ORDER BY updated_at DESC LIMIT 1")
+      .get(projectId, branchName) as Record<string, unknown> | undefined;
     return row ? mapIssueRow(row) : undefined;
   }
 

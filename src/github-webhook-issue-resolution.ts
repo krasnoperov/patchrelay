@@ -14,15 +14,24 @@ export function resolveGitHubWebhookIssue(
   event: NormalizedGitHubEvent,
 ): GitHubWebhookIssueResolution | undefined {
   if (event.prNumber !== undefined) {
-    const byPr = db.issues.getIssueByPrNumber(event.prNumber);
-    if (byPr && byPr.projectId === project.id) {
+    const byPr = db.issues.getIssueByProjectPrNumber(project.id, event.prNumber);
+    if (byPr) {
       return { issue: byPr, linkedBy: "pr" };
     }
   }
 
-  const byBranch = db.issues.getIssueByBranch(event.branchName);
-  if (byBranch && byBranch.projectId === project.id) {
+  const byBranch = db.issues.getIssueByProjectBranch(project.id, event.branchName);
+  if (byBranch) {
     return { issue: byBranch, linkedBy: "branch" };
+  }
+
+  // An issue-key mention is discovery evidence, not PR ownership. Only the
+  // opening event may establish that association; later review, check, close,
+  // and merge events must resolve through the persisted repo-local PR or
+  // branch identity. Otherwise a foreign PR that merely references an issue
+  // can mutate or complete the referenced issue's workflow.
+  if (event.triggerEvent !== "pr_opened") {
+    return undefined;
   }
 
   const byIssueKey = resolveGitHubWebhookIssueByKey(db, project, event);
@@ -61,11 +70,9 @@ export function resolveGitHubWebhookIssueByKey(
   if (!issueKey) {
     return undefined;
   }
-  const issue = db.issues.getIssueByKey(issueKey);
-  return issue?.projectId === project.id ? issue : undefined;
+  return db.issues.getIssueByProjectKey(project.id, issueKey);
 }
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-

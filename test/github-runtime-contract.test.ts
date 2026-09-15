@@ -340,6 +340,8 @@ function buildTerminalPrPayload(params: {
   prNumber: number;
   merged: boolean;
   prAuthorLogin?: string;
+  prTitle?: string;
+  prBody?: string;
 }): string {
   return JSON.stringify({
     action: params.action,
@@ -347,6 +349,8 @@ function buildTerminalPrPayload(params: {
     pull_request: {
       number: params.prNumber,
       html_url: `https://github.com/owner/repo/pull/${params.prNumber}`,
+      title: params.prTitle ?? `PR for #${params.prNumber}`,
+      body: params.prBody ?? "",
       state: "closed",
       merged: params.merged,
       user: { login: params.prAuthorLogin ?? "patchrelay[bot]" },
@@ -355,6 +359,53 @@ function buildTerminalPrPayload(params: {
     },
   });
 }
+
+test("a merged foreign PR that mentions a tracked issue cannot complete it", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-foreign-merge-"));
+  try {
+    const { db, enqueueCalls, handler } = createHandler(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-owned-pr",
+      issueKey: "USE-145",
+      branchName: "use/owned-pr",
+      prNumber: 194,
+      prState: "open",
+      prHeadSha: "owned-sha",
+      prReviewState: "changes_requested",
+      prAuthorLogin: "patchrelay[bot]",
+      workflowOutcome: undefined,
+      currentLinearState: "In Review",
+      currentLinearStateType: "started",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "pull_request",
+      rawBody: buildTerminalPrPayload({
+        action: "closed",
+        branch: "foreign/landing-page",
+        headSha: "foreign-sha",
+        prNumber: 192,
+        merged: true,
+        prBody: "Related follow-up: USE-145 should add the CLI command.",
+      }),
+    });
+
+    const issue = db.getIssue("usertold", "issue-owned-pr");
+    assert.equal(issue?.workflowOutcome, undefined);
+    assert.equal(issue?.prNumber, 194);
+    assert.equal(issue?.prState, "open");
+    assert.equal(issue?.currentLinearState, "In Review");
+    assert.deepEqual(enqueueCalls, []);
+    assert.equal(
+      db.workflowObservations.listObservations("usertold", "issue-owned-pr")
+        .some((observation) => observation.type === "github.pr_merged"),
+      false,
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
 
 function buildLabeledPrPayload(params: {
   branch: string;
